@@ -150,6 +150,7 @@
 .ui-tab { padding: var(--ui-sp-2) var(--ui-sp-1) var(--ui-sp-3); font: inherit; color: var(--ui-text-muted); background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; cursor: pointer; }
 .ui-tab:hover { color: var(--ui-text); background: none; }
 .ui-tab.active { color: var(--ui-text); border-bottom-color: var(--ui-accent); }
+.ui-tab.disabled, .ui-tab.disabled:hover { color: var(--ui-text-muted); opacity: 0.45; cursor: default; }
 
 /* ── Notice / EmptyState ── */
 .ui-notice { padding: var(--ui-sp-3) var(--ui-sp-4); border-radius: var(--ui-radius-md); font-size: var(--ui-fs-sm); line-height: 1.5; background: var(--ui-surface-2); border: 1px solid var(--ui-border); white-space: pre-wrap; }

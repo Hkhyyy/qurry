@@ -169,6 +169,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌘r` | Redis: scan keys again |
 | `⌘s` | Redis: save the value being edited |
 | `⌃l` | Redis terminal: clear |
+| `⇥ · ↑↓ · ↩` | Redis terminal: complete (commands with arguments, key names) · choose / history · pick / run |
 
 ## Other actions (menus, toolbars, Find Action — give them a key in Settings › Keymap)
 

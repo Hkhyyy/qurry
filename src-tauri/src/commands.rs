@@ -158,6 +158,16 @@ pub async fn redis_scan(state: State<'_, AppState>, id: String, cursor: String, 
 }
 
 #[tauri::command]
+pub async fn redis_overview(state: State<'_, AppState>, id: String) -> AppResult<crate::redisdb::ServerOverview> {
+    state.redis_overview(id).await
+}
+
+#[tauri::command]
+pub async fn redis_key_names(state: State<'_, AppState>, id: String, prefix: String, max: usize) -> AppResult<Vec<String>> {
+    state.redis_key_names(id, prefix, max).await
+}
+
+#[tauri::command]
 pub async fn redis_key(state: State<'_, AppState>, id: String, key: String, limit: Option<usize>) -> AppResult<crate::redisdb::KeyDetail> {
     state.redis_key(id, key, limit).await
 }

@@ -12,6 +12,13 @@ describe("shared wasm", () => {
     expect(shared().commitFailedTitle("Session closed")).toBe("Commit failed");
   });
 
+  it("Redis Terminal key names: the typed key first, quoted when it has spaces or quotes; unknown key counts show the name only", () => {
+    expect(shared().redisKeyChoices("user:1", ["user:10", "user:1"]).map((c) => c.label)).toEqual(["user:1", "user:10"]);
+    expect(shared().redisKeyChoices("user:1", ["user:1"])).toEqual([]);
+    expect(shared().redisKeyChoices("us", ["user 1"])).toEqual([{ label: "user 1", insert: '"user 1"' }]);
+    expect(shared().redisDbLabel("db0", -1)).toBe("db0");
+  });
+
   it("words a failed load-more as the TUI does", () => {
     expect(shared().moreRowsFailed("Session closed")).toBe("Couldn't load more rows: Session closed");
   });

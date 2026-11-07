@@ -82,6 +82,17 @@ export const SearchAndTabs: S = {
           value={t}
           onChange={setT}
         />
+        {/* A disabled tab is greyed out, can't be picked (click, ←/→ skip it) and says why on hover: Redis Config on managed Redis */}
+        <Tabs
+          size="sm"
+          items={[
+            { id: "a", label: "Content" },
+            { id: "b", label: "Info" },
+            { id: "c", label: "Config", disabled: true, title: "This server doesn't allow CONFIG — its settings are in the provider's console" },
+          ]}
+          value={t === "c" ? "a" : t}
+          onChange={setT}
+        />
         <Frame>
           <SectionTitle>Actions</SectionTitle>
         </Frame>
@@ -211,7 +222,11 @@ export const TreeRows: S = {
       {/* Several selected (⌘-click / ⇧-click): each selected row has the selection color */}
       <TreeRow depth={4} icon={<TableIcon />} label="payments" selected />
       <TreeRow depth={0} leaf leading={<Checkbox checked onChange={() => {}} />} label="All schemas" />
-      <TreeRow depth={1} leaf icon={<Badge color="#5f9ea0">STRING</Badge>} iconClass="rd-type" label="session:abc" trailing="59m 0s" />
+      {/* Redis: a database in the explorer (key count beside it, no keys under it); in the Redis tab a folder's count beside its name, a key's TTL on the right (— without expiry) */}
+      <TreeRow depth={1} leaf icon={<DatabaseIcon />} label="db0" sub="500" />
+      <TreeRow depth={0} icon={<FolderIcon />} label="sessions" sub="419" />
+      <TreeRow depth={1} leaf icon={<Badge color="#5f9ea0">STRING</Badge>} iconClass="rd-type" label="session:abc" trailing="1d 4h" />
+      <TreeRow depth={1} leaf icon={<Badge color="#5f9ea0">STRING</Badge>} iconClass="rd-type" label="session:def" trailing={<span className="rd-ttl none">—</span>} />
     </Frame>
   ),
 };

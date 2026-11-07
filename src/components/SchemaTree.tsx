@@ -1,12 +1,9 @@
 import { connBg, connStripe, useTheme } from "../lib/theme";
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redisDb, dbShown, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
+import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redis, redisDb, dbShown, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
 import { ScopePopup } from "./ScopePopup";
 import { Button, Notice, TreeRow } from "../ui";
 import { invalidateCompletion } from "../lib/completion";
-import { TYPE_COLOR } from "./RedisBrowser";
-import { keyTree, type KeyNode } from "../lib/keyTree";
-import { useSharedReady } from "../lib/shared";
 import { TlsFix } from "./TlsFix";
 import { ColumnIcon, DatabaseIcon, FkIcon, FolderIcon, IndexIcon, KeyIcon, MySqlIcon, objectIcon, PgIcon, RedisIcon, RoutineIcon, SchemaIcon, TableIcon } from "../ui/icons";
 
@@ -87,8 +84,8 @@ interface Props {
   conn: ConnectionView;
   filter: string;
   showSystem: boolean;
-  /** Table · view double-click = Edit Data (F4), routine double-click = DDL */
-  onActivate: (info: NodeInfo) => void;
+  /** Table · view double-click = Edit Data (F4), routine double-click = DDL. `click`: a single click (a Redis database switches the open Redis tab) */
+  onActivate: (info: NodeInfo, click?: boolean) => void;
   onMenu: (e: React.MouseEvent, info: NodeInfo) => void;
   /** Apply from the schema picker popup */
   onScopeChange: (conn: ConnectionView, scope: Scope) => void;
@@ -103,7 +100,6 @@ const REL_GROUPS: { kind: RelationInfo["kind"][]; label: string; icon: string }[
   { kind: ["view"], label: "views", icon: "◫" },
   { kind: ["matview"], label: "materialized views", icon: "◩" },
   { kind: ["sequence"], label: "sequences", icon: "#" },
-  { kind: ["key"], label: "keys", icon: "🔑" },
 ];
 
 function useSelectable(info?: NodeInfo) {
@@ -119,9 +115,9 @@ function useSelectable(info?: NodeInfo) {
   return { id, selected: ids.includes(id), select: (e?: React.MouseEvent) => select(id, info, e) };
 }
 
-function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onDoubleClick, onMenu, leaf, info, style, className, badge }: {
+function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onClick, onDoubleClick, onMenu, leaf, info, style, className, badge }: {
   depth: number; open?: boolean; onToggle?: () => void; icon: React.ReactNode; iconClass?: string; label: string; sub?: string;
-  title?: string; onDoubleClick?: () => void; onMenu?: (e: React.MouseEvent, info: NodeInfo) => void; leaf?: boolean;
+  title?: string; onClick?: () => void; onDoubleClick?: () => void; onMenu?: (e: React.MouseEvent, info: NodeInfo) => void; leaf?: boolean;
   info?: NodeInfo; style?: React.CSSProperties; className?: string; badge?: React.ReactNode;
 }) {
   const { id, selected, select } = useSelectable(info);
@@ -143,6 +139,7 @@ function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onDoub
       id={info ? id : undefined}
       onSelect={select}
       onToggle={onToggle}
+      onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -207,6 +204,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
   const [schemaCounts, setSchemaCounts] = useState<Record<string, { shown: number; total: number }>>({});
   const [opened, setOpened] = useState(false);
   const [dbs, setDbs] = useState<Load<string[]>>();
+  const [keyCounts, setKeyCounts] = useState<Record<string, number>>({});
   const [openDbs, setOpenDbs] = useState<Set<string>>(new Set());
   const [gen, setGen] = useState(0); // Remount child nodes on refresh
   const theme = useTheme();
@@ -217,7 +215,15 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
   const loadDbs = (force = false) => {
     if (dbs?.state === "ok" && !force) return;
     setDbs({ state: "loading" });
-    meta.databases(conn.id).then(
+    // Redis: its databases with their key counts (keys are browsed in the Redis tab, not in the tree)
+    const list =
+      conn.kind === "redis"
+        ? redis.overview(conn.id).then((o) => {
+            setKeyCounts(Object.fromEntries(o.databases.map((d) => [d.name, d.keys])));
+            return o.databases.map((d) => d.name);
+          })
+        : meta.databases(conn.id);
+    list.then(
       (data) => {
         setDbs({ state: "ok", data });
         // Connected: fill the search cache so Search Everywhere finds things next time without connecting
@@ -299,6 +305,23 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
           {dbs?.state === "ok" &&
             dbs.data.filter(shown).map((db) => {
               const dOpen = openDbs.has(db);
+              const info: NodeInfo = { kind: "db", conn, db, refresh: refreshAll };
+              // Redis: a database is a leaf with its key count; a click switches the source's open Redis tab, a double-click opens it
+              if (conn.kind === "redis")
+                return (
+                  <Row
+                    key={db}
+                    depth={1}
+                    leaf
+                    icon={<DatabaseIcon />}
+                    label={db}
+                    sub={keyCounts[db] >= 0 ? keyCounts[db].toLocaleString("en-US") : undefined}
+                    onClick={() => onActivate(info, true)}
+                    onDoubleClick={() => onActivate(info)}
+                    info={info}
+                    onMenu={onMenu}
+                  />
+                );
               return (
                 <div key={db}>
                   <Row
@@ -329,7 +352,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
                         return n;
                       })
                     }
-                    info={{ kind: "db", conn, db, refresh: refreshAll }}
+                    info={info}
                     onMenu={onMenu}
                   />
                   {dOpen && (
@@ -375,15 +398,13 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
   const target = targetId(conn.id, db);
   // MySQL: database == schema → show object folders directly without a schema row (same as DataGrip)
   // DBs that are the schema: tables without a schema level
-  const flat = ["mysql", "redis", "sqlite", "clickhouse", "mongodb", "qdrant", "chroma", "milvus"].includes(conn.kind);
+  const flat = ["mysql", "sqlite", "clickhouse", "mongodb", "qdrant", "chroma", "milvus"].includes(conn.kind);
   const dd = flat ? -1 : 0;
   const [open, setOpen] = useState<Set<string>>(new Set());
   useCollapse(() => setOpen(new Set()));
   const [schemas, setSchemas] = useState<Load<SchemaInfo[]>>();
   const [objects, setObjects] = useState<Record<string, Load<{ relations: RelationInfo[]; routines: RoutineInfo[] }>>>({});
   const [details, setDetails] = useState<Record<string, Load<TableDetail>>>({});
-  // Redis key folders come from the WASM module: render again once it has loaded
-  useSharedReady();
 
   const toggle = (key: string, onOpen?: () => void) =>
     setOpen((s) => {
@@ -412,7 +433,7 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
         const user = data.filter((x) => !x.isSystem);
         const auto = flat ? data[0]?.name : user.length === 1 ? user[0].name : user.find((x) => x.name === "public")?.name;
         if (auto) {
-          setOpen((s) => new Set(s).add(`s:${auto}`).add(`s:${auto}/g:${conn.kind === "redis" ? "keys" : "tables"}`));
+          setOpen((s) => new Set(s).add(`s:${auto}`).add(`s:${auto}/g:tables`));
           loadObjects(auto);
         }
       },
@@ -489,7 +510,7 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
               const tk = `${sk}/t:${r.name}`;
               const tOpen = open.has(tk);
               const det = details[`${s.name}.${r.name}`];
-              const isRel = r.kind !== "sequence" && r.kind !== "key";
+              const isRel = r.kind !== "sequence";
               const info: NodeInfo = {
                 kind: r.kind,
                 conn,
@@ -506,9 +527,9 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
                     depth={depth}
                     open={tOpen}
                     leaf={!isRel}
-                    icon={r.kind === "key" ? <span className="rd-dot" style={{ background: TYPE_COLOR[r.comment ?? ""] ?? "#777" }} title={r.comment ?? ""}>{({ string: "T", hash: "H", list: "L", set: "S", zset: "Z", stream: "X" } as Record<string, string>)[r.comment ?? ""] ?? "?"}</span> : <Icon />}
+                    icon={<Icon />}
                     label={r.name}
-                    title={r.kind === "key" ? `${r.name} (${r.comment})` : r.comment ? `${r.name} — ${r.comment}` : r.name}
+                    title={r.comment ? `${r.name} — ${r.comment}` : r.name}
                     onToggle={isRel ? () => toggle(tk, () => loadDetail(s.name, r.name)) : undefined}
                     onDoubleClick={() => onActivate(info)}
                     info={info}
@@ -523,19 +544,6 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
                 </div>
               );
             };
-            // Redis keys: folders split on ":" (like Medis)
-            const keyRows = (nodes: KeyNode<RelationInfo>[], depth: number, base: string): React.ReactNode =>
-              nodes.map((n) => {
-                if (n.kind === "key") return item(n.item, depth);
-                const fk = `${base}/f:${n.path}`;
-                const fOpen = open.has(fk) || !!f;
-                return (
-                  <div key={fk}>
-                    <Row depth={depth} open={fOpen} icon={<FolderIcon />} label={n.name} sub={String(n.count)} title={`${n.path}:*`} onToggle={() => toggle(fk)} />
-                    {fOpen && keyRows(n.children, depth + 1, base)}
-                  </div>
-                );
-              });
             return (
               <div key={sk}>
                 {!flat && <Row
@@ -560,7 +568,7 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
                           return (
                             <div key={gk}>
                               <Row depth={3 + dd} open={gOpen} icon={<FolderIcon />} label={g.label} sub={String(g.items.length)} onToggle={() => toggle(gk)} />
-                              {gOpen && (g.label === "keys" ? keyRows(keyTree(g.items, (r) => r.name), 4 + dd, gk) : g.items.map((r) => item(r, 4 + dd)))}
+                              {gOpen && g.items.map((r) => item(r, 4 + dd))}
                             </div>
                           );
                         })}

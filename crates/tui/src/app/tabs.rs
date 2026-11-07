@@ -127,9 +127,21 @@ impl App {
         self.restored_tab(conn, db, title, TabKind::Dba(d))
     }
 
+    /// One Redis tab per data source (before 0.3.2 one per database): a later saved one moves the restored tab to its database
+    /// and maps to it, so the last database picked comes back and nothing saved is dropped
     pub fn restore_redis(&mut self, conn: &str, db: String, title: String, pattern: &str) -> Option<u64> {
-        let r = RedisTab { pattern: pattern.into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, open: HashSet::new(), detail: None, text: None, value: None, focus_value: false, scanning: false, want: None };
-        self.restored_tab(conn, db, title, TabKind::Redis(r))
+        // Before 0.3.2 every key was saved as "*"; now that is no filter
+        let pattern = if pattern == "*" { "" } else { pattern };
+        if let Some(t) = self.tabs.iter_mut().find(|t| t.conn == conn && matches!(t.kind, TabKind::Redis(_))) {
+            t.target = sql::target_id(conn, Some(&db));
+            t.title = title;
+            t.db = db;
+            if let TabKind::Redis(r) = &mut t.kind {
+                r.pattern = pattern.into();
+            }
+            return Some(t.id);
+        }
+        self.restored_tab(conn, db, title, TabKind::Redis(RedisTab::new(pattern, None)))
     }
 
     pub fn tab_index(&self, id: u64) -> Option<usize> {

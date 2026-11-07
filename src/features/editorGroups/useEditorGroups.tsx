@@ -529,12 +529,12 @@ export function useEditorGroups({
                 <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
                   <RedisBrowser
                     target={t.target}
+                    connId={t.connId}
                     connName={c?.name ?? ""}
                     database={t.database ?? "db0"}
-                    dbList={dbCache[t.connId] ?? []}
                     readOnly={!!c?.readOnly}
+                    production={!!c?.options?.confirmChanges}
                     initialKey={t.redisKey}
-                    onLoadDbs={() => loadDbList(t.connId)}
                     onSwitchDb={(db) => c && patch(t.id, { database: db, target: targetId(c.id, db), title: `${c.name} [${db}]`, redisKey: undefined })}
                     onStatus={setStatus}
                   />

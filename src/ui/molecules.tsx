@@ -109,12 +109,14 @@ export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttribu
 }
 
 // ───────── Tabs · titles ─────────
-export function Tabs<T extends string>({ items, value, onChange, size, label }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (id: T) => void; size?: "sm"; label?: string }) {
-  // ←/→ (and Home/End) select the previous/next tab and move focus with it, as in the ARIA tab pattern
+/** A `disabled` tab is greyed out and can't be picked, but still shows its `title` (why) on hover: aria-disabled, not disabled */
+export function Tabs<T extends string>({ items, value, onChange, size, label }: { items: { id: T; label: ReactNode; disabled?: boolean; title?: string }[]; value: T; onChange: (id: T) => void; size?: "sm"; label?: string }) {
+  // ←/→ (and Home/End) select the previous/next tab and move focus with it, as in the ARIA tab pattern (skipping disabled ones)
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const i = items.findIndex((t) => t.id === value);
-    const n = { ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: items.length - 1 }[e.key];
-    if (n === undefined || n < 0 || n >= items.length || n === i) return;
+    const on = items.map((t, j) => (t.disabled ? -1 : j)).filter((j) => j >= 0);
+    const n = { ArrowLeft: on.filter((j) => j < i).pop(), ArrowRight: on.find((j) => j > i), Home: on[0], End: on[on.length - 1] }[e.key];
+    if (n === undefined || n === i) return;
     e.preventDefault();
     onChange(items[n].id);
     e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[n]?.focus();
@@ -122,7 +124,16 @@ export function Tabs<T extends string>({ items, value, onChange, size, label }: 
   return (
     <div className={cx("ui-tabs", size === "sm" && "size-sm")} role="tablist" aria-label={label} onKeyDown={onKeyDown}>
       {items.map((t) => (
-        <button key={t.id} type="button" role="tab" aria-selected={value === t.id} className={cx("ui-tab", value === t.id && "active")} onClick={() => onChange(t.id)}>
+        <button
+          key={t.id}
+          type="button"
+          role="tab"
+          aria-selected={value === t.id}
+          aria-disabled={t.disabled || undefined}
+          title={t.title}
+          className={cx("ui-tab", value === t.id && "active", t.disabled && "disabled")}
+          onClick={() => !t.disabled && onChange(t.id)}
+        >
           {t.label}
         </button>
       ))}

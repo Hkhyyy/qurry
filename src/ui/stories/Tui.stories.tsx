@@ -50,7 +50,10 @@ export const ScreenDbaStale = { ...by("Database Admin: refresh failed"), name: "
 export const ScreenDbaError = { ...by("Database Admin: report error"), name: "Screen · Database Admin: report error" };
 export const ScreenTableFilter = { ...by("Table filter completion"), name: "Screen · Table filter completion" };
 export const ScreenDbaDatabase = { ...by("Database Admin: database"), name: "Screen · Database Admin: database" };
-export const ScreenRedis ={ ...by("Redis"), name: "Screen · Redis" };
+export const ScreenRedis = { ...by("Redis"), name: "Screen · Redis" };
+export const ScreenRedisDatabase = { ...by("Redis: database"), name: "Screen · Redis: database (d)" };
+export const ScreenRedisCommandLine = { ...by("Redis: command line"), name: "Screen · Redis: command line (:)" };
+export const ScreenRedisArgumentHints = { ...by("Redis: argument hints"), name: "Screen · Redis: argument hints" };
 export const ScreenMysqlBackupDefiners = { ...by("MySQL backup: DEFINER= question"), name: "Screen · MySQL backup: DEFINER= question" };
 export const ScreenTooSmall = { ...by("Terminal too small"), name: "Screen · Terminal too small" };
 // Small windows: what stays when a dialog doesn't fit

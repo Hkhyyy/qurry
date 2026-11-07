@@ -4,7 +4,7 @@
 import { useSyncExternalStore } from "react";
 import init, * as wasm from "../wasm/pkg/qurry_shared_wasm";
 import wasmUrl from "../wasm/pkg/qurry_shared_wasm_bg.wasm?url";
-import type { Cell, CompletionTable, DbKind, QueryResult } from "./api";
+import type { Cell, CompletionTable, DbKind, QueryResult, RedisReply } from "./api";
 import type { ExecPlan, ExecSettings, Stmt } from "./execPlan";
 import type { Extractor } from "./extract";
 import type { Segment } from "./sqlSplit";
@@ -119,6 +119,28 @@ export interface ExtractRowsInput {
 /** qurry_shared::keytree::KeyNode: a key is its index in the names passed in */
 export type SharedKeyNode = { kind: "folder"; name: string; path: string; count: number; children: SharedKeyNode[] } | { kind: "key"; item: number };
 
+/** A row of the Redis Terminal's bundled command table (qurry_shared::redis_cmd::CommandDoc) */
+export interface RedisCommandDoc {
+  name: string;
+  args: string;
+  summary: string;
+}
+/** What the Redis Terminal offers for the text before the caret (qurry_shared::redis_cmd::Assist) */
+export interface RedisAssist {
+  /** The typed part of the current word: a pick replaces it */
+  prefix: string;
+  commands: { insert: string; doc: RedisCommandDoc; read: boolean }[];
+  /** The word is a key name (completed from a bounded SCAN) */
+  key: boolean;
+  /** The arguments from the current one on */
+  hint: string;
+}
+/** A Redis Terminal reply shown by type (qurry_shared::redis_cmd::ReplyTable) */
+export interface RedisReplyTable {
+  heads: string[];
+  rows: string[][];
+}
+
 /** Chart data (crates/shared/src/chart.rs): one label per X value, one series per Y */
 export interface ChartData {
   labels: string[];
@@ -207,6 +229,17 @@ const api = {
   extractRows: (fmt: Extractor, rows: ExtractRowsInput, kind: DbKind, opts: ExtractOptions): string => wasm.extractRows(fmt, rows, kind, opts),
   fuzzyScore: (query: string, text: string, wordStarts: boolean): number | undefined => wasm.fuzzyScore(query, text, wordStarts),
   keyTree: (names: string[], opts: KeyTreeOptions): SharedKeyNode[] => wasm.keyTree(names, opts),
+  redisAssist: (before: string): RedisAssist => wasm.redisAssist(before),
+  /** What HELP <command> prints, undefined when the line isn't a HELP */
+  redisHelp: (line: string): string | undefined => wasm.redisHelp(line),
+  /** The line's reply as a table (a hash as field / value, a list numbered …), undefined to print it as redis-cli does */
+  redisReplyTable: (line: string, reply: RedisReply): RedisReplyTable | undefined => wasm.redisReplyTable(line, reply) ?? undefined,
+  /** The key names listed for the typed prefix: the typed key first, `insert` quoted as redis-cli reads it ("user 1" → "\"user 1\"") */
+  redisKeyChoices: (prefix: string, names: string[]): { label: string; insert: string }[] => wasm.redisKeyChoices(prefix, names),
+  /** "db0 · 1,500 keys", the name alone when the count is unknown (< 0) */
+  redisDbLabel: (name: string, keys: number): string => wasm.redisDbLabel(name, keys),
+  /** A key's TTL in ms → "1d 4h", "—" without expiry */
+  redisTtl: (ms: number): string => wasm.redisTtl(ms),
   autoMap: (file: string[], table: string[] | null): string[] => wasm.autoMap(file, table),
   numericColumns: (columns: Columns, rows: Cell[][]): number[] => wasm.numericColumns(columns, rows),
   /** y undefined = the row count */

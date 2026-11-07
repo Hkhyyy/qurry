@@ -1004,6 +1004,16 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
 /// With a backslash the server's settings decide where strings end (MySQL NO_BACKSLASH_ESCAPES and ANSI_QUOTES,
 /// PostgreSQL standard_conforming_strings), so the statement must be a read under every rule
 pub fn is_read(sql: &str, kind: DbKind) -> bool {
+    // Redis: one line = one command, read as redis_cmd::is_read_command reads it (the Terminal's command table agrees)
+    if kind == DbKind::Redis {
+        let lines = crate::sql::split_statements(sql, kind);
+        return !lines.is_empty()
+            && lines.iter().all(|&(a, b)| {
+                let args = redis_args(&sql[a..b]);
+                let up = |i: usize| args.get(i).map(|s| s.to_uppercase()).unwrap_or_default();
+                !args.is_empty() && crate::redis_cmd::is_read_command(&up(0), &up(1))
+            });
+    }
     let pieces = statements(sql, kind);
     // Each statement as the server splits them, and the whole text read at once (where another quote rule ends the strings)
     let read = |sc: Scan| read_one(sc, kind);
@@ -1613,6 +1623,19 @@ mod tests {
         assert!(u("select * from t for update").is_none());
         assert!(unsafe_statement("FLUSHALL", DbKind::Redis).is_some());
         assert!(unsafe_statement("GET a", DbKind::Redis).is_none());
+    }
+
+    /// Redis reads by the command table's rule (is_read_command): the Production question and the console ask only for writes;
+    /// every line must read, a quoted command name is the same command, and an unknown command is a write
+    #[test]
+    fn is_read_redis() {
+        use DbKind::Redis;
+        for r in ["GET a", "hgetall h", "CONFIG GET maxmemory", "GET a\n# note\nTTL a", "\"GET\" a"] {
+            assert!(is_read(r, Redis), "{r}");
+        }
+        for w in ["SET a 1", "GET a\nDEL a", "CONFIG SET maxmemory 1", "NOSUCH a", "", "\"GET"] {
+            assert!(!is_read(w, Redis), "{w}");
+        }
     }
 
     /// Where strings end depends on a server setting once there is a backslash: a read must be a read under both rules

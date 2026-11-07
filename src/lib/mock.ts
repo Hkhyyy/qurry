@@ -136,9 +136,34 @@ export function importPlan(from: string, path: string) {
   return { title: "Import Data Sources", message: `Import these data sources from ${from}?\n${shown}\n\n5 to add, 2 skipped. ${IMPORT_NOTE}`, rows, importable: 5 };
 }
 
+/** [Redis] cache's keys: db0 (the default) and db3 */
+const redisKeys = (id: string) =>
+  String(id).endsWith("::db3")
+    ? [
+        { key: "jobs:1", type: "hash", ttl: -1 },
+        { key: "jobs:2", type: "hash", ttl: 600_000 },
+      ]
+    : [
+        { key: "session:abc", type: "string", ttl: 3_540_000 },
+        { key: "user:1", type: "hash", ttl: -1 },
+        { key: "user:1:name", type: "string", ttl: -1 },
+        { key: "queue:mail", type: "list", ttl: -1 },
+        { key: "tags", type: "set", ttl: -1 },
+        { key: "rank", type: "zset", ttl: 101_000_000 },
+        { key: "events", type: "stream", ttl: -1 },
+      ];
+/** SCAN MATCH with * and ? only */
+const redisMatch = (pattern: string | undefined, key: string) =>
+  new RegExp(`^${(pattern?.trim() || "*").replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(key);
+const historyAdded: { id: string; connId: string; database?: string; sql: string; ts: number }[] = [];
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
-  list_connections: () => structuredClone(conns),
+  // window.__mockRedis (set before load): { readOnly, production, managed } for [Redis] cache (managed: CONFIG refused, as on ElastiCache)
+  list_connections: () =>
+    structuredClone(conns).map((c: any) => {
+      const r = (globalThis as any).__mockRedis;
+      return c.id === "rd" && r ? { ...c, readOnly: !!r.readOnly, options: { ...c.options, confirmChanges: !!r.production } } : c;
+    }),
   // window.__mockDbListFail: the account can't connect to a source's default database, so listing through the source itself fails.
   // window.__mockDbListDelay (ms): the list arrives that late (a select asked for it only on its first click would open without it)
   list_databases: (a: any) => {
@@ -152,16 +177,10 @@ const handlers: Record<string, (a: any) => unknown> = {
   },
   redis_scan: (a: any) => ({
     cursor: "0",
-    keys: [
-      { key: "session:abc", type: "string", ttl: 3_540_000 },
-      { key: "user:1", type: "hash", ttl: -1 },
-      { key: "user:1:name", type: "string", ttl: -1 },
-      { key: "queue:mail", type: "list", ttl: -1 },
-      { key: "tags", type: "set", ttl: -1 },
-      { key: "rank", type: "zset", ttl: 86_400_000 },
-      { key: "events", type: "stream", ttl: -1 },
-    ].filter((k) => !a.typeFilter || k.type === a.typeFilter),
+    keys: redisKeys(a.id).filter((k) => (!a.typeFilter || k.type === a.typeFilter) && redisMatch(a.pattern, k.key)),
   }),
+  redis_overview: () => ({ configAllowed: !(globalThis as any).__mockRedis?.managed, databases: [{ name: "db0", keys: 7 }, { name: "db3", keys: 2 }] }),
+  redis_key_names: (a: any) => redisKeys(a.id).map((k) => k.key).filter((k) => k.startsWith(a.prefix)).sort().slice(0, a.max),
   redis_key: (a: any) =>
     a.key === "user:1"
       ? { type: "hash", ttl: -1, length: 3, memory: 96, encoding: "listpack", truncated: false, value: [["age", "30"], ["email", "a@b.c"], ["profile", '{"city":"Seoul","tags":["vip","beta"]}']] }
@@ -169,7 +188,25 @@ const handlers: Record<string, (a: any) => unknown> = {
       ? { type: "zset", ttl: 86400000, length: 2, memory: 72, encoding: "listpack", truncated: false, value: [["alice", "10"], ["bob", "20"]] }
       : { type: "string", ttl: 3540000, length: 42, memory: 80, encoding: "embstr", truncated: false, value: '{"uid":1,"roles":["admin"],"exp":1760000000}' },
   redis_exec: () => ({ status: "OK" }),
-  redis_exec_line: (a: any) => (/^hgetall/i.test(a.line) ? ["age", "30", "email", "a@b.c"] : /^incr/i.test(a.line) ? 7 : /^get/i.test(a.line) ? null : { status: "OK" }),
+  // As the backend: a read-only source refuses writes; replies by command (window.__mockRedisLines lists the lines that ran)
+  redis_exec_line: (a: any) => {
+    const g = globalThis as any;
+    const cmd = String(a.line).trim().split(/\s+/)[0].toUpperCase();
+    if (g.__mockRedis?.readOnly && !["GET", "HGETALL", "LRANGE", "SMEMBERS", "ZRANGE", "TTL", "TYPE", "DBSIZE", "PING", "SCAN"].includes(cmd)) throw `Data source "[Redis] cache" is read-only: ${cmd} changes data`;
+    (g.__mockRedisLines ??= []).push(a.line);
+    const reply: Record<string, unknown> = {
+      HGETALL: ["age", "30", "email", "a@b.c"],
+      LRANGE: ["mail-1", "mail-2", "mail-3"],
+      SMEMBERS: ["beta", "vip"],
+      ZRANGE: /withscores/i.test(a.line) ? ["alice", "10", "bob", "20"] : ["alice", "bob"],
+      INCR: 7,
+      GET: null,
+      DBSIZE: 7,
+      FLUSHDB: { status: "OK" },
+    };
+    if (cmd === "NOSUCH") throw "Redis: ERR unknown command 'NOSUCH', with args beginning with: ";
+    return cmd in reply ? reply[cmd] : { status: "OK" };
+  },
   warm_search_cache: () => null,
   cached_index: () => [
     { target: "prod::shop_app", objects: [{ schema: "public", name: "payments", kind: "table" }, { schema: "public", name: "refunds", kind: "table" }], columns: [{ schema: "public", name: "refunds", columns: [["payment_id", "bigint"]] }] },
@@ -395,7 +432,8 @@ const handlers: Record<string, (a: any) => unknown> = {
   explain_wrap: () => ((globalThis as any).__mockManual === true ? ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"] : ["BEGIN", "ROLLBACK"]),
   // Production confirmation: rows a change would touch; like the backend, only UPDATE/DELETE are counted (null = can't count, e.g. INSERT or DDL)
   preview_impact: (a: any) => (/^\s*(update|delete)\b/i.test(a.sql) ? (/\bwhere\b/i.test(a.sql) ? 3 : 500) : null),
-  unsafe_reason: (a: any) => (/^\s*(delete|update)\b(?![\s\S]*\bwhere\b)/i.test(a.sql) ? "DELETE without WHERE changes every row" : /^\s*(drop|truncate)\b/i.test(a.sql) ? "DROP removes data" : null),
+  // Redis as qurry_shared::guard::unsafe_statement words it
+  unsafe_reason: (a: any) => a.kind === "redis" ? ((c) => (/^(FLUSHALL|FLUSHDB|DEL|UNLINK|SHUTDOWN|SWAPDB|REPLICAOF|SLAVEOF)$/.test(c) ? `${c} deletes or replaces data` : /^(EVAL|EVALSHA|EVAL_RO|EVALSHA_RO|FCALL|FUNCTION|SCRIPT)$/.test(c) ? `${c} runs a script that can change anything` : null))(String(a.sql).trim().split(/\s+/)[0].toUpperCase()) : (/^\s*(delete|update)\b(?![\s\S]*\bwhere\b)/i.test(a.sql) ? "DELETE without WHERE changes every row" : /^\s*(drop|truncate)\b/i.test(a.sql) ? "DROP removes data" : null),
   trust_ssh_host: () => "Trusted",
   export_data: (a: any) => new Promise((ok) => setTimeout(() => ok({ rows: 500, path: a.clipboard ? null : `~/Downloads/${a.defaultName}.${a.format}`, text: a.clipboard ? "id\tname\n1\ta\n" : null }), 4000)),
   cancel_job: () => null,
@@ -482,11 +520,14 @@ const handlers: Record<string, (a: any) => unknown> = {
   ],
   apply_migrations: () => ["3"],
   save_migration: (a: any) => `${a.dir}/V4__x.sql`,
-  history_add: () => null,
-  history_list: () => [
-    { id: "h1", connId: "dev", sql: "SELECT client_ip, count(*) FROM logs.user_activity_log GROUP BY 1 ORDER BY 2 DESC LIMIT 20", ts: Date.now() - 60000 },
-    { id: "h2", connId: "dev", sql: "select * from users where id = 42", ts: Date.now() - 3600000 },
-  ],
+  // Kept for the session, newest first; the core masks passwords (AUTH …) as history::redact does
+  history_add: (a: any) => void historyAdded.unshift({ id: `ha${historyAdded.length}`, connId: a.connId, database: a.database ?? undefined, sql: String(a.sql).replace(/^(\s*auth\s+).*$/i, "$1***"), ts: Date.now() }),
+  history_list: (a: any) =>
+    [
+      ...historyAdded,
+      { id: "h1", connId: "dev", sql: "SELECT client_ip, count(*) FROM logs.user_activity_log GROUP BY 1 ORDER BY 2 DESC LIMIT 20", ts: Date.now() - 60000 },
+      { id: "h2", connId: "dev", sql: "select * from users where id = 42", ts: Date.now() - 3600000 },
+    ].filter((h) => !a?.connId || h.connId === a.connId),
   history_delete: () => null,
   fake_preview: () => ({
     plan: [

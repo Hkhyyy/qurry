@@ -270,6 +270,10 @@ fn click(app: &mut App, x: u16, y: u16) {
             app.toggle_node(&node);
         } else if dbl {
             app.activate_node(&node, false);
+        } else if node.kind == NodeKind::Db && app.kind_of(&node.conn) == qurry_core::store::DbKind::Redis {
+            // A click on a Redis database switches the source's open Redis tab to it (as in the GUI)
+            app.redis_db_clicked(&node.conn, node.db.clone().unwrap_or_default());
+            app.focus = Focus::Tree;
         }
         return;
     }
