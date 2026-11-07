@@ -14,7 +14,7 @@ import { useSharedReady } from "./lib/shared";
 import { tableTabLabels } from "./lib/tabLabels";
 import { NodeInfo } from "./components/SchemaTree";
 import { leaves } from "./lib/panes";
-import { useTheme } from "./lib/theme";
+import { takeThemeNotice } from "./lib/theme";
 import { Group, Tab } from "./features/tabs/types";
 import { isMac } from "./features/shortcuts/labels";
 import { offered, upToDate } from "./features/settings/SettingsDialog";
@@ -35,7 +35,6 @@ import { setDialog, setKeymapOpen, setSettingsOpen, setUpdate, setUpdateOpen, us
 import "./App.css";
 
 export default function App() {
-  const theme = useTheme();
   // Redraw the menu shortcut labels when the keymap changes (or the WASM module that draws them has loaded)
   const [keymapVer, setKeymapVer] = useState(0);
   useEffect(() => {
@@ -84,6 +83,11 @@ export default function App() {
   const [status, setStatus] = useState("Ready");
   // A keymap.json that doesn't load: the default keys work, the status bar says how to get the saved ones back
   useEffect(() => void loadKeymap().then((err) => err && setStatus(err)), []);
+  // The theme settings couldn't be read or the old pick moved (lib/theme.ts initTheme): what to do about it
+  useEffect(() => {
+    const n = takeThemeNotice();
+    if (n) setStatus(n);
+  }, []);
   const [treeSel, setTreeSel] = useState<NodeInfo | null>(null);
   // Every selected node (⌘-click / ⇧-click): the explorer's commands for several run on these
   const [treeSelAll, setTreeSelAll] = useState<NodeInfo[]>([]);
@@ -158,7 +162,8 @@ export default function App() {
     return () => off?.();
   }, [refresh]);
   useEffect(() => {
-    const onErr = (e: ErrorEvent) => setStatus(`Error: ${e.message}`);
+    // "ResizeObserver loop …" only says a resize was put off to the next frame (an editor laid out while its box settles: harmless)
+    const onErr = (e: ErrorEvent) => !e.message?.includes("ResizeObserver loop") && setStatus(`Error: ${e.message}`);
     const onRej = (e: PromiseRejectionEvent) => setStatus(`Error: ${String(e.reason)}`);
     const closeMenu = () => setTabMenu(null);
     window.addEventListener("error", onErr);
@@ -216,7 +221,7 @@ export default function App() {
   const { activateNode, buildMenu, startBackup } = ex;
 
   const [maximized, setMaximized] = useState(false);
-  const app = { conns, theme, setStatus, refresh, treeSel, treeSelAll, active, groupActive, labelOf, setTabMenu, setMaximized, ...cons, ...tabOps, ...ws, ...transfer, ...connActions, ...ex };
+  const app = { conns, setStatus, refresh, treeSel, treeSelAll, active, groupActive, labelOf, setTabMenu, setMaximized, ...cons, ...tabOps, ...ws, ...transfer, ...connActions, ...ex };
   const groups = useEditorGroups(app);
   const { renderPanes } = groups;
 

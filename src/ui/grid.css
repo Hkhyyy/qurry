@@ -1,4 +1,4 @@
-/* Result grid cells (ui/grid.tsx). Values are tokens · theme colors */
+/* Result grid cells (ui/grid.tsx). Values are tokens · theme colors; the edit and find states are theme tokens too (--grid-*, lib/theme.ts) */
 /* Header outside the scroller, scrolled sideways only (scrollLeft follows the body). ::after leaves room for the body's
    vertical scrollbar, so the header can scroll as far right as the body */
 .grid-head { flex: none; display: flex; overflow: hidden; }
@@ -26,10 +26,10 @@
 .cell.al-right { text-align: right; }
 .cell.al-center { text-align: center; }
 .cell.sel { outline: 1px solid var(--accent); outline-offset: -1px; background: var(--sel); }
-.grid-row.added .cell:not(.rownum) { background: rgba(95,184,101,.12); }
-.grid-row.deleted .cell:not(.rownum) { text-decoration: line-through; color: var(--danger); background: rgba(247,84,100,.08); }
+.grid-row.added .cell:not(.rownum) { background: var(--grid-added); }
+.grid-row.deleted .cell:not(.rownum) { text-decoration: line-through; color: var(--danger); background: var(--grid-deleted); }
 .grid-row.deleted .cell span { color: inherit; }
-.cell.changed { background: rgba(53,116,240,.22); }
+.cell.changed { background: var(--grid-changed); }
 .cell-input { flex: none; height: 24px; border-radius: 0; border: 1px solid var(--accent); padding: 0 7px; font: inherit; background: var(--c-1b2840); }
 .pk-mark { font-size: 10px; }
 .sort-btn { margin-left: auto; flex: none; color: transparent; cursor: pointer; padding: 0 2px; font-size: 12px; border-radius: 3px; }
@@ -48,7 +48,7 @@ body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-sel
 .cell-more { flex: none; height: 24px; padding: 0 6px; border-radius: 0 3px 3px 0; border: 1px solid var(--accent); border-left: none; background: var(--c-393b40); font-size: 12px; line-height: 1; }
 .cell.sel { background: var(--c-2e436e); outline: none; }
 .cell.active { outline: 1px solid var(--c-548af7); outline-offset: -1px; }
-.cell.match { background: rgba(229,192,123,.28); }
+.cell.match { background: var(--grid-match); }
 .cell.sel.match { background: var(--c-4a5a3a); }
 .cell.head.col-sel { background: var(--c-33405a); }
 .cell.rownum { cursor: default; }

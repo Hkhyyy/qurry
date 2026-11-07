@@ -16,6 +16,8 @@
 
 ## 토큰 (`tokens.css`)
 
+Colors are theme tokens: every theme's values are in `crates/shared/src/themes.json` (the TUI draws from it too), and `lib/theme.ts` sets them on `<html>`. The values below are Dark's.
+
 | 종류 | 토큰 | 값 (dark) | 쓰는 곳 |
 |---|---|---|---|
 | 바탕 | `--ui-bg` | #1e1f22 | 편집기, 표, 입력칸 |

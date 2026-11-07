@@ -1,11 +1,13 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { alignOf, setGridAlign, useGridAlign, VALUE_CLASSES } from "../../lib/gridAlign";
 import { useSharedReady, type Align } from "../../lib/shared";
 import { api, secretKey, setUpdateCheckEnabled, UpdateInfo, updateCheckEnabled } from "../../lib/api";
 import type { FontFamily, UpdateChannel } from "../../lib/api";
 import { KeymapEditor } from "../../components/KeymapEditor";
 import { Button, Checkbox, cx, Field, List, ListItem, Modal, Select, Text } from "../../ui";
-import { getThemePref, setThemePref, ThemePref, useTheme } from "../../lib/theme";
+import { allThemes, currentTheme, setThemePick, setThemeSync, SYSTEM, useThemeState, type ThemeDef } from "../../lib/theme";
+import { ask } from "../../lib/dialogs";
+import { ThemeEditor } from "./ThemeEditor";
 import { FontTarget, setFont, SIZES, useFonts } from "../../lib/prefs";
 import { FontPicker } from "./FontPicker";
 import { isMac, sk } from "../shortcuts/labels";
@@ -77,6 +79,62 @@ export function GridAlignField() {
   );
 }
 
+/** The theme choices: built-in, then custom */
+function ThemeOptions({ themes }: { themes: ThemeDef[] }) {
+  const custom = themes.filter((t) => t.custom);
+  const opt = (t: ThemeDef) => (
+    <option key={t.id} value={t.id}>
+      {t.name}
+    </option>
+  );
+  return (
+    <>
+      {themes.filter((t) => !t.custom).map(opt)}
+      {custom.length > 0 && <optgroup label="Custom">{custom.map(opt)}</optgroup>}
+    </>
+  );
+}
+
+/** Settings › Appearance › Theme: built-in and custom themes, or Sync with OS with a dark and a light theme of the user's choice
+ *  (shared with the TUI through settings.json); Edit Colors… opens the theme editor */
+export function ThemeField({ onEdit }: { onEdit: () => void }) {
+  const { settings, current } = useThemeState();
+  const [err, setErr] = useState<string | null>(null);
+  const all = allThemes(settings);
+  const sync = settings.theme === SYSTEM;
+  const run = (p: Promise<void>) => {
+    setErr(null);
+    p.catch((e) => setErr(String(e)));
+  };
+  return (
+    <Field label="Theme" group error={err ?? undefined} hint={sync ? `Follows the system appearance: ${current.name} now. The TUI uses the same themes (its terminal background picks dark or light).` : "The TUI uses the same theme."}>
+      <div className="ui-row">
+        <Select aria-label="Theme" value={sync ? current.id : settings.theme ?? "dark"} disabled={sync} onChange={(e) => run(setThemePick(e.target.value))}>
+          <ThemeOptions themes={all} />
+        </Select>
+        <Checkbox checked={sync} onChange={(v) => run(setThemePick(v ? SYSTEM : current.id))}>
+          Sync with OS
+        </Checkbox>
+        <Button size="sm" onClick={onEdit}>
+          Edit Colors…
+        </Button>
+      </div>
+      {sync && (
+        <div className="ui-row theme-sync">
+          <span className="muted">Dark</span>
+          <Select aria-label="Theme for a dark appearance" value={settings.sync.dark} onChange={(e) => run(setThemeSync({ ...settings.sync, dark: e.target.value }))}>
+            <ThemeOptions themes={all.filter((t) => t.kind !== "light")} />
+          </Select>
+          <span className="muted">Light</span>
+          <Select aria-label="Theme for a light appearance" value={settings.sync.light} onChange={(e) => run(setThemeSync({ ...settings.sync, light: e.target.value }))}>
+            <ThemeOptions themes={all.filter((t) => t.kind === "light")} />
+          </Select>
+        </div>
+      )}
+    </Field>
+  );
+}
+
 /** Settings › Passwords: whether to keep the password file's master key in a file or the OS keychain */
 function PasswordSettings() {
   const [loc, setLoc] = useState<"file" | "keychain" | null>(null);
@@ -114,8 +172,8 @@ const offered = (u: UpdateInfo) => (u.latest ? u : null);
 const upToDate = (u: UpdateInfo) => `You have the latest ${u.channel} version (${u.current}).`;
 
 /** onChannel: the update the new channel (or a check that finds nothing) offers (null: none), so the status bar button follows the channel */
-export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "appearance" }: { onClose: () => void; onUpdate: (u: UpdateInfo) => void; onChannel: (u: UpdateInfo | null) => void; initialPage?: "appearance" | "keymap" }) {
-  const [page, setPage] = useState<"appearance" | "keymap" | "passwords">(initialPage);
+export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "appearance" }: { onClose: () => void; onUpdate: (u: UpdateInfo) => void; onChannel: (u: UpdateInfo | null) => void; initialPage?: "appearance" | "theme" | "keymap" }) {
+  const [page, setPage] = useState<"appearance" | "theme" | "keymap" | "passwords">(initialPage);
   const [checkOnStart, setCheckOnStart] = useState(updateCheckEnabled());
   const [updMsg, setUpdMsg] = useState<string | null>(null);
   const [channel, setChannel] = useState<UpdateChannel | null>(null);
@@ -152,13 +210,14 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
       setUpdMsg(String(e));
     }
   };
-  const [pref, setPref] = useState<ThemePref>(getThemePref());
-  const theme = useTheme();
-  const pick = (p: ThemePref) => {
-    setPref(p);
-    setThemePref(p);
+  // Leaving the theme editor with colors not saved asks first (they would be lost)
+  const themeDirty = useRef(false);
+  const leave = async (then: () => void) => {
+    if (page === "theme" && themeDirty.current && !(await ask("The changed colors aren't saved as a theme. Discard them?", { title: "Theme Colors", okLabel: "Discard", danger: true }))) return;
+    themeDirty.current = false;
+    then();
   };
-  const sync = pref === "system";
+  const go = (p: typeof page) => leave(() => setPage(p));
   // Listed when Settings opens and again each time a picker opens (a font installed meanwhile shows up); empty if it can't
   // (the pickers then offer the default and the saved family)
   const [fonts, setFonts] = useState<FontFamily[] | null>(null);
@@ -173,11 +232,11 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
       size="xl"
       fixed
       className="settings"
-      onClose={onClose}
+      onClose={() => leave(onClose)}
       footer={
         <>
-          {page === "appearance" && <span className="ui-modal-foot-hint">Quick switch theme: {sk("theme")}</span>}
-          <Button variant="primary" onClick={onClose}>
+          {(page === "appearance" || page === "theme") && <span className="ui-modal-foot-hint">Quick switch theme: {sk("theme")}</span>}
+          <Button variant="primary" onClick={() => leave(onClose)}>
             OK
           </Button>
         </>
@@ -185,26 +244,16 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
     >
       <div className="settings-body">
         <List className="settings-nav">
-          <ListItem title="Appearance" selected={page === "appearance"} onClick={() => setPage("appearance")} />
-          <ListItem title="Keymap" selected={page === "keymap"} onClick={() => setPage("keymap")} />
-          <ListItem title="Passwords" selected={page === "passwords"} onClick={() => setPage("passwords")} />
+          <ListItem title="Appearance" selected={page === "appearance" || page === "theme"} onClick={() => go("appearance")} />
+          <ListItem title="Keymap" selected={page === "keymap"} onClick={() => go("keymap")} />
+          <ListItem title="Passwords" selected={page === "passwords"} onClick={() => go("passwords")} />
         </List>
         {page === "keymap" && <KeymapEditor />}
         {page === "passwords" && <PasswordSettings />}
+        {page === "theme" && <ThemeEditor start={currentTheme().id} onBack={() => go("appearance")} onDirty={(d) => (themeDirty.current = d)} />}
         {page === "appearance" && (
           <div className="settings-form">
-            <Field label="Theme">
-              <div className="ui-row">
-                <Select value={sync ? theme : pref} disabled={sync} onChange={(e) => pick(e.target.value as ThemePref)}>
-                  <option value="dark">Dark</option>
-                  <option value="light">Light</option>
-                  <option value="hc">High contrast</option>
-                </Select>
-                <Checkbox checked={sync} onChange={(v) => pick(v ? "system" : theme)}>
-                  Sync with OS
-                </Checkbox>
-              </div>
-            </Field>
+            <ThemeField onEdit={() => setPage("theme")} />
             <FontField target="editor" label="Editor font" hint={fontKeys && `Size also with ${fontKeys} in the editor.`} installed={fonts} onOpen={loadFonts} />
             <FontField target="grid" label="Grid font" installed={fonts} onOpen={loadFonts} />
             <GridAlignField />
