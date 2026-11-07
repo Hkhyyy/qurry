@@ -141,3 +141,55 @@ async fn a_new_run_clears_the_marks_of_earlier_runs() {
     h.settle().await;
     assert_eq!(editor_lines(&mut h), [" 1 select * from orders;", "✓2 select * from users;"]);
 }
+
+/// Fails like PostgreSQL on "boom", with the position of it in the statement sent (qurry_shared::errors::with_position)
+fn positioned(q: &str) -> Result<QueryResult, String> {
+    match q.find("boom") {
+        Some(i) => Err(qurry_shared::errors::with_position("ERROR: relation \"boom\" does not exist", q[..i].chars().count() + 1)),
+        None => fake(q),
+    }
+}
+
+/// The editor text drawn underlined in the danger colour (the run's error mark), one entry per row that has some
+fn underlined(h: &mut Harness) -> Vec<String> {
+    let buf = h.buffer(100, 24);
+    let marked = |x: u16, y: u16| buf[(x, y)].modifier.contains(ratatui::style::Modifier::UNDERLINED) && buf[(x, y)].fg == crate::kit::DANGER;
+    (0..24).map(|y| (0..100).filter(|&x| marked(x, y)).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).filter(|s| !s.is_empty()).collect()
+}
+
+/// A failed statement that isn't the first: the server's spot is underlined in the editor (through the statement's place in the
+/// console, past a wide character before it) and the status line says where; an edit clears it, Output keeps the error
+#[tokio::test]
+async fn run_error_underlines_the_servers_spot() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(positioned);
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    h.console_with("select 1;\nselect '한', x from boom;", 0, 0);
+    h.key("F5");
+    h.settle().await;
+    assert_eq!(underlined(&mut h), ["boom"]);
+    assert_eq!(h.app.status, "Error at line 2, col 20: ERROR: relation \"boom\" does not exist (position 20) — fix it and run again");
+    // An edit anywhere clears it; Output keeps the error
+    h.key("End");
+    h.type_str(" ");
+    assert!(underlined(&mut h).is_empty());
+    assert!(h.console_output().iter().any(|l| l.contains("relation \"boom\" does not exist")), "{:?}", h.console_output());
+}
+
+/// No position from the server: the whole statement is underlined; the next run clears it before it starts
+#[tokio::test]
+async fn run_error_without_a_position_marks_the_statement() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(fake);
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    h.console_with("select 1;\nselect *\n  from boom;", 0, 0);
+    h.key("F5");
+    h.settle().await;
+    assert_eq!(underlined(&mut h), ["select *", "  from boom"]);
+    assert_eq!(h.app.status, "Error: ERROR: relation \"boom\" does not exist — fix the statement and run it again");
+    h.app.fake_db = Some(|q| fake(&q.replace("boom", "t")));
+    h.key("F5");
+    assert!(underlined(&mut h).is_empty(), "cleared when the next run starts");
+    h.settle().await;
+    assert!(underlined(&mut h).is_empty());
+}

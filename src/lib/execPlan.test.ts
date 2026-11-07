@@ -26,6 +26,14 @@ describe("planExecution (DataGrip Query Execution)", () => {
     expect(p && "ask" in p && p.ask[2].stmts.map((s) => s.sql)).toEqual(["GRANT b TO x", "COMMIT"]);
   });
 
+  it("inside a subquery offers it after the statement, with its range in UTF-16 (past an emoji before it)", () => {
+    const sql = "select '😀', x from t where id in (select id from u);";
+    const p = planExecution(sql, sql.indexOf("from u"), splitStatements(sql), DEFAULT_EXEC);
+    expect(p && "ask" in p && p.ask.map((o) => o.label)).toEqual([sql.slice(0, -1), "select id from u"]);
+    const sub = p && "ask" in p ? p.ask[1].stmts : [];
+    expect(sub).toEqual([{ start: sql.indexOf("select id"), end: sql.indexOf("select id") + "select id from u".length, sql: "select id from u" }]);
+  });
+
   it("doesn't ask when there is only one statement", () => {
     expect(planExecution("select 1", 3, splitStatements("select 1"), DEFAULT_EXEC)).toEqual({ run: [{ start: 0, end: 8, sql: "select 1" }] });
   });

@@ -79,13 +79,16 @@ mod tests {
         h.key("F5");
         let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no chooser") };
         assert_eq!(p.items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["select 2", "All statements (3)", "From caret to end"]);
-        // Which of the three statement rows are drawn on the selection background
+        // Which of the three statements are drawn on the selection background (their text, not the `;` or past the line's end)
         let lines = |h: &mut Harness| {
             let buf = h.buffer(100, 30);
             let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
             ["1", "2", "3"].map(|n| {
                 let y = (0..30).find(|&y| row(y).contains(&format!("select {n};"))).unwrap();
-                buf[(60, y)].bg == crate::ui::SEL
+                let s = row(y);
+                let x = s[..s.find(&format!("select {n};")).unwrap()].chars().count() as u16;
+                assert!(buf[(x + 8, y)].bg != crate::ui::SEL && buf[(60, y)].bg != crate::ui::SEL);
+                buf[(x, y)].bg == crate::ui::SEL && buf[(x + 7, y)].bg == crate::ui::SEL
             })
         };
         assert_eq!(lines(&mut h), [false, true, false]);

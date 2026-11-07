@@ -104,7 +104,7 @@ impl App {
         let mut editor = TextArea::new(sql.lines().map(String::from).collect());
         editor.set_cursor_line_style(ratatui::style::Style::default());
         let manual = self.conn(conn).map(|c| c.config.options.tx_manual).unwrap_or(false);
-        let c = Console { editor, session: uuid::Uuid::new_v4().to_string(), grid: None, result_title: String::new(), result_sql: String::new(), output: vec![], show_output: true, running: false, tx_manual: manual, in_tx: false, complete: None, marks: Default::default() };
+        let c = Console { editor, session: uuid::Uuid::new_v4().to_string(), grid: None, result_title: String::new(), result_sql: String::new(), output: vec![], show_output: true, running: false, tx_manual: manual, in_tx: false, complete: None, marks: Default::default(), run_spans: vec![], run_error: None };
         self.restored_tab(conn, db, title, TabKind::Console(c))
     }
 
@@ -326,7 +326,7 @@ impl App {
         editor.set_cursor_line_style(ratatui::style::Style::default());
         let manual = self.conn(conn).map(|c| c.config.options.tx_manual).unwrap_or(false);
         let session = uuid::Uuid::new_v4().to_string();
-        let id = self.push_tab(conn, db, title, TabKind::Console(Console { editor, session: session.clone(), grid: None, result_title: String::new(), result_sql: String::new(), output: vec![], show_output: true, running: false, tx_manual: manual, in_tx: false, complete: None, marks: Default::default() }));
+        let id = self.push_tab(conn, db, title, TabKind::Console(Console { editor, session: session.clone(), grid: None, result_title: String::new(), result_sql: String::new(), output: vec![], show_output: true, running: false, tx_manual: manual, in_tx: false, complete: None, marks: Default::default(), run_spans: vec![], run_error: None }));
         let target = self.tabs[self.tab_index(id).unwrap()].target.clone();
         self.load_completion(target);
         if manual {

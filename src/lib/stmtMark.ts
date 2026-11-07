@@ -6,6 +6,8 @@ export interface StmtMark {
   out: string;
   ts: string;
   text?: string;
+  /** A failed statement: where its error points, as an offset into its text (undefined when the server doesn't say) */
+  at?: number;
 }
 /** Sets the gutter mark of the i-th statement of a run */
 export type MarkStmt = (i: number, m: StmtMark) => void;

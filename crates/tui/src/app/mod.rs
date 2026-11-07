@@ -56,6 +56,30 @@ pub struct Console {
     pub complete: Option<Completion>,
     /// Gutter marks of the statements runs executed
     pub marks: Marks,
+    /// Where the statements about to run are in the editor (run_marked; empty for a run of statements typed nowhere): the run's
+    /// error is marked through them
+    pub run_spans: Vec<Span>,
+    /// The last run's error, underlined in the editor until its text changes or the next run starts
+    pub run_error: Option<RunError>,
+}
+
+/// A stretch of the editor: (row, char column) of its start and its end (exclusive)
+pub type Span = ((usize, usize), (usize, usize));
+
+/// A failed statement's error in the editor: where the server points (else the whole statement), on the lines it ran from
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunError {
+    pub span: Span,
+    pub lines: Vec<String>,
+}
+
+/// Where byte `at` of `text` is in the editor, when `text` starts at `origin` (row, char column)
+pub fn editor_pos(text: &str, at: usize, origin: (usize, usize)) -> (usize, usize) {
+    let head = &text[..at.min(text.len())];
+    match head.rfind('\n') {
+        Some(nl) => (origin.0 + head.matches('\n').count(), head[nl + 1..].chars().count()),
+        None => (origin.0, origin.1 + head.chars().count()),
+    }
 }
 
 /// How a run statement's gutter mark shows it (DataGrip): … running, ✓ done, ✗ failed (symbols, so NO_COLOR reads them too)
@@ -420,7 +444,7 @@ pub enum PAction {
     Object { conn: String, db: String, e: IndexEntryLite },
     Tab(u64),
     /// Statements picked in the execution picker popup
-    Run { stmts: Vec<String>, rows: Vec<(usize, usize)>, explain: bool },
+    Run { stmts: Vec<String>, spans: Vec<Span>, explain: bool },
     /// Change execution settings
     Exec(qurry_core::exec::ExecSettings),
     /// Update channel picked

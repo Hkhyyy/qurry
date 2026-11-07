@@ -34,6 +34,28 @@ onTheme((t) => {
 
 export { monaco };
 
+/** Owner of a console's run error marker, apart from every other marker so setting or clearing it leaves theirs alone */
+const RUN_ERROR = "qurry.runError";
+
+/**
+ * Mark a failed run's error in the console (DataGrip): at the server's spot (`at`, an offset into the model; the word there, else one
+ * character) or, when the error doesn't say, over the whole statement (`start`–`end`). null clears it (an edit, the next run)
+ */
+export function setRunError(m: monaco.editor.ITextModel, err: { start: number; end: number; at?: number; message: string } | null) {
+  if (!err) return monaco.editor.setModelMarkers(m, RUN_ERROR, []);
+  let range: monaco.IRange = monaco.Range.fromPositions(m.getPositionAt(err.start), m.getPositionAt(err.end));
+  if (err.at !== undefined) {
+    const p = m.getPositionAt(err.at);
+    // The word from the spot on (not one that only ends there: `foo(` with the spot on the parenthesis)
+    const w = [m.getWordAtPosition(p)].find((x) => x && p.column < x.endColumn);
+    const max = m.getLineMaxColumn(p.lineNumber);
+    // Past the line's last character (MySQL's near '' is the statement's end): the character before it
+    const col = w ? w.startColumn : Math.max(Math.min(p.column, max - 1), 1);
+    range = new monaco.Range(p.lineNumber, col, p.lineNumber, w ? w.endColumn : Math.min(col + 1, max));
+  }
+  monaco.editor.setModelMarkers(m, RUN_ERROR, [{ ...range, severity: monaco.MarkerSeverity.Error, message: err.message }]);
+}
+
 /**
  * When closing a console tab: discard that console's undo history.
  * Monaco keeps a closed model's undo (up to 20MB) in case the same URI is reopened, but console URIs (console-<tab id>.sql) are never reused.

@@ -459,3 +459,81 @@ async fn console_rerun_with_pending_edits_asks_first() {
     assert!(h.console_output().len() > before, "it ran");
     assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 0);
 }
+
+/// The text of each editor row drawn on the selection background (the Execute chooser's highlight)
+fn highlighted(h: &mut Harness) -> Vec<String> {
+    let buf = h.buffer(140, 24);
+    let ed = h.app.hits.editor;
+    (ed.top()..ed.bottom()).map(|y| (ed.left()..ed.right()).filter(|&x| buf[(x, y)].bg == crate::ui::SEL).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).filter(|s| !s.trim().is_empty()).collect()
+}
+
+/// Inside a subquery F5 offers it after the whole statement, innermost first (DataGrip); the editor highlights exactly its text,
+/// and picking it runs only that text
+#[tokio::test]
+async fn execute_chooser_offers_the_subqueries_around_the_caret() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(fake);
+    let sql = "select 1;\nselect * from orders where user_id in (select id from users where n > (select avg(n) from users));";
+    h.console_with(sql, 1, 75);
+    h.key("F5");
+    let Some(Popup::Palette(p)) = &h.app.popup else { panic!("no chooser") };
+    let labels: Vec<_> = p.items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(labels[1..], ["select avg(n) from users", "select id from users where n > (select avg(n) from users)", "All statements (2)"]);
+    assert!(highlighted(&mut h)[0].contains("from orders where user_id in (select id"), "{:?}", highlighted(&mut h));
+    h.key("Down");
+    assert_eq!(highlighted(&mut h), ["select avg(n) from users"]);
+    h.key("Down");
+    assert_eq!(highlighted(&mut h), ["select id from users where n > (select avg(n) from users)"]);
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(h.console_output(), ["> select id from users where n > (select avg(n) from users)", "2 row(s) retrieved in 7 ms"]);
+}
+
+/// A subquery picked in the chooser goes through the same checks as any run: on a Production source a write in it asks first
+/// with its counted rows, on a read-only one the server-side check refuses it (the fake refuses what core's check_read_only does)
+#[tokio::test]
+async fn a_picked_subquery_goes_through_the_guards() {
+    let sql = "select 1;\nselect * from (with d as (delete from payment where id = 4 returning id) select id from d) x;";
+    let pick = |h: &mut Harness| {
+        let TabKind::Console(c) = &mut h.app.tabs[h.app.active].kind else { panic!() };
+        c.editor.move_cursor(tui_textarea::CursorMove::Jump(1, 85));
+        h.key("F5");
+        let Some(Popup::Palette(p)) = &h.app.popup else { panic!("no chooser: {}", h.app.status) };
+        assert_eq!(p.items[1].label, "with d as (delete from payment where id = 4 returning id) select id from d");
+        h.key("Down");
+        h.key("Enter");
+    };
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+    }))
+    .unwrap();
+    cfg.options.confirm_changes = true;
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.fake_db = Some(fake);
+    let id = h.app.restore_console("p", "d".into(), "console".into(), sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    pick(&mut h);
+    h.settle().await;
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    assert!(text.starts_with("Production data source \"PROD\" — this changes data:\n\n  with d as (delete from payment where id = 4 returning id) select"), "{text}");
+    assert!(h.console_output().is_empty(), "nothing runs before the answer");
+    h.key("Esc");
+
+    fn read_only(q: &str) -> Result<QueryResult, String> {
+        match qurry_core::guard::read_only_violation(q, qurry_core::store::DbKind::Postgres, false) {
+            Some(why) => Err(why),
+            None => fake(q),
+        }
+    }
+    h.app.fake_db = Some(read_only);
+    h.console_with(sql, 0, 0);
+    pick(&mut h);
+    h.settle().await;
+    let out = h.console_output();
+    assert_eq!(out[0], "> with d as (delete from payment where id = 4 returning id) select id from d");
+    assert!(out[1].contains("Read-only"), "{out:?}");
+}
