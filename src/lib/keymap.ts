@@ -153,6 +153,7 @@ export const KEYMAP: KeySection[] = [
       ["⌘r", "Redis: scan keys again"],
       ["⌘s", "Redis: save the value being edited"],
       ["⌃l", "Redis terminal: clear"],
+      ["⇥ · ↑↓ · ↩", "Redis terminal: complete (commands with arguments, key names) · choose / history · pick / run"],
     ],
   },
 ];

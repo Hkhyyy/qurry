@@ -10,7 +10,7 @@ Qurry 가 다루는 데이터베이스, 연결 방법 (SSH, AWS SSM, SSL, 옵션
 |---|---|
 | PostgreSQL | 탐색기 트리 (데이터베이스, 스키마, 테이블, 뷰, 시퀀스, 루틴), 쿼리 콘솔 (서버 커서로 나눠 받기, 취소, 수동 트랜잭션), 데이터 편집, 실행 계획, DDL, 전체 텍스트 검색. `infinity` / `-infinity` 날짜 · 타임스탬프는 그대로 `infinity` / `-infinity` 로, 그 배열은 값으로 보여 줍니다 |
 | MySQL / MariaDB | 위와 같음. MySQL 은 데이터베이스가 곧 스키마라서 테이블이 데이터베이스 바로 아래에 보입니다 |
-| Redis | Medis 같은 브라우저 (타입 · TTL 이 붙은 키 목록, 타입별 값 편집기), redis-cli 같은 터미널, **Standalone / Sentinel / Cluster** |
+| Redis | Medis 같은 브라우저 (타입 · TTL 이 붙은 키 목록, 타입별 값 편집기), 자동 완성이 되는 redis-cli 같은 터미널, **Standalone / Sentinel / Cluster** ([Redis 브라우저](#redis-브라우저)) |
 
 연결 옵션:
 - **SSH 터널** (키 또는 비밀번호). 호스트 키는 `~/.ssh/known_hosts` 로 확인합니다. 키가 바뀌었으면 거부하고, 처음 보는 서버는 SHA256 지문을 보여 주며 **Trust host key** 를 고를 때까지 멈춥니다 (GUI: Data Source 창, TUI: 폼에서 `⌃y` 또는 `⌃k › Trust SSH Host Key`). 터널은 연결된 동안 `127.0.0.1` 의 임의 포트에서 기다립니다. 같은 컴퓨터의 다른 프로그램도 그 포트를 쓸 수 있으므로, 여럿이 쓰는 컴퓨터에서는 (bastion IP 허용만 믿지 말고) DB 비밀번호를 쓰고 **Auto-disconnect** 를 켜서 쓰지 않는 터널이 닫히게 하세요. SSH 세션 하나를 그 Data Source 의 모든 데이터베이스가 같이 씁니다. 세션이 끝나면 (노트북 잠자기, 네트워크 변경) 다음 쿼리가 다시 로그인합니다. 세션은 열려 있는데 더는 아무것도 지나가지 않으면, 10초 안에 응답이 없는 접속은 먼저 터널을 확인합니다: 새 연결이 2초 안에 (그 Data Source 의 콘솔에 열린 트랜잭션이나 실행 중인 문장이 있거나, 그 Data Source 에서 내보내기 · 가져오기 · 백업 · 복원 · subset 복사가 돌고 있으면 5초 안에. Auto-disconnect 도 그것들이 끝날 때까지 기다립니다) 데이터베이스의 첫 바이트를 받아야 합니다. 그것도 아무것도 받지 못하면 다시 로그인해 한 번 더 시도하고 그 쿼리는 그대로 실행됩니다 (죽은 세션을 지나던 콘솔의 트랜잭션은 잃습니다: 더는 그곳에 닿을 수 없습니다). 세션이 이미 열린 콘솔이나 테이블 탭은 10초 넘게 쓰지 않았으면 (시계 기준이라 컴퓨터가 잠자던 시간도 셉니다) 실행 전에 먼저 그 세션을 확인합니다. 5초 안에 응답이 없으면 Qurry 가 그 세션을 닫고 (터널도 아무것도 전달하지 않으면 터널까지) 새 세션에서 문장을 한 번 실행합니다. 그 세션에 트랜잭션이 열려 있는데 터널은 아직 응답하면, 세션이 느릴 뿐이므로 (잠자기 후 네트워크가 돌아오는 중, 백업으로 바쁜 터널) Qurry 는 세션과 트랜잭션을 그대로 두고 아무것도 보내지 않은 채 그렇다고 알립니다. 다시 실행하거나 Roll back 하세요. 터널도 아무것도 전달하지 않으면 트랜잭션은 잃습니다: 실행 (또는 Commit) 은 그렇다고 알리고 아무것도 보내지 않으니 다시 실행하세요. 터널과 함께 닫히거나 Disconnect 로 닫힌 다른 콘솔의 트랜잭션도, 그 콘솔의 다음 실행 · Commit · Roll back 이 새 세션에서 실행하는 대신 한 번 그렇다고 알립니다. 죽은 세션에서 이미 기다리던 문장은 Cancel 을 누르거나, Keep-alive 를 켰다면 (Options) 다음 keep-alive 때 "The connection through the SSH tunnel (…) closed" 로 끝나며, 저절로 다시 실행되지 않습니다. 그때 상태 줄은 Data Source 의 연결이 왜 끊겼는지 알려 줍니다 ("Disconnected: the SSH tunnel of <이름> stopped answering — the next query opens a new one"). 터널이 아직 응답하면 터널과 그것을 지나는 모든 작업 (콘솔, 가져오기, 복원) 은 그대로 두고, 오류가 터널은 응답한다는 것과 접속을 붙잡는 다른 원인을 알려 줍니다: 그 Data Source 의 연결 32개가 모두 사용 중 (열린 콘솔과 테이블), 느린 데이터베이스, 실패하거나 오래 걸리는 시작 스크립트. PostgreSQL 과 MySQL Data Source, 그리고 SSL 을 쓰지 않는 Redis 콘솔 (오래 쓰지 않았으면 같은 방식으로 확인합니다) 에 해당하며, 그 밖의 Redis 작업과 플러그인 드라이버 데이터베이스 (SQL Server, MongoDB, ClickHouse, Oracle …) 는 연결을 끊고 다시 연결하세요. 새 세션으로도 데이터베이스가 응답하지 않으면 SSH 서버를 밝힌 오류를 한 번 보여 줍니다 ("Can't connect to … through the SSH tunnel (bastion:22)"). 데이터베이스가 켜져 있는지, SSH 서버가 거기에 닿는지 확인한 뒤 다시 실행하세요.
@@ -23,6 +23,15 @@ Qurry 가 다루는 데이터베이스, 연결 방법 (SSH, AWS SSM, SSL, 옵션
 - **MCP**: AI 도구가 `qurry-mcp` 로 할 수 있는 것 — Off (새 Data Source. 목록에 없고 접속하지 않음), Read, Read & write (`--allow-write` 일 때). [MCP 서버](mcp.md) 참고. GUI: Options 탭 · TUI: `MCP` 칸.
 
 > Redis Sentinel · Cluster 노드는 자기 주소를 알려 주는 방식이라 SSH · AWS SSM 터널과 같이 쓸 수 없습니다.
+
+## Redis 브라우저
+
+- **탐색기**: Redis Data Source 아래에는 데이터베이스 (`db0`, 설정한 데이터베이스, 키가 있는 모든 데이터베이스) 와 그 키 개수만 보입니다. 키는 Redis 탭에서 봅니다. 더블클릭 (TUI `Enter`) 하면 그 데이터베이스로 Data Source 의 Redis 탭을 열고, 다른 데이터베이스를 클릭하면 열린 탭이 그 데이터베이스로 바뀝니다.
+- **Data Source 마다 Redis 탭 하나**: 툴바에 데이터베이스 선택 (`db0 · 500 keys`, TUI `d`) 과 키 필터 (SCAN 패턴, 예: `prod:user:*`, TUI `/`) 가 있습니다. 고른 데이터베이스는 워크스페이스에 저장됩니다. 0.3.2 이전에 데이터베이스마다 탭을 열어 저장한 워크스페이스는 마지막에 저장된 데이터베이스로 탭 하나를 다시 엽니다.
+- **키 트리**: 키는 `:` 로 나눈 폴더로 묶이고, 폴더 이름 옆에 키 개수가 흐리게 보입니다 (`sessions 419`). TTL 열에는 키의 TTL 만 (`1d 4h`), 만료가 없는 키는 `—` 로 보입니다. 오른쪽 값 패널에는 **Content · Terminal · Info · Config** 가 있습니다.
+- **Config** 는 서버가 `CONFIG` 를 막으면 흐리게 보이고 고를 수 없습니다 (관리형 Redis: AWS ElastiCache / MemoryDB, Azure Cache, GCP Memorystore, Upstash … 는 끄거나 이름을 바꿉니다. 연결할 때 한 번 확인합니다). 마우스를 올리면 이유가 나옵니다: 설정은 제공자 콘솔 (예: ElastiCache 파라미터 그룹) 에 있고, 서버 정보는 **Info** 에서 그대로 볼 수 있습니다.
+- **Terminal** (TUI `:`): 명령을 치면 될 수 있는 명령과 인자 · 설명이 목록으로 나옵니다 (`HG` → `HGET key field`, `HGETALL key`). 목록은 Qurry 에 들어 있는 명령 표에서 나오고, 키 인자는 횟수를 제한한 SCAN 으로 키 이름을 완성합니다. `⇥` / `↩` 로 고르고 `⎋` 로 목록을 닫습니다. 아직 칠 인자는 글자 뒤에 흐리게 보입니다. `↑` `↓` 는 이 Data Source 의 기록을 오갑니다 (Query History 와 같은 기록. `AUTH`, `HELLO … AUTH`, `CONFIG SET requirepass` 의 비밀번호는 가립니다). `HELP <명령>` 은 그 명령의 인자와 설명을 보여 줍니다. 응답은 종류에 맞게 보입니다: 해시는 field / value 표, 리스트는 0 부터 번호, set · sorted set 은 행으로 (`WITHSCORES` 면 점수와 함께), nil 과 오류는 다른 모양으로.
+- **콘솔과 같은 규칙**: 읽기 전용 Data Source 는 읽는 명령만 실행하고 (명령 표에 없는 명령은 쓰기로 봅니다), Production Data Source 는 쓰기 전에 묻고, `FLUSHALL` / `FLUSHDB` / `DEL` (그리고 지우거나 스크립트를 실행하는 다른 명령) 은 늘 묻습니다.
 
 ## 내보내기와 가져오기
 
