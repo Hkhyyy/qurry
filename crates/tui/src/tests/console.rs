@@ -582,6 +582,36 @@ async fn unknown_names_are_underlined_and_alt_enter_fixes_them() {
     assert!(h.console_output().iter().any(|l| l.ends_with("> select user_name from users")), "{:?}", h.console_output());
 }
 
+/// A paste is marked at once, and ⌥↩ reads the marks of the text as it is now: SQL that moved the name without a key (inserted
+/// by a command) still gets its name fixed, not the text at its old place
+#[tokio::test]
+async fn pasted_and_moved_names_are_marked_where_they_are() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(fake);
+    h.console_with("", 0, 0);
+    assist_meta(&mut h);
+    h.app.focus = crate::app::Focus::Editor;
+    h.paste("select nme from users");
+    assert_eq!(console(&h).assist.names.iter().map(|m| (m.row, m.from, m.to)).collect::<Vec<_>>(), [(0, 7, 10)]);
+    if let TabKind::Console(c) = &mut h.app.tabs[h.app.active].kind {
+        c.editor.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+        c.editor.insert_str("\n");
+        c.editor.move_cursor(tui_textarea::CursorMove::Jump(1, 9));
+    }
+    h.key("Alt+Enter");
+    assert_eq!(items(&h), ["user_name"]);
+    h.key("Enter");
+    assert_eq!(h.console_text(), "\nselect user_name from users");
+    // Valid SQL the metadata has no names for (FETCH, a named window): no mark, so ⌥↩ at it runs the statement
+    h.console_with("select id from users fetch next 5 rows only", 0, 27);
+    assist_meta(&mut h);
+    h.key("Right");
+    assert!(console(&h).assist.names.is_empty(), "{:?}", console(&h).assist.names);
+    h.key("Alt+Enter");
+    h.settle().await;
+    assert!(h.console_output().iter().any(|l| l.ends_with("> select id from users fetch next 5 rows only")), "{:?}", h.console_output());
+}
+
 /// No marks for what the metadata can't tell: a CTE, an alias, a function, another database's table, or before the metadata loads
 #[tokio::test]
 async fn no_marks_when_unsure() {

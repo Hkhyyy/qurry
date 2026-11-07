@@ -102,6 +102,7 @@ fn paste(app: &mut App, s: String) {
         None => match app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
             Some(TabKind::Console(c)) if app.focus == Focus::Editor => {
                 c.editor.insert_str(s);
+                app.update_assist();
             }
             // Table data, an editable console result: fill from the current cell (⌘V)
             Some(TabKind::Table(_) | TabKind::Console(_)) if app.focus == Focus::Grid => {

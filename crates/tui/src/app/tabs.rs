@@ -311,6 +311,7 @@ impl App {
                 if let Some(Tab { kind: TabKind::Console(c), .. }) = a.tabs.get_mut(a.active) {
                     c.editor.insert_str(sql);
                 }
+                a.update_assist();
                 a.status = "Similar-rows query is in a new console — F5 to run".into();
             }
             Err(e) => a.status = e,

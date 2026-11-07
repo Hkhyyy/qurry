@@ -221,8 +221,12 @@ impl App {
         let sig = complete::signature(&meta, &stmt, caret, mysql);
         // Byte offsets in the window → (row, char columns)
         let starts: Vec<usize> = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
+        // A statement the window's edge cuts (a long one running past it) isn't marked: its other sources may be outside it
+        let spans = sql::split_script(&text, kind);
+        let cut = |at: usize| spans.iter().position(|&(s, e)| s <= at && at <= e).is_some_and(|k| from > 0 && k == 0 || to < lines.len() && k + 1 == spans.len());
         let names = complete::script_marks(&meta, &text, kind, &db)
             .into_iter()
+            .filter(|m| !cut(m.start))
             .map(|m| {
                 let r = starts.partition_point(|&s| s <= m.start) - 1;
                 let line = &text[starts[r]..];
@@ -236,6 +240,8 @@ impl App {
     /// ⌥↩: on an underlined unknown name, its closest names as a list (picking one replaces it); anywhere else Execute, so the
     /// key keeps running statements
     pub fn quick_fix(&mut self) {
+        // The marks as of the text now, not as of the last key (a paste or inserted SQL may have moved them)
+        self.update_assist();
         let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind) else { return self.execute(false) };
         let (row, col) = c.editor.cursor();
         let Some(m) = c.assist.at(row, col).cloned() else { return self.execute(false) };
