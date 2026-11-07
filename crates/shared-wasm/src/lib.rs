@@ -533,7 +533,14 @@ pub fn redis_help(line: &str) -> Option<String> {
     qurry_shared::redis_cmd::help(line)
 }
 
-/// Redis database picker: "db0 · 1,500 keys" (the TUI's words)
+/// Redis Terminal: the key names listed for the typed prefix ([{label, insert}], the typed key first, `insert` quoted as
+/// redis-cli reads it) from a bounded SCAN's names
+#[wasm_bindgen(js_name = redisKeyChoices)]
+pub fn redis_key_choices(prefix: &str, names: Vec<String>) -> Result<JsValue, JsError> {
+    to(&qurry_shared::redis_cmd::key_choices(prefix, &names))
+}
+
+/// Redis database picker: "db0 · 1,500 keys", the name alone when the count is unknown (the TUI's words)
 #[wasm_bindgen(js_name = redisDbLabel)]
 pub fn redis_db_label(name: &str, keys: f64) -> String {
     qurry_shared::redis_cmd::db_label(name, keys as i64)

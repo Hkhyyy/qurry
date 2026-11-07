@@ -184,6 +184,8 @@ pub struct RedisPrompt {
     pub hi: Option<usize>,
     /// Key names read for a prefix (the last SCAN asked)
     pub keys: Option<(String, Vec<String>)>,
+    /// ↑↓ moved in the open list since the last edit: only then ↩ picks a key name (else it runs the line; ⇥ always picks)
+    pub moved: bool,
 }
 
 /// Editor split (the GUI's Split Right / Split Down). Each pane (group) has its own tab bar

@@ -659,6 +659,16 @@ export const RedisTerminal: S = {
     await userEvent.type(input, "HG");
   },
 };
+/** Terminal key names from a bounded SCAN: the key typed out comes first, and ↩ runs the line unless ↑↓ moved to another key (⇥ picks) */
+export const RedisTerminalKeys: S = {
+  name: "Redis Browser — Terminal key names",
+  render: RedisTab,
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(await c.findByRole("tab", { name: "Terminal" }));
+    await userEvent.type(await c.findByRole("textbox", { name: "Redis command" }), "HGETALL user:1");
+  },
+};
 const WS_NAMES = ["Default", "Reports", "Billing", "Analytics", "Ops", "Support", "Growth", "Search", "Mobile", "Payments"];
 /** The rail at a fixed window height: n workspaces, the 2nd current. Keymap and Settings stay at the bottom while the list scrolls */
 const Rail = ({ n, h = 420 }: { n: number; h?: number }) => {

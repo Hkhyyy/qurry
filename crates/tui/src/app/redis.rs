@@ -117,8 +117,10 @@ impl App {
                 }
             });
         }
+        let asked = target.clone();
         self.spawn(async move { st.redis_scan(target, cursor, pattern, 500, None).await.map_err(err) }, move |a, res| {
-            let Some(t) = a.tab_mut(id) else { return };
+            // The tab switched databases meanwhile: these keys are the old one's
+            let Some(t) = a.tab_mut(id).filter(|t| t.target == asked) else { return };
             let TabKind::Redis(r) = &mut t.kind else { return };
             r.scanning = false;
             match res {
@@ -162,9 +164,10 @@ impl App {
         let Some(t) = self.tab_mut(id) else { return };
         let target = t.target.clone();
         let st = self.state.clone();
-        let k2 = key.clone();
+        let (k2, asked) = (key.clone(), target.clone());
         self.spawn(async move { st.redis_key(target, k2, Some(1000)).await.map_err(err) }, move |a, res| {
-            let Some(t) = a.tab_mut(id) else { return };
+            // A key of the database the tab showed before: its edits would go to the new one
+            let Some(t) = a.tab_mut(id).filter(|t| t.target == asked) else { return };
             let TabKind::Redis(r) = &mut t.kind else { return };
             match res {
                 Ok(d) => {
@@ -191,7 +194,7 @@ impl App {
         let hist = self.state.history.list(Some(&conn), "", 200).into_iter().map(|h| h.sql).collect();
         self.input(format!("{db}>"), "", move |a, line| a.redis_run_line(id, line));
         if let Some(Popup::Input { redis, .. }) = &mut self.popup {
-            *redis = Some(RedisPrompt { tab: id, hist, hi: None, keys: None });
+            *redis = Some(RedisPrompt { tab: id, hist, hi: None, keys: None, moved: false });
         }
     }
 
@@ -209,7 +212,10 @@ impl App {
                 .collect()
         } else if a.key {
             match &p.keys {
-                Some((pre, names)) if *pre == a.prefix => names.iter().filter(|k| **k != a.prefix).map(|k| Item { label: k.clone(), detail: String::new(), insert: format!("{k} "), kind: complete::ItemKind::Value }).collect(),
+                Some((pre, names)) if *pre == a.prefix => qurry_shared::redis_cmd::key_choices(&a.prefix, names)
+                    .into_iter()
+                    .map(|k| Item { label: k.label, detail: String::new(), insert: format!("{} ", k.insert), kind: complete::ItemKind::Value })
+                    .collect(),
                 _ => return (None, Some(a.prefix)),
             }
         } else {

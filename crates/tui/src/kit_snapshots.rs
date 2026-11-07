@@ -602,6 +602,15 @@ async fn redis(h: &mut Harness, scenes: &mut Vec<Value>) {
     scenes.push(app_scene(h, "Redis: command line", ": runs a command: completion with arguments from the bundled command table (keys from a bounded SCAN), ↑↓ history, HELP <command>; read-only runs reads only, Production asks before writes, FLUSHDB / DEL always ask", 120, 22));
     h.key("Tab");
     scenes.push(app_scene(h, "Redis: argument hints", "After the command: the arguments still to type, muted, after the text", 120, 22));
+    // Key names as a bounded SCAN reads them for the typed word (set here: nothing connects)
+    h.app.popup = None;
+    h.app.redis_prompt(id);
+    if let Some(Popup::Input { input, redis: Some(p), complete, .. }) = &mut h.app.popup {
+        input.insert_str("GET user:41");
+        p.keys = Some(("user:41".into(), vec!["user:41:cart".into(), "user:41".into(), "user:41 (old)".into()]));
+        *complete = crate::app::App::redis_complete(input, p).0;
+    }
+    scenes.push(app_scene(h, "Redis: key names", "A key argument: names from a bounded SCAN, the key typed out first; ↩ runs the line unless ↑↓ moved to another key, ⇥ picks; a key with spaces goes in quoted", 120, 22));
     h.app.popup = None;
     h.app.close_tab_now(h.app.active);
     h.app.tree.children.remove("rd");

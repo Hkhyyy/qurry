@@ -227,7 +227,9 @@ const api = {
   redisHelp: (line: string): string | undefined => wasm.redisHelp(line),
   /** The line's reply as a table (a hash as field / value, a list numbered …), undefined to print it as redis-cli does */
   redisReplyTable: (line: string, reply: RedisReply): RedisReplyTable | undefined => wasm.redisReplyTable(line, reply) ?? undefined,
-  /** "db0 · 1,500 keys" */
+  /** The key names listed for the typed prefix: the typed key first, `insert` quoted as redis-cli reads it ("user 1" → "\"user 1\"") */
+  redisKeyChoices: (prefix: string, names: string[]): { label: string; insert: string }[] => wasm.redisKeyChoices(prefix, names),
+  /** "db0 · 1,500 keys", the name alone when the count is unknown (< 0) */
   redisDbLabel: (name: string, keys: number): string => wasm.redisDbLabel(name, keys),
   /** A key's TTL in ms → "1d 4h", "—" without expiry */
   redisTtl: (ms: number): string => wasm.redisTtl(ms),

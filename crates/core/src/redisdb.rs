@@ -305,26 +305,8 @@ pub fn parse_command(line: &str) -> AppResult<Vec<Vec<u8>>> {
     qurry_shared::redis_cmd::parse_command(line).map_err(AppError::Msg)
 }
 
-/// Quoting for command-line display (Go to DDL)
-pub fn quote_arg(s: &str) -> String {
-    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || ":_-./@".contains(c)) {
-        s.to_string()
-    } else {
-        let mut o = String::from("\"");
-        for c in s.chars() {
-            match c {
-                '"' => o.push_str("\\\""),
-                '\\' => o.push_str("\\\\"),
-                '\n' => o.push_str("\\n"),
-                '\t' => o.push_str("\\t"),
-                '\r' => o.push_str("\\r"),
-                c => o.push(c),
-            }
-        }
-        o.push('"');
-        o
-    }
-}
+/// Quoting for command-line display (Go to DDL), as the Terminal's key completion quotes
+pub use qurry_shared::redis_cmd::quote_arg;
 
 fn bytes_text(b: &[u8]) -> Value {
     match std::str::from_utf8(b) {
@@ -545,10 +527,17 @@ pub struct RedisDb {
 /// DBs with keys + db0 + the configured DB (empty DBs are hidden, like DataGrip), with their key counts (INFO keyspace)
 pub async fn keyspace(m: &RedisConn, current: i64) -> AppResult<Vec<RedisDb>> {
     if m.is_cluster() {
-        // A cluster has db0 only, spread over its masters
+        // A cluster has db0 only, spread over its masters; a master that refuses DBSIZE (an ACL without it, unreachable) makes
+        // the count unknown (-1), not the list
         let mut keys = 0;
         for mut node in m.scan_nodes() {
-            keys += redis::cmd("DBSIZE").query_async::<i64>(&mut node).await.map_err(err)?;
+            match redis::cmd("DBSIZE").query_async::<i64>(&mut node).await {
+                Ok(n) => keys += n,
+                Err(_) => {
+                    keys = -1;
+                    break;
+                }
+            }
         }
         return Ok(vec![RedisDb { name: "db0".into(), keys }]);
     }

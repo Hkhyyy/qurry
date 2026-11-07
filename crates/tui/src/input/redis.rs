@@ -313,6 +313,49 @@ mod tests {
         assert_eq!(input_line(&h), "");
     }
 
+    /// Key names: ↩ runs a line whose key is typed out (`GET user:1` with `user:10` there too) instead of picking the longer key;
+    /// after ↑↓ ↩ picks; ⇥ picks; a key with a space goes in quoted, as one argument
+    #[tokio::test]
+    async fn command_line_key_names_dont_replace_a_typed_key() {
+        let mut h = Harness::new().await;
+        redis_source(&mut h, "plain", false, false).await;
+        h.app.push_tab("plain", "db0".into(), "plain [db0]".into(), TabKind::Redis(crate::app::RedisTab::new("", None)));
+        // The names a bounded SCAN would read for the prefix
+        let scanned = |h: &mut Harness, prefix: &str, names: &[&str]| {
+            if let Some(Popup::Input { input, redis: Some(p), complete, .. }) = &mut h.app.popup {
+                p.keys = Some((prefix.into(), names.iter().map(|s| s.to_string()).collect()));
+                *complete = App::redis_complete(input, p).0;
+            }
+        };
+        let labels = |h: &Harness| match &h.app.popup {
+            Some(Popup::Input { complete: Some(c), .. }) => c.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>(),
+            _ => vec![],
+        };
+        let open = |h: &mut Harness, line: &str| {
+            h.app.popup = None;
+            h.app.focus = crate::app::Focus::Grid;
+            h.key(":");
+            h.type_str(line);
+        };
+        open(&mut h, "GET user:1");
+        scanned(&mut h, "user:1", &["user:10", "user:1"]);
+        assert_eq!(labels(&h), ["user:1", "user:10"], "the typed key first");
+        h.key("Enter");
+        assert!(!matches!(h.app.popup, Some(Popup::Input { .. })), "↩ ran the line");
+        assert_eq!(h.app.state.history.list(Some("plain"), "", 10)[0].sql, "GET user:1");
+        // ↓ to the longer one, then ↩ picks it
+        open(&mut h, "GET user:1");
+        scanned(&mut h, "user:1", &["user:10", "user:1"]);
+        h.key("Down");
+        h.key("Enter");
+        assert_eq!(input_line(&h), "GET user:10 ");
+        // ⇥ picks; a key with a space stays one argument
+        open(&mut h, "DEL us");
+        scanned(&mut h, "us", &["user 1"]);
+        h.key("Tab");
+        assert_eq!(input_line(&h), r#"DEL "user 1" "#);
+    }
+
     /// The command line follows the console's rules: HELP answers from the table, a read-only source refuses a write without
     /// sending it, Production asks before a write, FLUSHDB / DEL always ask. Each line lands in this source's history
     #[tokio::test]
@@ -371,6 +414,14 @@ mod tests {
         assert_eq!(a, b);
         let t: Vec<_> = h.app.tabs.iter().map(|t| (t.title.as_str(), t.db.as_str(), t.target.as_str())).collect();
         assert_eq!(t, [("rd [db3]", "db3", "rd::db3")]);
+        let pattern = |h: &Harness| match &h.app.tabs[0].kind {
+            TabKind::Redis(r) => r.pattern.clone(),
+            _ => panic!(),
+        };
+        assert_eq!(pattern(&h), "user:*");
+        // The "*" saved for every key before 0.3.2 is no filter now (the title and / don't show one)
+        h.app.restore_redis("rd", "db0".into(), "rd [db0]".into(), "*");
+        assert_eq!(pattern(&h), "");
     }
 
     /// On a real server (QURRY_TEST_REDIS, own db12 and redis-browser:tui:* keys): the explorer lists the source's databases with
@@ -404,10 +455,15 @@ mod tests {
         assert_eq!(tab(&h), [("db12".to_string(), "rb::db12".to_string())]);
         let s = h.screen(140, 30);
         assert!(s.contains("db12 · 3 keys") && s.contains("▸ ▤ redis-browser 3"), "{s}");
-        // A click on db0 switches the open tab (still one), d picks db12 back from the list
+        // A click on db0 switches the open tab (still one), d picks db12 back from the list. A db12 key still loading when it
+        // switches doesn't land in the db0 tab (its value edits would write into db0)
+        let id = h.app.tabs[h.app.active].id;
+        h.app.redis_load_key(id, "redis-browser:tui:h".into());
         h.app.redis_db_clicked("rb", "db0".into());
         h.settle().await;
         assert_eq!(tab(&h), [("db0".to_string(), "rb::db0".to_string())]);
+        let TabKind::Redis(r) = &h.app.tabs[h.app.active].kind else { panic!() };
+        assert!(r.detail.as_ref().is_none_or(|d| d.0 != "redis-browser:tui:h"), "db12's key in the db0 tab");
         h.app.focus = crate::app::Focus::Grid;
         h.key("d");
         h.settle().await;

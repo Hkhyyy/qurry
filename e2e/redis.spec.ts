@@ -109,12 +109,23 @@ test("Terminal: command completion with argument hints, key names from SCAN, HEL
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Tab");
   await expect(term(page)).toHaveValue("HGETALL ");
-  // The key argument completes from a bounded SCAN
+  // The key argument completes from a bounded SCAN: ⇥ picks; ↩ picks only after ↑↓ moved to a key
   await term(page).pressSequentially("user:");
   await expect(choices).toHaveText(["user:1", "user:1:name"]);
+  await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
+  await expect(term(page)).toHaveValue("HGETALL user:1:name ");
+  await term(page).fill("HGETALL ");
+  await term(page).pressSequentially("user:");
+  await expect(choices).toHaveText(["user:1", "user:1:name"]);
+  await page.keyboard.press("Tab");
   await expect(term(page)).toHaveValue("HGETALL user:1 ");
+  // A key typed out in full is listed first, and ↩ runs the line (not the longer user:1:name)
+  await term(page).fill("HGETALL ");
+  await term(page).pressSequentially("user:1");
+  await expect(choices).toHaveText(["user:1", "user:1:name"]);
   await page.keyboard.press("Enter");
+  await expect.poll(() => ran(page)).toEqual(["HGETALL user:1"]);
   const out = work(page).locator(".rd-term-out");
   await expect(out.locator("table").last().locator("tr")).toHaveText(["fieldvalue", "age30", "emaila@b.c"]);
   await run(page, "LRANGE queue:mail 0 -1");

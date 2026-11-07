@@ -315,7 +315,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
                     leaf
                     icon={<DatabaseIcon />}
                     label={db}
-                    sub={keyCounts[db] != null ? keyCounts[db].toLocaleString("en-US") : undefined}
+                    sub={keyCounts[db] >= 0 ? keyCounts[db].toLocaleString("en-US") : undefined}
                     onClick={() => onActivate(info, true)}
                     onDoubleClick={() => onActivate(info)}
                     info={info}

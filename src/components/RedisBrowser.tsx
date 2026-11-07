@@ -122,12 +122,15 @@ export function RedisBrowser(p: Props) {
     if (configOff && tab === "config") setTab("info");
   }, [configOff]);
 
+  // A scan of the database shown before that answers late is dropped (shownTarget: the database shown now)
   const scan = async (reset: boolean) => {
+    const asked = p.target;
     setScanning(true);
     setError(null);
     if (reset) loadOverview();
     try {
-      const page = await redis.scan(p.target, reset ? "0" : cursor, pattern, 500, typeFilter);
+      const page = await redis.scan(asked, reset ? "0" : cursor, pattern, 500, typeFilter);
+      if (asked !== shownTarget.current) return;
       setKeys((ks) => {
         // Merge only the new (sorted) page into the already sorted list (instead of re-sorting everything each time)
         const have = new Set(reset ? [] : ks.map((k) => k.key));
@@ -140,9 +143,9 @@ export function RedisBrowser(p: Props) {
       });
       setCursor(page.cursor);
     } catch (e) {
-      setError(String(e));
+      if (asked === shownTarget.current) setError(String(e));
     } finally {
-      setScanning(false);
+      if (asked === shownTarget.current) setScanning(false);
     }
   };
   useEffect(() => {
@@ -183,7 +186,7 @@ export function RedisBrowser(p: Props) {
         <Select className="rd-db" value={p.database} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database (the explorer's databases switch it too)" aria-label="Database">
           {(overview?.databases.some((d) => d.name === p.database) ? overview.databases : [{ name: p.database, keys: -1 }, ...(overview?.databases ?? [])]).map((d) => (
             <option key={d.name} value={d.name}>
-              {d.keys < 0 ? d.name : dbLabel(d)}
+              {dbLabel(d)}
             </option>
           ))}
         </Select>
@@ -778,8 +781,12 @@ function Terminal({ target, connId, connName, database, readOnly, production, pr
       : assist.commands.length
         ? assist.commands.map((c) => ({ insert: c.insert, label: c.doc.name, args: c.doc.args, summary: c.doc.summary, write: !c.read }))
         : assist.key && keys?.prefix === assist.prefix
-          ? keys.names.filter((k) => k !== assist.prefix).map((k) => ({ insert: k, label: k }))
+          ? sharedOr<Choice[]>([], (s) => s.redisKeyChoices(assist.prefix, keys.names))
           : [];
+  // Key names: ↩ picks one only after ↑↓ moved to it, else it runs the line (⇥ always picks), so a key typed out in full
+  // (`GET user:1`) isn't swapped for a longer one the SCAN found (`user:10`)
+  const [moved, setMoved] = useState(false);
+  const enterPicks = !!assist?.commands.length || moved;
   const sel = Math.min(pick, Math.max(choices.length - 1, 0));
   // The arguments still to type, after the text (a highlighted command shows its own)
   const hint = choices.length && choices[sel].args !== undefined ? choices[sel].args : (assist?.hint ?? "");
@@ -787,6 +794,7 @@ function Terminal({ target, connId, connName, database, readOnly, production, pr
     setInput(v);
     setCaret(at);
     setPick(0);
+    setMoved(false);
     setClosed(false);
   };
   const choose = (c: Choice) => {
@@ -928,7 +936,8 @@ function Terminal({ target, connId, connName, database, readOnly, production, pr
               if (open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
                 e.preventDefault();
                 setPick((sel + (e.key === "ArrowDown" ? 1 : choices.length - 1)) % choices.length);
-              } else if (open && (e.key === "Tab" || e.key === "Enter")) {
+                setMoved(true);
+              } else if (open && (e.key === "Tab" || (e.key === "Enter" && enterPicks))) {
                 e.preventDefault();
                 choose(choices[sel]);
               } else if (open && e.key === "Escape") {

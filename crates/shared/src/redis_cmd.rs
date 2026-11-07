@@ -4,7 +4,12 @@
 
 /// redis-cli style argument splitting: spaces, "double quotes"(\n \t \" \\ \xHH), 'single quotes'. Err = why the line can't be read
 pub fn parse_command(line: &str) -> Result<Vec<Vec<u8>>, String> {
-    let mut out: Vec<Vec<u8>> = Vec::new();
+    Ok(parse_words(line)?.into_iter().map(|(_, w)| w).collect())
+}
+
+/// parse_command's arguments with where each is written in the line
+fn parse_words(line: &str) -> Result<Vec<(std::ops::Range<usize>, Vec<u8>)>, String> {
+    let mut out = Vec::new();
     let b = line.as_bytes();
     let mut i = 0;
     while i < b.len() {
@@ -14,6 +19,7 @@ pub fn parse_command(line: &str) -> Result<Vec<Vec<u8>>, String> {
         if i >= b.len() {
             break;
         }
+        let start = i;
         let mut cur = Vec::new();
         let mut quoted = false;
         while i < b.len() && !b[i].is_ascii_whitespace() {
@@ -79,13 +85,103 @@ pub fn parse_command(line: &str) -> Result<Vec<Vec<u8>>, String> {
             }
         }
         if !cur.is_empty() || quoted {
-            out.push(cur);
+            out.push((start..i, cur));
         }
     }
     if out.is_empty() {
         return Err("Empty command".into());
     }
     Ok(out)
+}
+
+/// An argument written so parse_command reads it back as one word (redis-cli's quoting): as is when plain, else "double quoted"
+pub fn quote_arg(s: &str) -> String {
+    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || ":_-./@".contains(c)) {
+        s.to_string()
+    } else {
+        let mut o = String::from("\"");
+        for c in s.chars() {
+            match c {
+                '"' => o.push_str("\\\""),
+                '\\' => o.push_str("\\\\"),
+                '\n' => o.push_str("\\n"),
+                '\t' => o.push_str("\\t"),
+                '\r' => o.push_str("\\r"),
+                c => o.push(c),
+            }
+        }
+        o.push('"');
+        o
+    }
+}
+
+/// A line with its passwords masked, by its arguments (quoted ones with spaces too): every argument of AUTH, the username and
+/// password after HELLO's AUTH, the value of CONFIG SET requirepass / masterauth, ACL SETUSER's >pass <pass #hash !hash rules,
+/// MIGRATE's AUTH password / AUTH2 username password; the other arguments stay as written. None when the line has none (it is
+/// kept as typed). A line of those commands that can't be read keeps only its command name
+pub fn mask_secrets(line: &str) -> Option<String> {
+    let args = parse_words(line);
+    let first = match &args {
+        Ok(a) => String::from_utf8_lossy(&a[0].1).into_owned(),
+        Err(_) => line.split_whitespace().next()?.trim_matches(['"', '\'']).to_string(),
+    };
+    let head = first.to_ascii_uppercase();
+    if !["AUTH", "HELLO", "CONFIG", "ACL", "MIGRATE"].contains(&head.as_str()) {
+        return None;
+    }
+    let Ok(args) = args else { return Some(format!("{first} ***")) };
+    let words: Vec<String> = args.iter().map(|(_, a)| String::from_utf8_lossy(a).into_owned()).collect();
+    let up = |i: usize| words.get(i).map(|w| w.to_ascii_uppercase()).unwrap_or_default();
+    // Each argument as written, or None where it is masked (a run of masked ones shows as one ***)
+    let mut out: Vec<Option<String>> = args.iter().map(|(at, _)| Some(line[at.clone()].to_string())).collect();
+    let kept = out.clone();
+    let mut hide = |from: usize, n: usize| out.iter_mut().skip(from).take(n).for_each(|w| *w = None);
+    match head.as_str() {
+        "AUTH" => hide(1, words.len()),
+        "HELLO" => {
+            if let Some(i) = (2..words.len()).find(|&i| up(i) == "AUTH") {
+                hide(i + 1, 2);
+            }
+        }
+        "CONFIG" if up(1) == "SET" => {
+            for i in (2..words.len()).step_by(2) {
+                if matches!(up(i).as_str(), "REQUIREPASS" | "MASTERAUTH") {
+                    hide(i + 1, 1);
+                }
+            }
+        }
+        "ACL" if up(1) == "SETUSER" => {
+            for (i, w) in words.iter().enumerate().skip(3) {
+                if let Some(c) = w.chars().next().filter(|c| ">#<!".contains(*c)) {
+                    out[i] = Some(format!("{c}***"));
+                }
+            }
+        }
+        // MIGRATE host port key db timeout [COPY] [REPLACE] [AUTH password | AUTH2 username password] [KEYS key ...]
+        "MIGRATE" => {
+            for i in 6..words.len() {
+                match up(i).as_str() {
+                    "AUTH" => hide(i + 1, 1),
+                    "AUTH2" => hide(i + 1, 2),
+                    "KEYS" => break,
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    if out == kept {
+        return None;
+    }
+    let mut s: Vec<String> = vec![];
+    for w in out {
+        match w {
+            Some(w) => s.push(w),
+            None if s.last().is_some_and(|l| l == "***") => {}
+            None => s.push("***".into()),
+        }
+    }
+    Some(s.join(" "))
 }
 
 /// Commands that only read, whatever their arguments (is_read_command decides the container commands by their subcommand)
@@ -416,9 +512,12 @@ pub fn help(line: &str) -> Option<String> {
     })
 }
 
-/// The database picker's line: "db0 · 1,500 keys"
-pub fn db_label(name: &str, keys: i64) -> String {
-    let digits = keys.unsigned_abs().to_string();
+/// A key count with digit grouping ("1,500"); "" when the count is unknown (< 0: a cluster master refused DBSIZE)
+pub fn key_count(n: i64) -> String {
+    if n < 0 {
+        return String::new();
+    }
+    let digits = n.to_string();
     let mut grouped = String::new();
     for (i, c) in digits.chars().enumerate() {
         if i > 0 && (digits.len() - i).is_multiple_of(3) {
@@ -426,7 +525,34 @@ pub fn db_label(name: &str, keys: i64) -> String {
         }
         grouped.push(c);
     }
-    format!("{name} · {}{grouped} key{}", if keys < 0 { "-" } else { "" }, if keys == 1 { "" } else { "s" })
+    grouped
+}
+
+/// The database picker's line: "db0 · 1,500 keys", the name alone when the count is unknown
+pub fn db_label(name: &str, keys: i64) -> String {
+    if keys < 0 {
+        return name.to_string();
+    }
+    format!("{name} · {} key{}", key_count(keys), if keys == 1 { "" } else { "s" })
+}
+
+/// A key name the Terminal lists for the typed prefix, and what a pick inserts: quoted as parse_command reads it (`"user 1"`),
+/// so a key with spaces or quotes stays one argument
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct KeyChoice {
+    pub label: String,
+    pub insert: String,
+}
+
+/// The Terminal's key-name list for the typed prefix, from a bounded SCAN's names: the typed key itself first when it exists (⇥ on
+/// a key typed out keeps it), nothing when it is the only one
+pub fn key_choices(prefix: &str, names: &[String]) -> Vec<KeyChoice> {
+    if names.iter().all(|k| k == prefix) {
+        return vec![];
+    }
+    let mut v: Vec<&String> = names.iter().collect();
+    v.sort_by_key(|k| *k != prefix);
+    v.into_iter().map(|k| KeyChoice { label: k.clone(), insert: quote_arg(k) }).collect()
 }
 
 /// A key's TTL as the key list shows it ("45s", "3m 20s", "2h 5m", "1d 4h"), "—" for a key without expiry (PTTL < 0)
@@ -591,6 +717,46 @@ mod tests {
         assert_eq!(db_label("db1", 1), "db1 · 1 key");
         assert_eq!(db_label("db2", 0), "db2 · 0 keys");
         assert_eq!(db_label("db3", 1_234_567), "db3 · 1,234,567 keys");
+        assert_eq!(db_label("db0", -1), "db0", "unknown count");
+        assert_eq!((key_count(1500), key_count(999), key_count(-1)), ("1,500".into(), "999".into(), String::new()));
+    }
+
+    #[test]
+    fn key_choices_quote_and_keep_the_typed_key() {
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let c = key_choices("user:1", &names(&["user:10", "user:1"]));
+        assert_eq!(c.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["user:1", "user:10"], "the typed key first");
+        assert!(key_choices("user:1", &names(&["user:1"])).is_empty(), "only the typed key: nothing to list");
+        assert!(key_choices("x", &[]).is_empty());
+        // A key with a space or a quote stays one argument
+        let c = key_choices("us", &names(&["user 1", "it's \"x\""]));
+        assert_eq!(c.iter().map(|c| c.insert.as_str()).collect::<Vec<_>>(), [r#""user 1""#, r#""it's \"x\"""#]);
+        for k in &c {
+            assert_eq!(parse_command(&format!("DEL {}", k.insert)).unwrap()[1], k.label.as_bytes());
+        }
+    }
+
+    #[test]
+    fn masks_passwords_by_argument() {
+        let m = |l: &str| mask_secrets(l);
+        assert_eq!(m("AUTH s3cret").as_deref(), Some("AUTH ***"));
+        assert_eq!(m(r#"AUTH default "my long secret""#).as_deref(), Some("AUTH ***"));
+        assert_eq!(m(r#"auth "my long secret""#).as_deref(), Some("auth ***"));
+        assert_eq!(m(r#""AUTH" 'a b'"#).as_deref(), Some(r#""AUTH" ***"#), "a quoted command name too");
+        assert_eq!(m("ACL SETUSER bob on >pw ~* +@all").as_deref(), Some("ACL SETUSER bob on >*** ~* +@all"), "the rest as written");
+        assert_eq!(m(r#"HELLO 3 AUTH default "my secret" SETNAME me"#).as_deref(), Some("HELLO 3 AUTH *** SETNAME me"));
+        assert_eq!(m(r#"CONFIG SET requirepass "a b c""#).as_deref(), Some("CONFIG SET requirepass ***"));
+        assert_eq!(m(r#"config set maxmemory 1gb masterauth 'x y'"#).as_deref(), Some("config set maxmemory 1gb masterauth ***"));
+        assert_eq!(m(r##"ACL SETUSER bob on >s3cret "#hash" ~* +@all"##).as_deref(), Some("ACL SETUSER bob on >*** #*** ~* +@all"));
+        assert_eq!(m(r#"ACL SETUSER bob on ">my secret""#).as_deref(), Some("ACL SETUSER bob on >***"));
+        assert_eq!(m("MIGRATE h 6379 k 0 5000 AUTH hunter2").as_deref(), Some("MIGRATE h 6379 k 0 5000 AUTH ***"));
+        assert_eq!(m(r#"MIGRATE h 6379 "" 0 5000 AUTH2 u "p w" KEYS a AUTH"#).as_deref(), Some(r#"MIGRATE h 6379 "" 0 5000 AUTH2 *** KEYS a AUTH"#));
+        // Can't be read: only the command name is kept
+        assert_eq!(m(r#"AUTH "unbalanced"#).as_deref(), Some("AUTH ***"));
+        // Nothing to mask: kept as typed
+        for l in ["CONFIG GET requirepass", "ACL SETUSER bob on", "HELLO 3", "GET auth", "HGET auth field", "CONFIG SET maxmemory 1gb", "SELECT 1"] {
+            assert_eq!(m(l), None, "{l}");
+        }
     }
 
     #[test]

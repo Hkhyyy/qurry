@@ -198,7 +198,7 @@ impl App {
                                 .map(|d| Node {
                                     key: format!("{}|{d}", cfg.id),
                                     hint: match keys.get(&d) {
-                                        Some(n) => n.to_string(),
+                                        Some(n) => qurry_shared::redis_cmd::key_count(*n),
                                         None if d == def => "default".into(),
                                         None => String::new(),
                                     },

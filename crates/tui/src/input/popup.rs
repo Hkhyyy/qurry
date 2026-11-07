@@ -127,7 +127,11 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
         },
         Popup::Input { title, body, mut input, on_ok, filter, mut redis, mut complete } => {
             // The open list (a table filter's completion) takes the console's list keys: ↑↓ PgUp PgDn move, ↩ / ⇥ pick, ⎋ closes it
+            // The Redis command line's key names: ↩ runs the line unless ↑↓ moved to one (⇥ picks), so a key typed out in full
+            // isn't swapped for a longer one the SCAN found
+            let keys_unmoved = redis.as_ref().is_some_and(|p| !p.moved) && complete.as_ref().is_some_and(|c| c.items.first().is_some_and(|i| i.kind == qurry_core::complete::ItemKind::Value));
             if let Some(cmp) = &mut complete
+                && !(keys_unmoved && k.code == KeyCode::Enter)
                 && let Some(key) = list_key(cmp, k.code)
             {
                 match key {
@@ -139,7 +143,11 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                         complete = None;
                     }
                     ListKey::Close => complete = None,
-                    ListKey::Moved => {}
+                    ListKey::Moved => {
+                        if let Some(p) = &mut redis {
+                            p.moved = true;
+                        }
+                    }
                 }
                 app.popup = Some(Popup::Input { title, body, input, on_ok, filter, redis, complete });
                 return;
@@ -168,6 +176,7 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                     }
                     let p = redis.as_mut().expect("redis prompt");
                     p.hi = None;
+                    p.moved = false;
                     let (c, ask_keys) = App::redis_complete(&input, p);
                     let tab = p.tab;
                     app.popup = Some(Popup::Input { title, body, input, on_ok, filter, redis, complete: c });
