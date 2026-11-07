@@ -52,7 +52,7 @@ test("Edit Colors…: live preview, contrast warnings kept, an invalid hex not a
   await dialog(page).getByRole("combobox", { name: "Based on" }).selectOption("dracula");
   // The whole window draws the theme being edited
   await expect.poll(() => drawn(page)).toMatchObject({ bg: rgb(theme("dracula").colors.bg) });
-  const hex = (label: string) => dialog(page).getByRole("textbox", { name: `${label} hex` });
+  const hex = (label: string) => dialog(page).getByRole("textbox", { name: `${label} hex`, exact: true });
   await hex("Background, editor").fill("#101018");
   await expect.poll(() => drawn(page)).toMatchObject({ bg: "rgb(16, 16, 24)" });
   // Not a color: marked, not applied
@@ -80,6 +80,12 @@ test("Edit Colors…: live preview, contrast warnings kept, an invalid hex not a
   await dialog(page).getByRole("button", { name: "Save as new theme" }).click();
   await expect(dialog(page).getByText(/Saved "Night shift" and switched to it \(1 below the contrast minimum/)).toBeVisible();
   expect(await saved(page)).toEqual({ theme: "custom-1", sync: { dark: "dark", light: "light" }, custom: [{ id: "custom-1", name: "Night shift", base: "dracula", colors: { bg: "#101018", comment: "#2a2b33" } }] });
+  // Save replaces it (same id); nothing left unsaved
+  await expect(dialog(page).getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+  await hex("Accent").fill("#9580ff");
+  await dialog(page).getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(async () => (await saved(page)).custom).toEqual([{ id: "custom-1", name: "Night shift", base: "dracula", colors: { accent: "#9580ff", bg: "#101018", comment: "#2a2b33" } }]);
+  await expect(dialog(page).getByRole("button", { name: "Save", exact: true })).toBeDisabled();
   // Back on Appearance: the picker lists it under Custom; closing keeps it
   await dialog(page).getByRole("button", { name: "‹ Appearance" }).click();
   await expect(themeSelect(page)).toHaveValue("custom-1");

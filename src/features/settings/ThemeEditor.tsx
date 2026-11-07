@@ -80,8 +80,10 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
   const base = BUILT_IN.find((t) => t.id === baseId)!;
   const saved = editing ? settings.custom.find((c) => c.id === editing) : undefined;
   const colors: Palette = { ...base.colors, ...over };
-  const changed = Object.keys(over).filter((k) => over[k] !== base.colors[k]);
-  const dirty = saved ? saved.name !== name.trim() || JSON.stringify(saved.colors) !== JSON.stringify(Object.fromEntries(changed.map((k) => [k, over[k]]))) || saved.base !== baseId : changed.length > 0;
+  const changed = Object.keys(over).filter((k) => over[k] !== base.colors[k]).sort();
+  // Saved colors come back sorted by name (settings.json): compare in that order
+  const savedColors = saved && Object.keys(saved.colors).sort().map((k) => [k, saved.colors[k]]);
+  const dirty = saved ? saved.name !== name.trim() || saved.base !== baseId || JSON.stringify(savedColors) !== JSON.stringify(changed.map((k) => [k, over[k]])) : changed.length > 0;
   const ready = useSharedReady();
   const warnings = useMemo(() => sharedOr<ThemeWarning[]>([], (s) => s.themeWarnings(colors)), [JSON.stringify(colors), ready]);
   const warnOf = (k: string) => warnings.find((w) => w.token === k);
