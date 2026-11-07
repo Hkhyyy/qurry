@@ -2,7 +2,7 @@
 
 English | [한국어](ko/tui.md)
 
-`qurry-tui` adapts to the terminal it runs in: how many colors it has, whether its background is light, how big the window is, and what tmux or the terminal keeps for itself. It all follows the environment, down to the font; the only setting is the theme, for when the terminal doesn't say its background.
+`qurry-tui` adapts to the terminal it runs in: how many colors it has, whether its background is light, how big the window is, and what tmux or the terminal keeps for itself. It all follows the environment, down to the font; the only setting is the theme (shared with the GUI).
 
 ## Connect from a URL
 
@@ -53,21 +53,21 @@ When colors are off or limited to 16, the status line says so at startup, with w
 
 Over `ssh` or `sudo` (and in `tmux`, below) `COLORTERM` usually doesn't arrive, so a 24-bit terminal gets the 256 or 16 colors: `export COLORTERM=truecolor` on the other side, or pass it along with `SendEnv COLORTERM` in `~/.ssh/config` and `AcceptEnv COLORTERM` in the server's `sshd_config` (`sudo --preserve-env=COLORTERM` for sudo).
 
-### Light or dark
+### Themes
 
-The TUI has a dark palette (made for a dark terminal background) and a light one. Pick it with **⌃k › Theme…**:
+The TUI draws the GUI's themes: the seven built-in ones (Dark, Light, High contrast, Dracula, One Dark, Solarized Dark, Solarized Light) and the custom ones made in the GUI's **Settings › Appearance › Theme › Edit Colors…** ([Settings › Themes](settings.md#themes)). Pick one with **⌃k › Theme…**; the pick is saved in `settings.json` in the [config folder](getting-started.md#where-qurry-keeps-your-settings) for both apps, and the list reads the file again when it opens, so a theme saved in the GUI shows up there.
 
-| Theme | Palette |
+| Theme | Colors |
 |---|---|
-| **Auto** (default) | Light when `COLORFGBG` says the background is white (its last number is `7` or `15`, e.g. `COLORFGBG=0;15`); dark otherwise, also when `COLORFGBG` isn't set |
-| **Dark** | Always dark |
-| **Light** | Always light |
+| **Sync with OS** (default) | The dark or the light theme picked for Sync with OS in the GUI (Dark and Light unless changed): the light one when `COLORFGBG` says the background is white (its last number is `7` or `15`, e.g. `COLORFGBG=0;15`), the dark one otherwise, also when `COLORFGBG` isn't set |
+| **Dark**, **Light**, **High contrast** | The theme's colors on the terminal's own background and text, as the TUI's dark and light palettes did before |
+| **Dracula**, **One Dark**, **Solarized Dark**, **Solarized Light**, custom themes | The theme's colors on its own background and text (in truecolor and 256 colors) |
 
-The light palette takes the GUI's light theme colors: Data Source colors become pale tints of the same hue, so icons and dim text on them stay readable (the active tab is the stronger one; 256 and 16 colors, which have no pale hues, keep a stronger tint so the hue survives), selections, edited cells and badges stay apart from each other, JSON cells use the GUI's light JSON colors, and production keeps its red. It works in every color mode above: 256 colors map it to the nearest palette colors, 16 colors use the normal (not the bright) terminal colors, and `NO_COLOR` stays monochrome with the same rules as in the dark theme.
+A light theme takes the GUI's light colors: Data Source colors become pale tints of the same hue, so icons and dim text on them stay readable (the active tab is the stronger one; 256 and 16 colors, which have no pale hues, keep a stronger tint so the hue survives), selections, edited cells and badges stay apart from each other, JSON cells use the theme's JSON colors, and production keeps its red. Every theme works in every color mode above: 256 colors map it to the nearest palette colors (a status line or header never lands on the background's color), 16 colors keep the terminal's own background and use the normal (not the bright) terminal colors in a light theme, and `NO_COLOR` stays monochrome with the same rules in every theme. The tree's object icons and Redis key types keep the TUI's own colors.
 
-Terminals such as iTerm2, rxvt and Konsole set `COLORFGBG` from their background color; many others (kitty, WezTerm, Ghostty, Alacritty) don't, so on a light background there pick **Light** yourself. The theme is saved in `settings.json` in the [config folder](getting-started.md#where-qurry-keeps-your-settings) under `"tuiTheme"` (the GUI has its own theme setting).
+Terminals such as iTerm2, rxvt and Konsole set `COLORFGBG` from their background color; many others (kitty, WezTerm, Ghostty, Alacritty) don't, so on a light background there pick a light theme yourself. Up to 0.3.1 the TUI saved its pick as `"tuiTheme"` (Auto, Dark or Light): it is used until a theme is picked in either app (Auto is Sync with OS).
 
-When Auto picked the light palette, the status line says so at startup: `Light palette — ⌃k › Theme… › Dark to undo`. To keep the colors you had before, pick **⌃k › Theme… › Dark**. It takes the place of the `16 colors` notice; with `NO_COLOR` the palette makes no difference, so the `Colors off` notice shows instead.
+When Sync with OS picked the light theme, the status line says so at startup: `Light palette — ⌃k › Theme… › Dark to undo`. To keep the dark colors, pick **⌃k › Theme… › Dark**. It takes the place of the `16 colors` notice; with `NO_COLOR` the theme makes no difference, so the `Colors off` notice shows instead.
 
 Some things never depend on color:
 

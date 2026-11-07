@@ -8,7 +8,7 @@ GUI **Settings** (`⌘,`, or the ⚙ button at the bottom of the workspace rail 
 
 | Setting | What it does | Shared with the TUI |
 |---|---|---|
-| Theme | Dark, Light or High contrast, or **Sync with OS**. Quick switch: `` ⌃` `` | No (the TUI follows the terminal's colors) |
+| Theme | Dark, Light, High contrast, Dracula, One Dark, Solarized Dark, Solarized Light or a custom theme, or **Sync with OS** with a dark and a light theme of your choice ([below](#themes)). Quick switch: `` ⌃` `` | Yes (TUI **⌃k › Theme…**) |
 | Editor font | Font family and size of the query console editor. Size 8–32 px (default 13); `⌃⇧.` / `⌃⇧,` change it too, and Settings shows the new size | No (the TUI uses the terminal's font) |
 | Grid font | Font family and size of the result and table grids. Size 9–16 px (default 12): rows keep their height, so larger text would be cut. Columns get wider with the size | No (the TUI uses the terminal's font) |
 | Alignment | Where cells sit in result grids, per kind of value (below) | Yes (TUI **⌃k › Grid Alignment…**) |
@@ -25,7 +25,27 @@ A saved font that isn't installed (removed since, or chosen on another computer)
 
 **Add Font File…** (at the bottom of the list; not in DataGrip) uses a font without installing it on the computer: pick a `.ttf`, `.otf`, `.woff` or `.woff2` file of up to 20 MB, and Qurry copies it into the `fonts` folder inside the config folder and picks it for that field. The copy is named after the file (letters, digits, `-` and `_` kept, anything else becomes a space); if a font of that name was already added, the new one gets ` 2`, ` 3`… instead of replacing it. A file that isn't really a font (Qurry checks its first bytes, not its extension), or one that can't be loaded as a font (damaged or incomplete), is refused with the reason. Added fonts are listed in both fields right after **Default monospace**, marked `custom`, whether or not **Monospaced only** is on; one with the name of an installed font replaces it in the list. The `−` button on its row removes it (after asking): the copy is deleted, the file you added it from is kept, and a field set to it goes back to **Default monospace** (unless a font of that name is installed: it then shows in the installed one). Added fonts are loaded each time Qurry starts. The TUI uses the terminal's font, so added fonts don't apply there.
 
-The theme and fonts are kept by the GUI on this computer (not in the config folder; only added font files are copied into its `fonts` folder), so they don't affect the TUI.
+The fonts are kept by the GUI on this computer (not in the config folder; only added font files are copied into its `fonts` folder), so they don't affect the TUI.
+
+### Themes
+
+Seven themes are built in: **Dark**, **Light** and **High contrast**, and **Dracula**, **One Dark**, **Solarized Dark** and **Solarized Light**. Each one colors everything: panels, the editor (SQL, and JSON in the Value Editor), result grids with their edited, added and deleted rows, find matches and NULLs, the Data Source tints and the Production stripe, and the TUI. Every built-in theme keeps text at least 4.5:1 against its background, and dim text, icons and the accent at least 3:1 (WCAG contrast); where a published palette doesn't (Solarized's text and dim text, One Dark's comments, some status colors), the color is made a little lighter or darker in the same hue.
+
+Pick one in **Settings › Appearance › Theme**, with **Quick Switch Theme** (`` ⌃` ``, which also lists custom themes) or in Find Action (`Theme: …`). With **Sync with OS** on, two more fields pick the theme for a dark system appearance and the one for a light appearance (any dark or high-contrast theme, and any light one, custom ones too); Qurry switches when the system does.
+
+The theme is saved in `settings.json` in the config folder (`"theme"`, `"themeSync"`, `"customThemes"`), and the TUI uses the same one (**⌃k › Theme…**; there Sync with OS goes by the terminal's background, see [TUI › Themes](tui.md#themes)). Up to 0.3.1 the GUI kept its theme inside the app: the first start of 0.3.2 moves it to `settings.json`, unless the TUI had saved a theme there already, which then wins. If the move fails, the status bar says so and the theme is used for that run; pick it again in Settings to keep it.
+
+**Edit Colors…** makes a custom theme. Start from any theme in **Based on** (a built-in one, or a custom one to change it). The basic colors come first (background, panels, text, dim text, accent, selection, the syntax colors and the Production tint); **Advanced colors** has the rest (row numbers, borders, icons, the grid states, the Green tint, the Production stripe, status colors). The Production tint and stripe are what a Data Source colored **Red** gets, the Green tint one colored **Green**; the other Data Source colors are mixed into the theme's panels. Each color has a picker and its `#rrggbb` hex (a hex being typed applies once it is a color; one that isn't is marked and not applied), and ↺ goes back to the base's color. While you edit, the whole window draws the new colors, and the preview shows the explorer, tabs, a console, a result grid in every state, a JSON value and notices; point at a color's name to outline where it is used. A color below the contrast minimum is warned about next to it (`⚠ 2.1:1 on Background`) and in the header, and saved as you set it if you save: nothing is changed for you. **Save as new theme** adds it under the name you give and switches to it; **Save** replaces the custom theme you started from; **Delete** removes it (a pick of it, also in Sync with OS, goes back to its base). Leaving with unsaved colors asks first.
+
+**Export…** writes the theme as a small JSON file, **Import…** reads one into the editor (check it, then save it):
+
+```json
+{ "qurryTheme": 1, "name": "Night shift", "base": "dracula", "colors": { "bg": "#1d1e26", "accent": "#9580ff" } }
+```
+
+`base` is a built-in theme and `colors` only the colors changed from it, by these names (in the editor's order: `bg`, `panel`, `panel2`, `odd`, `hover`, `border`, `borderStrong`, `text`, `muted`, `nullText`, `icon`, `accent`, `link`, `onAccent`, `sel`, `keyword`, `string`, `number`, `comment`, `function`, `jsonKey`, `gridNum`, `changed`, `added`, `deleted`, `match`, `prodTint`, `prodStripe`, `tint`, `ok`, `warn`, `danger`). A file is refused, with the reason, when it is larger than 16 KB, isn't this JSON, has another key, an unknown color name or base, or a color that isn't `#rrggbb`.
+
+In 0.3.2 Dark, Light and High contrast changed slightly where they missed the contrast minimum: text on the accent (primary buttons; High contrast's is now black), the Production stripe, Light's accent and link blue, and Light's error red.
 
 ### Alignment in result grids
 
