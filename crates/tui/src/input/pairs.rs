@@ -126,6 +126,17 @@ mod tests {
         let x2 = cell(y + 1, "$$");
         assert_eq!(buf[(x2, y + 1)].fg, crate::ui::DANGER);
         assert!(h.screen(100, 30).contains("Unclosed '('"), "{}", h.screen(100, 30));
+        // A tab before it is drawn to the next tab stop: the mark stays on the `(`, with the caret on that line or another
+        for (crow, ccol) in [(1, 0), (0, 3)] {
+            h.console_with("\tselect count(*\nfrom t", crow, ccol);
+            let buf = h.buffer(100, 30);
+            let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
+            let y = (0..30).find(|&y| row(y).contains("select count(*")).unwrap();
+            let r = row(y);
+            let x = r[..r.find("(*").unwrap()].chars().count() as u16;
+            assert!(buf[(x, y)].modifier.contains(ratatui::style::Modifier::UNDERLINED), "caret {crow}:{ccol}");
+            assert_ne!(buf[(x - 1, y)].fg, crate::ui::DANGER);
+        }
         // Closed: nothing marked
         h.console_with("select count(*) from t", 0, 0);
         let s = h.screen(100, 30);

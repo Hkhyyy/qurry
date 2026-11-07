@@ -761,7 +761,11 @@ fn draw_unbalanced(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Opti
     let digits = lines.len().to_string().len();
     let x0 = (ed.x + 1 + digits as u16 + 2) as i64;
     let (crow, ccol) = c.editor.cursor();
-    let width = |row: usize, col: usize| lines[row].chars().take(col).collect::<String>().width() as i64;
+    // Display cells before `col`, a tab running to the next tab stop as tui-textarea draws it
+    let tab = c.editor.tab_length().max(1) as i64;
+    let width = |row: usize, col: usize| {
+        lines[row].chars().take(col).fold(0, |w, ch| if ch == '\t' { w + tab - w % tab } else { w + ch.to_string().width() as i64 })
+    };
     // Columns scrolled off to the left
     let shift = x0 + width(crow, ccol) - cx as i64;
     let top = crow as i64 - (cy as i64 - ed.y as i64 - 1);

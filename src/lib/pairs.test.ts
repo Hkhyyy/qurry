@@ -3,7 +3,7 @@ import { pairKey } from "./pairs";
 import { shared } from "./shared";
 
 /** Types `key` at the `|` (or over the «…» selection) and shows the field with its caret / selection the same way */
-function ty(field: string, key: string, kind: "postgres" | "mysql" = "postgres"): string | undefined {
+function ty(field: string, key: string, kind: "postgres" | "mysql" | "mssql" = "postgres"): string | undefined {
   const a = field.includes("«") ? field.indexOf("«") : field.indexOf("|");
   const b = field.includes("«") ? field.indexOf("»") - 1 : a;
   const value = field.replace(/[|«»]/g, "");
@@ -30,6 +30,11 @@ describe("pairKey (table tab WHERE / ORDER BY)", () => {
     expect(ty("x # |", "(", "mysql")).toBeUndefined();
     expect(ty("|", "x")).toBeUndefined();
     expect(ty("|", "Enter")).toBeUndefined();
+  });
+
+  it("SQL Server [name]: `]` steps over the closer `[` added", () => {
+    expect(ty("|", "[", "mssql")).toBe("[|]");
+    expect(ty("[name|]", "]", "mssql")).toBe("[name]|");
   });
 
   it("UTF-16 offsets around non-ASCII text", () => {

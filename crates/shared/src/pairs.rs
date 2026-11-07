@@ -53,8 +53,10 @@ pub fn typed(text: &str, sel: (usize, usize), ch: char, kind: DbKind) -> Option<
     let at = scan(text, kind, a).at_end;
     let quote = ch == '\'' || ch == '"';
     let over = Edit { start: a, end: a + 1, insert: ch.to_string(), sel: (a + 1, a + 1) };
-    // The closing quote of the string the caret is in, or a closing bracket outside strings and comments
-    if next == Some(ch) && ((quote && at == At::Quote(ch as u8)) || (matches!(ch, ')' | ']') && at == At::Code)) {
+    // The closing quote of the string the caret is in, the `]` of the [name] it is in, or a closing bracket outside strings and
+    // comments
+    let closes_literal = (quote && at == At::Quote(ch as u8)) || (ch == ']' && at == At::Quote(b'['));
+    if next == Some(ch) && (closes_literal || (matches!(ch, ')' | ']') && at == At::Code)) {
         return Some(over);
     }
     let close = close?;
@@ -322,6 +324,19 @@ mod tests {
         assert_eq!(ty("'(|)'", ')', PG), None);
         // A closing bracket with something else after it inserts as usual
         assert_eq!(ty("(a|", ')', PG), None);
+    }
+
+    #[test]
+    fn bracket_names_close_and_type_over() {
+        // SQL Server and SQLite read [name] as a quoted name: `[` closes itself, `]` types over its own closer
+        assert_eq!(ty("|", '[', DbKind::Sqlite).as_deref(), Some("[|]"));
+        assert_eq!(ty("select |", '[', DbKind::Mssql).as_deref(), Some("select [|]"));
+        assert_eq!(ty("[name|]", ']', DbKind::Mssql).as_deref(), Some("[name]|"));
+        assert_eq!(ty("[|]", ']', DbKind::Sqlite).as_deref(), Some("[]|"));
+        assert!(unbalanced("[name]", DbKind::Mssql).is_empty());
+        // Nothing closes itself inside a [name], and ⌫ removes an empty pair
+        assert_eq!(ty("[a |]", '(', DbKind::Mssql), None);
+        assert_eq!(bs("[|]", DbKind::Mssql).as_deref(), Some("|"));
     }
 
     #[test]
