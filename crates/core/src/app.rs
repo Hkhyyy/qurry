@@ -2958,8 +2958,9 @@ pub(crate) mod tests {
         st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
         assert!(q(full, "m").await.unwrap().truncated);
         st.disconnect("d".into()).await.unwrap();
+        // the console's own lost-transaction notice (#110) comes first, once
         let e = st.fetch_more("m".into(), Some(500)).await.unwrap_err().to_string();
-        assert!(e.contains("transaction (Manual mode or BEGIN)") && e.contains("Run the query again"), "{e}");
+        assert!(e.contains("The transaction is lost") && e.contains("nothing was sent"), "{e}");
         assert!(st.sessions.read().await.get("m").is_none(), "refused before opening a session");
 
         // A statement that isn't a plain read: not run again behind the user's back

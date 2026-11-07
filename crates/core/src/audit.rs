@@ -1520,7 +1520,9 @@ mod tests {
         st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
         run(format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
         st.disconnect("d".into()).await.unwrap();
-        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        // the console is told once, by the first call that needs its session, that its transaction is lost (#110); Manual is kept
+        let e = st.set_tx_mode("d".into(), "m".into(), true).await.unwrap_err().to_string();
+        assert!(e.contains("The transaction is lost") && e.contains("nothing was sent"), "{e}");
         run(format!("update {s}.t set v = 12 where id = 3")).await.unwrap();
         st.commit_tx("m".into()).await.unwrap();
         let log = st.audit_log(None, String::new(), 4).into_iter().map(|e| e.sql).collect::<Vec<_>>();
