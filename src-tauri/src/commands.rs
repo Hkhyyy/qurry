@@ -765,6 +765,22 @@ pub fn set_grid_align(state: State<'_, AppState>, class: qurry_core::format::Val
     state.store.set_grid_align(class, align)
 }
 
+/// Column widths a user gave a table tab's columns (settings.json "columnWidths", shared with the TUI)
+#[tauri::command]
+pub fn column_widths(state: State<'_, AppState>, table: qurry_core::store::TableRef) -> qurry_core::format::ColumnWidths {
+    state.store.column_widths(&table)
+}
+
+#[tauri::command]
+pub fn set_column_widths(state: State<'_, AppState>, table: qurry_core::store::TableRef, widths: qurry_core::format::ColumnWidths) -> AppResult<qurry_core::format::ColumnWidths> {
+    state.store.set_column_widths(&table, &widths)
+}
+
+#[tauri::command]
+pub fn reset_column_widths(state: State<'_, AppState>, table: qurry_core::store::TableRef) -> AppResult<()> {
+    state.store.reset_column_widths(&table)
+}
+
 /// Saves the channel, then answers what it offers from the saved check only (no request): None if nothing was checked yet or checks are off
 #[tauri::command]
 pub fn set_update_channel(state: State<'_, AppState>, channel: qurry_core::update::Channel) -> AppResult<Option<UpdateInfo>> {

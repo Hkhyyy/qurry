@@ -418,6 +418,12 @@ pub fn frac_width(values: JsValue) -> Result<usize, JsError> {
     Ok(qurry_shared::format::frac_width(v.iter().map(String::as_str)))
 }
 
+/// A set column width (characters) moved by `steps` narrow (-) / widen (+) steps, kept in range (the TUI's < > =)
+#[wasm_bindgen(js_name = columnWidth)]
+pub fn column_width(width: f64, steps: f64) -> u16 {
+    qurry_shared::format::column_width(width.round() as i64, steps as i64)
+}
+
 /// 03:19:15 → 03:19:15.000000 (`width` fractional digits)
 #[wasm_bindgen(js_name = padFrac)]
 pub fn pad_frac(s: &str, width: usize) -> String {

@@ -1,6 +1,6 @@
 //! Display formatting shared by the result grids: fractional seconds aligned within a time column, digit grouping,
 //! the value class of a cell and its alignment (Settings › Appearance › Alignment in grid; overrides kept in settings.json),
-//! the colors of a JSON cell.
+//! the colors of a JSON cell, the widths a user gave columns (resize).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -259,9 +259,39 @@ pub fn cell_align(column: ValueClass, class: ValueClass, overrides: &Alignments)
     }
 }
 
+/// Column widths a user set (drag, fit, ⌃⌥← / ⌃⌥→ in the GUI, < > = in the TUI), by column name, in characters: the TUI draws a
+/// column that many cells wide, the GUI that many grid characters plus its cell padding. A column not in it keeps its computed width
+pub type ColumnWidths = BTreeMap<String, u16>;
+
+/// The narrowest and widest a set width can be, and how much one narrow / widen step changes it
+pub const COLUMN_WIDTH_MIN: u16 = 3;
+pub const COLUMN_WIDTH_MAX: u16 = 200;
+pub const COLUMN_WIDTH_STEP: i64 = 4;
+
+/// `width` (characters) moved by `steps` narrow (-) / widen (+) steps, kept between the narrowest and the widest
+pub fn column_width(width: i64, steps: i64) -> u16 {
+    width.saturating_add(steps.saturating_mul(COLUMN_WIDTH_STEP)).clamp(COLUMN_WIDTH_MIN as i64, COLUMN_WIDTH_MAX as i64) as u16
+}
+
+/// Reads saved widths (settings.json "columnWidths" › "widths"), skipping what isn't a whole number and keeping the rest in range
+pub fn column_widths(v: &Value) -> ColumnWidths {
+    let Some(m) = v.as_object() else { return ColumnWidths::new() };
+    m.iter().filter_map(|(k, w)| Some((k.clone(), column_width(w.as_i64()?, 0)))).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn column_widths_stay_in_range() {
+        assert_eq!(column_width(16, 3), 28);
+        assert_eq!(column_width(5, -1), COLUMN_WIDTH_MIN);
+        assert_eq!(column_width(198, 1), COLUMN_WIDTH_MAX);
+        let saved = serde_json::json!({ "memo": 53, "tiny": 1, "wide": 5000, "odd": "12", "half": 1.5 });
+        assert_eq!(column_widths(&saved), ColumnWidths::from([("memo".into(), 53), ("tiny".into(), COLUMN_WIDTH_MIN), ("wide".into(), COLUMN_WIDTH_MAX)]));
+        assert!(column_widths(&serde_json::json!([1])).is_empty());
+    }
 
     #[test]
     fn time_values_are_padded() {
