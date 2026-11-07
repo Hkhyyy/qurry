@@ -218,9 +218,9 @@ a { color: var(--c-548af7); cursor: pointer; }
 .result-area { flex: 1; min-height: 0; position: relative; background: var(--bg); }
 /* A run or load-more of the focused tab, in the status bar where its text is */
 .running-bar { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; min-width: 0; white-space: nowrap; }
-/* Its ✕ (cancel) shows on hover or keyboard focus; the space is kept so nothing moves */
+/* Its ✕ (cancel) shows on hover only, its space kept so nothing moves (hidden, it takes no focus: the keyboard cancels with ⌘F2 or the toolbar's ■) */
 .running-bar .rb-cancel { visibility: hidden; margin-left: -4px; }
-.running-bar:hover .rb-cancel, .running-bar .rb-cancel:focus-visible { visibility: visible; }
+.running-bar:hover .rb-cancel { visibility: visible; }
 .plan-table { user-select: text; }
 .plan-tools.ui-toolbar { height: 30px; border-bottom: 1px solid var(--border); }
 .running-time { font-variant-numeric: tabular-nums; }
