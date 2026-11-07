@@ -109,6 +109,7 @@ fn draw_screen(f: &mut Frame, app: &mut App) {
     // With two or more workspaces, one line at the top: 1 Default │ 2 Reports (Alt+n · click)
     app.hits.workspaces.clear();
     app.hits.text = Rect::default();
+    app.hits.run = Rect::default();
     app.hits.cancel = Rect::default();
     let main = if app.workspaces.len() > 1 {
         let [bar, rest] = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).areas(main);
@@ -436,7 +437,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     let value_keys = app.keys.slot_keys(crate::keys::Slot { action: A::ValueEditor, pane: Scope::Grid }).first().map(|k| crate::keys::pane_disp(k));
     let value_keys = format!(" {} / {} close ", value_keys.unwrap_or_else(|| "—".into()), k(A::CloseTab));
     let finding = focused && matches!(app.popup, Some(Popup::Find(_)));
-    // A run or a load-more in flight: the console's [■ Cancel] button (the status line says what and for how long)
+    // A run or a load-more in flight: the console's [▶ Run] is [■ Cancel] (the status line says what and for how long). The TUI has no
+    // grid toolbar (the GUI's ↻ / ■), so a console result's load-more is this button's too
     let busy = app.tabs[idx].busy().is_some();
     // The Execute chooser's highlighted option: the console rows it would run
     let preview = match &app.popup {
@@ -459,27 +461,28 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             } else {
                 (Rect::default(), ed)
             };
+            let button = if busy { format!("[■ Cancel {k_cancel}]") } else { format!("[▶ Run {k_run}]") };
             let title = format!(
-                " {db} · Tx: {}{}{}{} ",
+                " {db} · Tx: {}{} · {button}{} ",
                 if c.tx_manual { "Manual" } else { "Auto" },
                 if c.in_tx { format!(" (pending — {k_commit} commit / {k_rollback} rollback)") } else { String::new() },
-                if busy { format!(" · [■ Cancel {k_cancel}]") } else { String::new() },
                 if ro { " · read-only" } else { "" }
             );
             let editing = focus == Focus::Editor;
             if !editing {
                 c.complete = None;
             }
-            // [■ Cancel] spot (the title starts right after the top-left corner)
-            app.hits.cancel = match (busy, title.find("[■ Cancel")) {
-                (true, Some(at)) => {
-                    use unicode_width::UnicodeWidthStr;
-                    let x = ed.x + 1 + title[..at].width() as u16;
-                    let w = title[at..].find(']').map(|e| title[at..at + e + 1].width() as u16).unwrap_or(0);
-                    Rect { x, y: ed.y, width: w.min(ed.right().saturating_sub(x)), height: 1 }
-                }
-                _ => Rect::default(),
+            // The button's spot (the title starts right after the top-left corner)
+            let spot = {
+                use unicode_width::UnicodeWidthStr;
+                let at = title.find(&button).unwrap_or_default();
+                let x = ed.x + 1 + title[..at].width() as u16;
+                Rect { x, y: ed.y, width: (button.width() as u16).min(ed.right().saturating_sub(x)), height: 1 }
             };
+            // Only the focused pane's: a click acts on the active tab
+            if focused {
+                *(if busy { &mut app.hits.cancel } else { &mut app.hits.run }) = spot;
+            }
             c.editor.set_block(panel(title, editing));
             c.editor.set_line_number_style(Style::default().fg(DIM));
             // Put an invisible mark (underline color) on the cursor cell: found after drawing and used to place autocomplete·compute mouse positions

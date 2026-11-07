@@ -713,7 +713,7 @@ mod tests {
         assert!(!h.table(id).grid.as_ref().unwrap().loading_more, "not asked again");
     }
 
-    /// On a result wider than the grid, a failed load-more's words on the bottom edge stay whole beside the horizontal scrollbar
+    /// On a result wider than the grid, a failed load-more's words on the bottom edge stay whole beside the horizontal scrollbar and its range
     #[tokio::test]
     async fn the_load_more_error_stays_beside_the_horizontal_scrollbar() {
         let mut h = Harness::new().await;
@@ -732,7 +732,7 @@ mod tests {
         let screen = h.screen(120, 30);
         let edge = screen.lines().find(|l| l.contains('✗')).unwrap_or_else(|| panic!("{screen}"));
         let why = qurry_shared::errors::more_rows_failed("Session closed");
-        assert!(edge.contains(&format!("✗ {why}")) && edge.contains('█'), "{edge}");
+        assert!(edge.contains(&format!("▶  ✗ {why}")) && edge.contains("┗━━") && edge.contains("─ ◀ cols 1–"), "{edge}");
     }
 
     /// A load-more answer that arrives after the tab ran again belongs to the grid it replaced: dropped

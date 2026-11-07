@@ -660,7 +660,8 @@ pub struct Hits {
     pub last_click: Option<(std::time::Instant, u16, u16)>,
     /// Screen cell where the console cursor was drawn and the cursor then (row, col) — for mapping mouse position to text position (tui-textarea doesn't expose scroll position)
     pub caret: Option<(u16, u16, usize, usize)>,
-    /// [■ Cancel] in the running console's title bar (click to cancel)
+    /// The console title's one button (the GUI toolbar's ▶ / ■): [▶ Run] runs, [■ Cancel] while it runs cancels; the other is empty
+    pub run: ratatui::layout::Rect,
     pub cancel: ratatui::layout::Rect,
     /// Text tab (DDL·diagram) body — scroll with the wheel
     pub text: ratatui::layout::Rect,

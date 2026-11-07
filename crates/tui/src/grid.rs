@@ -688,17 +688,29 @@ impl Grid {
                 buf[(x, y)].set_symbol("│").set_style(line);
             }
         }
-        // Horizontal scrollbar: visible range in bold on the bottom border (click or drag to move); a block on the focused, already thick border
+        // Horizontal scrollbar on the bottom border (GUI: "cols 3–8 of 14" in the status bar): the border line itself is the bar, a dim
+        // thin track with a heavier bold thumb over the shown columns (the same focused or not, so it shows in NO_COLOR too), then the
+        // shown range at its right end, before the load-more message. Click or drag the track to move
         self.hbar = Rect::default();
-        if self.col_off > 0 || self.col_off + full < self.cols() {
-            let track = Rect { x: inner.x, y: area.bottom().saturating_sub(1), width: inner.width - msg_w, height: 1 };
+        let last = self.col_off + full.max(1);
+        if let Some(text) = qurry_shared::format::shown_cols(self.col_off + 1, last, self.cols()) {
+            let accent = if focused { Color::Cyan } else { Color::Gray };
+            let label = format!(" ◀ {text} ▶ ");
+            let room = inner.width - msg_w;
+            // A narrow grid keeps the track and drops the range
+            let label_w = if room >= label.width() as u16 + 10 { label.width() as u16 } else { 0 };
+            let track = Rect { x: inner.x, y: area.bottom().saturating_sub(1), width: room - label_w, height: 1 };
             let n = self.cols() as u32;
             let tw = track.width as u32;
             let start = (self.col_off as u32 * tw / n) as u16;
             let len = ((full.max(1) as u32 * tw).div_ceil(n) as u16).clamp(2, track.width - start);
-            let thumb = Style::default().fg(if focused { Color::Cyan } else { Color::Gray });
-            for x in track.x + start..track.x + start + len {
-                buf[(x, track.y)].set_symbol(if focused { "█" } else { "━" }).set_style(thumb);
+            for x in track.left()..track.right() {
+                let on = (track.x + start..track.x + start + len).contains(&x);
+                let st = if on { Style::default().fg(accent).add_modifier(Modifier::BOLD) } else { Style::default().fg(crate::kit::DIM) };
+                buf[(x, track.y)].set_symbol(if on { "━" } else { "─" }).set_style(st);
+            }
+            if label_w > 0 {
+                buf.set_string(track.right(), track.y, &label, Style::default().fg(accent));
             }
             self.hbar = track;
         }
@@ -902,25 +914,47 @@ mod tests {
         assert_eq!(g.in_list(DbKind::Postgres), ("(1, 2, 3)".to_string(), 3));
     }
 
-    /// Focus shows in the border's shape, not only its color (NO_COLOR has none); the scrollbar thumb stays visible on the thick border
+    /// Focus shows in the border's shape, not only its color (NO_COLOR has none). The bottom border is the horizontal scrollbar (#107):
+    /// a dim thin track, a bold heavier thumb over the shown columns (the same focused or not), the shown range at its right end
     #[test]
-    fn focused_grid_has_a_thick_border_and_a_block_thumb() {
+    fn grid_bottom_border_is_a_scrollbar_with_the_shown_columns() {
         let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
         let cols: Vec<_> = (0..12).map(|i| col(&format!("column_{i}"))).collect();
         let rows = vec![(0..12).map(|i| json!(i)).collect()];
         let mut g = Grid::new(QueryResult { columns: cols, rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
-        let draw = |g: &mut Grid, focused: bool| {
-            let mut term = Terminal::new(ratatui::backend::TestBackend::new(40, 6)).unwrap();
+        let draw = |g: &mut Grid, focused: bool, w: u16| {
+            let mut term = Terminal::new(ratatui::backend::TestBackend::new(w, 6)).unwrap();
             term.draw(|f| g.render(f, f.area(), "t".into(), focused, Default::default(), &Default::default())).unwrap();
             let buf = term.backend().buffer().clone();
-            (buf[(0, 0)].symbol().to_string(), (0..40).map(|x| buf[(x, 5)].symbol()).collect::<String>())
+            let bottom: Vec<_> = (0..w).map(|x| buf[(x, 5)].clone()).collect();
+            (buf[(0, 0)].symbol().to_string(), bottom)
         };
-        let (corner, bottom) = draw(&mut g, true);
-        assert_eq!(corner, "┏");
-        assert!(bottom.contains('█') && bottom.contains('━'), "{bottom}");
-        let (corner, bottom) = draw(&mut g, false);
-        assert_eq!(corner, "┌");
-        assert!(bottom.contains('━') && bottom.contains('─'), "{bottom}");
+        let text = |cells: &[ratatui::buffer::Cell]| cells.iter().map(|c| c.symbol()).collect::<String>();
+        for focused in [true, false] {
+            let (corner, bottom) = draw(&mut g, focused, 60);
+            assert_eq!(corner, if focused { "┏" } else { "┌" });
+            let line = text(&bottom);
+            let end = if focused { " ◀ cols 1–4 of 12 ▶ ┛" } else { " ◀ cols 1–4 of 12 ▶ ┘" };
+            assert!(line.starts_with(if focused { "┗━━" } else { "└━━" }) && line.ends_with(end), "{line}");
+            // The thumb: heavier and bold over the first 4 of 12 columns; the rest of the track thin and dim
+            let track = &bottom[1..bottom.len() - 1 - " ◀ cols 1–4 of 12 ▶ ".chars().count()];
+            let thumb = track.iter().take_while(|c| c.symbol() == "━").count();
+            assert!(thumb >= 2 && track[..thumb].iter().all(|c| c.modifier.contains(Modifier::BOLD)), "{line}");
+            assert!(track[thumb..].iter().all(|c| c.symbol() == "─" && c.fg == crate::kit::DIM && !c.modifier.contains(Modifier::BOLD)), "{line}");
+            assert_eq!(g.hbar.width as usize, track.len());
+        }
+        // Scrolled to the end: the thumb at the right end of the track, the range follows
+        g.col = 11;
+        let (_, bottom) = draw(&mut g, true, 60);
+        let line = text(&bottom);
+        assert!(line.contains("━ ◀ cols 9–12 of 12 ▶ ┛"), "{line}");
+        // Every column fits: a plain border, no range
+        let (_, bottom) = draw(&mut g, true, 200);
+        assert!(!text(&bottom).contains("cols") && g.hbar.width == 0, "{}", text(&bottom));
+        // Too narrow for the range: only the track
+        g.col = 0;
+        let (_, bottom) = draw(&mut g, true, 26);
+        assert!(!text(&bottom).contains("cols") && text(&bottom).contains('━') && g.hbar.width == 24, "{}", text(&bottom));
     }
 
     /// A 3×3 grid of "r{row}c{col}" values

@@ -467,16 +467,29 @@ mod tests {
     }
 
     /// Text tabs (diagram·DDL): wheel scrolls, not past the end, g/G for start·end
-    /// While running: the status line shows the bar, "Executing…" and the elapsed time; the console title a [■ Cancel ⌃c] that sends a cancel
+    /// The console title's one button (#107): [▶ Run] with the run key when idle (a click runs), [■ Cancel ⌃c] in the same spot while
+    /// running (a click cancels); the status line shows the bar, "Executing…", the elapsed time and the cancel key
     #[tokio::test]
-    async fn running_console_shows_time_and_a_cancel_button() {
+    async fn console_run_button_turns_into_cancel_while_running() {
         let mut h = Harness::new().await;
-        let id = h.console_tab();
+        let id = h.console_with("select 1", 0, 8);
+        let run_key = crate::keys::disp(&h.app.keys.keys(crate::app::Action::Execute)[0]);
+        let screen = h.screen(140, 30);
+        assert!(screen.contains(&format!("Tx: Auto · [▶ Run {run_key}]")) && !screen.contains("[■ Cancel"), "{screen}");
+        let run = h.app.hits.run;
+        assert_eq!((h.app.hits.cancel, run.width as usize), (ratatui::layout::Rect::default(), format!("[▶ Run {run_key}]").chars().count()));
+        let row = screen.lines().nth(run.y as usize).unwrap();
+        assert!(row.chars().skip(run.x as usize).collect::<String>().starts_with("[▶ Run"), "{row}");
+        // A click runs the console (its data source isn't there, so the run starts and fails)
+        h.mouse("down", run.x + 2, run.y);
+        h.settle().await;
+        assert!(h.console_output().iter().any(|l| l.contains("select 1")), "the click ran Execute: {:?}", h.console_output());
         if let Some(TabKind::Console(c)) = h.app.tab_mut(id).map(|t| &mut t.kind) {
             c.running = true;
         }
         let screen = h.screen(140, 30);
-        assert!(screen.contains("Tx: Auto · [■ Cancel"), "{screen}");
+        assert!(screen.contains("Tx: Auto · [■ Cancel") && !screen.contains("[▶ Run"), "{screen}");
+        assert_eq!((h.app.hits.cancel.x, h.app.hits.run), (run.x, ratatui::layout::Rect::default()), "■ in the ▶'s spot");
         assert!(screen.lines().last().unwrap().contains("▏ Executing… 0.0 s · ⌃c cancel"), "{screen}");
         let r = h.app.hits.cancel;
         assert!(r.width > 8, "{r:?}");
@@ -485,12 +498,12 @@ mod tests {
         crate::input::on_event(&mut h.app, Event::Mouse(crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x + 2, row: r.y, modifiers: KeyModifiers::NONE }));
         h.settle().await;
         assert!(!h.app.status.is_empty() && h.app.status != "Executing…", "cancel was sent: {}", h.app.status);
-        // The button goes away when finished
+        // [▶ Run] again when finished
         if let Some(TabKind::Console(c)) = h.app.tab_mut(id).map(|t| &mut t.kind) {
             c.running = false;
         }
-        h.screen(140, 30);
-        assert_eq!(h.app.hits.cancel, ratatui::layout::Rect::default());
+        assert!(h.screen(140, 30).contains("[▶ Run"));
+        assert_eq!((h.app.hits.cancel, h.app.hits.run), (ratatui::layout::Rect::default(), run));
     }
 
 }

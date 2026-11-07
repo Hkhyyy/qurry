@@ -265,6 +265,48 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     if let Some(g) = h.app.grid_mut() {
         (g.result.truncated, g.loading_more) = (false, false);
     }
+    // Horizontal scrollbar on the grid's bottom border (#107): 14 columns, 3–8 shown
+    let id = h.console_with("select * from payment;", 0, 22);
+    let names = ["idx", "order_no", "user_idx", "payment_type", "tx_type", "sub_type", "contract_idx", "merchant_idx", "partner_idx", "sales_idx", "receiver_name", "receiver_contact", "receiver_bank", "created_at"];
+    let wide = qurry_core::db::QueryResult {
+        columns: names.iter().enumerate().map(|(i, n)| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: if i % 4 == 0 { "INT8" } else { "TEXT" }.into() }).collect(),
+        rows: (0..12).map(|r| names.iter().enumerate().map(|(i, _)| if i % 4 == 0 { json!(486 + r * 3 + i) } else { json!(format!("{}-{}", ["CARD", "BANK", "PAY", "NORMAL"][(r + i) % 4], 100 + r)) }).collect()).collect(),
+        rows_affected: 0,
+        truncated: false,
+        elapsed_ms: 12,
+        has_result_set: true,
+        in_transaction: false,
+        warning: None,
+        editable: None,
+    };
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.result_title = "Result 1: select * from payment".into();
+        let mut g = crate::grid::Grid::new(wide);
+        (g.row, g.col, g.col_off) = (2, 4, 2);
+        c.grid = Some(g);
+        c.show_output = false;
+    }
+    let status = std::mem::replace(&mut h.app.status, "12 row(s) retrieved in 12 ms".into());
+    use crate::theme::{ColorMode, Theme};
+    const BAR: &str = "the bottom border is the bar: a dim thin track, the thumb heavier and bold over the shown columns, the shown range at its right end; click or drag the track";
+    for (focus, color, theme, name, desc) in [
+        (crate::app::Focus::Grid, ColorMode::TrueColor, Theme::Auto, "Grid scrollbar: focused", format!("A result with more columns than fit: {BAR}. Focused: the thick cyan border, the thumb and range in cyan")),
+        (crate::app::Focus::Editor, ColorMode::TrueColor, Theme::Auto, "Grid scrollbar: not focused", format!("The same thumb when the grid isn't focused; only the border's color and shape change ({BAR})")),
+        (crate::app::Focus::Grid, ColorMode::TrueColor, Theme::Light, "Grid scrollbar: light", "Theme Light: the same bar on a light terminal".into()),
+        (crate::app::Focus::Grid, ColorMode::Ansi16, Theme::Auto, "Grid scrollbar: 16 colors", "TERM=xterm: the thumb cyan and bold, the track dark gray".into()),
+        (crate::app::Focus::Grid, ColorMode::NoColor, Theme::Auto, "Grid scrollbar: NO_COLOR", "NO_COLOR=1: the thumb by its heavier bold line (━ over ─)".into()),
+    ] {
+        (h.app.focus, h.app.color, h.app.theme) = (focus, color, theme);
+        scenes.push(app_scene(h, name, &desc, 120, 22));
+    }
+    (h.app.color, h.app.theme) = (ColorMode::TrueColor, Theme::Auto);
+    if let Some(g) = h.app.grid_mut() {
+        (g.result.truncated, g.more_error) = (true, Some("Couldn't load more rows: Session closed".into()));
+    }
+    scenes.push(app_scene(h, "Grid scrollbar: beside a failed load-more", "The load-more message keeps its place at the right end; the range sits just before it", 120, 22));
+    h.app.focus = crate::app::Focus::Editor;
+    h.app.close_tab_now(h.app.active);
+    h.app.status = status;
     // Long Output log: the newest line sits on the bottom row, a long wrapped one included
     let id = h.console_with("update payment set memo = 'migrated' where id = 1;", 0, 0);
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
