@@ -25,9 +25,9 @@ Colors are theme tokens: every theme's values are in `crates/shared/src/themes.j
 | | `--ui-surface-2` | #26282b | 한 단계 낮은 면 |
 | | `--ui-hover` · `--ui-selected` | #33353a · #2e436e | 올림 · 고른 줄 |
 | 선 | `--ui-border` · `--ui-border-strong` | #393b40 · #4e5157 | 구역 · 입력칸 테두리 |
-| 글자 | `--ui-text` · `--ui-text-muted` · `--ui-text-on-accent` | #dfe1e5 · #868a91 · #fff | 본문 · 설명 · 강조색 위 |
+| 글자 | `--ui-text` · `--ui-text-muted` · `--ui-text-on-accent` | #dfe1e5 · #8b8f95 · #fff | 본문 · 설명 · 강조색 위 |
 | 색 | `--ui-accent` · `--ui-danger` · `--ui-warn` · `--ui-ok` | #3574f0 · #f75464 · #e5a64b · #5fb865 | 주 버튼 · 위험 · 주의 · 성공 |
-| JSON | `--ui-json-key` · `-string` · `-number` · `-keyword` · `-punct` | #c77dbb · #6aab73 · #2aacb8 · #cf8e6d · #868a91 | JSON cells in result grids (the TUI uses the same values) |
+| JSON | `--ui-json-key` · `-string` · `-number` · `-keyword` · `-punct` | #c77dbb · #6aab73 · #2aacb8 · #cf8e6d · #8b8f95 | JSON cells in result grids (the TUI uses the same values) |
 | 간격 | `--ui-sp-1` … `--ui-sp-6` | 2 · 4 · 8 · 12 · 16 · 24px | padding · gap · margin 은 이 값만 |
 | 둥글기 | `--ui-radius-sm` / `-md` / `-lg` | 4 · 6 · 10px | 버튼 / 메뉴 · 목록 / 대화상자 |
 | 글자 크기 | `--ui-fs-xs` / `-sm` / `-md` / `-lg` | 11 · 12 · 13 · 14px | 배지 / 보조 / 본문 / 제목 |

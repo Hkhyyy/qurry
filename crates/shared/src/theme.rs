@@ -24,8 +24,10 @@ pub struct Token {
     /// Shown without "Advanced colors"
     #[serde(default)]
     pub basic: bool,
-    /// [text, background, minimum WCAG contrast]: one of the two is this token
-    pub check: Option<(String, String, f64)>,
+    /// [text, background, minimum WCAG contrast] for each surface the color is drawn on (or each color drawn on it): one of the two
+    /// is this token
+    #[serde(default)]
+    pub checks: Vec<(String, String, f64)>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -163,16 +165,19 @@ pub struct Warning {
     pub min: f64,
 }
 
-/// The tokens whose pair (text ≥ 4.5:1, dim text, icons and the accent ≥ 3:1) a palette doesn't meet
+/// The tokens with a pair (text ≥ 4.5:1, dim text, icons and the accent ≥ 3:1) a palette doesn't meet: one warning per token, for
+/// its pair furthest below the minimum
 pub fn warnings(colors: &BTreeMap<String, String>) -> Vec<Warning> {
     let get = |k: &str| colors.get(k).map(String::as_str).unwrap_or("");
     table()
         .tokens
         .iter()
         .filter_map(|t| {
-            let (fg, bg, min) = t.check.as_ref()?;
-            let ratio = contrast(get(fg), get(bg));
-            (ratio < *min).then(|| Warning { token: t.key.clone(), fg: fg.clone(), bg: bg.clone(), ratio, min: *min })
+            t.checks
+                .iter()
+                .map(|(fg, bg, min)| Warning { token: t.key.clone(), fg: fg.clone(), bg: bg.clone(), ratio: contrast(get(fg), get(bg)), min: *min })
+                .filter(|w| w.ratio < w.min)
+                .min_by(|a, b| (a.ratio / a.min).total_cmp(&(b.ratio / b.min)))
         })
         .collect()
 }
@@ -237,7 +242,8 @@ pub fn parse_file(text: &str) -> Result<CustomTheme, String> {
 mod tests {
     use super::*;
 
-    /// The test like the TUI light theme's, over every built-in theme: text 4.5:1, dim text, icons and the accent 3:1
+    /// The test like the TUI light theme's, over every built-in theme: text 4.5:1, dim text, icons and the accent 3:1, on each surface
+    /// they are drawn on (panels, odd rows, hover, the current line, the selection, the Production tint)
     #[test]
     fn every_builtin_theme_meets_the_contrast_minimums() {
         assert_eq!(table().themes.len(), 7);
@@ -254,7 +260,20 @@ mod tests {
         colors.insert("onAccent".into(), "#3574f0".into());
         let w = warnings(&colors);
         assert_eq!(w.iter().map(|w| w.token.as_str()).collect::<Vec<_>>(), ["onAccent", "comment"]);
-        assert!(w[1].ratio < 3.0 && w[1].min == 3.0 && w[1].fg == "comment" && w[1].bg == "bg", "{w:?}");
+        assert!(w[1].ratio < 3.0 && w[1].min == 3.0 && w[1].fg == "comment" && w[1].bg == "panel2", "{w:?}");
+        // Checked on every surface a color is drawn on, not only the editor's background: Dracula's published comment blue as dim
+        // text is fine on the background but not on odd rows or the selection (the warning names the worst)
+        let mut colors = builtin("dracula").unwrap().colors.clone();
+        colors.insert("muted".into(), "#6272a4".into());
+        colors.insert("nullText".into(), "#6272a4".into());
+        assert!(contrast("#6272a4", &colors["bg"]) >= 3.0);
+        let w = warnings(&colors);
+        assert_eq!(w.iter().map(|w| (w.token.as_str(), w.bg.as_str())).collect::<Vec<_>>(), [("muted", "sel"), ("nullText", "sel")], "{w:?}");
+        // A surface made too close to the text it carries warns at the text
+        let mut colors = builtin("solarized-dark").unwrap().colors.clone();
+        colors.insert("panel2".into(), "#2e5560".into());
+        let w = warnings(&colors);
+        assert!(w.iter().any(|w| w.token == "text" && w.bg == "panel2") && w.iter().any(|w| w.token == "keyword" && w.bg == "panel2"), "{w:?}");
         // A custom theme is checked on its colors over its base's
         let s = ThemeSettings { custom: vec![CustomTheme { id: "c1".into(), name: "Dim".into(), base: "dracula".into(), colors: [("text".into(), "#44475a".into())].into() }], ..Default::default() };
         let w = warnings(&s.find("c1").unwrap().colors);
@@ -272,7 +291,7 @@ mod tests {
             assert!(keys.contains(&tok.as_str()), "tui {atom} → {tok}");
         }
         for t in &table().tokens {
-            if let Some((fg, bg, _)) = &t.check {
+            for (fg, bg, _) in &t.checks {
                 assert!(keys.contains(&fg.as_str()) && keys.contains(&bg.as_str()) && (fg == &t.key || bg == &t.key), "{}", t.key);
             }
         }

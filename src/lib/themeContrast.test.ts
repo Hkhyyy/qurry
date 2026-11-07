@@ -12,7 +12,12 @@ describe("theme contrast (WASM)", () => {
     const w = shared().themeWarnings(colors);
     expect(w.map((x) => x.token)).toEqual(expect.arrayContaining(["text", "comment", "sel"]));
     const c = w.find((x) => x.token === "comment")!;
-    expect([c.fg, c.bg, c.min, c.ratio < 3]).toEqual(["comment", "bg", 3, true]);
+    expect([c.fg, c.bg, c.min, c.ratio < 3]).toEqual(["comment", "panel2", 3, true]);
+  });
+  it("checks a color on the surfaces it is drawn on, not only the background", () => {
+    const dracula = TABLE.themes.find((t) => t.id === "dracula")!.colors;
+    const w = shared().themeWarnings({ ...dracula, muted: "#6272a4" });
+    expect(w.map((x) => [x.token, x.bg])).toEqual([["muted", "sel"]]);
   });
   it("refuses theme files that aren't one, saying why", () => {
     const ok = shared().parseThemeFile(JSON.stringify({ qurryTheme: 1, name: "Mine", base: "dracula", colors: { bg: "#101010" } }));

@@ -16,8 +16,8 @@ export interface ThemeToken {
   desc: string;
   /** Shown without "Advanced colors" */
   basic?: boolean;
-  /** [text, background, minimum contrast]: one of the two is this token */
-  check?: [string, string, number];
+  /** [text, background, minimum contrast] for each surface the color is drawn on: one of the two is this token */
+  checks?: [string, string, number][];
 }
 export const TOKENS = TABLE.tokens as ThemeToken[];
 /** The TUI's tokens (crates/tui/src/kit/atoms.rs) and the theme token each one draws with */
