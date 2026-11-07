@@ -1124,7 +1124,7 @@ pub(crate) mod tests {
         let running = tokio::spawn(async move { sqlx::query("select pg_advisory_xact_lock(7702100), pg_sleep(13)").execute(&mut *job).await.map(|_| ()) });
         tokio::time::sleep(Duration::from_millis(300)).await;
         let t = Instant::now();
-        let e = one(id.clone()).await.err().expect("no connection within the timeout").to_string();
+        let e = one(id.clone()).await.expect_err("no connection within the timeout").to_string();
         assert!(e.contains("though the AWS SSM tunnel (instance i-0123456789abcdef0) answers") && e.contains("startup script"), "{e}");
         assert!(t.elapsed() < Duration::from_secs(12), "one timeout: {:?}", t.elapsed());
         running.await.unwrap().expect("the running statement goes on");
@@ -1191,7 +1191,7 @@ pub(crate) mod tests {
         stop_forwarding(fake.path());
         age_session(&st, "c1").await;
         let t = Instant::now();
-        let e = tokio::time::timeout(Duration::from_secs(40), st.commit_tx("c1".into())).await.expect("doesn't hang").err().expect("lost").to_string();
+        let e = tokio::time::timeout(Duration::from_secs(40), st.commit_tx("c1".into())).await.expect("doesn't hang").expect_err("lost").to_string();
         // The 5s check, then 5s for the tunnel (a transaction is open: a slow session through a working tunnel would be kept)
         println!("transaction-open console answered in {:?}", t.elapsed());
         assert!(t.elapsed() < Duration::from_secs(12), "{:?}", t.elapsed());
@@ -1208,7 +1208,7 @@ pub(crate) mod tests {
             tokio::time::sleep(Duration::from_millis(500)).await;
             st.cancel_query("c1".into()).await
         });
-        let e = r.expect("the statement doesn't wait forever").err().expect("cut off").to_string();
+        let e = r.expect("the statement doesn't wait forever").expect_err("cut off").to_string();
         let took = t.elapsed();
         println!("hung statement ended by Cancel in {took:?}: {e}");
         assert!(lost(&e), "{e}");
@@ -1229,7 +1229,7 @@ pub(crate) mod tests {
             tokio::time::sleep(Duration::from_millis(500)).await;
             crate::app::housekeeping(&st).await
         });
-        let e = r.expect("the statement doesn't wait forever").err().expect("cut off").to_string();
+        let e = r.expect("the statement doesn't wait forever").expect_err("cut off").to_string();
         let took = t.elapsed();
         println!("hung statement ended by the keep-alive in {took:?}");
         assert!(lost(&e), "{e}");
@@ -1280,7 +1280,7 @@ pub(crate) mod tests {
         run("select 2", Some("b")).await.expect("doesn't hang").expect("b goes on through a new tunnel");
         println!("tab b recovered in {:?}", t.elapsed());
         // Tab a's next statement isn't run in a new session
-        let e = run("insert into qurry_t110_lost values (2)", Some("a")).await.unwrap().err().expect("lost").to_string();
+        let e = run("insert into qurry_t110_lost values (2)", Some("a")).await.unwrap().expect_err("lost").to_string();
         assert!(
             e.starts_with("Qurry closed this console's connection to \"ssm-lost\" through the AWS SSM tunnel (instance i-0123456789abcdef0) because the data source stopped answering")
                 && e.contains("The transaction is lost")
@@ -1296,7 +1296,7 @@ pub(crate) mod tests {
         run("begin", Some("a")).await.unwrap().unwrap();
         run("insert into qurry_t110_lost values (3)", Some("a")).await.unwrap().unwrap();
         st.disconnect(id.clone()).await.unwrap();
-        let e = tokio::time::timeout(Duration::from_secs(40), st.commit_tx("a".into())).await.unwrap().err().expect("lost").to_string();
+        let e = tokio::time::timeout(Duration::from_secs(40), st.commit_tx("a".into())).await.unwrap().expect_err("lost").to_string();
         assert!(e.starts_with("\"ssm-lost\" was disconnected") && e.contains("nothing was sent"), "{e}");
         assert_eq!(count().await, serde_json::json!(0));
         // A tab without a transaction just reconnects
@@ -1332,7 +1332,7 @@ pub(crate) mod tests {
         hold_forwarding(fake.path());
         age_session(&st, "s").await;
         let t = Instant::now();
-        let e = run("insert into qurry_t110_slow values (2)", Some("s")).await.expect("doesn't hang").err().expect("not sent").to_string();
+        let e = run("insert into qurry_t110_slow values (2)", Some("s")).await.expect("doesn't hang").expect_err("not sent").to_string();
         let took = t.elapsed();
         println!("{kind:?}: slow session answered in {took:?}: {e}");
         assert!(e.contains("though the tunnel answers, so Qurry kept it with the transaction open in it") && e.contains("Nothing was sent"), "{e}");
@@ -1341,7 +1341,7 @@ pub(crate) mod tests {
         assert_eq!(starts(), 1, "the tunnel is kept");
         // Run again at once, as the message says, while the session still doesn't come back: checked again, never sent into it
         let t = Instant::now();
-        let e = run("insert into qurry_t110_slow values (2)", Some("s")).await.expect("a second run doesn't hang either").err().expect("not sent").to_string();
+        let e = run("insert into qurry_t110_slow values (2)", Some("s")).await.expect("a second run doesn't hang either").expect_err("not sent").to_string();
         assert!(e.contains("though the tunnel answers") && t.elapsed() < Duration::from_secs(8), "{e} after {:?}", t.elapsed());
 
         release_forwarding(fake.path());

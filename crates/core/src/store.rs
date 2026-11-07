@@ -367,6 +367,9 @@ struct Access {
     allow_plaintext: bool,
 }
 
+/// A source whose saved passwords an import deletes: (id, DB password, SSH secret)
+type Forget = (String, bool, bool);
+
 impl Store {
     pub fn new(dir: PathBuf) -> Self {
         Self {
@@ -645,7 +648,7 @@ impl Store {
     /// (added, changed, sources whose passwords to delete: (id, DB password, SSH secret)). The saved flags follow the current values, not the file.
     /// `forget` deletes those passwords before the store is written (under its lock): if it fails, nothing is imported — otherwise the store would
     /// say "no password" (or allow plain text) while the old password stayed in the file
-    pub fn import_apply(&self, plan: &ImportPlan, picked: &[bool], forget: impl FnOnce(&[(String, bool, bool)]) -> AppResult<()>) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
+    pub fn import_apply(&self, plan: &ImportPlan, picked: &[bool], forget: impl FnOnce(&[Forget]) -> AppResult<()>) -> AppResult<(usize, usize, Vec<Forget>)> {
         let chosen: Vec<ConnectionConfig> = plan.configs.iter().enumerate().filter(|(i, _)| picked.get(*i).copied().unwrap_or(true)).filter_map(|(_, c)| c.clone()).collect();
         self.update(|all| {
             let incoming = chosen.into_iter().filter(|c| !c.id.is_empty() || !all.iter().any(|e| crate::import::same_source(e, c))).collect();
@@ -661,7 +664,7 @@ impl Store {
         !e.same_server(c) || (!e.options.allow_plaintext && c.options.allow_plaintext)
     }
 
-    fn merge_import(all: &mut Vec<ConnectionConfig>, incoming: Vec<ConnectionConfig>) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
+    fn merge_import(all: &mut Vec<ConnectionConfig>, incoming: Vec<ConnectionConfig>) -> AppResult<(usize, usize, Vec<Forget>)> {
         let (mut added, mut updated, mut forget) = (0, 0, vec![]);
         for mut c in incoming {
             if c.id.is_empty() {
@@ -985,7 +988,7 @@ mod tests {
     }
 
     /// Import a whole file, as the confirm with every row checked
-    fn import_all(s: &Store, file: &std::path::Path) -> (usize, usize, Vec<(String, bool, bool)>) {
+    fn import_all(s: &Store, file: &std::path::Path) -> (usize, usize, Vec<Forget>) {
         let plan = s.import_plan(file, std::path::Path::new("/nonexistent-home"), None).unwrap();
         s.import_apply(&plan, &[], |_| Ok(())).unwrap()
     }
