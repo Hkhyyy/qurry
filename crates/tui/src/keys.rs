@@ -48,7 +48,7 @@ pub fn fixed_in(pane: Scope, spec: &str) -> bool {
 
 /// The order the F1 window, --help and docs/shortcuts-tui.md list the commands with default keys in (scripts/gen-keymap-docs.py reads it here).
 /// The table can't hold it: commands both apps have sit in the GUI's order there. Every TUI row with default keys is here once (a test checks)
-const ORDER: [Action; 41] = [
+const ORDER: [Action; 42] = [
     Action::Quit,
     Action::Help,
     Action::Palette,
@@ -76,6 +76,7 @@ const ORDER: [Action; 41] = [
     Action::Execute,
     Action::Explain,
     Action::Complete,
+    Action::Reformat,
     Action::Cancel,
     Action::TxToggle,
     Action::Commit,
@@ -215,22 +216,44 @@ pub struct Keymap {
     map: HashMap<Slot, Vec<String>>,
     /// (pane, key spec) → command, rebuilt whenever map changes. A key two commands have goes to the first in COMMANDS
     by_key: HashMap<(Scope, String), Action>,
+    /// Default keys left out because keymap.json gives them to another command: (the command left without it, the key, that command)
+    pub shadowed: Vec<(Slot, String, Slot)>,
 }
 
 impl Keymap {
-    /// Overlay user settings on the defaults. Unknown names are ignored
+    /// Overlay user settings on the defaults. Unknown names are ignored. A key the user gave a command stays that command's, also
+    /// when a later version makes it another command's default (⌥⇧F Reformat Code in 0.3.2): the other command goes without it
     pub fn new(user: &qurry_core::store::Keymap) -> Self {
-        let map = COMMANDS
+        let mut map: HashMap<Slot, Vec<String>> = COMMANDS
             .iter()
             .map(|(s, keys)| (*s, user.get(&s.id()).map_or_else(|| keys.to_vec(), |v| v.iter().map(|k| table::normalize(k)).collect())))
             .collect();
-        let mut km = Keymap { map, by_key: HashMap::new() };
+        let mine: Vec<(Slot, Vec<String>)> = map.iter().filter(|(s, _)| user.contains_key(&s.id())).map(|(s, v)| (*s, v.clone())).collect();
+        let mut shadowed = vec![];
+        for (s, keys) in map.iter_mut().filter(|(s, _)| !user.contains_key(&s.id())) {
+            keys.retain(|k| match table::conflicts(s, s.pane, k, mine.iter().map(|(o, v)| (*o, o.pane, v.as_slice()))).first() {
+                Some(by) => {
+                    shadowed.push((*s, k.clone(), *by));
+                    false
+                }
+                None => true,
+            });
+        }
+        shadowed.sort_by_key(|(s, k, _)| (s.id(), k.clone()));
+        let mut km = Keymap { map, by_key: HashMap::new(), shadowed };
         km.index();
         km
     }
 
+    /// What the status line says at startup when keymap.json keeps a default key for another command, and how to give one back
+    pub fn shadowed_notice(&self) -> Option<String> {
+        let (s, key, by) = self.shadowed.first()?;
+        let name = |s: &Slot| crate::app::title(s.action);
+        Some(format!("{} stays on {} (your keymap.json), so {} has no key — {} › Keymap gives it one", disp(key), name(by), name(s), self.label(Action::Palette)))
+    }
+
     fn index(&mut self) {
-        let Keymap { map, by_key } = self;
+        let Keymap { map, by_key, .. } = self;
         by_key.clear();
         for (s, _) in COMMANDS.iter() {
             for k in map.get(s).into_iter().flatten() {

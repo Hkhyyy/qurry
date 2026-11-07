@@ -31,13 +31,21 @@ pub(super) fn editor_key(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Char(_) if k.modifiers.contains(KeyModifiers::SUPER) => {}
+        // Undo / redo: a Reformat Code or keyword case change is one step
+        KeyCode::Char('u') if k.modifiers == KeyModifiers::CONTROL => c.undo(),
+        KeyCode::Char('r') if k.modifiers == KeyModifiers::CONTROL => c.redo(),
         _ => {
             c.editor.input(k);
         }
     }
+    let plain = !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    // A space, newline or punctuation typed after a keyword: the keyword case (Off by default)
+    let typing = !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
+    if typing && (k.code == KeyCode::Enter || matches!(k.code, KeyCode::Char(ch) if !(ch.is_alphanumeric() || ch == '_' || ch == '$'))) {
+        app.case_typed_keyword();
+    }
     // Typing a word or '.' opens it (like the GUI), deleting while open re-filters. Any other key closes it
     // (On macOS Ctrl+Space switches input sources, so opening by typing is the default)
-    let plain = !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
     let typed = plain && matches!(k.code, KeyCode::Char(ch) if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '\'' || ch == ' ' || ch == '>');
     if typed || (open && k.code == KeyCode::Backspace) {
         app.update_completion(false);

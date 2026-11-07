@@ -71,6 +71,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `F5 / ⌃Enter / ⌥Enter` | Execute (asks what to run — see Query Execution Settings) |
 | `⌥e` | Explain Plan |
 | `⌃Space` | Code Completion |
+| `⌥⇧F` | Reformat Code (the selection or the statement at the cursor) |
 | `⌃c` | Cancel Running Statement |
 | `⌥t` | Toggle Transaction Mode (Auto/Manual) |
 | `⌥c` | Commit |
@@ -151,6 +152,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | — | Unsplit All |
 | — | Trust SSH Host Key (after checking its fingerprint) |
 | — | Password Key… (keep it in the config folder or the system keychain) |
+| — | Keyword Case… (UPPER or lower SQL keywords as you type and in Reformat Code; shared with the GUI) |
 | — | Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI) |
 | — | Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background) |
 | — | Check for Updates |

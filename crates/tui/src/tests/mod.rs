@@ -10,6 +10,7 @@ mod keymap;
 mod marks;
 mod notices;
 mod perf;
+mod reformat;
 mod tabs;
 mod temporary;
 mod tls_optin;

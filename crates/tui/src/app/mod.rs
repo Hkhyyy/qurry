@@ -21,6 +21,7 @@ mod conns;
 mod explorer;
 mod palette;
 mod redis;
+mod reformat;
 mod run;
 mod splits;
 mod tables;
@@ -56,6 +57,8 @@ pub struct Console {
     pub complete: Option<Completion>,
     /// Gutter marks of the statements runs executed
     pub marks: Marks,
+    /// Replacements (Reformat Code, keyword case) that ⌃u / ⌃r undo and redo as one step (reformat.rs)
+    pub joined: Vec<reformat::Joined>,
 }
 
 /// How a run statement's gutter mark shows it (DataGrip): … running, ✓ done, ✗ failed (symbols, so NO_COLOR reads them too)
@@ -425,6 +428,8 @@ pub enum PAction {
     Exec(qurry_core::exec::ExecSettings),
     /// Update channel picked
     Channel(qurry_core::update::Channel),
+    /// Keyword case picked
+    KeywordCase(qurry_core::format::KeywordCase),
     /// Grid alignment: a value class picked (→ pick where it sits)
     AlignClass(qurry_core::format::ValueClass),
     /// Grid alignment: where a value class sits, picked
@@ -636,6 +641,7 @@ pub enum Action {
     Unsplit,
     OtherSplit,
     Complete,
+    Reformat,
     TrustSshHost,
     Palette,
     CycleFocus,
@@ -651,6 +657,7 @@ pub enum Action {
     ExplorerWider,
     ManageSchemas,
     PasswordKey,
+    KeywordCase,
     GridAlign,
     Theme,
     CheckUpdate,
@@ -801,6 +808,8 @@ pub struct App {
     pub auto_light: bool,
     /// Grid alignment per value class, shared with the GUI's Settings › Appearance › Alignment (settings.json, read at startup and by ⌃k › Grid Alignment…)
     pub align: qurry_core::format::Alignments,
+    /// Keyword case as you type and in Reformat Code, shared with the GUI's Settings › Appearance › Keyword case (settings.json, read at startup and by ⌃k › Keyword Case…)
+    pub keyword_case: qurry_core::format::KeywordCase,
     /// The last frame was the 'terminal too small' message: keys and clicks would act on a screen that isn't drawn
     pub too_small: bool,
     /// Tests only (testkit): answers console statements and the Production row counts instead of the database
@@ -839,6 +848,7 @@ impl App {
         let align = state.store.grid_align();
         let themes = state.store.theme_settings();
         let mut a = App {
+            keyword_case: state.store.keyword_case(),
             align,
             hits: Hits::default(),
             state,
@@ -893,7 +903,7 @@ impl App {
             workspaces: vec![Workspace { id: uuid::Uuid::new_v4().to_string(), name: "Default".into(), conns: vec![], saved: None }],
             cur_ws: 0,
         };
-        if let Some(e) = keys_err {
+        if let Some(e) = keys_err.or_else(|| a.keys.shadowed_notice()) {
             a.status = e;
         }
         a.reload_conns();

@@ -39,6 +39,7 @@ Commands (change them with F1)
   F5 / ⌃Enter / ⌥Enter           Execute (asks what to run — see Query Execution Settings)
   ⌥e                             Explain Plan
   ⌃Space                         Code Completion
+  ⌥⇧F                            Reformat Code (the selection or the statement at the cursor)
   ⌃c                             Cancel Running Statement
   ⌥t                             Toggle Transaction Mode (Auto/Manual)
   ⌥c                             Commit
