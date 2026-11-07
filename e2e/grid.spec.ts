@@ -155,6 +155,8 @@ test("Add Row, then rows loaded below go before the new row: it stays selected, 
     // Scrolled to the end: the next rows load (once; the result then has all of them)
     await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
     await expect(info).toHaveText("620 rows · 1 pending");
+    // The view stays where it was when rows load (#94), so the new row, now last, may be out of view: scroll to it again
+    await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
     await expect(work(page).locator(".grid-row.added .cell.sel")).toHaveCount(1);
     await work(page).getByRole("button", { name: new RegExp(`^${undo}`) }).click();
     // A loaded row would be marked deleted (still 1 pending) if the selection had stayed where the new row was
