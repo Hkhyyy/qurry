@@ -17,6 +17,7 @@ pub mod keytree;
 pub mod kind;
 pub mod labels;
 pub mod redis_cmd;
+pub mod scope;
 pub mod result_edit;
 pub mod sql;
 pub mod theme;

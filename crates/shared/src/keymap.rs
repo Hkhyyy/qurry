@@ -394,6 +394,7 @@ mod tests {
             ("tab.prev", "PrevTab"),
             ("split.other", "OtherSplit"),
             ("editor.run", "Execute"),
+            ("editor.quickFix", "QuickFix"),
             ("editor.cancel", "Cancel"),
             ("editor.history", "QueryHistory"),
             ("ws.new", "WsNew"),

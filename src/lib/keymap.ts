@@ -105,6 +105,7 @@ export const KEYMAP: KeySection[] = [
       [null, "editor.cancel"],
       [null, "editor.history"],
       ["⌃Space", "Code completion"],
+      [null, "editor.quickFix"],
       [null, "editor.reformat"],
       ["⌘/", "Line comment"],
       [null, "editor.blockComment"],

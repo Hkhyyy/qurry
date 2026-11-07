@@ -3,7 +3,7 @@ Start here
   ⌃p                             Search everything: tables, columns, tabs, actions (not sure? start here)
   ⌃k                             All actions, each with its shortcut
   ⌃l                             New query console for the selected data source
-  F5 / ⌃Enter / ⌥Enter           Run (asks what to run when there are several statements)
+  F5 / ⌃Enter                    Run (asks what to run when there are several statements)
   ⌃e                             Recent tabs
   ⌃w                             Close tab
   Enter (explorer)               Connect · open a table
@@ -36,7 +36,8 @@ Commands (change them with F1)
   ⌥⇧Right                        Move Split Divider Right / Down
   ⌥[                             Database Explorer Narrower
   ⌥]                             Database Explorer Wider
-  F5 / ⌃Enter / ⌥Enter           Execute (asks what to run — see Query Execution Settings)
+  F5 / ⌃Enter                    Execute (asks what to run — see Query Execution Settings)
+  ⌥Enter                         Quick Fixes (an underlined unknown name's closest names; elsewhere Execute)
   ⌥e                             Explain Plan
   ⌃Space                         Code Completion
   ⌃c                             Cancel Running Statement

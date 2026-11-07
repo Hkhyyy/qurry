@@ -1,6 +1,7 @@
 // Console autocompletion for Monaco. The rules are qurry_shared::complete (the TUI's too), run through the shared WASM:
 // one CompletionIndex per connection, built when its metadata loads, then asked synchronously on every request.
-// Only the value · json key lookups (meta.hints) wait on the backend.
+// Only the value · json key lookups (meta.hints) wait on the backend. The same index gives signature help inside a call's
+// parentheses and the unknown-name markers (with their quick fixes, ⌥↩).
 import { monaco } from "./monaco";
 import { CompletionTable, meta } from "./api";
 import { initShared, shared, type Completion, type CompletionItem, type FilterSuggestions, type Suggestions } from "./shared";
@@ -23,6 +24,10 @@ function load(connId: string): Promise<Completion> {
       await initShared();
       return shared().completionIndex(tables);
     });
+  // The consoles of this target get their markers once the metadata is there
+  p.then(() => {
+    for (const [uri, b] of modelConn) if (b.connId === connId) scheduleMarks(uri, 0);
+  }, () => {});
   cache.set(connId, p);
   return p;
 }
@@ -32,6 +37,7 @@ export function bindModel(uri: string, connId: string, db: string) {
   modelConn.set(uri, { connId, db });
   // A module that can't load is said when the console opens, not later as a dialog that takes the keys being typed
   if (!cache.has(connId)) load(connId).catch(warnOff);
+  scheduleMarks(uri, 0);
 }
 
 /** Once, where a GUI user sees it (the devtools console is not) */
@@ -45,7 +51,65 @@ function warnOff(e: unknown) {
 /** When the editor closes */
 export function unbindModel(uri: string) {
   modelConn.delete(uri);
+  clearTimeout(markTimers.get(uri));
+  markTimers.delete(uri);
+  markFixes.delete(uri);
 }
+
+const MARKER_OWNER = "qurry-names";
+const markTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** Each model's quick fixes by marker (kept here, not in the marker's `code`, which Monaco shows in the hover) */
+const markFixes = new Map<string, Map<string, string[]>>();
+const fixKey = (m: { startLineNumber: number; startColumn: number; message: string }) => `${m.startLineNumber}:${m.startColumn}:${m.message}`;
+
+/** Underline the console's unknown tables and columns (qurry_shared::complete::marks: the same scope as completion; none for CTEs,
+ * aliases, functions, databases not loaded) after a pause in typing. Quick fixes (⌥↩) offer the closest names */
+function scheduleMarks(uri: string, delay = 300) {
+  clearTimeout(markTimers.get(uri));
+  markTimers.set(
+    uri,
+    setTimeout(async () => {
+      markTimers.delete(uri);
+      const model = monaco.editor.getModel(monaco.Uri.parse(uri));
+      const bound = modelConn.get(uri);
+      const lang = model?.getLanguageId();
+      if (!model || !bound || (lang !== "pgsql" && lang !== "mysql")) return;
+      const version = model.getVersionId();
+      const idx = await indexFor(bound.connId);
+      if (!idx || model.isDisposed() || model.getVersionId() !== version) return;
+      const marks = idx.marks(model.getValue(), bound.db, lang === "mysql");
+      const fixes = new Map<string, string[]>();
+      markFixes.set(uri, fixes);
+      monaco.editor.setModelMarkers(
+        model,
+        MARKER_OWNER,
+        marks.map((m) => {
+          const a = model.getPositionAt(m.start);
+          const b = model.getPositionAt(m.end);
+          const fix = m.fixes.length ? ` — ⌥↩ for the closest names (${m.fixes.join(", ")})` : "";
+          const marker = {
+            severity: monaco.MarkerSeverity.Warning,
+            message: `${m.message}${fix}. If it was just created, refresh the data source: completion knows the names from when it loaded`,
+            startLineNumber: a.lineNumber,
+            startColumn: a.column,
+            endLineNumber: b.lineNumber,
+            endColumn: b.column,
+            source: "Qurry",
+          };
+          fixes.set(fixKey(marker), m.fixes);
+          return marker;
+        }),
+      );
+    }, delay),
+  );
+}
+
+monaco.editor.onDidCreateModel((m) => {
+  m.onDidChangeContent(() => {
+    const uri = m.uri.toString();
+    if (modelConn.has(uri)) scheduleMarks(uri);
+  });
+});
 /** Drop metadata of a Data Source (and its DBs): on disconnect and refresh */
 export function invalidateCompletion(connId: string) {
   for (const [k, p] of [...cache]) {
@@ -121,16 +185,62 @@ for (const lang of ["pgsql", "mysql"]) {
       if (quiet) return { suggestions: [] };
       const s = idx.suggest(text, caret, db, mysql);
       const r = range(s);
-      const kind: Record<CompletionItem["kind"], monaco.languages.CompletionItemKind> = { column: K.Field, table: K.Class, schema: K.Module, keyword: K.Keyword, value: K.Value };
+      const kind: Record<CompletionItem["kind"], monaco.languages.CompletionItemKind> = { column: K.Field, table: K.Class, schema: K.Module, keyword: K.Keyword, value: K.Value, join: K.Reference, function: K.Function, snippet: K.Snippet };
+      const described = new Set<CompletionItem["kind"]>(["column", "table", "join", "function", "snippet"]);
       return {
-        suggestions: s.items.map((it, i) => ({
-          label: it.kind === "column" || it.kind === "table" ? { label: it.label, description: it.detail } : it.label,
-          kind: kind[it.kind],
-          insertText: it.insert,
-          sortText: sortText(i),
-          range: r,
-        })),
+        suggestions: s.items.map((it, i) => {
+          const snippet = it.kind === "function" || it.kind === "snippet";
+          return {
+            label: described.has(it.kind) ? { label: it.label, description: it.detail } : it.label,
+            kind: kind[it.kind],
+            insertText: it.insert,
+            insertTextRules: snippet ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
+            // `expand *` replaces the `*` it stands for, so it is found by that, not by its label
+            filterText: it.label.startsWith("expand ") ? model.getLineContent(position.lineNumber).slice(s.startColumn - 1, position.column - 1) : undefined,
+            // A function opens its signature help inside the parentheses it writes
+            command: it.kind === "function" ? { id: "editor.action.triggerParameterHints", title: "Parameter hints" } : undefined,
+            sortText: sortText(i),
+            range: r,
+          };
+        }),
       };
+    },
+  });
+
+  // Signature help inside a call's parentheses: built-in and user functions, the parameter at the caret
+  monaco.languages.registerSignatureHelpProvider(lang, {
+    signatureHelpTriggerCharacters: ["(", ","],
+    signatureHelpRetriggerCharacters: [")"],
+    async provideSignatureHelp(model, position) {
+      const idx = await indexFor(modelConn.get(model.uri.toString())?.connId);
+      const s = idx?.signatureAt(model.getValue(), model.getOffsetAt(position), mysql);
+      if (!s) return null;
+      const which = Math.max(0, s.signatures.findIndex((x) => x.params.length > s.active));
+      const params = s.signatures[which].params;
+      // A `…` list keeps its last parameter active past its end
+      const active = s.active < params.length ? s.active : params[params.length - 1]?.includes("…") ? params.length - 1 : s.active;
+      return {
+        value: { signatures: s.signatures.map((x) => ({ label: x.label, parameters: x.params.map((label) => ({ label })) })), activeSignature: which, activeParameter: active },
+        dispose() {},
+      };
+    },
+  });
+
+  // Quick fixes for an unknown name: its closest names (⌥↩, editor.quickFix)
+  monaco.languages.registerCodeActionProvider(lang, {
+    provideCodeActions(model, _range, context) {
+      const actions = context.markers
+        .filter((m) => m.source === "Qurry")
+        .flatMap((m) =>
+          (markFixes.get(model.uri.toString())?.get(fixKey(m)) ?? []).map((name, i) => ({
+            title: `Change to ${name}`,
+            kind: "quickfix",
+            diagnostics: [m],
+            isPreferred: i === 0,
+            edit: { edits: [{ resource: model.uri, versionId: model.getVersionId(), textEdit: { range: { startLineNumber: m.startLineNumber, startColumn: m.startColumn, endLineNumber: m.endLineNumber, endColumn: m.endColumn }, text: name } }] },
+          })),
+        );
+      return { actions, dispose() {} };
     },
   });
 }

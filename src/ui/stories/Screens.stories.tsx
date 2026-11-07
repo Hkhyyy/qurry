@@ -594,6 +594,31 @@ export const ConsoleStatementsPopup: S = {
     await waitFor(() => expect(canvasElement.querySelector(".stmt-preview")).not.toBeNull(), { timeout: 10000 });
   },
 };
+/** The shared completion engine in the console (mock metadata: orders.user_id → users.id, the user function order_total): an
+ * unknown column underlined (⌥↩ lists the closest names) and signature help inside a call's parentheses */
+export const ConsoleAssist: S = {
+  name: "Console — unknown name and signature help",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane
+        tabId="story-assist" target="dev" initialSql={"select nme, order_total(id, ) from orders o\njoin users u on o.user_id = u.id;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
+        dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
+        output={[]} txManual={false} inTx={false}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
+      />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    const ed = await waitFor(() => monaco.editor.getEditors().find((e) => canvasElement.contains(e.getContainerDomNode())) ?? Promise.reject(new Error("no editor yet")));
+    await waitFor(() => expect(canvasElement.querySelector(".squiggly-warning")).not.toBeNull(), { timeout: 10000 });
+    ed.focus();
+    // Inside order_total( id, ‸): its second parameter
+    ed.setPosition({ lineNumber: 1, column: "select nme, order_total(id, ".length + 1 });
+    ed.trigger("story", "editor.action.triggerParameterHints", null);
+    await waitFor(() => expect(document.querySelector(".parameter-hints-widget .parameter.active")?.textContent).toBe("with_tax boolean"), { timeout: 10000 });
+  },
+};
 /** A script's Output longer than the pane: it follows the newest line while scrolled to the bottom; scrolled up, it stays put */
 export const ConsoleLongOutput: S = {
   name: "Console — long Output",

@@ -319,6 +319,17 @@ const SCOPES: { name: string; setup?: (page: Page) => Promise<void>; steps: Step
     steps: [
       ["editor.reformat", edits("select a from b", /^SELECT\s+a\s+FROM\s+b$/)],
       ["editor.blockComment", edits("select 1", "/* select 1 */", (page) => page.keyboard.press("Meta+A"))],
+      // On an underlined unknown name: its quick fixes (the closest names)
+      ["editor.quickFix", async (page, key) => {
+        await editor(page).click();
+        await typeSql(page, "select nme from users");
+        await expect(editor(page).locator(".squiggly-warning")).toHaveCount(1);
+        await page.keyboard.press("Home");
+        for (let i = 0; i < 8; i++) await page.keyboard.press("ArrowRight");
+        await page.keyboard.press(key);
+        await expect(page.getByText("Change to user_name")).toBeVisible();
+        await page.keyboard.press("Escape");
+      }],
       ["editor.duplicate", edits("select 1", "select 1\nselect 1")],
       ["editor.deleteLine", edits("one\ntwo", "one")],
       // ⌥⇧↑ / ⌥⇧↓, ⌥↑ / ⌥↓ and ⌃G also cover monacoKey's ⌃ / ⌥ / ⇧ bits and arrow keys (Monaco actions get their keys from ConsoleEditor, not the global handler)

@@ -110,8 +110,8 @@ export function TableEditor(p: Props) {
   );
 }
 
-/** Keywords (and values, which the filter doesn't list) keep an empty icon slot, so every label starts in one column */
-const ITEM_ICON: Record<CompletionItem["kind"], ReactNode> = { column: <ColumnIcon />, table: <TableIcon />, schema: <SchemaIcon />, keyword: <></>, value: <></> };
+/** Keywords and functions (and the kinds the filter doesn't list) keep an empty icon slot, so every label starts in one column */
+const ITEM_ICON: Record<CompletionItem["kind"], ReactNode> = { column: <ColumnIcon />, table: <TableIcon />, schema: <SchemaIcon />, keyword: <></>, value: <></>, join: <></>, function: <></>, snippet: <></> };
 
 /**
  * One field of the filter bar. While an identifier is typed it lists the console's candidates for the field's text in its query

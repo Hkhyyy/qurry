@@ -340,22 +340,55 @@ impl Backend for PgPool {
     }
 
     async fn completion_meta(&self) -> AppResult<Vec<CompletionTable>> {
-        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        const USER_NS: &str = "n.nspname not in ('pg_catalog','information_schema') and n.nspname not like 'pg_toast%'";
+        let rows: Vec<(String, String, String, String)> = sqlx::query_as(&format!(
             "select n.nspname::text, c.relname::text, a.attname::text, format_type(a.atttypid, a.atttypmod) \
              from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace \
-             where c.relkind in ('r','p','v','m','f') and a.attnum > 0 and not a.attisdropped \
-               and n.nspname not in ('pg_catalog','information_schema') and n.nspname not like 'pg_toast%' \
-             order by n.nspname, c.relname, a.attnum limit 30000",
-        )
+             where c.relkind in ('r','p','v','m','f') and a.attnum > 0 and not a.attisdropped and {USER_NS} \
+             order by n.nspname, c.relname, a.attnum limit {}",
+            qurry_shared::complete::COLUMN_LIMIT
+        ))
         .fetch_all(self)
         .await?;
         let mut out: Vec<CompletionTable> = Vec::new();
         for (schema, name, col, ty) in rows {
             match out.last_mut() {
                 Some(t) if t.schema == schema && t.name == name => t.columns.push((col, ty)),
-                _ => out.push(CompletionTable { schema, name, columns: vec![(col, ty)] }),
+                _ => out.push(CompletionTable { schema, name, columns: vec![(col, ty)], ..Default::default() }),
             }
         }
+        // Foreign keys (FK-aware joins), their columns in key order
+        let cols = |key: &str, rel: &str| format!("array(select a.attname::text from unnest(k.{key}) with ordinality u(n, o) join pg_attribute a on a.attrelid = k.{rel} and a.attnum = u.n order by u.o)");
+        // (schema, table, columns, referenced schema, table, columns)
+        type FkRow = (String, String, Vec<String>, String, String, Vec<String>);
+        let fks: Vec<FkRow> = sqlx::query_as(&format!(
+            "select n.nspname::text, c.relname::text, {}, rn.nspname::text, rc.relname::text, {} \
+             from pg_constraint k join pg_class c on c.oid = k.conrelid join pg_namespace n on n.oid = c.relnamespace \
+             join pg_class rc on rc.oid = k.confrelid join pg_namespace rn on rn.oid = rc.relnamespace \
+             where k.contype = 'f' and {USER_NS} limit 20000",
+            cols("conkey", "conrelid"),
+            cols("confkey", "confrelid")
+        ))
+        .fetch_all(self)
+        .await?;
+        // Tables by (schema, name): thousands of tables and FK rows are matched without a scan per row
+        let at: std::collections::HashMap<(String, String), usize> = out.iter().enumerate().map(|(i, t)| ((t.schema.clone(), t.name.clone()), i)).collect();
+        for (schema, name, columns, ref_schema, ref_table, ref_columns) in fks {
+            if let Some(&i) = at.get(&(schema, name)) {
+                out[i].fks.push(qurry_shared::complete::ForeignKey { columns, ref_schema, ref_table, ref_columns });
+            }
+        }
+        // User functions (not an extension's) with their signatures, for completion and signature help
+        let fns: Vec<(String, String, String, String)> = sqlx::query_as(&format!(
+            "select n.nspname::text, p.proname::text, pg_get_function_arguments(p.oid), coalesce(pg_get_function_result(p.oid), '') \
+             from pg_proc p join pg_namespace n on n.oid = p.pronamespace \
+             where p.prokind in ('f','a','w') and {USER_NS} and n.nspname not like 'pg_temp%' \
+               and not exists (select 1 from pg_depend d where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e') \
+             order by 1, 2 limit 5000"
+        ))
+        .fetch_all(self)
+        .await?;
+        out.extend(fns.into_iter().map(|(schema, name, args, returns)| CompletionTable { schema, name, routine: Some(qurry_shared::complete::Routine { args, returns }), ..Default::default() }));
         Ok(out)
     }
 

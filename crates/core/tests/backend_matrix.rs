@@ -1099,3 +1099,31 @@ async fn mysql_console_result_edit_target() {
     st.close_session("edit-my".into()).await.unwrap();
     q(&st, &format!("drop database {s}")).await;
 }
+
+/// Completion metadata carries foreign keys (FK-aware joins) and user functions with their signatures (signature help)
+#[tokio::test]
+#[ignore]
+async fn pg_completion_fks_and_functions() {
+    let Some(c) = pg_env() else { return };
+    let st = state(&c, None).await;
+    pg_fixture(&st, "qc_completion").await;
+    let comp = st.completion_meta(ID.into()).await.unwrap();
+    let orders = comp.iter().find(|t| t.schema == "qc_completion" && t.name == "orders").expect("orders");
+    assert_eq!(orders.fks, [qurry_shared::complete::ForeignKey { columns: vec!["customer_id".into()], ref_schema: "qc_completion".into(), ref_table: "customers".into(), ref_columns: vec!["id".into()] }]);
+    let f = comp.iter().find(|t| t.schema == "qc_completion" && t.name == "twice").expect("twice");
+    assert_eq!((f.columns.len(), f.routine.clone()), (0, Some(qurry_shared::complete::Routine { args: "x integer".into(), returns: "integer".into() })));
+    q(&st, "drop schema qc_completion cascade").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_completion_fks_and_functions() {
+    let Some(st) = my_state("qc_completion").await else { return };
+    my_fixture(&st, "qc_completion").await;
+    let comp = st.completion_meta(ID.into()).await.unwrap();
+    let orders = comp.iter().find(|t| t.schema == "qc_completion" && t.name == "orders").expect("orders");
+    assert_eq!(orders.fks, [qurry_shared::complete::ForeignKey { columns: vec!["customer_id".into()], ref_schema: "qc_completion".into(), ref_table: "customers".into(), ref_columns: vec!["id".into()] }]);
+    let f = comp.iter().find(|t| t.schema == "qc_completion" && t.name == "twice").expect("twice");
+    assert_eq!((f.columns.len(), f.routine.clone()), (0, Some(qurry_shared::complete::Routine { args: "x int".into(), returns: "int".into() })));
+    q(&st, "drop database qc_completion").await;
+}

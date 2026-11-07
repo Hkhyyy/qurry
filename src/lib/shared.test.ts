@@ -68,7 +68,7 @@ describe("shared wasm", () => {
     const caret = text.indexOf("이름") + 1;
     const mid = idx.suggestFilter("public", "users", false, text, caret, "", false, false);
     expect([mid.from, labels(mid)]).toEqual([text.indexOf("이름"), ["이름"]]);
-    expect(labels(idx.suggestFilter("public", "users", true, "id de", 5, "", false, false))).toEqual(["delete", "desc"]);
+    expect(labels(idx.suggestFilter("public", "users", true, "id de", 5, "", false, false))).toEqual(["desc", "delete"]);
     expect(idx.suggestFilter("public", "users", false, "user_name like 'us", 18, "", false, false).items).toEqual([]);
     // ⌃Space at an empty word lists the table's columns first
     expect(labels(idx.suggestFilter("public", "users", false, "", 0, "", false, true)).slice(0, 3)).toEqual(["id", "user_name", "이름"]);

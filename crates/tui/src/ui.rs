@@ -444,6 +444,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     let k = |a: crate::app::Action| app.keys.keys(a).first().map(|s| disp(s)).unwrap_or_else(|| "—".into());
     use crate::app::Action as A;
     let (k_out, k_run, k_commit, k_rollback, k_cancel, k_submit) = (k(A::ToggleOutput), k(A::Execute), k(A::Commit), k(A::Rollback), k(A::Cancel), k(A::Submit));
+    let k_fix = k(A::QuickFix);
     // The value panel beside result and table grids, and its keys (v toggles it, ⌃w closes it from the grid)
     let value_panel = app.value_panel;
     let value_keys = app.keys.slot_keys(crate::keys::Slot { action: A::ValueEditor, pane: Scope::Grid }).first().map(|k| crate::keys::pane_disp(k));
@@ -504,6 +505,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             // tui-textarea doesn't expose its scroll position → use the cursor cell just drawn
             let drawn = find_caret(f, ed);
             draw_marks(f, c, ed, drawn);
+            draw_names(f, c, ed, drawn);
             draw_preview(f, c, ed, drawn, &preview);
             let caret = if editing && c.complete.is_some() { drawn } else { None };
             if focused {
@@ -541,6 +543,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             }
             if let (Some((x, y)), Some(cmp)) = (caret, &c.complete) {
                 draw_completion(f, cmp, x, y);
+            } else if let Some((x, y)) = drawn.filter(|_| editing) {
+                draw_hint(f, c, ed, x, y, &k_fix);
             }
         }
         TabKind::Table(tt) => {
@@ -742,6 +746,71 @@ fn draw_marks(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u
     }
 }
 
+/// Unknown names (complete::marks) underlined in red. Rows on screen are counted from the cursor cell just drawn, as for the gutter
+/// marks, and so are the text's columns (tui-textarea scrolls sideways without saying how far)
+fn draw_names(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>) {
+    use unicode_width::UnicodeWidthStr;
+    let Some((cx, cy)) = caret.filter(|_| !c.assist.names.is_empty()) else { return };
+    let (crow, ccol) = c.editor.cursor();
+    let lines = c.editor.lines();
+    let top = crow as i64 - (cy as i64 - ed.y as i64 - 1);
+    let x0 = (ed.x + 1 + lines.len().to_string().len() as u16 + 2) as i64;
+    let width = |row: usize, col: usize| lines.get(row).map_or(0, |l| l.chars().take(col).collect::<String>().width() as i64);
+    let scroll = x0 + width(crow, ccol) - cx as i64;
+    let (right, bottom) = (ed.right().saturating_sub(1) as i64, ed.bottom().saturating_sub(1) as i64);
+    let buf = f.buffer_mut();
+    for m in &c.assist.names {
+        let y = ed.y as i64 + 1 + m.row as i64 - top;
+        if y <= ed.y as i64 || y >= bottom {
+            continue;
+        }
+        for x in (x0 + width(m.row, m.from) - scroll).max(x0)..(x0 + width(m.row, m.to) - scroll).min(right) {
+            let cell = &mut buf[(x as u16, y as u16)];
+            // The cursor cell keeps its mark (find_caret reads it)
+            if cell.underline_color != CARET_MARK {
+                cell.modifier.insert(Modifier::UNDERLINED);
+                cell.underline_color = DANGER;
+            }
+        }
+    }
+}
+
+/// The hint line above the caret (below on the editor's first row): the unknown name the caret is on with its fixes and the key
+/// that lists them, else the signature of the call the caret is in, its current parameter highlighted
+fn draw_hint(f: &mut Frame, c: &crate::app::Console, ed: Rect, x: u16, y: u16, fix_key: &str) {
+    let (row, col) = c.editor.cursor();
+    let dim = Style::default().fg(DIM);
+    let line = if let Some(m) = c.assist.at(row, col) {
+        let fixes = if m.fixes.is_empty() { String::new() } else { format!(" · {fix_key} {}", m.fixes.join(", ")) };
+        Line::from(vec![Span::styled(format!(" {}", m.message), Style::default().fg(DANGER)), Span::styled(format!("{fixes} "), dim)])
+    } else if let Some(sig) = &c.assist.sig {
+        // The overload with a parameter at the caret's, else the first
+        let s = sig.signatures.iter().find(|s| s.params.len() > sig.active).unwrap_or(&sig.signatures[0]);
+        let (head, tail) = (&s.label[..s.label.find('(').unwrap_or(0)], s.label.rfind(')').map_or("", |i| &s.label[i..]));
+        let mut spans = vec![Span::raw(format!(" {head}("))];
+        for (i, p) in s.params.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw(", "));
+            }
+            let on = i == sig.active || i + 1 == s.params.len() && sig.active >= i && p.contains('…');
+            spans.push(Span::styled(p.clone(), if on { Style::default().fg(ACCENT).add_modifier(Modifier::BOLD) } else { Style::default() }));
+        }
+        spans.push(Span::raw(format!("{tail} ")));
+        if sig.signatures.len() > 1 {
+            spans.push(Span::styled(format!("(+{} more) ", sig.signatures.len() - 1), dim));
+        }
+        Line::from(spans)
+    } else {
+        return;
+    };
+    let screen = f.area();
+    let w = (line.width() as u16).min(screen.width);
+    let y = if y > ed.y + 1 { y - 1 } else { y + 1 };
+    let r = Rect { x: x.min(screen.right().saturating_sub(w)), y: y.min(screen.bottom().saturating_sub(1)), width: w, height: 1 };
+    clear(f, r);
+    f.render_widget(Paragraph::new(line).style(Style::default().bg(POPUP_BG)), r);
+}
+
 /// The rows an Execute chooser option would run, on the selection background (text columns, past the line numbers).
 /// Rows on screen are counted from the cursor cell just drawn, as for the gutter marks
 fn draw_preview(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>, rows: &[(usize, usize)]) {
@@ -786,6 +855,9 @@ fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) 
                 ItemKind::Schema => ("◇", Color::Gray),
                 ItemKind::Keyword => ("k", C_KEYWORD),
                 ItemKind::Value => ("=", crate::kit::NUMBER),
+                ItemKind::Join => ("⋈", crate::kit::C_VIEW),
+                ItemKind::Function => ("ƒ", crate::kit::C_ROUTINE),
+                ItemKind::Snippet => ("»", ACCENT),
             };
             ListItem::new(Row::new(format!("{:<lw$} ", it.label)).lead(icon(glyph, color)).hint(it.detail.clone()).selected(i == cmp.sel, true).line())
         })

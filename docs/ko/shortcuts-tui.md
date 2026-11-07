@@ -68,7 +68,8 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `⌥⇧Right` | Move Split Divider Right / Down |
 | `⌥[` | Database Explorer Narrower |
 | `⌥]` | Database Explorer Wider |
-| `F5 / ⌃Enter / ⌥Enter` | Execute (asks what to run — see Query Execution Settings) |
+| `F5 / ⌃Enter` | Execute (asks what to run — see Query Execution Settings) |
+| `⌥Enter` | Quick Fixes (an underlined unknown name's closest names; elsewhere Execute) |
 | `⌥e` | Explain Plan |
 | `⌃Space` | Code Completion |
 | `⌃c` | Cancel Running Statement |

@@ -379,6 +379,32 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     scenes.push(app_scene(h, "Console: Execute chooser", "F5 inside one of several statements asks what to run; the editor highlights the rows the selected option runs (↑↓ · Enter · Esc closes without running)", 120, 22));
     h.key("Esc");
     h.app.close_tab_now(h.app.active);
+    // Completion from the shared engine: FK joins, the signature hint line, unknown names underlined with their fixes (⌥↩)
+    let meta = || {
+        use qurry_core::complete::{CompletionTable, ForeignKey, Meta};
+        let t = |n: &str, cols: &[(&str, &str)]| CompletionTable { schema: "public".into(), name: n.into(), columns: cols.iter().map(|(c, ty)| (c.to_string(), ty.to_string())).collect(), ..Default::default() };
+        let mut payment = t("payment", &[("id", "int8"), ("user_id", "int8"), ("amount", "numeric"), ("card_brand", "text"), ("status", "text")]);
+        payment.fks = vec![ForeignKey { columns: vec!["user_id".into()], ref_schema: "public".into(), ref_table: "users".into(), ref_columns: vec!["id".into()] }];
+        std::sync::Arc::new(Meta::new(vec![payment, t("users", &[("id", "int8"), ("name", "text"), ("email", "text")]), t("audit_log", &[("id", "int8")])]))
+    };
+    let target = |h: &Harness| h.app.tabs[h.app.active].target.clone();
+    h.console_with("select p.amount, u.name\nfrom payment p\njoin users u ", 2, 13);
+    h.app.completion.insert(target(h), meta());
+    h.app.focus = crate::app::Focus::Editor;
+    h.key("Ctrl+Space");
+    scenes.push(app_scene(h, "Console: FK join", "After join <table>, ⌃Space offers the whole ON condition from the foreign keys (both ways); after join, the tables with a foreign key to the statement's come first", 120, 22));
+    h.key("Esc");
+    h.app.close_tab_now(h.app.active);
+    h.console_with("select card_brand,\n       coalesce(amount, ", 1, 24);
+    h.app.completion.insert(target(h), meta());
+    h.key("Right");
+    scenes.push(app_scene(h, "Console: signature hint", "Inside a call's parentheses the hint line above the caret shows the function's signature, the parameter at the caret highlighted", 120, 22));
+    h.app.close_tab_now(h.app.active);
+    h.console_with("select p.amount, p.card_brnd\nfrom payment p\nwhere statsu = 'paid'", 0, 25);
+    h.app.completion.insert(target(h), meta());
+    h.key("End");
+    scenes.push(app_scene(h, "Console: unknown name", "A table or column the statement's scope lacks is underlined (none for CTEs, aliases, functions, unloaded databases); on it the hint line names the closest names and ⌥↩ lists them", 120, 22));
+    h.app.close_tab_now(h.app.active);
     // Grid alignment (GUI Settings › Appearance › Alignment, read from settings.json)
     let id = h.console_with("select * from payment_check;", 1, 10);
     let res = qurry_core::db::QueryResult {

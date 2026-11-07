@@ -135,6 +135,7 @@ impl App {
         if let Some(Tab { kind: TabKind::Console(c), .. }) = self.tabs.get_mut(self.active) {
             c.editor.insert_str(undo);
             self.focus = crate::app::Focus::Editor;
+            self.update_assist();
         }
         self.status = "Undo SQL opened — check it, then run it".into();
     }
@@ -149,6 +150,7 @@ impl App {
         if let Some(Tab { kind: TabKind::Console(c), .. }) = self.tabs.get_mut(self.active) {
             c.editor.insert_str(sql);
             self.focus = crate::app::Focus::Editor;
+            self.update_assist();
         }
     }
 }

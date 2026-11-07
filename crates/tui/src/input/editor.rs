@@ -44,6 +44,7 @@ pub(super) fn editor_key(app: &mut App, k: KeyEvent) {
     } else if let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
         c.complete = None;
     }
+    app.update_assist();
 }
 
 #[cfg(test)]

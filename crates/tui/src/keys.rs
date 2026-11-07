@@ -48,7 +48,7 @@ pub fn fixed_in(pane: Scope, spec: &str) -> bool {
 
 /// The order the F1 window, --help and docs/shortcuts-tui.md list the commands with default keys in (scripts/gen-keymap-docs.py reads it here).
 /// The table can't hold it: commands both apps have sit in the GUI's order there. Every TUI row with default keys is here once (a test checks)
-const ORDER: [Action; 41] = [
+const ORDER: [Action; 42] = [
     Action::Quit,
     Action::Help,
     Action::Palette,
@@ -74,6 +74,7 @@ const ORDER: [Action; 41] = [
     Action::ExplorerNarrower,
     Action::ExplorerWider,
     Action::Execute,
+    Action::QuickFix,
     Action::Explain,
     Action::Complete,
     Action::Cancel,
@@ -378,7 +379,8 @@ mod tests {
     fn defaults_and_overrides() {
         let mut km = Keymap::new(&Default::default());
         assert_eq!(km.lookup(&ev(KeyCode::Char('l'), KeyModifiers::CONTROL)), Some(Action::NewConsole));
-        assert_eq!(km.lookup(&ev(KeyCode::Enter, KeyModifiers::ALT)), Some(Action::Execute));
+        // ⌥↩ fixes an underlined name, and runs anywhere else (App::quick_fix)
+        assert_eq!(km.lookup(&ev(KeyCode::Enter, KeyModifiers::ALT)), Some(Action::QuickFix));
         assert!(km.overrides().is_empty());
 
         // Taking a key another command used removes it from that command

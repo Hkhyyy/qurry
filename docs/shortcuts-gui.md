@@ -118,6 +118,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⌘F2` | Cancel running statement |
 | `⌥⌘e` | Query history |
 | `⌃Space` | Code completion |
+| `⌥↩` | Quick fixes for an underlined unknown name (the closest names) |
 | `⌥⌘l` | Reformat code |
 | `⌘/` | Line comment |
 | `⌥⌘/` | Block comment |

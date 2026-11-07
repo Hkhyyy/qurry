@@ -731,19 +731,56 @@ pub async fn object_ddl(p: &MySqlPool, schema: &str, name: &str, kind: &str) -> 
 }
 
 pub async fn completion_meta(p: &MySqlPool) -> AppResult<Vec<CompletionTable>> {
-    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(&format!(
         "select cast(table_schema as char), cast(table_name as char), cast(column_name as char), cast(column_type as char) \
-         from information_schema.columns where table_schema = database() order by table_name, ordinal_position limit 30000",
-    )
+         from information_schema.columns where table_schema = database() order by table_name, ordinal_position limit {}",
+        qurry_shared::complete::COLUMN_LIMIT
+    ))
     .fetch_all(p)
     .await?;
     let mut out: Vec<CompletionTable> = Vec::new();
     for (schema, name, col, ty) in rows {
         match out.last_mut() {
             Some(t) if t.schema == schema && t.name == name => t.columns.push((col, ty)),
-            _ => out.push(CompletionTable { schema, name, columns: vec![(col, ty)] }),
+            _ => out.push(CompletionTable { schema, name, columns: vec![(col, ty)], ..Default::default() }),
         }
     }
+    // Foreign keys (FK-aware joins): one row per column, in key order
+    let fks: Vec<(String, String, String, String, String, String, String)> = sqlx::query_as(
+        "select cast(table_schema as char), cast(table_name as char), cast(constraint_name as char), cast(column_name as char), \
+           cast(referenced_table_schema as char), cast(referenced_table_name as char), cast(referenced_column_name as char) \
+         from information_schema.key_column_usage where table_schema = database() and referenced_table_name is not null \
+         order by table_name, constraint_name, ordinal_position limit 20000",
+    )
+    .fetch_all(p)
+    .await?;
+    // Tables by (schema, name): thousands of tables and FK rows are matched without a scan per row
+    let at: std::collections::HashMap<(String, String), usize> = out.iter().enumerate().map(|(i, t)| ((t.schema.clone(), t.name.clone()), i)).collect();
+    let mut last: Option<(String, String, String)> = None;
+    for (schema, name, constraint, col, ref_schema, ref_table, ref_col) in fks {
+        let Some(&i) = at.get(&(schema.clone(), name.clone())) else { continue };
+        let t = &mut out[i];
+        let key = Some((schema, name, constraint));
+        match t.fks.last_mut() {
+            Some(fk) if last == key => {
+                fk.columns.push(col);
+                fk.ref_columns.push(ref_col);
+            }
+            _ => t.fks.push(qurry_shared::complete::ForeignKey { columns: vec![col], ref_schema, ref_table, ref_columns: vec![ref_col] }),
+        }
+        last = key;
+    }
+    // Stored functions with their parameters, for completion and signature help
+    let fns: Vec<(String, String, String, String)> = sqlx::query_as(
+        "select cast(r.routine_schema as char), cast(r.routine_name as char), \
+           cast(coalesce((select group_concat(concat(x.parameter_name, ' ', x.dtd_identifier) order by x.ordinal_position separator ', ') \
+             from information_schema.parameters x where x.specific_schema = r.routine_schema and x.specific_name = r.specific_name and x.ordinal_position > 0), '') as char), \
+           cast(coalesce(r.dtd_identifier, '') as char) \
+         from information_schema.routines r where r.routine_schema = database() and r.routine_type = 'FUNCTION' order by 2 limit 5000",
+    )
+    .fetch_all(p)
+    .await?;
+    out.extend(fns.into_iter().map(|(schema, name, args, returns)| CompletionTable { schema, name, routine: Some(qurry_shared::complete::Routine { args, returns }), ..Default::default() }));
     Ok(out)
 }
 

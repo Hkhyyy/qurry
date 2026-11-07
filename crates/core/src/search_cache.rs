@@ -92,7 +92,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("dbtool-sc-{}", std::process::id()));
         let o = |n: &str| IndexEntry { schema: "public".into(), name: n.into(), kind: "table".into() };
         save_objects(&base, "c1::app/db", &[o("payment")]);
-        save_columns(&base, "c1::app/db", &[CompletionTable { schema: "public".into(), name: "payment".into(), columns: vec![("amount".into(), "int".into())] }]);
+        save_columns(&base, "c1::app/db", &[CompletionTable { schema: "public".into(), name: "payment".into(), columns: vec![("amount".into(), "int".into())], ..Default::default() }]);
         save_objects(&base, "c2::x", &[o("other")]);
         let all = load_all(&base, |c| c == "c1");
         assert_eq!(all.len(), 1);
