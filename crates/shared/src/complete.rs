@@ -511,6 +511,8 @@ enum Spot {
     OrderBy,
     /// Inside INSERT INTO t (…)
     InsertColumns,
+    /// Right after an operand, or `is`: keywords only
+    AfterOperand,
     /// Any other expression (WHERE, SET, HAVING, function arguments …)
     Expr,
 }
@@ -596,6 +598,19 @@ impl Caret {
         let clause = self.back.iter().map(|&i| (i, sc.t(i).to_lowercase())).find(|(i, w)| {
             sc.toks[*i].k == K::Word && matches!(w.as_str(), "select" | "from" | "join" | "on" | "using" | "where" | "by" | "having" | "set" | "values" | "into" | "update" | "returning" | "limit" | "when" | "then" | "else" | "case")
         });
+        // Right after an operand (a name, a number, a string, `)`, `null` …) or after `is` / `is not` in an expression: only
+        // keywords come there (`and`, `desc`, `null` …), not another column or a function
+        let operand = match prev_kind {
+            Some(K::Word) => !is_keyword(&prev_word) || matches!(prev_word.as_str(), "null" | "true" | "false" | "current_date" | "current_timestamp"),
+            Some(K::Quoted | K::Num | K::Str) => true,
+            Some(K::Punct) => prev_word == ")",
+            None => false,
+        };
+        let after_is = prev_word == "is" || prev_word == "not" && self.word_at(1) == "is";
+        let in_sources = clause.as_ref().is_some_and(|(_, w)| matches!(w.as_str(), "from" | "join" | "update" | "into"));
+        if (operand || after_is) && !in_sources {
+            return Spot::AfterOperand;
+        }
         let Some((ci, cw)) = clause else { return Spot::Expr };
         let is_ref = prev.is_some_and(|i| sc.toks[i].k == K::Word && is_ref_keyword(&prev_word) && (prev_word != "update" || self.back.len() == 1 || sc.is(self.back[1], "with") || sc.punct(self.back[1], ")")));
         if is_ref {
@@ -860,6 +875,7 @@ pub fn suggest_lead(m: &Meta, text: &str, caret: usize, db: &str, mysql: bool, o
     match c.spot.clone() {
         Spot::Start => (n, vec![], rest(Kw::Statement, false, false, vec![])),
         Spot::StatementFirst => (n, vec![], rest(Kw::StatementFirst, false, false, vec![])),
+        Spot::AfterOperand => (n, vec![], rest(Kw::All, false, false, vec![])),
         Spot::TableRef { join } => {
             let mut lead: Vec<Item> = vec![];
             for b in c.sc.chain(c.block) {
@@ -1685,7 +1701,7 @@ mod tests {
         // The caret in the middle: only the text before it counts
         assert_eq!(f(false, "em = 1 and id > 2", 2).1[0], "email");
         assert_eq!(f(false, "id = 1 an", 9), (2, vec!["and".into(), "analyze".into()]));
-        assert_eq!(f(true, "id de", 5).1, ["dense_rank", "delete", "desc"]);
+        assert_eq!(f(true, "id de", 5).1, ["delete", "desc"], "after a column: keywords only");
         assert_eq!(f(true, "users.", 6).1, ["id", "user_name", "email"]);
         // Not while typing a number, after a space or an operator, or in a string literal
         assert!(f(false, "id = 12", 7).1.is_empty());

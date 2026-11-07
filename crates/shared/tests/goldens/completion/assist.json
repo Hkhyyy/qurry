@@ -199,35 +199,19 @@
   "fk-join-no-condition-twice": {
     "gui": {
       "first": [
-        "Column created_at · timestamptz · orders",
-        "Column email · text · users",
-        "Column id · int8 · orders",
-        "Column sender_fee_ratio · numeric · orders",
-        "Column service_fee · numeric · orders",
-        "Column status · varchar · orders",
-        "Column user_id · int8 · orders",
-        "Column user_name · varchar · users"
+        "Keyword all · keyword",
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword and · keyword",
+        "Keyword as · keyword",
+        "Keyword asc · keyword",
+        "Keyword begin · keyword",
+        "Keyword between · keyword"
       ],
       "prefix": 0
     },
     "tui": {
-      "items": [
-        "Column id · int8 · orders",
-        "Column user_id · int8 · orders",
-        "Column status · varchar · orders",
-        "Column sender_fee_ratio · numeric · orders",
-        "Column service_fee · numeric · orders",
-        "Column created_at · timestamptz · orders",
-        "Column user_name · varchar · users",
-        "Column email · text · users",
-        "Table audit_log · public",
-        "Table invoices => billing.invoices · billing",
-        "Table order_items · public",
-        "Table orders · public",
-        "Table users · public",
-        "Schema billing · schema",
-        "Schema public · schema"
-      ],
+      "items": [],
       "prefix": 0
     }
   },
