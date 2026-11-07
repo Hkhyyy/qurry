@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, editor, expect, menuItem, openApp, openConsole, runAll, spyCancels, test, treeItem, typeSql, work } from "./app";
+import { dialog, editor, expect, menuItem, openApp, openConsole, openInTheme, runAll, spyCancels, test, treeItem, typeSql, work } from "./app";
 
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
 /** The mock's created_at alternates no fraction / .5 / .125 */
@@ -346,7 +346,7 @@ test("grid keys work in Transpose and Chart too (find, back to Table)", async ({
 
 for (const theme of ["dark", "light", "hc"]) {
   test(`jsonb cells color keys, strings, numbers, keywords and punctuation apart (${theme}); a large value renders only what fits`, async ({ page }) => {
-    await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
+    await openInTheme(page, theme);
     await openConsole(page);
     await typeSql(page, "select * from json_demo");
     await page.keyboard.press("Escape");

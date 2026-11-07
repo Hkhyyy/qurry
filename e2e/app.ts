@@ -19,6 +19,13 @@ export async function openApp(page: Page) {
   await expect(page.locator(".tree-node", { hasText: "[DEV] shop_app" })).toBeVisible();
 }
 
+/** Open the mock app in a theme (settings.json "theme", which the mock keeps in localStorage), with custom themes if given */
+export async function openInTheme(page: Page, theme: string, custom: unknown[] = []) {
+  await page.goto("");
+  await page.evaluate(([theme, custom]) => localStorage.setItem("mock-themeSettings", JSON.stringify({ theme, sync: { dark: "dark", light: "light" }, custom })), [theme, custom] as const);
+  await openApp(page);
+}
+
 export const treeNode = (page: Page, text: string) => page.locator(".ws-explorer.on .tree-node", { hasText: text }).first();
 /** Explorer row by its exact accessible name ("users", "tables 2", "[DEV] shop_app 3") */
 export const treeItem = (page: Page, name: string) => page.locator(".ws-explorer.on").getByRole("treeitem", { name, exact: true });
