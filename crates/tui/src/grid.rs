@@ -668,7 +668,7 @@ impl Grid {
                         None => Line::from(text),
                     };
                     let mut st = match class {
-                        ValueClass::Null => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                        ValueClass::Null => Style::default().fg(crate::kit::NULL_TEXT).add_modifier(Modifier::ITALIC),
                         ValueClass::Number => Style::default().fg(crate::kit::NUMBER),
                         _ => Style::default(),
                     };
@@ -755,7 +755,7 @@ impl Grid {
         let block = Block::default().borders(Borders::ALL).title(title).title_bottom(Line::styled(close, Style::default().fg(crate::kit::DIM))).border_style(Style::default().fg(Color::DarkGray));
         let lines: Vec<Line> = match (col, self.value(self.row, self.col)) {
             (None, _) => vec![],
-            (Some(_), None) => vec![Line::styled("<null>", Style::default().fg(crate::kit::DIM).add_modifier(Modifier::ITALIC))],
+            (Some(_), None) => vec![Line::styled("<null>", Style::default().fg(crate::kit::NULL_TEXT).add_modifier(Modifier::ITALIC))],
             (Some(c), Some(v)) => {
                 let p = qurry_shared::value::panel_text(&c.type_name, &v);
                 if p.json { json_lines(&p.text) } else { p.text.lines().map(|l| Line::raw(l.to_string())).collect() }

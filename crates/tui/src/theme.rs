@@ -17,7 +17,7 @@ pub fn auto_light(var: impl Fn(&str) -> Option<String>) -> bool {
 }
 
 /// The tokens of kit/atoms.rs by the names themes.json "tui" gives them (each one is drawn in that theme token's color)
-const ATOMS: [(&str, Color); 14] = [
+const ATOMS: [(&str, Color); 15] = [
     ("ACCENT", ACCENT),
     ("SEL", SEL),
     ("SURFACE", SURFACE),
@@ -32,7 +32,11 @@ const ATOMS: [(&str, Color); 14] = [
     ("JSON_KEYWORD", JSON_KEYWORD),
     ("JSON_PUNCT", JSON_PUNCT),
     ("C_ROUTINE", C_ROUTINE),
+    ("NULL_TEXT", NULL_TEXT),
 ];
+
+/// The Data Source colors with a theme token of their own (the GUI's connBg): Red, the Production color, and Green
+const TINTS: [(&str, &str); 2] = [("red", "prodTint"), ("green", "tint")];
 
 /// The TUI's own colors, which no theme token stands for, in a light theme. The Redis key types are darker than the GUI's
 /// (which keeps one set): 3:1 as icons on the Data Source tints and white badge text on them
@@ -72,6 +76,10 @@ pub struct Look {
     paint: Option<[Color; 3]>,
     /// The theme's background: in 256 colors no other background lands on its palette color
     bg: Color,
+    /// Truecolor backgrounds from the theme: each Data Source color with a tint token (and its active tab's stronger variant), and
+    /// the grid's range (the selection's color halfway to the background). 256 and 16 colors keep the preset hues and their own
+    /// range color: their palettes have no tints to land on (a Production row would turn gray)
+    true_bg: Vec<(Color, Color)>,
 }
 
 impl Look {
@@ -79,7 +87,14 @@ impl Look {
         let tokens = theme::table().tui.iter().filter_map(|(name, tok)| Some((ATOMS.iter().find(|a| a.0 == name)?.1, hex_color(t.color(tok))))).collect();
         let bg = hex_color(t.color("bg"));
         let paint = (!TERMINAL_BG.contains(&t.id.as_str())).then(|| [bg, hex_color(t.color("text")), hex_color(t.color("muted"))]);
-        Self { light: t.kind == theme::Kind::Light, tokens, paint, bg }
+        let light = t.kind == theme::Kind::Light;
+        let mut true_bg: Vec<_> = TINTS
+            .iter()
+            .filter_map(|&(name, tok)| crate::ui::COLOR_PRESETS.iter().find(|p| p.0 == name).map(|p| (hex_color(p.1), hex_color(t.color(tok)))))
+            .flat_map(|(preset, tint)| [(preset, tint), (lighten(preset), stronger(tint, light))])
+            .collect();
+        true_bg.push((CELL_EDITED, mix(hex_color(t.color("sel")), bg)));
+        Self { light, tokens, paint, bg, true_bg }
     }
 
     /// The built-in Dark theme (tests draw with it)
@@ -93,12 +108,16 @@ impl Look {
         Self::new(&s.resolve(theme::SYSTEM, !auto_light))
     }
 
-    /// One drawn color in the theme (before the mode). Tokens take the theme's color. In a light theme the TUI's own colors take
+    /// One drawn color in the theme (before the mode). Tokens take the theme's color, and in truecolor the Red and Green Data Source
+    /// colors its tints (`true_bg`). In a light theme the TUI's own colors take
     /// their light value; other dark backgrounds (Data Source colors and their lighter variant on the active tab) keep their hue
     /// with the lightness turned over, so a Data Source tint stays a tint and the active tab the stronger one; named text colors
     /// meant for a dark background get a dark counterpart
     fn color(&self, c: Color, bg: bool, mode: ColorMode) -> Color {
         if let Some(&(_, v)) = self.tokens.iter().find(|t| t.0 == c) {
+            return v;
+        }
+        if let (Some(&(_, v)), true, ColorMode::TrueColor) = (self.true_bg.iter().find(|t| t.0 == c), bg, mode) {
             return v;
         }
         if let (Some([pbg, fg, dim]), true) = (self.paint, mode != ColorMode::Ansi16) {
@@ -146,6 +165,28 @@ impl Look {
             _ => self.color(fg, false, mode),
         };
         [fg, to, self.color(ul, false, mode)]
+    }
+}
+
+/// The active tab's tint: a step further from the theme's background than the row's (`lighten` in a dark theme, as the presets)
+fn stronger(c: Color, light: bool) -> Color {
+    match c {
+        Color::Rgb(r, g, b) if light => {
+            let d = |v: u8| v.saturating_sub((255 - v) / 2 + 16);
+            Color::Rgb(d(r), d(g), d(b))
+        }
+        c => lighten(c),
+    }
+}
+
+/// Halfway between two RGB colors
+fn mix(a: Color, b: Color) -> Color {
+    match (a, b) {
+        (Color::Rgb(r, g, b), Color::Rgb(r2, g2, b2)) => {
+            let m = |x: u8, y: u8| ((x as u16 + y as u16) / 2) as u8;
+            Color::Rgb(m(r, r2), m(g, g2), m(b, b2))
+        }
+        (a, _) => a,
     }
 }
 
@@ -223,7 +264,7 @@ impl ColorMode {
                 if reverse {
                     m |= Modifier::REVERSED;
                 }
-                if self == Self::NoColor && cell.fg == Color::DarkGray {
+                if self == Self::NoColor && (cell.fg == Color::DarkGray || cell.fg == NULL_TEXT) {
                     m |= Modifier::DIM;
                 }
                 cell.set_style(ratatui::style::Style::reset().add_modifier(m));
@@ -623,6 +664,18 @@ mod tests {
         };
         assert_eq!(at(&Look::of(&s, false), ColorMode::TrueColor, Style::default().bg(SEL)).1, Color::Rgb(0x12, 0x34, 0x56));
         assert_eq!(at(&Look::of(&s, false), ColorMode::TrueColor, Style::default()).1, Color::Rgb(0x1e, 0x1f, 0x22), "custom themes draw their background");
+        // … its Red / Green Data Source tints (truecolor; 256 and 16 colors keep the presets' hues), its NULL and the grid's range
+        let s = ThemeSettings { custom: vec![qurry_shared::theme::CustomTheme { colors: [("prodTint".into(), "#5a1e2a".into()), ("tint".into(), "#1e4a2a".into()), ("nullText".into(), "#a0a4c0".into()), ("sel".into(), "#204060".into())].into(), ..s.custom[0].clone() }], ..s };
+        for base in ["dark", "light"] {
+            let s = ThemeSettings { custom: vec![qurry_shared::theme::CustomTheme { base: base.into(), ..s.custom[0].clone() }], ..s.clone() };
+            let look = Look::of(&s, false);
+            assert_eq!(at(&look, ColorMode::TrueColor, Style::default().bg(hex("#6e2a2a").unwrap())).1, Color::Rgb(0x5a, 0x1e, 0x2a), "{base}");
+            assert_eq!(at(&look, ColorMode::TrueColor, Style::default().bg(hex("#2f5634").unwrap())).1, Color::Rgb(0x1e, 0x4a, 0x2a), "{base}");
+            assert_eq!(at(&look, ColorMode::TrueColor, Style::default().fg(NULL_TEXT)).0, Color::Rgb(0xa0, 0xa4, 0xc0), "{base}");
+            let range = at(&look, ColorMode::TrueColor, Style::default().bg(CELL_EDITED)).1;
+            assert_eq!(range, mix(Color::Rgb(0x20, 0x40, 0x60), hex_color(s.find("custom-1").unwrap().color("bg"))), "{base}");
+            assert_eq!(at(&look, ColorMode::Ansi16, Style::default().bg(hex("#6e2a2a").unwrap())).1, Color::Red, "{base}");
+        }
         // NO_COLOR stays monochrome in every theme
         for t in &all {
             assert_eq!(at(&Look::new(t), ColorMode::NoColor, Style::default().fg(ACCENT).bg(SURFACE)), (Color::Reset, Color::Reset), "{}", t.id);
@@ -720,7 +773,7 @@ mod tests {
 
     #[test]
     fn light_palette_in_256_and_16_colors_and_no_color() {
-        let i = |c: Color| ColorMode::Ansi256.color(lt(c, true), true);
+        let i = |c: Color| ColorMode::Ansi256.color(look(true).color(c, true, ColorMode::Ansi256), true);
         assert_ne!(i(SEL), i(SEL_BLUR));
         assert_ne!(i(SEL_BLUR), i(POPUP_BG));
         assert_ne!(i(SEL), i(CELL_EDITED), "the grid's cursor inside its range");
