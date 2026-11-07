@@ -688,7 +688,7 @@ fn lost_session_error(cfg: &ConnectionConfig, closed: bool) -> AppError {
 fn slow_session_error(cfg: &ConnectionConfig) -> AppError {
     let w = way(cfg).unwrap_or_else(|| "the tunnel".into());
     AppError::Msg(format!(
-        "The console's connection through {w} sat unused and didn't answer within {}s when Qurry checked it before this ran, though the tunnel answers, so Qurry kept it with the transaction open in it. Nothing was sent. Run it again (it goes to the same session), or Roll back.",
+        "The console's connection through {w} sat unused and didn't answer within {}s when Qurry checked it before this ran, though the tunnel answers, so Qurry kept it with the transaction open in it. Nothing was sent. Run it again (Qurry checks the session again first), or Roll back.",
         SESSION_PING.as_secs()
     ))
 }
@@ -867,6 +867,13 @@ async fn tab_session(state: &AppState, tab: &str) -> AppResult<TabSession> {
             let port = state.tunnels.read().await.get(base).map(|t| t.local_port);
             if let Some(port) = port {
                 if crate::tunnel::answers(port, &cfg, SESSION_PING).await {
+                    drop(s);
+                    // Checked again on its next use, so a session that never comes back can't take a statement and hang
+                    if let Some(e) = state.sessions.read().await.get(tab) {
+                        *e.used.lock().unwrap() = std::time::SystemTime::UNIX_EPOCH;
+                    }
+                    // This error says it already: a mark a disconnect left meanwhile isn't said a second time
+                    state.lost_tx.lock().unwrap().remove(tab);
                     return Err(slow_session_error(&cfg));
                 }
                 tunnel_dead = true;
@@ -901,6 +908,8 @@ async fn tab_session(state: &AppState, tab: &str) -> AppResult<TabSession> {
         }
     };
     if in_tx {
+        // The drop above may have marked this tab too; this error says it already
+        state.lost_tx.lock().unwrap().remove(tab);
         return Err(lost_session_error(&cfg, closed));
     }
     Ok(TabSession::Lost(closed.then_some(g)))

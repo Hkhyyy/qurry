@@ -1339,8 +1339,15 @@ pub(crate) mod tests {
         assert!(took >= Duration::from_secs(5) && took < Duration::from_secs(8), "the 5s check and a quick look at the tunnel: {took:?}");
         assert!(st.tx_state("s".into()).await, "the transaction is kept");
         assert_eq!(starts(), 1, "the tunnel is kept");
+        // Run again at once, as the message says, while the session still doesn't come back: checked again, never sent into it
+        let t = Instant::now();
+        let e = run("insert into qurry_t110_slow values (2)", Some("s")).await.expect("a second run doesn't hang either").err().expect("not sent").to_string();
+        assert!(e.contains("though the tunnel answers") && t.elapsed() < Duration::from_secs(8), "{e} after {:?}", t.elapsed());
 
         release_forwarding(fake.path());
+        // The late answers of the checks are read past: the session's next statement gets its own result
+        let r = run("select 42", Some("s")).await.expect("doesn't hang").expect("runs in the same session");
+        assert_eq!(r.rows[0][0].to_string().trim_matches('"'), "42", "not a late check's answer");
         run("insert into qurry_t110_slow values (2)", Some("s")).await.expect("doesn't hang").expect("runs in the same session");
         tokio::time::timeout(Duration::from_secs(40), st.commit_tx("s".into())).await.unwrap().expect("commits");
         let r = run("select count(*) from qurry_t110_slow", None).await.unwrap().unwrap();
