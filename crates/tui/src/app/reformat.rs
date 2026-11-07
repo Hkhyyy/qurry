@@ -4,10 +4,21 @@ use super::*;
 use qurry_core::format::{self, KeywordCase};
 use tui_textarea::CursorMove;
 
-/// A replacement, which the textarea keeps as two edits (the old text deleted, the new inserted): the text between them and after
+/// A replacement, which the textarea keeps as two edits (the old text deleted, the new inserted): fingerprints of the text between
+/// them and after (not copies: a large console would keep many)
 pub struct Joined {
-    mid: String,
-    after: String,
+    mid: u64,
+    after: u64,
+}
+
+/// A fingerprint of the text the parts make one after another
+fn fingerprint<'a>(parts: impl IntoIterator<Item = &'a str>) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for p in parts {
+        h.write(p.as_bytes());
+    }
+    h.finish()
 }
 
 /// How many recent replacements ⌃u undoes in one step (an older one takes two)
@@ -16,6 +27,11 @@ const JOINED_MAX: usize = 20;
 impl Console {
     fn text(&self) -> String {
         self.editor.lines().join("\n")
+    }
+
+    /// fingerprint() of text(), without joining the lines
+    fn text_fingerprint(&self) -> u64 {
+        fingerprint(self.editor.lines().iter().enumerate().flat_map(|(i, l)| [if i == 0 { "" } else { "\n" }, l.as_str()]))
     }
 
     /// text[start..end] (bytes) becomes `with` in one undo step; the cursor ends after it
@@ -34,7 +50,7 @@ impl Console {
         self.editor.insert_str(with);
         if start < end && !with.is_empty() {
             let (head, tail) = (&text[..start], &text[end..]);
-            self.joined.push(Joined { mid: format!("{head}{tail}"), after: format!("{head}{with}{tail}") });
+            self.joined.push(Joined { mid: fingerprint([head, tail]), after: fingerprint([head, with, tail]) });
             if self.joined.len() > JOINED_MAX {
                 self.joined.remove(0);
             }
@@ -43,9 +59,9 @@ impl Console {
 
     /// ⌃u: a replacement's two edits at once
     pub fn undo(&mut self) {
-        let before = self.text();
+        let before = self.text_fingerprint();
         if self.editor.undo() {
-            let now = self.text();
+            let now = self.text_fingerprint();
             if self.joined.iter().any(|j| j.after == before && j.mid == now) {
                 self.editor.undo();
             }
@@ -55,7 +71,7 @@ impl Console {
     /// ⌃r: a replacement's two edits at once
     pub fn redo(&mut self) {
         if self.editor.redo() {
-            let now = self.text();
+            let now = self.text_fingerprint();
             if self.joined.iter().any(|j| j.mid == now) {
                 self.editor.redo();
             }
@@ -132,5 +148,18 @@ pub(super) fn keyword_case_name(c: KeywordCase) -> &'static str {
         KeywordCase::Off => "Off",
         KeywordCase::Upper => "UPPER",
         KeywordCase::Lower => "lower",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fingerprint as f;
+
+    /// The fingerprint doesn't depend on how the text is cut into parts (the console's lines, or the text around a replacement)
+    #[test]
+    fn fingerprint_ignores_where_the_parts_split() {
+        assert_eq!(f(["select 1\nfr", "om t"]), f(["select 1\nfrom t"]));
+        assert_eq!(f(["", "select 1", "\n", "", "\n", "from t"]), f(["select 1\n\nfrom t"]));
+        assert_ne!(f(["select 1"]), f(["select 2"]));
     }
 }
