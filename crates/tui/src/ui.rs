@@ -69,6 +69,18 @@ pub fn format_reply(v: &Value) -> String {
     go(v, 0)
 }
 
+/// The Redis command line's reply shown by type (qurry_shared::redis_cmd::reply_table, as the GUI's Terminal): a hash as an aligned
+/// field / value table, a list numbered, set members one per line; the rest as redis-cli prints it
+pub fn format_typed(line: &str, v: &Value) -> String {
+    let Some(t) = qurry_shared::redis_cmd::reply_table(line, v) else { return format_reply(v) };
+    let w = t.rows.iter().map(|r| r[0].chars().count()).chain([t.heads[0].chars().count()]).max().unwrap_or(0);
+    let row = |cells: Vec<&str>| match cells[..] {
+        [a, b] => format!("{a:<w$}  {b}"),
+        _ => cells.join("  "),
+    };
+    std::iter::once(row(t.heads.clone())).chain(t.rows.iter().map(|r| row(r.iter().map(String::as_str).collect()))).collect::<Vec<_>>().join("\n")
+}
+
 /// Smallest screen the layout is drawn for (explorer · tabs · status line still readable); below it, a message instead
 pub const MIN_SIZE: (u16, u16) = (40, 10);
 
@@ -619,7 +631,10 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
         TabKind::Redis(r) => {
             let [left, right] = Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).areas(body);
             let kf = focus == Focus::Grid && !r.focus_value;
-            let title = format!(" Keys {} — {}{} {} ", r.pattern, r.keys.len(), if r.cursor != "0" { "+" } else { "" }, if r.scanning { "scanning…" } else { "" });
+            // " db0 · 500 keys · prod:user:* — 3 " : the database (d switches it), the filter (/), the keys scanned so far
+            let db = r.dbs.iter().find(|d| d.name == tab.db).map(|d| qurry_shared::redis_cmd::db_label(&d.name, d.keys)).unwrap_or_else(|| tab.db.clone());
+            let filter = if r.pattern.is_empty() { String::new() } else { format!(" · {}", r.pattern) };
+            let title = format!(" {db}{filter} — {}{} {}", r.keys.len(), if r.cursor != "0" { "+" } else { "" }, if r.scanning { "scanning… " } else { "" });
             let b = panel(title, kf);
             let inner = b.inner(left);
             f.render_widget(b, left);
@@ -638,11 +653,15 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 .map(|(i, row)| {
                     let w = inner.width as usize;
                     let line = match row {
-                        crate::app::KRow::Folder { path, name, depth, count } => Row::new(name.clone()).indent(*depth).chevron(Some(r.open.contains(path))).lead(icon("▤", ACCENT)).trailing(count.to_string()),
+                        // The folder's key count beside its name (muted), like "tables 68"; the right column only has key TTLs
+                        crate::app::KRow::Folder { path, name, depth, count } => Row::new(name.clone()).indent(*depth).chevron(Some(r.open.contains(path))).lead(icon("▤", ACCENT)).hint(count.to_string()),
                         crate::app::KRow::Key { idx, depth } => {
                             let k = &r.keys[*idx];
-                            let ttl = if k.ttl >= 0 { format!("{}s", k.ttl / 1000) } else { String::new() };
-                            Row::new(k.key.clone()).indent(*depth).chevron(None).lead(badge(&format!("{:<6}", k.ty.to_uppercase()), type_color(&k.ty))).lead(Span::raw(" ")).trailing(ttl)
+                            let ttl = qurry_shared::redis_cmd::ttl_label(k.ttl);
+                            // A long name is cut with … so the TTL column stays (indent · slot · badge · gaps)
+                            let room = w.saturating_sub(depth * 2 + 2 + 9 + ttl.chars().count() + 2);
+                            let name = if k.key.chars().count() <= room { k.key.clone() } else { k.key.chars().take(room.saturating_sub(1)).collect::<String>() + "…" };
+                            Row::new(name).indent(*depth).chevron(None).lead(badge(&format!("{:<6}", k.ty.to_uppercase()), type_color(&k.ty))).lead(Span::raw(" ")).trailing(ttl)
                         }
                     };
                     ListItem::new(line.selected(i == r.sel, kf).fit(0, w))
@@ -797,7 +816,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                     fixed("Enter", "edit"), grid(A::ValueEditor, "value"), grid(A::AddRow, "add"), grid(A::DeleteRow, "delete"), grid(A::SetNull, "NULL"), cmd(A::Submit, "submit"), grid(A::Revert, "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), grid(A::ExportCsv, "export"),
                 ],
                 Some(TabKind::Redis(r)) if r.focus_value => vec![fixed("e", "edit"), fixed("a", "add"), fixed("x", "delete"), fixed("Esc", "keys")],
-                Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("/", "pattern"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
+                Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("d", "database"), fixed("/", "filter"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
                 Some(TabKind::Text(t)) if t.structure_view => vec![fixed("v", "SQL"), fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Text(t)) if t.has_structure() => vec![fixed("v", "structure"), fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Text(t)) if t.ddl_of.is_some() => vec![fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
@@ -1083,7 +1102,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
         Popup::ImportPick(p) => draw_import(f, area, p),
         // Like Confirm, but only y allows (no Enter): the popup opened on its own
         Popup::AllowPlaintext { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Allow Unencrypted ", text, key_hints(&[("y", "allow"), ("n / Esc", "cancel")])),
-        Popup::Input { title, body, input, complete, filter, .. } => {
+        Popup::Input { title, body, input, complete, filter, redis, .. } => {
             // The title goes on the border; the body (answers, reasons) in a box below, wrapped, so it isn't cut off
             let body: Vec<Line> = body.lines().map(|l| Line::raw(disp(l))).collect();
             let bh = if body.is_empty() { 0 } else { wrapped_height(&body, 90u16.min(area.width.saturating_sub(4)).saturating_sub(2)) + 2 };
@@ -1097,9 +1116,21 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }).block(b), br);
             }
             clear(f, r);
-            let hint = if filter.is_none() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
+            let hint = if redis.is_some() { "Enter / Esc · Tab complete · ↑↓ history · HELP command" } else if filter.is_none() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
             input.set_block(panel(format!(" {} ({hint}) ", disp(title)), true));
             f.render_widget(&*input, r);
+            // The Redis command line: the arguments still to type, muted, after the text
+            if redis.is_some() {
+                let line = input.lines().first().cloned().unwrap_or_default();
+                let at = line.chars().count();
+                let args = qurry_shared::redis_cmd::assist(&line).hint;
+                if input.cursor().1 == at && !args.is_empty() {
+                    let x = r.x + 1 + at as u16 + u16::from(!line.is_empty() && !line.ends_with(' '));
+                    let w = r.right().saturating_sub(x + 1);
+                    let ghost = Rect { x, y: r.y + 1, width: w, height: 1 };
+                    f.render_widget(Paragraph::new(Span::styled(args, Style::default().fg(DIM))), ghost);
+                }
+            }
             // The console's completion list, right under the input at the word being completed
             if let Some(cmp) = complete {
                 draw_completion(f, cmp, r.x + 1 + input.cursor().1 as u16, r.bottom() - 1);

@@ -560,9 +560,57 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     scenes.push(app_scene(h, "Table filter completion", "w / o on a table tab: the WHERE / ORDER BY input completes like the console (the table's columns first, then keywords); ↑↓ PgUp PgDn move, Enter / Tab pick, Esc closes the list first", 120, 22));
     h.app.popup = None;
     h.app.close_tab_now(h.app.active);
-    // Redis
+}
+
+/// Redis (#108): the explorer lists a source's databases with key counts (no keys); one tab per source, the database (d) and filter
+/// (/) in its title; folder counts beside the name, TTLs only for keys; the command line (:) with completion and argument hints
+async fn redis(h: &mut Harness, scenes: &mut Vec<Value>) {
+    use qurry_core::redisdb::{KeyRow, RedisDb};
+    let cfg = serde_json::from_value(json!({ "id": "rd", "name": "[DEV] rentalpay redis", "kind": "redis", "host": "cache.example.com", "port": 6379, "user": "", "database": "0", "color": "#2f5634" })).unwrap();
+    h.app.state.save_connection(cfg, None, None).await.unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    let dbs = [("db0", 500), ("db1", 12), ("db2", 0)];
+    let db_node = |d: &str, n: i64| Node { key: format!("rd|{d}"), label: d.into(), hint: n.to_string(), kind: NodeKind::Db, conn: "rd".into(), db: Some(d.into()), schema: None, name: None, expandable: false };
+    h.app.tree.children.insert("rd".into(), dbs.iter().map(|(d, n)| db_node(d, *n)).collect());
+    h.app.tree.expanded.insert("rd".into());
+    let keys = [
+        ("dev:admin_sessions:{17}", "zset", -1),
+        ("dev:sessions:{405}", "zset", -1),
+        ("prod:refresh:{9}", "string", 86_400_000),
+        ("prod:user:mkt-daily-signup:2026-05-05", "string", 101_000_000),
+        ("prod:user:mkt-daily-signup:2026-05-16", "string", 101_000_000),
+        ("queue:mail", "list", -1),
+    ];
+    let id = h.redis_tab(&[]);
+    let t = h.app.tabs.iter_mut().find(|t| t.id == id).unwrap();
+    (t.conn, t.title, t.target) = ("rd".into(), "[DEV] rentalpay redis [db0]".into(), "rd::db0".into());
+    if let crate::app::TabKind::Redis(r) = &mut t.kind {
+        r.keys = keys.iter().map(|(k, ty, ttl)| KeyRow { key: k.to_string(), ty: ty.to_string(), ttl: *ttl }).collect();
+        r.dbs = dbs.iter().map(|(d, n)| RedisDb { name: d.to_string(), keys: *n }).collect();
+        r.open.extend(["prod".to_string(), "prod:user".into(), "prod:user:mkt-daily-signup".into()]);
+        r.sel = 5;
+    }
+    h.app.tree.sel = h.app.tree.visible().iter().position(|(_, n)| n.key == "rd|db0").unwrap_or(0);
+    h.app.focus = crate::app::Focus::Grid;
+    scenes.push(app_scene(h, "Redis", "Explorer: a Redis source's databases with key counts, no keys. One tab per source: the database (d) and key filter (/) in the title; folder counts beside the name, the TTL column only for keys (— without expiry)", 120, 22));
+    h.app.redis_db_choices(id, dbs.iter().map(|(d, n)| RedisDb { name: d.to_string(), keys: *n }).collect());
+    scenes.push(app_scene(h, "Redis: database", "d: the server's databases with their key counts, the current one selected; picking one shows its keys in the same tab (Enter or a click on a database in the explorer does too)", 120, 22));
+    h.app.popup = None;
+    h.app.redis_prompt(id);
+    h.type_str("HG");
+    scenes.push(app_scene(h, "Redis: command line", ": runs a command: completion with arguments from the bundled command table (keys from a bounded SCAN), ↑↓ history, HELP <command>; read-only runs reads only, Production asks before writes, FLUSHDB / DEL always ask", 120, 22));
+    h.key("Tab");
+    scenes.push(app_scene(h, "Redis: argument hints", "After the command: the arguments still to type, muted, after the text", 120, 22));
+    h.app.popup = None;
+    h.app.close_tab_now(h.app.active);
+    h.app.tree.children.remove("rd");
+    h.app.state.delete_connection("rd".into()).await.unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    // The later scenes as before (a key browser tab open, nothing in the status line)
     h.redis_tab(&["session:9f2c", "session:a771", "user:41", "user:41:cart", "queue:mail", "rank:daily"]);
-    scenes.push(app_scene(h, "Redis", "Redis 키 브라우저: 키 · 타입 · TTL", 120, 22));
+    h.app.status.clear();
     h.app.focus = crate::app::Focus::Tree;
 }
 
@@ -690,6 +738,7 @@ async fn all_scenes() -> Vec<Value> {
     scenes.push(app_scene(&mut h, "Keymap (F1): explorer keys", "Every command can get a key, those without a default show —; the explorer's and the grid's letter commands are rebindable too (here: recording a new key for c Connect)", 120, 30));
     h.app.popup = None;
     screens(&mut h, &mut scenes);
+    redis(&mut h, &mut scenes).await;
     // MySQL backup: after the path, the DEFINER= question (question on the border, answers and reason in the box below)
     let my = serde_json::from_value(json!({ "id": "my", "name": "shop", "kind": "mysql", "host": "db.example.com", "port": 3306, "user": "app", "database": "shop" })).unwrap();
     h.app.state.save_connection(my, None, None).await.unwrap();

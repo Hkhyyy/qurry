@@ -173,6 +173,19 @@ pub struct FilterSource {
     pub mysql: bool,
 }
 
+/// The Redis browser's command line (:), the GUI's Terminal: completion from the shared command table (qurry_shared::redis_cmd)
+/// and key names from a bounded SCAN, ↑↓ through this data source's history
+pub struct RedisPrompt {
+    /// The Redis tab it runs in
+    pub tab: u64,
+    /// This data source's history, newest first (passwords masked by the core)
+    pub hist: Vec<String>,
+    /// The history line shown (None: what is being typed)
+    pub hi: Option<usize>,
+    /// Key names read for a prefix (the last SCAN asked)
+    pub keys: Option<(String, Vec<String>)>,
+}
+
 /// Editor split (the GUI's Split Right / Split Down). Each pane (group) has its own tab bar
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SplitDir {
@@ -259,8 +272,11 @@ pub struct DbaTab {
     pub gone: Option<String>,
 }
 
-/// Medis-style Redis browser: key list on the left, value on the right
+/// Medis-style Redis browser, one per data source: key list on the left, value on the right; d switches its database
 pub struct RedisTab {
+    /// The server's databases with their key counts (the title's "db0 · 500 keys" and d's list), read with each new scan
+    pub dbs: Vec<qurry_core::redisdb::RedisDb>,
+    /// SCAN MATCH pattern (key filter); empty = every key
     pub pattern: String,
     pub keys: Vec<KeyRow>,
     pub cursor: String,
@@ -287,6 +303,10 @@ pub enum KRow {
 }
 
 impl RedisTab {
+    pub fn new(pattern: &str, want: Option<String>) -> Self {
+        RedisTab { dbs: vec![], pattern: pattern.into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, open: HashSet::new(), detail: None, text: None, value: None, focus_value: false, scanning: false, want }
+    }
+
     /// Visible rows: folders first (by name), then keys. Only expanded folders show contents (same rules as the explorer's tree::key_folders)
     pub fn rows(&self) -> Vec<KRow> {
         fn level(r: &RedisTab, idx: Vec<usize>, depth: usize, prefix: &str, out: &mut Vec<KRow>) {
@@ -509,7 +529,7 @@ pub enum Popup {
     Note { title: String, text: String, back: Box<Popup> },
     /// Single-line input. filter = a table tab's WHERE / ORDER BY completes like the console, complete = its open list
     /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
-    Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, filter: Option<FilterSource>, complete: Option<Completion> },
+    Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, filter: Option<FilterSource>, redis: Option<RedisPrompt>, complete: Option<Completion> },
     /// `opened` is set when the confirm comes up on its own (open_after_notices, or a notice over it closing): then, as for
     /// AllowPlaintext, y / Enter count only after TLS_ASK_GRACE without any key, so typing meant for the editor or a form never answers it
     Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: Option<std::time::Instant> },

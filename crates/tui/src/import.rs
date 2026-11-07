@@ -92,6 +92,7 @@ impl App {
                 a.ds_import_show(r);
             }),
             filter: None,
+            redis: None,
             complete: None,
         });
     }

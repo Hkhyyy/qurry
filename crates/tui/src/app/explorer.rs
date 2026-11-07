@@ -1,6 +1,9 @@
 use super::*;
 use qurry_core::ddl::DropTarget;
 
+/// A data source's databases, its default one, and (Redis) each database's key count
+type DbList = (Vec<String>, String, HashMap<String, i64>);
+
 impl App {
     // ───────── Data Sources ─────────
 
@@ -177,31 +180,40 @@ impl App {
                 let def = sql::default_db(&cfg);
                 self.spawn(
                     async move {
+                        // Redis: its databases with their key counts; keys are browsed in the Redis tab, not in the tree
+                        if kind == DbKind::Redis {
+                            let o = st.redis_overview(conn).await.map_err(err)?;
+                            return Ok::<_, String>((o.databases.iter().map(|d| d.name.clone()).collect(), def, o.databases.into_iter().map(|d| (d.name, d.keys)).collect()));
+                        }
                         let dbs = st.list_databases(conn.clone()).await.map_err(err)?;
                         // Connected: fill the search cache in the background so lookups work next time without connecting
                         let st2 = st.clone();
                         tokio::spawn(async move { st2.warm_search_cache(conn).await });
-                        Ok::<_, String>((dbs, def))
+                        Ok((dbs, def, HashMap::new()))
                     },
-                    move |a, r: Result<(Vec<String>, String), String>| {
-                        let r = r.map(|(dbs, def)| {
+                    move |a, r: Result<DbList, String>| {
+                        let r = r.map(|(dbs, def, keys)| {
                             qurry_core::app::visible_dbs(&cfg, dbs, &def)
                                 .into_iter()
                                 .map(|d| Node {
                                     key: format!("{}|{d}", cfg.id),
+                                    hint: match keys.get(&d) {
+                                        Some(n) => n.to_string(),
+                                        None if d == def => "default".into(),
+                                        None => String::new(),
+                                    },
                                     label: d.clone(),
-                                    hint: if d == def { "default".into() } else { String::new() },
                                     kind: NodeKind::Db,
                                     conn: cfg.id.clone(),
                                     db: Some(d),
                                     schema: None,
                                     name: None,
-                                    expandable: true,
+                                    expandable: kind != DbKind::Redis,
                                 })
                                 .collect::<Vec<_>>()
                         });
                         // DB to auto-expand: the only visible DB if there's one, otherwise the default DB (only if visible)
-                        let auto = r.as_ref().ok().and_then(|ns| if ns.len() == 1 { ns.first().cloned() } else { ns.iter().find(|n| n.hint == "default").cloned() });
+                        let auto = r.as_ref().ok().and_then(|ns| if ns.len() == 1 { ns.first().cloned() } else { ns.iter().find(|n| n.hint == "default").cloned() }).filter(|n| n.expandable);
                         done(a, key, r);
                         a.reload_conns();
                         if let Some(n) = auto {
@@ -359,8 +371,11 @@ impl App {
         let kind = self.kind_of(&n.conn);
         // Connection·DB·schema·folder: Enter/double-click = expand (regardless of DB kind). F4 / Ctrl+↓ = console, key browser for Redis
         match &n.kind {
-            NodeKind::Conn | NodeKind::Db if f4 && kind == DbKind::Redis => {
-                let db = n.db.clone().unwrap_or_else(|| self.default_db(&n.conn));
+            // Redis: F4 on the source, Enter / F4 on a database opens the source's Redis tab (or switches it to that database)
+            NodeKind::Conn | NodeKind::Db if kind == DbKind::Redis && (f4 || n.kind == NodeKind::Db) => {
+                // The source itself: its open tab as it is
+                let open = self.tabs.iter().find(|t| t.conn == n.conn && matches!(t.kind, TabKind::Redis(_))).map(|t| t.db.clone());
+                let db = n.db.clone().or(open).unwrap_or_else(|| self.default_db(&n.conn));
                 self.open_redis(&n.conn, db, None)
             }
             NodeKind::Conn | NodeKind::Db if f4 => self.open_console(&n.conn, n.db.clone()),

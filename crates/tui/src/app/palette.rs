@@ -289,7 +289,7 @@ impl App {
         let mut t = TextArea::new(vec![init.to_string()]);
         t.move_cursor(tui_textarea::CursorMove::End);
         t.set_cursor_line_style(ratatui::style::Style::default());
-        self.popup = Some(Popup::Input { title: title.into(), body: String::new(), input: t, on_ok: Box::new(on_ok), filter: None, complete: None });
+        self.popup = Some(Popup::Input { title: title.into(), body: String::new(), input: t, on_ok: Box::new(on_ok), filter: None, redis: None, complete: None });
     }
 
     /// Input with an explanation box under it (answers, reasons); the title stays one line on the border

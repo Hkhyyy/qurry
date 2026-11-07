@@ -197,6 +197,7 @@ impl App {
                 };
             }),
             filter: None,
+            redis: None,
             complete: None,
         });
     }

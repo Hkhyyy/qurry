@@ -125,7 +125,7 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
             KeyCode::Char('y') | KeyCode::Char('Y') => on_yes(app),
             _ => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: Instant::now() }),
         },
-        Popup::Input { title, body, mut input, on_ok, filter, mut complete } => {
+        Popup::Input { title, body, mut input, on_ok, filter, mut redis, mut complete } => {
             // The open list (a table filter's completion) takes the console's list keys: ↑↓ PgUp PgDn move, ↩ / ⇥ pick, ⎋ closes it
             if let Some(cmp) = &mut complete
                 && let Some(key) = list_key(cmp, k.code)
@@ -141,12 +141,40 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                     ListKey::Close => complete = None,
                     ListKey::Moved => {}
                 }
-                app.popup = Some(Popup::Input { title, body, input, on_ok, filter, complete });
+                app.popup = Some(Popup::Input { title, body, input, on_ok, filter, redis, complete });
                 return;
             }
             match k.code {
                 KeyCode::Esc => {}
                 KeyCode::Enter => on_ok(app, input.lines().join("")),
+                // The Redis command line: ↑↓ through this data source's history, newest first (↓ past the newest: an empty line)
+                KeyCode::Up | KeyCode::Down if redis.is_some() => {
+                    let p = redis.as_mut().expect("redis prompt");
+                    p.hi = match (k.code, p.hi) {
+                        (KeyCode::Up, None) if !p.hist.is_empty() => Some(0),
+                        (KeyCode::Up, Some(i)) => Some((i + 1).min(p.hist.len() - 1)),
+                        (KeyCode::Down, Some(i)) => i.checked_sub(1),
+                        (_, h) => h,
+                    };
+                    input = tui_textarea::TextArea::new(vec![p.hi.map(|i| p.hist[i].clone()).unwrap_or_default()]);
+                    input.set_cursor_line_style(ratatui::style::Style::default());
+                    input.move_cursor(tui_textarea::CursorMove::End);
+                    app.popup = Some(Popup::Input { title, body, input, on_ok, filter, redis, complete: None });
+                }
+                _ if redis.is_some() => {
+                    // Commands and their arguments complete as you type; key names once a bounded SCAN has read them
+                    if k.code != KeyCode::Tab {
+                        input.input(k);
+                    }
+                    let p = redis.as_mut().expect("redis prompt");
+                    p.hi = None;
+                    let (c, ask_keys) = App::redis_complete(&input, p);
+                    let tab = p.tab;
+                    app.popup = Some(Popup::Input { title, body, input, on_ok, filter, redis, complete: c });
+                    if let Some(prefix) = ask_keys {
+                        app.redis_key_names(tab, prefix);
+                    }
+                }
                 _ => {
                     // Typing a word or '.' opens the list, deleting re-filters an open one, ⇥ / ⌃Space ask at the cursor (a
                     // single-line input inserts no tab); other keys close it
@@ -158,7 +186,7 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                         input.input(k);
                     }
                     complete = filter.as_ref().filter(|_| ask || typed || refilter).and_then(|f| filter_complete(&input, f, ask));
-                    app.popup = Some(Popup::Input { title, body, input, on_ok, filter, complete });
+                    app.popup = Some(Popup::Input { title, body, input, on_ok, filter, redis, complete });
                 }
             }
         }
