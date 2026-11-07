@@ -1,7 +1,8 @@
 import Editor from "@monaco-editor/react";
 import { useEffect, useRef } from "react";
 import { format as formatSql } from "sql-formatter";
-import { monaco } from "../lib/monaco";
+import { markUnbalanced, monaco } from "../lib/monaco";
+import type { DbKind } from "../lib/api";
 import { bindModel, unbindModel } from "../lib/completion";
 import { MONACO_THEME } from "../lib/theme";
 import { font, fontStack } from "../lib/prefs";
@@ -43,6 +44,8 @@ interface Props {
   onMarkClick?: (out: string) => void;
   registerApi: (tabId: string, api: EditorApi) => void;
   readOnly?: boolean;
+  /** The data source's kind: unclosed quotes and brackets are marked as it reads them (none: not marked) */
+  kind?: DbKind;
 }
 
 const { KeyMod: M, KeyCode: K } = monaco;
@@ -64,7 +67,7 @@ function monacoKey(spec: string): number | null {
 }
 const keysOf = (id: string) => bindings(id).map(monacoKey).filter((n): n is number => n !== null);
 
-export function ConsoleEditor({ tabId, connId, database, initialSql, language, onChange, onRun, onMarkClick, registerApi, readOnly }: Props) {
+export function ConsoleEditor({ tabId, connId, database, initialSql, language, onChange, onRun, onMarkClick, registerApi, readOnly, kind }: Props) {
   const modelUri = useRef<string | null>(null);
   useEffect(() => {
     if (modelUri.current) bindModel(modelUri.current, connId, database);
@@ -73,6 +76,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
   onRunRef.current = onRun;
   const onMarkRef = useRef(onMarkClick);
   onMarkRef.current = onMarkClick;
+  const kindRef = useRef(kind);
+  kindRef.current = kind;
 
   return (
     <Editor
@@ -118,6 +123,7 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
         };
         caret();
         ed.onDidChangeCursorSelection(caret);
+        const unbalanced = kind && !readOnly ? markUnbalanced(ed, () => kindRef.current ?? kind) : undefined;
         const deco = ed.createDecorationsCollection();
         const preview = ed.createDecorationsCollection();
         const highlight = (ranges: { start: number; end: number }[]) => {
@@ -252,6 +258,7 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
         // addAction's commands·shortcuts·menus stay in the global registry, so dispose them manually when the editor closes
         ed.onDidDispose(() => {
           offKeymap();
+          unbalanced?.dispose();
           setFocusWidgets(owner, undefined);
           registered.forEach((d) => d.dispose());
           registered = [];
