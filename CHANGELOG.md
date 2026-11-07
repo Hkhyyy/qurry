@@ -4,6 +4,10 @@ What changed in each Qurry version, for people who use it. The format follows [K
 
 ## [Unreleased]
 
+### Fixed
+
+- **SSH / AWS SSM tunnel that stopped forwarding** (#110): after sleep or a network change, a query, a new connect or a console that sat unused no longer hangs: Qurry finds the dead tunnel, opens a new one and tries once more, and the errors name the way they went (SSM instance, SSH server or direct). An open transaction is never lost silently: a console whose transaction went with a closed tunnel, or with Disconnect, says so once and sends nothing, and a console whose session is only slow while the tunnel answers keeps its transaction. A running export, import, backup or restore keeps its tunnel and connections from being taken for dead or idle. The status line says why a data source was disconnected, with its name ([Data sources](docs/data-sources.md)).
+
 ## [0.3.1] - 2026-11-04
 
 ### Added
