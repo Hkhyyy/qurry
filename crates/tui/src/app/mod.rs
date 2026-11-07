@@ -171,7 +171,8 @@ pub struct FilterSource {
     pub table: String,
     pub order_by: bool,
     pub db: String,
-    pub mysql: bool,
+    /// The tab's data source kind (MySQL inserts names bare; quotes and brackets pair up as it reads them)
+    pub kind: DbKind,
 }
 
 /// The Redis browser's command line (:), the GUI's Terminal: completion from the shared command table (qurry_shared::redis_cmd)

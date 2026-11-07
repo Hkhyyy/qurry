@@ -439,6 +439,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     let color = app.color;
     let align = app.align.clone();
     let ro = app.tabs.get(idx).and_then(|t| app.conn(&t.conn)).map(|c| c.config.read_only).unwrap_or(false);
+    let kind = app.tabs.get(idx).map(|t| app.kind_of(&t.conn)).unwrap_or(qurry_core::store::DbKind::Postgres);
     let pct = app.console_pct;
     // Rebindable commands are shown with their first key in the current keymap
     let k = |a: crate::app::Action| app.keys.keys(a).first().map(|s| disp(s)).unwrap_or_else(|| "—".into());
@@ -495,7 +496,15 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             if focused {
                 *(if busy { &mut app.hits.cancel } else { &mut app.hits.run }) = spot;
             }
-            c.editor.set_block(panel(title, editing));
+            // Unclosed quotes and brackets (the GUI console's markers); on the caret's line the bottom border says what is open
+            let text = c.editor.lines().join("\n");
+            let open = qurry_shared::pairs::unbalanced(&text, kind);
+            let at_caret = open.iter().find(|u| crate::input::pairs::position(&text, u.start).0 == c.editor.cursor().0);
+            let block = panel(title, editing);
+            c.editor.set_block(match at_caret {
+                Some(u) => block.title_bottom(Line::styled(format!(" {} ", u.message), Style::default().fg(DANGER)).right_aligned()),
+                None => block,
+            });
             c.editor.set_line_number_style(Style::default().fg(DIM));
             // Put an invisible mark (underline color) on the cursor cell: found after drawing and used to place autocomplete·compute mouse positions
             let mark = Style::default().underline_color(CARET_MARK);
@@ -504,6 +513,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             // tui-textarea doesn't expose its scroll position → use the cursor cell just drawn
             let drawn = find_caret(f, ed);
             draw_marks(f, c, ed, drawn);
+            draw_unbalanced(f, c, ed, drawn, &text, &open);
             draw_preview(f, c, ed, drawn, &preview);
             let caret = if editing && c.complete.is_some() { drawn } else { None };
             if focused {
@@ -739,6 +749,39 @@ fn draw_marks(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u
             MarkState::Err => DANGER,
         };
         buf[(ed.x + 1, y)].set_char(state.symbol()).set_fg(color);
+    }
+}
+
+/// Unclosed quotes and brackets (qurry_shared::pairs::unbalanced): the character underlined in the danger color, and its line's number
+/// in the danger color. Rows and the sideways scroll are read from the cursor cell just drawn, as for the gutter marks
+fn draw_unbalanced(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>, text: &str, open: &[qurry_shared::pairs::Unbalanced]) {
+    use unicode_width::UnicodeWidthStr;
+    let Some((cx, cy)) = caret.filter(|_| !open.is_empty()) else { return };
+    let lines = c.editor.lines();
+    let digits = lines.len().to_string().len();
+    let x0 = (ed.x + 1 + digits as u16 + 2) as i64;
+    let (crow, ccol) = c.editor.cursor();
+    let width = |row: usize, col: usize| lines[row].chars().take(col).collect::<String>().width() as i64;
+    // Columns scrolled off to the left
+    let shift = x0 + width(crow, ccol) - cx as i64;
+    let top = crow as i64 - (cy as i64 - ed.y as i64 - 1);
+    let buf = f.buffer_mut();
+    for u in open {
+        let (row, col) = crate::input::pairs::position(text, u.start);
+        let y = ed.y as i64 + 1 + row as i64 - top;
+        if y <= ed.y as i64 || y >= ed.bottom() as i64 - 1 {
+            continue;
+        }
+        let y = y as u16;
+        for x in ed.x + 2..ed.x + 2 + digits as u16 {
+            buf[(x, y)].set_fg(DANGER);
+        }
+        let x = x0 + width(row, col) - shift;
+        if x >= x0 && x < ed.right() as i64 - 1 {
+            let cell = &mut buf[(x as u16, y)];
+            cell.set_fg(DANGER);
+            cell.modifier |= Modifier::UNDERLINED | Modifier::BOLD;
+        }
     }
 }
 

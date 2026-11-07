@@ -28,6 +28,7 @@ export const ScreenConsole = { ...by("Console & result"), name: "Screen · Conso
 export const ScreenConsoleRunning = { ...by("Console gutter marks"), name: "Screen · Console running: [■ Cancel] and gutter marks" };
 export const ScreenConsoleEditable ={ ...by("Console result: editable"), name: "Screen · Console result: editable" };
 export const ScreenConsoleReadOnly = { ...by("Console result: read-only"), name: "Screen · Console result: read-only (why)" };
+export const ScreenConsoleUnclosed = { ...by("Console: unclosed bracket"), name: "Screen · Console: unclosed bracket" };
 export const ScreenGridMarked = { ...by("Grid: marked rows"), name: "Screen · Grid: marked rows (m)" };
 export const ScreenChart = { ...by("Chart"), name: "Screen · Chart" };
 export const ScreenGridLoadingMore = { ...by("Grid: loading more"), name: "Screen · Grid: loading more" };

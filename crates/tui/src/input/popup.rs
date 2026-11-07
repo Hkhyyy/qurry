@@ -191,7 +191,9 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                     let plain = !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
                     let typed = plain && matches!(k.code, KeyCode::Char(c) if c.is_alphanumeric() || c == '_' || c == '.' || c == '\'' || c == ' ');
                     let refilter = complete.is_some() && k.code == KeyCode::Backspace;
-                    if !ask {
+                    // The WHERE / ORDER BY inputs pair up quotes and brackets, as the console does
+                    let paired = !ask && filter.as_ref().is_some_and(|f| pair_key(&mut input, &k, f.kind));
+                    if !ask && !paired {
                         input.input(k);
                     }
                     complete = filter.as_ref().filter(|_| ask || typed || refilter).and_then(|f| filter_complete(&input, f, ask));
