@@ -4,7 +4,9 @@ import "./lib/monaco";
 import "./lib/completion";
 import { initShared } from "./lib/shared";
 import { loadGridAlign } from "./lib/gridAlign";
+import { loadKeywordCase } from "./lib/keywordCase";
 import { loadCustomFonts } from "./lib/prefs";
+import { initTheme } from "./lib/theme";
 import App from "./App";
 
 async function boot() {
@@ -15,6 +17,9 @@ async function boot() {
     console.error(`Qurry could not load its shared WebAssembly module (${e}). If the WebView refused to create a WebAssembly object, the system WebView is too old: update macOS (Safari) or webkit2gtk.`),
   );
   loadGridAlign();
+  loadKeywordCase();
+  // Awaited: the app starts in the theme shared with the TUI (settings.json), not in Dark first
+  await initTheme();
   // Font files added in Settings: until registered, a font set to one renders with the default
   loadCustomFonts().catch((e) => console.warn(`The added font files could not be listed (${e})`));
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

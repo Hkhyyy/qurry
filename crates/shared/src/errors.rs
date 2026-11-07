@@ -21,6 +21,55 @@ pub fn tls_opt_in(msg: &str) -> bool {
 /// When the connection was lost during a COMMIT (after the server error)
 pub const COMMIT_UNKNOWN_ERR: &str = "connection lost while committing, so it is unknown whether the changes were committed. Check the data before you run them again (the next run reconnects).";
 
+/// What became of a console's open transaction when its connection was lost while a statement ran (core's recover, after the
+/// error and how the connection went)
+pub const TX_ROLLED_BACK: &str = "the open transaction was rolled back by the server";
+/// What a console says when its session was closed with a transaction open before the statement was sent (a disconnect, a dead
+/// tunnel: core's lost_tx)
+pub const TX_LOST_NOTHING_SENT: &str = "The transaction is lost (the server rolls it back), and nothing was sent. Run it again in a new session.";
+
+/// The server's setting that ends a session sitting idle in a transaction: PostgreSQL's idle_in_transaction_session_timeout,
+/// MySQL's wait_timeout (any idle session)
+pub fn idle_tx_setting(mysql: bool) -> &'static str {
+    if mysql { "wait_timeout" } else { "idle_in_transaction_session_timeout" }
+}
+
+/// The server ended a console's session that sat idle with a transaction open (after the server's error)
+pub fn idle_tx_ended(mysql: bool) -> String {
+    format!("the server ended the session because it sat idle in a transaction longer than its {} allows, so {TX_ROLLED_BACK}. Run it again to reconnect.", idle_tx_setting(mysql))
+}
+
+/// A Production console whose transaction has stayed open and unused (GUI Output and status bar, TUI status line). changed = a
+/// change ran in it; timeout = the server's limit for it, in seconds, when it has one (and keep-alive doesn't restart its clock)
+pub fn tx_idle_reminder(source: &str, minutes: u64, changed: bool, timeout: Option<(bool, u64)>) -> String {
+    let ends = match timeout {
+        Some((mysql, s)) => format!(" The server ends it after {} idle ({}), and rolls it back.", duration(s), idle_tx_setting(mysql)),
+        None => String::new(),
+    };
+    let what = match changed {
+        true => "its changes aren't saved and the rows it changed stay locked. Commit or Roll back.",
+        false => "nothing was changed in it, but it keeps the locks of what ran in it (an ALTER TABLE on those tables waits). Commit or Roll back to end it.",
+    };
+    format!("A transaction on Production \"{source}\" has been open for {minutes} min without a statement: {what}{ends}")
+}
+
+/// A read that ran outside a Production console's Manual transaction, in a read-only one of its own, tried to change data (a
+/// function that writes): the server refused it (after the server's error)
+pub const READ_FIRST_WROTE: &str = "Nothing was changed: on Production, a read run before the console's transaction is open runs in a read-only transaction of its own, so it can't hold locks or commit by itself, and this one tried to change data (a function that writes?). Run BEGIN first, then run it again: it then runs in the console's transaction and its changes stay pending until Commit or Roll back.";
+
+/// The first time a console of a Production data source starts in Manual mode (GUI Output, TUI status line)
+pub const PRODUCTION_MANUAL: &str = "Production: this console starts in Tx: Manual, so changes stay pending until you Commit or Roll back. To start them in Auto, turn off \"Production: start consoles in Manual transaction mode\" for this data source (GUI: Data Source Properties › Options · TUI: the data source form, \"Production Manual\").";
+
+/// "90 s", "10 min", "2 h 5 min"
+fn duration(s: u64) -> String {
+    match s {
+        _ if s < 120 => format!("{s} s"),
+        _ if s < 7200 => format!("{} min", s / 60),
+        _ if s % 3600 / 60 == 0 => format!("{} h", s / 3600),
+        _ => format!("{} h {} min", s / 3600, s % 3600 / 60),
+    }
+}
+
 /// Title of the notice for a failed COMMIT (GUI and TUI): it may not have failed when the connection was lost during it
 pub fn commit_failed_title(msg: &str) -> &'static str {
     if msg.contains(COMMIT_UNKNOWN_ERR) { "Commit outcome unknown" } else { "Commit failed" }
@@ -29,6 +78,26 @@ pub fn commit_failed_title(msg: &str) -> &'static str {
 /// The line the result grid keeps when loading more rows failed (GUI and TUI): the result isn't complete, so it says why it stopped
 pub fn more_rows_failed(msg: &str) -> String {
     format!("Couldn't load more rows: {}", msg.trim())
+}
+
+/// Why the app disconnected a data source by itself (the status line of GUI and TUI: disconnected)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Disconnected {
+    /// Auto-disconnect (Options)
+    Idle,
+    /// Its tunnel's process (aws CLI) or SSH session ended
+    TunnelStopped,
+    /// Its tunnel carried nothing any more when the keep-alive checked (sleep, a network change)
+    TunnelSilent,
+}
+
+/// The status line when the app disconnected a data source by itself (GUI and TUI). tunnel = its kind ("AWS SSM tunnel", "SSH tunnel")
+pub fn disconnected(name: &str, tunnel: &str, why: Disconnected) -> String {
+    match why {
+        Disconnected::Idle => format!("Disconnected (idle): {name}"),
+        Disconnected::TunnelStopped => format!("Disconnected: the {tunnel} of {name} stopped — the next query opens a new one"),
+        Disconnected::TunnelSilent => format!("Disconnected: the {tunnel} of {name} stopped answering — the next query opens a new one"),
+    }
 }
 
 /// The DBA report's database picker couldn't list the databases (GUI and TUI): it lists through the report's database, or the
@@ -72,9 +141,6 @@ pub const EDIT_DRIVER: &str = "Read-only: console results can be edited on Postg
 
 /// A console result the backend didn't check (src/components/ResultGrid.tsx CONSOLE_READ_ONLY has the same text)
 pub const CONSOLE_READ_ONLY: &str = "Console results are read-only. Open the table to edit its rows.";
-/// A console in Manual mode or with an open transaction: grid edits save in a transaction of their own (executeBatch), so they'd
-/// commit outside it and wait on its row locks (ResultGrid.tsx CONSOLE_IN_TX)
-pub const CONSOLE_IN_TX: &str = "Read-only in a transaction: edits are saved in a transaction of their own. Commit or roll back and switch to Tx: Auto to edit these rows.";
 
 /// GROUP BY, HAVING, DISTINCT, UNION …: one result row isn't one table row
 pub fn edit_combined(what: &str) -> String {
@@ -95,9 +161,24 @@ pub fn edit_no_pk(table: &str) -> String {
     format!("Read-only: {table} has no primary key.")
 }
 
-pub fn edit_missing_pk(pk: &[String]) -> String {
-    format!("Read-only: the result doesn't include the primary key ({}).", pk.join(", "))
+pub fn edit_missing_pk(table: &str, pk: &[String]) -> String {
+    format!("Read-only: the result doesn't include the primary key of {table} ({}).", pk.join(", "))
 }
+
+/// A join's outer side where no row of the table matched (its key is NULL in that row)
+pub fn edit_no_row(table: &str) -> String {
+    format!("Read-only: no {table} row matches this row (outer join).")
+}
+
+/// A table joined with itself, where Qurry can't tell which of the two a column is (a bare `*` with USING, a bare column name)
+pub fn edit_self_join(table: &str) -> String {
+    format!("Read-only: {table} is in the join more than once, and Qurry can't tell which one this column comes from. Select it as alias.column.")
+}
+
+/// MySQL: a bare `*` over a join with USING or NATURAL lists the merged columns once, so it can't be lined up with the tables
+pub const EDIT_STAR_USING: &str = "Read-only: with USING or NATURAL, Qurry can't tell which table each column of * comes from. List the columns, or use alias.*.";
+/// Add, delete and clone rows on a join result: its rows aren't rows of one table (GUI buttons, TUI status line)
+pub const EDIT_JOIN_ROWS: &str = "Rows can be added or deleted only in a result from one table. In a join, edit the cells of a table whose primary key is in the result.";
 
 /// A temporary table lives in the console's session only: edits saved on another connection would miss it (PostgreSQL) or change
 /// the base table it shadows (MySQL)
@@ -110,6 +191,46 @@ pub fn edit_not_table(table: &str, what: &str) -> String {
     format!("Read-only: {table} is a {what}, not a table.")
 }
 
+/// A server error with the spot in the statement it points at (PostgreSQL's 1-based character position), as the core words it:
+/// the console finds it again with [`error_position`] to mark that spot
+pub fn with_position(msg: &str, pos: usize) -> String {
+    format!("{msg} (position {pos})")
+}
+
+/// `msg` without the position [`with_position`] added: for where the error is shown next to its mark (the mark is the spot)
+pub fn without_position(msg: &str) -> &str {
+    let t = msg.trim_end();
+    t.strip_suffix(')').and_then(|r| r.rfind(" (position ").filter(|&i| r[i + 11..].parse::<usize>().is_ok()).map(|i| &t[..i])).unwrap_or(msg)
+}
+
+/// Where a failed statement's error points, as a byte offset into `sql` (the text that was sent): PostgreSQL's position
+/// ([`with_position`]), MySQL's "near '…' at line N" (the quoted text is the rest of the statement from the spot, cut short after
+/// 80 characters; `near ''` is its end). None when the error doesn't say (the console then marks the whole statement)
+pub fn error_position(msg: &str, sql: &str) -> Option<usize> {
+    let msg = msg.trim_end();
+    if let Some(rest) = msg.strip_suffix(')')
+        && let Some(i) = rest.rfind(" (position ")
+        && let Ok(n) = rest[i + 11..].parse::<usize>()
+    {
+        return sql.char_indices().map(|(b, _)| b).chain([sql.len()]).nth(n.checked_sub(1)?);
+    }
+    // The first "near '" is MySQL's own (the quoted text may hold another); " at line N" ends the message
+    let from = msg.find("to use near '")? + 13;
+    let at = msg.rfind("' at line ")?;
+    let line: usize = msg[at + 10..].parse().ok()?;
+    let near = msg.get(from..at)?;
+    let start = sql.split_inclusive('\n').take(line.checked_sub(1)?).map(str::len).sum::<usize>();
+    if start > sql.len() {
+        return None;
+    }
+    let body = sql.trim_end();
+    if body.ends_with(near) && body.len() - near.len() >= start {
+        return Some(body.len() - near.len());
+    }
+    // Cut short: where the whole quoted text starts, from that line on
+    Some(sql[start..].find(near).map_or(start, |j| start + j))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,8 +238,51 @@ mod tests {
     #[test]
     fn console_texts_match_the_gui() {
         let gui = include_str!("../../../src/components/ResultGrid.tsx");
-        for t in [CONSOLE_READ_ONLY, CONSOLE_IN_TX] {
-            assert!(gui.contains(&format!("\"{t}\"")), "ResultGrid.tsx lacks: {t}");
+        assert!(gui.contains(&format!("\"{CONSOLE_READ_ONLY}\"")), "ResultGrid.tsx lacks: {CONSOLE_READ_ONLY}");
+    }
+
+    #[test]
+    fn error_position_finds_the_spot() {
+        // PostgreSQL: characters, 1-based (a multi-byte one before it counts once)
+        let sql = "select '한' fro t";
+        assert_eq!(error_position(&with_position("syntax error at or near \"t\"", 16), sql), Some(sql.find(" t").unwrap() + 1));
+        assert_eq!(error_position(&with_position("x", 1), sql), Some(0));
+        assert_eq!(error_position(&with_position("x", 99), sql), None);
+        // MySQL: the line, then the quoted rest of the statement on it
+        let sql = "select a,\n  b fro t\nwhere x";
+        let my = |near: &str, line| format!("1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '{near}' at line {line}");
+        assert_eq!(error_position(&my("fro t\nwhere x", 2), sql), Some(sql.find("fro").unwrap()));
+        // The same text earlier in the statement is not the spot
+        assert_eq!(error_position(&my("x", 3), "select x\nfrom t\nwhere x"), Some("select x\nfrom t\nwhere ".len()));
+        assert_eq!(error_position(&my("", 1), "select 1 +  "), Some("select 1 +".len()));
+        // A short near text that also comes earlier on its line: the rest of the statement says where
+        assert_eq!(error_position(&my("t", 1), "select 1 fro t"), Some("select 1 fro ".len()));
+        let sql = "select 1 as a from dual where 1 = 1 and 2 = 1 1";
+        assert_eq!(error_position(&my("1", 1), sql), Some(sql.len() - 1));
+        // The quoted text holding " near '" itself
+        let sql = "select 1 fro t where x = ' near ' and y = 2";
+        assert_eq!(error_position(&my("t where x = ' near ' and y = 2", 1), sql), Some("select 1 fro ".len()));
+        // Cut short after 80 characters: the whole quoted text is found from its line on
+        let sql = format!("select a from\nt where b = 1 fro {} and c = 1", "x".repeat(90));
+        let cut: String = sql[sql.find("fro x").unwrap()..].chars().take(80).collect();
+        assert_eq!(error_position(&my(&cut, 2), &sql), sql.find("fro x"));
+        assert_eq!(without_position(&with_position("ERROR: relation \"t\" does not exist", 15)), "ERROR: relation \"t\" does not exist");
+        assert_eq!(without_position("f(x) (position y)"), "f(x) (position y)");
+        // Errors that don't say
+        assert_eq!(error_position("ERROR: relation \"t\" does not exist", "select * from t"), None);
+        assert_eq!(error_position("Unknown column 'x' in 'field list'", "select x"), None);
+    }
+
+    #[test]
+    fn transaction_texts_name_the_server_setting() {
+        assert!(idle_tx_ended(false).contains("longer than its idle_in_transaction_session_timeout allows") && idle_tx_ended(false).contains(TX_ROLLED_BACK));
+        assert!(idle_tx_ended(true).contains("wait_timeout"));
+        assert!(tx_idle_reminder("prod", 5, true, None).ends_with("the rows it changed stay locked. Commit or Roll back."));
+        // Only reads ran in it (a typed BEGIN): no changes or changed rows to speak of, but its locks
+        let read = tx_idle_reminder("prod", 5, false, None);
+        assert!(!read.contains("its changes") && !read.contains("rows it changed") && read.contains("nothing was changed") && read.contains("ALTER TABLE"), "{read}");
+        for (s, says) in [(90, "90 s idle"), (600, "10 min idle"), (28800, "8 h idle"), (7500, "2 h 5 min idle")] {
+            assert!(tx_idle_reminder("prod", 5, true, Some((true, s))).contains(&format!("after {says} (wait_timeout)")), "{s}");
         }
     }
 
@@ -147,6 +311,13 @@ mod tests {
         for m in [format!("error returned from database: {NEEDS_TLS}"), format!("ERROR: {}", needs_tls_pg()), format!("invalid input syntax for type integer: \"{DROPPED_TLS}\"")] {
             assert!(!tls_opt_in(&m), "{m}");
         }
+    }
+
+    #[test]
+    fn disconnected_says_why_with_the_name() {
+        assert_eq!(disconnected("prod", "SSH tunnel", Disconnected::Idle), "Disconnected (idle): prod");
+        assert_eq!(disconnected("prod", "AWS SSM tunnel", Disconnected::TunnelSilent), "Disconnected: the AWS SSM tunnel of prod stopped answering — the next query opens a new one");
+        assert!(disconnected("prod", "SSH tunnel", Disconnected::TunnelStopped).starts_with("Disconnected: the SSH tunnel of prod stopped —"));
     }
 
     #[test]

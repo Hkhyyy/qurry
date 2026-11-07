@@ -32,8 +32,18 @@ fn known_hosts_path() -> Option<String> {
     std::env::var("QURRY_KNOWN_HOSTS").ok()
 }
 
-/// Adds a server key whose fingerprint the user confirmed to known_hosts (passes from the next connection on)
+/// Adds a server key whose fingerprint the user confirmed to known_hosts (passes from the next connection on). `host` / `port` are
+/// the data source's SSH host: when the unknown key came from its ~/.ssh/config HostName or a ProxyJump host, that one is trusted
 pub fn trust_host_key(host: &str, port: u16) -> AppResult<String> {
+    let pending = |h: &str, p: u16| PENDING_KEYS.lock().unwrap().as_ref().is_some_and(|m| m.contains_key(&(h.to_string(), p)));
+    let (host, port) = match pending(host, port) {
+        true => (host.to_string(), port),
+        false => {
+            let ssh = SshConfig { enabled: true, host: host.into(), port, user: String::new(), auth: SshAuth::Key, key_path: String::new() };
+            route(&ssh).unwrap_or_default().into_iter().find(|h| pending(&h.host, h.port)).map(|h| (h.host, h.port)).unwrap_or((host.to_string(), port))
+        }
+    };
+    let host = host.as_str();
     let key = PENDING_KEYS.lock().unwrap().as_mut().and_then(|m| m.remove(&(host.to_string(), port)));
     let key = match key {
         None => return Err(AppError::Msg(format!("No pending host key for {host}:{port} — connect (or Test SSH) first"))),
@@ -105,7 +115,7 @@ pub struct Tunnel {
 
 /// What forwards the port: the SSH accept loop and its session, or the aws CLI process (killed when dropped)
 enum Keep {
-    Ssh(JoinHandle<()>, Arc<client::Handle<Client>>),
+    Ssh(JoinHandle<()>, Arc<Session>),
     Process(Box<crate::ssm::Process>),
 }
 
@@ -147,54 +157,241 @@ pub(crate) fn expand_home(path: &str) -> String {
     }
 }
 
-/// Tests only the SSH login (Test Connection on the SSH/SSL tab).
-pub async fn test_login(ssh: &SshConfig, secret: Option<&str>) -> AppResult<String> {
-    let session = login(ssh, secret).await?;
-    let _ = session.disconnect(russh::Disconnect::ByApplication, "", "en").await;
-    Ok(format!("SSH connection OK: {}@{}:{} (host key verified)", ssh.user, ssh.host, ssh.port))
+/// Whether a new connection through a tunnel's local port gets the database's first bytes `within`: false when the tunnel
+/// accepts but forwards nothing (its session died while the aws CLI or the SSH accept loop runs on). It authenticates nothing:
+/// PostgreSQL answers an SSLRequest with one byte, MySQL greets first, Redis answers a PING (with PONG, or -NOAUTH: any byte
+/// counts). Redis with TLS (it would want a TLS handshake first) and plugin drivers have no such step and count as answering
+pub(crate) async fn answers(local_port: u16, cfg: &crate::store::ConnectionConfig, within: std::time::Duration) -> bool {
+    use crate::store::DbKind;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let hello: &[u8] = match cfg.kind {
+        // SSLRequest (length 8, code 80877103)
+        DbKind::Postgres => &[0, 0, 0, 8, 4, 210, 22, 47],
+        DbKind::Mysql => &[],
+        DbKind::Redis if cfg.active_ssl().is_none() => b"PING\r\n",
+        _ => return true,
+    };
+    let probe = async {
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await.ok()?;
+        s.write_all(hello).await.ok()?;
+        let mut b = [0u8; 1];
+        (s.read(&mut b).await.ok()? > 0).then_some(())
+    };
+    matches!(tokio::time::timeout(within, probe).await, Ok(Some(())))
 }
 
-async fn login(ssh: &SshConfig, secret: Option<&str>) -> AppResult<client::Handle<Client>> {
-    let reject = Arc::new(Mutex::new(None));
-    let handler = Client { host: ssh.host.clone(), port: ssh.port, reject: reject.clone() };
+/// The SSH session to the data source's SSH host, and the ProxyJump sessions it runs through (they live as long as it does)
+struct Session {
+    last: client::Handle<Client>,
+    jumps: Vec<client::Handle<Client>>,
+}
+
+impl Session {
+    fn is_closed(&self) -> bool {
+        self.last.is_closed() || self.jumps.iter().any(|j| j.is_closed())
+    }
+
+    async fn disconnect(&self) {
+        let _ = self.last.disconnect(russh::Disconnect::ByApplication, "", "en").await;
+        for j in self.jumps.iter().rev() {
+            let _ = j.disconnect(russh::Disconnect::ByApplication, "", "en").await;
+        }
+    }
+}
+
+/// The SSH servers on the way to the data source's SSH host, from ~/.ssh/config (crate::ssh_config): its HostName, User, Port,
+/// IdentityFile, IdentityAgent and ProxyJump hosts. The source's own port wins unless it is the default 22, its user unless it is empty
+fn route(ssh: &SshConfig) -> AppResult<Vec<crate::ssh_config::Hop>> {
+    let home = dirs::home_dir().unwrap_or_default();
+    let local = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default();
+    let port = (ssh.port != 22).then_some(ssh.port);
+    crate::ssh_config::SshConfigFile::load()?.route(&ssh.host, port, Some(&ssh.user), &home, &local)
+}
+
+/// Tests only the SSH login (Test Connection on the SSH/SSL tab).
+pub async fn test_login(ssh: &SshConfig, secret: Option<&str>) -> AppResult<String> {
+    let (session, hops) = login(ssh, secret).await?;
+    session.disconnect().await;
+    let (last, jumps) = hops.split_last().expect("a route ends at the SSH host");
+    let via = if jumps.is_empty() { String::new() } else { format!(" via {}", jumps.iter().map(|h| h.host.as_str()).collect::<Vec<_>>().join(" → ")) };
+    Ok(format!("SSH connection OK: {}@{}:{}{via} (host key verified)", last.user, last.host, last.port))
+}
+
+/// The data source's own credential for its SSH host. None (no key file, no password) = ssh-agent, then the IdentityFile keys, as `ssh` does
+enum Own<'a> {
+    Password(&'a str),
+    Key(String),
+}
+
+async fn login(ssh: &SshConfig, secret: Option<&str>) -> AppResult<(Session, Vec<crate::ssh_config::Hop>)> {
+    let hops = route(ssh)?;
+    let own = match ssh.auth {
+        SshAuth::Key if !ssh.key_path.trim().is_empty() => Some(Own::Key(expand_home(ssh.key_path.trim()))),
+        SshAuth::Key => None,
+        SshAuth::Password => secret.filter(|s| !s.is_empty()).map(Own::Password),
+    };
     let config = Arc::new(client::Config {
         inactivity_timeout: None,
         keepalive_interval: Some(std::time::Duration::from_secs(30)),
         ..Default::default()
     });
-    let mut session = tokio::time::timeout(std::time::Duration::from_secs(15), client::connect(config, (ssh.host.as_str(), ssh.port), handler))
-        .await
-        .map_err(|_| AppError::Msg(format!("SSH connect timeout: {}:{}", ssh.host, ssh.port)))?
-        .map_err(|e| AppError::Msg(reject.lock().unwrap().take().unwrap_or_else(|| format!("SSH connect failed: {e}"))))?;
-
-    let auth = match ssh.auth {
-        SshAuth::Password => session
-            .authenticate_password(&ssh.user, secret.unwrap_or_default())
-            .await
-            .map_err(|e| AppError::Msg(format!("SSH auth error: {e}")))?,
-        SshAuth::Key => {
-            let path = expand_home(&ssh.key_path);
-            let key = russh::keys::load_secret_key(&path, secret.filter(|s| !s.is_empty()))
-                .map_err(|e| AppError::Msg(format!("Cannot load private key {path}: {e}")))?;
-            let hash = session.best_supported_rsa_hash().await.ok().flatten().flatten();
-            session
-                .authenticate_publickey(&ssh.user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
-                .await
-                .map_err(|e| AppError::Msg(format!("SSH auth error: {e}")))?
-        }
-    };
-    if !auth.success() {
-        let hint = if ssh.user.chars().any(|c| c.is_uppercase()) { " — user names are case-sensitive (e.g. 'ubuntu', not 'Ubuntu')" } else { " — check the user name and key/password" };
-        return Err(AppError::Msg(format!("SSH authentication failed for {}@{}{hint}", ssh.user, ssh.host)));
+    let wait = std::time::Duration::from_secs(15);
+    let mut sessions: Vec<client::Handle<Client>> = Vec::new();
+    for (i, hop) in hops.iter().enumerate() {
+        let reject = Arc::new(Mutex::new(None));
+        let handler = Client { host: hop.host.clone(), port: hop.port, reject: reject.clone() };
+        let failed = |e: russh::Error| AppError::Msg(reject.lock().unwrap().take().unwrap_or_else(|| format!("SSH connect to {}:{} failed: {e}", hop.host, hop.port)));
+        let timeout = |_| AppError::Msg(format!("SSH connect timeout: {}:{}", hop.host, hop.port));
+        // The first hop over TCP; each next one through a direct-tcpip channel of the one before (ProxyJump)
+        let mut session = match sessions.last() {
+            None => tokio::time::timeout(wait, client::connect(config.clone(), (hop.host.as_str(), hop.port), handler)).await.map_err(timeout)?.map_err(failed)?,
+            Some(prev) => {
+                let ch = tokio::time::timeout(wait, prev.channel_open_direct_tcpip(hop.host.clone(), hop.port as u32, "127.0.0.1", 0))
+                    .await
+                    .map_err(timeout)?
+                    .map_err(|e| AppError::Msg(format!("SSH jump host {} cannot reach {}:{} ({e})", hops[i - 1].host, hop.host, hop.port)))?;
+                tokio::time::timeout(wait, client::connect_stream(config.clone(), ch.into_stream(), handler)).await.map_err(timeout)?.map_err(failed)?
+            }
+        };
+        // The data source's password / key go only to its own SSH host, never to a jump host
+        let last = i + 1 == hops.len();
+        authenticate(&mut session, hop, own.as_ref().filter(|_| last), secret.filter(|_| last)).await?;
+        sessions.push(session);
     }
-    Ok(session)
+    let last = sessions.pop().expect("a route ends at the SSH host");
+    Ok((Session { last, jumps: sessions }, hops))
+}
+
+async fn authenticate(session: &mut client::Handle<Client>, hop: &crate::ssh_config::Hop, own: Option<&Own<'_>>, secret: Option<&str>) -> AppResult<()> {
+    let auth_err = |e: &dyn std::fmt::Display| AppError::Msg(format!("SSH auth error ({}@{}): {e}", hop.user, hop.host));
+    let hash = session.best_supported_rsa_hash().await.ok().flatten().flatten();
+    let secret = secret.filter(|s| !s.is_empty());
+    match own {
+        Some(Own::Password(p)) => {
+            return match session.authenticate_password(&hop.user, *p).await.map_err(|e| auth_err(&e))?.success() {
+                true => Ok(()),
+                false => Err(auth_failed(hop, &["the password".into()], "")),
+            };
+        }
+        Some(Own::Key(path)) => {
+            let key = russh::keys::load_secret_key(path, secret).map_err(|e| AppError::Msg(format!("Cannot load private key {path}: {e}")))?;
+            return match session.authenticate_publickey(&hop.user, PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await.map_err(|e| auth_err(&e))?.success() {
+                true => Ok(()),
+                false => Err(auth_failed(hop, &[format!("the key {path}")], "")),
+            };
+        }
+        None => {}
+    }
+    let mut tried = Vec::new();
+    let mut hint: String = hop.notes.iter().map(|n| format!(" {n}.")).collect();
+    // The IdentityFile keys' public halves: the agent offers those first (a server drops the login after MaxAuthTries, 6 by
+    // default, and an agent often holds more keys), and with IdentitiesOnly only those, as ssh does
+    let wanted: Vec<_> = hop.identity_files.iter().filter_map(|p| public_key_of(p)).collect();
+    let mut offered = Vec::new();
+    // ssh-agent first (keys with a passphrase are usually there), then the IdentityFile keys
+    #[cfg(unix)]
+    {
+        use crate::ssh_config::Agent;
+        let sock = match &hop.agent {
+            Agent::Off => None,
+            Agent::Socket(p) => Some(p.clone()),
+            Agent::Env => {
+                let s = std::env::var_os("SSH_AUTH_SOCK").map(std::path::PathBuf::from);
+                if s.is_none() {
+                    hint.push_str(" SSH_AUTH_SOCK isn't set, so no ssh-agent was asked.");
+                }
+                s
+            }
+        };
+        if let Some(sock) = sock {
+            match russh::keys::agent::client::AgentClient::connect_uds(&sock).await {
+                Ok(mut agent) => {
+                    let keys: Vec<_> = agent
+                        .request_identities()
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|i| match i {
+                            russh::keys::agent::AgentIdentity::PublicKey { key, .. } => Some(key),
+                            russh::keys::agent::AgentIdentity::Certificate { .. } => None,
+                        })
+                        .collect();
+                    let held = keys.len();
+                    let mut keys = keys;
+                    keys.sort_by_key(|k| !wanted.contains(k.key_data()));
+                    if hop.identities_only {
+                        keys.retain(|k| wanted.contains(k.key_data()));
+                    }
+                    let s = |n: usize| if n == 1 { "" } else { "s" };
+                    tried.push(match hop.identities_only {
+                        true => format!("ssh-agent ({} of its {held} key{}: IdentitiesOnly)", keys.len(), s(held)),
+                        false => format!("ssh-agent ({held} key{})", s(held)),
+                    });
+                    for key in keys {
+                        offered.push(key.key_data().clone());
+                        if session.authenticate_publickey_with(&hop.user, key, hash, &mut agent).await.map_err(|e| auth_err(&e))?.success() {
+                            return Ok(());
+                        }
+                    }
+                }
+                Err(e) => hint.push_str(&format!(" The ssh-agent at {} didn't answer ({e}).", sock.display())),
+            }
+        }
+    }
+    for path in hop.identity_files.iter().filter(|p| p.exists()) {
+        // Already offered by the agent: the server would say no again (and count it against MaxAuthTries)
+        if public_key_of(path).is_some_and(|k| offered.contains(&k)) {
+            continue;
+        }
+        let shown = path.display().to_string();
+        let key = match russh::keys::load_secret_key(path, secret) {
+            Ok(k) => k,
+            Err(russh::keys::Error::KeyIsEncrypted) => {
+                hint.push_str(&format!(" {shown} needs a passphrase: add it to ssh-agent (ssh-add {shown})."));
+                continue;
+            }
+            Err(e) => {
+                hint.push_str(&format!(" Cannot load {shown}: {e}."));
+                continue;
+            }
+        };
+        tried.push(shown);
+        if session.authenticate_publickey(&hop.user, PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await.map_err(|e| auth_err(&e))?.success() {
+            return Ok(());
+        }
+    }
+    if tried.is_empty() {
+        tried.push("no key (no ssh-agent, no IdentityFile, no ~/.ssh/id_ed25519 · id_ecdsa · id_rsa)".into());
+    }
+    Err(auth_failed(hop, &tried, &hint))
+}
+
+/// An IdentityFile's public key: its .pub file, else the private key file's header (readable without the passphrase)
+fn public_key_of(path: &std::path::Path) -> Option<russh::keys::ssh_key::public::KeyData> {
+    let mut pub_path = path.as_os_str().to_owned();
+    pub_path.push(".pub");
+    if let Ok(k) = russh::keys::load_public_key(&pub_path) {
+        return Some(k.key_data().clone());
+    }
+    russh::keys::PrivateKey::read_openssh_file(path).ok().map(|k| k.public_key().key_data().clone())
+}
+
+fn auth_failed(hop: &crate::ssh_config::Hop, tried: &[String], hint: &str) -> AppError {
+    let case = if hop.user.chars().any(|c| c.is_uppercase()) { " User names are case-sensitive (e.g. 'ubuntu', not 'Ubuntu')." } else { "" };
+    AppError::Msg(format!(
+        "SSH authentication failed for {}@{} — tried {}.{hint}{case} Check the user name, or set a key file or password for the SSH tunnel.",
+        hop.user,
+        hop.host,
+        tried.join(", ")
+    ))
 }
 
 pub async fn open(ssh: &SshConfig, secret: Option<&str>, remote_host: &str, remote_port: u16) -> AppResult<Tunnel> {
-    let session = login(ssh, secret).await?;
+    let (session, hops) = login(ssh, secret).await?;
+    let last = hops.last().expect("a route ends at the SSH host");
 
     // First check that the bastion can actually reach the DB address (otherwise you only see "connection reset")
-    match session.channel_open_direct_tcpip(remote_host, remote_port as u32, "127.0.0.1", 0).await {
+    match session.last.channel_open_direct_tcpip(remote_host, remote_port as u32, "127.0.0.1", 0).await {
         Ok(ch) => {
             let _ = ch.close().await;
         }
@@ -202,7 +399,7 @@ pub async fn open(ssh: &SshConfig, secret: Option<&str>, remote_host: &str, remo
             return Err(AppError::Msg(format!(
                 "SSH login OK, but {}@{} cannot reach {remote_host}:{remote_port} ({e}). \
                  Set the database host/port on the General tab as seen from the SSH server.",
-                ssh.user, ssh.host
+                last.user, last.host
             )));
         }
     }
@@ -213,12 +410,16 @@ pub async fn open(ssh: &SshConfig, secret: Option<&str>, remote_host: &str, remo
     let (rhost, rport) = (remote_host.to_string(), remote_port);
     let forward = session.clone();
     let task = tokio::spawn(async move {
+        // The forwarded connections end with the accept loop (Tunnel's drop aborts it): through a session that stopped forwarding,
+        // a statement waiting on one then fails at once instead of waiting forever, and closing its pool doesn't wait for it
+        let mut conns = tokio::task::JoinSet::new();
         loop {
             let Ok((mut tcp, peer)) = listener.accept().await else { break };
+            while conns.try_join_next().is_some() {}
             let session = forward.clone();
             let rhost = rhost.clone();
-            tokio::spawn(async move {
-                match session.channel_open_direct_tcpip(rhost, rport as u32, peer.ip().to_string(), peer.port() as u32).await {
+            conns.spawn(async move {
+                match session.last.channel_open_direct_tcpip(rhost, rport as u32, peer.ip().to_string(), peer.port() as u32).await {
                     Ok(ch) => {
                         let mut stream = ch.into_stream();
                         let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
@@ -233,6 +434,63 @@ pub async fn open(ssh: &SshConfig, secret: Option<&str>, remote_host: &str, remo
 
 #[cfg(test)]
 mod tests {
+    /// The probe that tells a dead tunnel from a busy one: the database's first bytes count, a port that accepts and stays
+    /// silent or a closed port doesn't, and kinds without a handshake to ask count as answering
+    #[tokio::test]
+    async fn a_tunnel_answers_when_the_database_does() {
+        use crate::store::DbKind;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let serve = |greet: bool| async move {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = l.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                let mut held = vec![];
+                while let Ok((mut s, _)) = l.accept().await {
+                    let mut b = [0u8; 8];
+                    // MySQL greets first; PostgreSQL answers the SSLRequest, Redis the PING
+                    if greet || s.read(&mut b).await.is_ok_and(|n| n > 0) {
+                        let _ = s.write_all(if greet { b"J\0\0\0\n8.4" } else { b"N" }).await;
+                    }
+                    held.push(s);
+                }
+            });
+            port
+        };
+        let silent = crate::app::tests::silent_server().await;
+        const TWO: std::time::Duration = std::time::Duration::from_secs(2);
+        let of = |kind: &str, ssl: bool| -> crate::store::ConnectionConfig {
+            serde_json::from_value(serde_json::json!({ "name": "a", "kind": kind, "host": "db", "port": 1, "user": "u", "ssl": { "enabled": ssl } })).unwrap()
+        };
+        let (pg, my, redis) = (of("postgres", false), of("mysql", false), of("redis", false));
+        assert_eq!(redis.kind, DbKind::Redis);
+        assert!(answers(serve(false).await, &pg, TWO).await);
+        assert!(answers(serve(true).await, &my, TWO).await);
+        // Redis answers the PING (here like PostgreSQL's server: it reads, then answers)
+        assert!(answers(serve(false).await, &redis, TWO).await);
+        let t = std::time::Instant::now();
+        assert!(!answers(silent, &pg, TWO).await);
+        assert!(!answers(silent, &my, TWO).await);
+        assert!(!answers(silent, &redis, TWO).await);
+        assert!(t.elapsed() < std::time::Duration::from_secs(8), "2s each: {:?}", t.elapsed());
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        assert!(!answers(closed, &pg, TWO).await);
+        assert!(answers(silent, &of("mssql", false), TWO).await);
+        assert!(answers(silent, &of("redis", true), TWO).await, "Redis with TLS isn't probed");
+    }
+
+    /// A real Redis answers the tunnel check's PING (PONG, or -NOAUTH with a password: any byte counts).
+    /// Run: QURRY_TEST_REDIS=127.0.0.1:16379 cargo test -p qurry-core real_redis_answers_the_tunnel_check -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn real_redis_answers_the_tunnel_check() {
+        let addr = std::env::var("QURRY_TEST_REDIS").expect("QURRY_TEST_REDIS=host:port");
+        let port: u16 = addr.rsplit(':').next().unwrap().parse().unwrap();
+        let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "r", "kind": "redis", "host": "127.0.0.1", "port": port, "user": "" })).unwrap();
+        let t = std::time::Instant::now();
+        assert!(answers(port, &cfg, std::time::Duration::from_secs(2)).await);
+        assert!(t.elapsed() < std::time::Duration::from_secs(1), "{:?}", t.elapsed());
+    }
+
     /// If a different key arrives after the fingerprint was shown (MITM), it isn't added
     #[test]
     fn pending_key_swap_is_refused() {
@@ -311,10 +569,24 @@ mod tests {
         let _ = std::fs::remove_file(&kh);
     }
 
-    /// An SSH server in this process: password "pw", direct-tcpip forwarded to `to`. Counts logins
+    /// An SSH server in this process: password "pw", direct-tcpip forwarded to `to`. Counts logins. A session whose `dead` is set
+    /// stops forwarding while it stays open (the server can't reach the database any more, or the link stalled)
     struct Sshd {
         to: std::net::SocketAddr,
         logins: Arc<std::sync::atomic::AtomicUsize>,
+        dead: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    /// Copies r to w until r ends, dropping what comes while `dead` is set
+    async fn pump(mut r: impl tokio::io::AsyncRead + Unpin, mut w: impl tokio::io::AsyncWrite + Unpin, dead: Arc<std::sync::atomic::AtomicBool>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut buf = vec![0; 65536];
+        while let Ok(n @ 1..) = r.read(&mut buf).await {
+            if !dead.load(std::sync::atomic::Ordering::SeqCst) && w.write_all(&buf[..n]).await.is_err() {
+                return;
+            }
+        }
+        let _ = w.shutdown().await;
     }
 
     impl russh::server::Handler for Sshd {
@@ -339,18 +611,22 @@ mod tests {
             _session: &mut russh::server::Session,
         ) -> Result<(), Self::Error> {
             reply.accept().await;
-            let to = self.to;
+            let (to, dead) = (self.to, self.dead.clone());
             tokio::spawn(async move {
-                if let Ok(mut tcp) = tokio::net::TcpStream::connect(to).await {
-                    let _ = tokio::io::copy_bidirectional(&mut tcp, &mut channel.into_stream()).await;
+                if let Ok(tcp) = tokio::net::TcpStream::connect(to).await {
+                    let ((tr, tw), (cr, cw)) = (tcp.into_split(), tokio::io::split(channel.into_stream()));
+                    tokio::join!(pump(tr, cw, dead.clone()), pump(cr, tw, dead));
                 }
             });
             Ok(())
         }
     }
 
+    /// The running sessions, and the flag that stops each one forwarding
+    type Sessions = Arc<Mutex<Vec<(russh::server::Handle, Arc<std::sync::atomic::AtomicBool>)>>>;
+
     /// Port, login count, and the running sessions
-    async fn sshd(to: std::net::SocketAddr, known_hosts: &std::path::Path) -> (u16, Arc<std::sync::atomic::AtomicUsize>, Arc<Mutex<Vec<russh::server::Handle>>>) {
+    async fn sshd(to: std::net::SocketAddr, known_hosts: &std::path::Path) -> (u16, Arc<std::sync::atomic::AtomicUsize>, Sessions) {
         let key = russh::keys::PrivateKey::from(russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[7; 32]));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -361,8 +637,9 @@ mod tests {
         let (l, s) = (logins.clone(), sessions.clone());
         tokio::spawn(async move {
             while let Ok((tcp, _)) = listener.accept().await {
-                if let Ok(running) = russh::server::run_stream(config.clone(), tcp, Sshd { to, logins: l.clone() }).await {
-                    s.lock().unwrap().push(running.handle());
+                let dead = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                if let Ok(running) = russh::server::run_stream(config.clone(), tcp, Sshd { to, logins: l.clone(), dead: dead.clone() }).await {
+                    s.lock().unwrap().push((running.handle(), dead));
                     tokio::spawn(running);
                 }
             }
@@ -401,7 +678,7 @@ mod tests {
 
         // The session ends (as when keepalive gives up); the accept loop doesn't notice
         let ended: Vec<_> = sessions.lock().unwrap().drain(..).collect();
-        for s in ended {
+        for (s, _) in ended {
             let _ = s.disconnect(russh::Disconnect::ByApplication, String::new(), "en".into()).await;
         }
         let alive = || async { st.tunnels.read().await.get(&id).unwrap().alive() };
@@ -418,6 +695,259 @@ mod tests {
             .expect("another db reopens the tunnel");
         assert!(other.server_version().await.is_ok());
         assert_eq!(logins(), 2);
+        st.disconnect(id).await.unwrap();
+    }
+
+    /// An SSH server in this process that takes only one public key, and forwards direct-tcpip to the address asked for (a jump host).
+    /// Records "user@port" per login, "rejected user@port" per refused key
+    #[derive(Clone)]
+    struct KeySshd {
+        key: russh::keys::PublicKey,
+        port: u16,
+        logins: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl russh::server::Handler for KeySshd {
+        type Error = russh::Error;
+
+        async fn auth_publickey(&mut self, user: &str, key: &russh::keys::PublicKey) -> Result<russh::server::Auth, Self::Error> {
+            if *key != self.key {
+                self.logins.lock().unwrap().push(format!("rejected {user}@{}", self.port));
+                return Ok(russh::server::Auth::reject());
+            }
+            self.logins.lock().unwrap().push(format!("{user}@{}", self.port));
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn channel_open_direct_tcpip(
+            &mut self,
+            channel: russh::Channel<russh::server::Msg>,
+            host: &str,
+            port: u32,
+            _from: &str,
+            _from_port: u32,
+            reply: russh::server::ChannelOpenHandle,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            let to = format!("{host}:{port}");
+            reply.accept().await;
+            tokio::spawn(async move {
+                if let Ok(mut tcp) = tokio::net::TcpStream::connect(to).await {
+                    let _ = tokio::io::copy_bidirectional(&mut tcp, &mut channel.into_stream()).await;
+                }
+            });
+            Ok(())
+        }
+    }
+
+    async fn key_sshd(seed: u8, client: &russh::keys::PublicKey, logins: Arc<Mutex<Vec<String>>>) -> (u16, russh::keys::PublicKey) {
+        let key = russh::keys::PrivateKey::from(russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[seed; 32]));
+        let host_key = key.public_key().clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // MaxAuthTries 6, OpenSSH's default
+        let config = Arc::new(russh::server::Config { keys: vec![key], auth_rejection_time: std::time::Duration::ZERO, max_auth_attempts: 6, ..Default::default() });
+        let h = KeySshd { key: client.clone(), port, logins };
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                if let Ok(running) = russh::server::run_stream(config.clone(), tcp, h.clone()).await {
+                    tokio::spawn(running);
+                }
+            }
+        });
+        (port, host_key)
+    }
+
+    /// ssh-agent and ~/.ssh/config: a Host alias with HostName, User, Port and ProxyJump through a jump host, both logged in with the
+    /// agent's key (the data source has no key file and no password). An unknown jump host key stops the connect, and trusting the
+    /// data source's SSH host trusts that jump host. A wrong ProxyCommand is refused.
+    /// Run on its own (it sets QURRY_KNOWN_HOSTS and QURRY_SSH_CONFIG): cargo test -p qurry-core ssh_agent_and_proxy_jump -- --ignored
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore]
+    async fn ssh_agent_and_proxy_jump_from_ssh_config() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let dir = tempfile::tempdir().unwrap();
+        // The agent, holding the only key the servers take
+        let client_key = russh::keys::PrivateKey::from(russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[9; 32]));
+        let sock = dir.path().join("agent.sock");
+        let agent_listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let incoming = futures::stream::unfold(agent_listener, |l| async move { Some((l.accept().await.map(|(s, _)| s), l)) });
+        tokio::spawn(russh::keys::agent::server::serve(Box::pin(incoming), ()));
+        let mut agent = russh::keys::agent::client::AgentClient::connect_uds(&sock).await.unwrap();
+        agent.add_identity(&client_key, &[]).await.unwrap();
+
+        let logins = Arc::new(Mutex::new(Vec::new()));
+        let (jump, jump_key) = key_sshd(11, client_key.public_key(), logins.clone()).await;
+        let (target, target_key) = key_sshd(12, client_key.public_key(), logins.clone()).await;
+        // What the tunnel reaches: an echo server
+        let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let echo_port = echo.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = echo.accept().await {
+                tokio::spawn(async move {
+                    let (mut r, mut w) = s.split();
+                    let _ = tokio::io::copy(&mut r, &mut w).await;
+                });
+            }
+        });
+        let kh = dir.path().join("known_hosts");
+        russh::keys::known_hosts::learn_known_hosts_path("127.0.0.1", target, &target_key, &kh).unwrap();
+        let conf = dir.path().join("config");
+        let s = sock.display();
+        std::fs::write(&conf, format!("Host qurry-target\n  HostName 127.0.0.1\n  Port {target}\n  User deploy\n  ProxyJump jumper\n  IdentityAgent {s}\nHost jumper\n  HostName 127.0.0.1\n  Port {jump}\n  User hop\n  IdentityAgent {s}\nHost qurry-proxycmd\n  ProxyCommand nc %h %p\n")).unwrap();
+        unsafe {
+            std::env::set_var("QURRY_KNOWN_HOSTS", &kh);
+            std::env::set_var("QURRY_SSH_CONFIG", &conf);
+        }
+        let ssh = SshConfig { enabled: true, host: "qurry-target".into(), port: 22, user: String::new(), auth: SshAuth::Key, key_path: String::new() };
+
+        // The jump host's key is unknown: stop and show it; trusting the data source's SSH host trusts the jump host
+        let e = test_login(&ssh, None).await.unwrap_err().to_string();
+        assert!(e.contains(UNKNOWN_HOST) && e.contains(&format!("127.0.0.1:{jump}")), "{e}");
+        assert!(trust_host_key("qurry-target", 22).unwrap().contains(&format!("127.0.0.1:{jump}")));
+        assert!(std::fs::read_to_string(&kh).unwrap().contains(&jump.to_string()));
+        let _ = jump_key;
+
+        let ok = test_login(&ssh, None).await.unwrap();
+        assert!(ok.contains(&format!("deploy@127.0.0.1:{target} via 127.0.0.1")), "{ok}");
+        assert_eq!(logins.lock().unwrap().drain(..).collect::<Vec<_>>(), [format!("hop@{jump}"), format!("deploy@{target}")]);
+
+        // A tunnel through both, to the echo server; a password-auth source with no password uses the agent too
+        let pw = SshConfig { auth: SshAuth::Password, ..ssh.clone() };
+        let t = open(&pw, None, "127.0.0.1", echo_port).await.unwrap();
+        let mut c = tokio::net::TcpStream::connect(("127.0.0.1", t.local_port)).await.unwrap();
+        c.write_all(b"through two hops").await.unwrap();
+        let mut buf = [0u8; 16];
+        c.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"through two hops");
+        assert!(t.alive());
+        drop(t);
+
+        // The agent holds more keys than the server allows tries (MaxAuthTries 6), the right one last: an IdentityFile whose key the
+        // agent holds is offered first (the agent lists its keys in any order); IdentitiesOnly offers no other agent key
+        let sock = dir.path().join("agent2.sock");
+        let agent_listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let incoming = futures::stream::unfold(agent_listener, |l| async move { Some((l.accept().await.map(|(s, _)| s), l)) });
+        tokio::spawn(russh::keys::agent::server::serve(Box::pin(incoming), ()));
+        let mut agent = russh::keys::agent::client::AgentClient::connect_uds(&sock).await.unwrap();
+        let s = sock.display();
+        for seed in 20..27u8 {
+            let decoy = russh::keys::PrivateKey::from(russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[seed; 32]));
+            agent.add_identity(&decoy, &[]).await.unwrap();
+        }
+        agent.add_identity(&client_key, &[]).await.unwrap();
+        let pem = dir.path().join("prod.pem");
+        client_key.public_key().write_openssh_file(dir.path().join("prod.pem.pub")).unwrap();
+        let other = dir.path().join("other.pem");
+        russh::keys::PrivateKey::from(russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[30; 32]))
+            .write_openssh_file(&other, russh::keys::ssh_key::LineEnding::LF)
+            .unwrap();
+        let many = |extra: &str| format!("Host qurry-many\n  HostName 127.0.0.1\n  Port {target}\n  User deploy\n  IdentityAgent {s}\n{extra}");
+        let many_ssh = SshConfig { host: "qurry-many".into(), ..ssh.clone() };
+        let deploy = format!("deploy@{target}");
+        logins.lock().unwrap().clear();
+        for extra in ["", "  IdentitiesOnly yes\n"] {
+            std::fs::write(&conf, many(&format!("  IdentityFile {}\n{extra}", pem.display()))).unwrap();
+            test_login(&many_ssh, None).await.unwrap();
+            assert_eq!(logins.lock().unwrap().drain(..).collect::<Vec<_>>(), std::slice::from_ref(&deploy), "no wrong key offered first");
+        }
+        std::fs::write(&conf, many(&format!("  IdentityFile {}\n  IdentitiesOnly yes\n", other.display()))).unwrap();
+        let e = test_login(&many_ssh, None).await.unwrap_err().to_string();
+        assert!(e.contains("ssh-agent (0 of its 8 keys: IdentitiesOnly)") && e.contains("other.pem"), "{e}");
+        assert_eq!(logins.lock().unwrap().drain(..).collect::<Vec<_>>(), [format!("rejected {deploy}")], "only the IdentityFile");
+        // An unsupported token in a broad block is skipped, not a stop (the source's own key still logs in), and told when the login fails
+        let own = dir.path().join("own.pem");
+        client_key.write_openssh_file(&own, russh::keys::ssh_key::LineEnding::LF).unwrap();
+        let keyed = SshConfig { host: "127.0.0.1".into(), port: target, user: "deploy".into(), key_path: own.display().to_string(), ..ssh.clone() };
+        std::fs::write(&conf, format!("Host *\n  IdentityFile ~/.ssh/%n\n  IdentityAgent {s}\n  IdentitiesOnly yes\n")).unwrap();
+        test_login(&keyed, None).await.unwrap();
+        logins.lock().unwrap().clear();
+        let e = test_login(&SshConfig { key_path: String::new(), ..keyed.clone() }, None).await.unwrap_err().to_string();
+        assert!(e.contains("%n") && e.contains("IdentityFile was skipped"), "{e}");
+        std::fs::write(&conf, "Host qurry-proxycmd\n  ProxyCommand nc %h %p\n").unwrap();
+
+        // No agent and no key: says what it tried
+        unsafe { std::env::set_var("QURRY_SSH_CONFIG", dir.path().join("empty")) };
+        let direct = SshConfig { host: "127.0.0.1".into(), port: target, user: "deploy".into(), ..ssh.clone() };
+        let saved = std::env::var_os("SSH_AUTH_SOCK");
+        unsafe { std::env::remove_var("SSH_AUTH_SOCK") };
+        let e = test_login(&direct, None).await.unwrap_err().to_string();
+        if let Some(s) = saved {
+            unsafe { std::env::set_var("SSH_AUTH_SOCK", s) };
+        }
+        assert!(e.contains("SSH authentication failed for deploy@127.0.0.1") && e.contains("SSH_AUTH_SOCK"), "{e}");
+
+        // ProxyCommand is refused before anything connects
+        unsafe { std::env::set_var("QURRY_SSH_CONFIG", &conf) };
+        let e = test_login(&SshConfig { host: "qurry-proxycmd".into(), ..ssh.clone() }, None).await.unwrap_err().to_string();
+        assert!(e.contains("ProxyCommand isn't supported"), "{e}");
+        unsafe { std::env::remove_var("QURRY_SSH_CONFIG") };
+    }
+
+    /// An SSH session that stops forwarding while it stays open (a stalled link, the SSH server lost its way to the database): the
+    /// connect that times out through it opens a new session and the call goes on — with an open pool (the MCP query) and a new
+    /// database. A recovered call takes one timeout plus a new session and a connect. A database that doesn't answer through a new
+    /// session either is reported once, naming the SSH server.
+    /// Run on its own (it sets QURRY_KNOWN_HOSTS): QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres cargo test -p qurry-core dead_ssh_tunnel -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn dead_ssh_tunnel_is_opened_again_once() {
+        use std::sync::atomic::Ordering::SeqCst;
+        use std::time::{Duration, Instant};
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let kh = tempfile::NamedTempFile::new().unwrap();
+        unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", kh.path()) };
+        let (port, logins, sessions) = sshd(format!("{}:{}", pg.host, pg.port).parse().unwrap(), kh.path()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let source = |port: u16| -> ConnectionConfig {
+            serde_json::from_value(serde_json::json!({ "name": "ssh-dead", "kind": "postgres", "host": "db.internal", "port": 5432, "user": &pg.user, "database": &pg.database,
+                "ssh": { "enabled": true, "host": "127.0.0.1", "port": port, "user": "me", "auth": "password", "keyPath": "" } })).unwrap()
+        };
+        let id = st.save_connection(source(port), None, Some("pw".into())).await.unwrap().id;
+        let stop = || sessions.lock().unwrap().iter().for_each(|(_, dead)| dead.store(true, SeqCst));
+        let recovered = |t: Instant| {
+            let took = t.elapsed();
+            println!("recovered in {took:?}");
+            assert!(took >= Duration::from_secs(10) && took < Duration::from_secs(14), "one timeout, a new session and a connect: {took:?}");
+        };
+
+        st.run_read_only(id.clone(), "select 1".into(), 1).await.expect("connects");
+        assert_eq!(logins.load(SeqCst), 1);
+        stop();
+        let t = Instant::now();
+        st.run_read_only(id.clone(), "select 1".into(), 1).await.expect("recovers in the same call");
+        recovered(t);
+        assert_eq!(logins.load(SeqCst), 2);
+
+        // A console whose session is open: after it sat unused, its next run checks the session (5s) and the tunnel (2s) first,
+        // and goes on through a new SSH session
+        let console = |sql: &str| tokio::time::timeout(Duration::from_secs(40), st.run_query(id.clone(), sql.into(), None, Some("ssh-console".into())));
+        console("select 1").await.unwrap().expect("console");
+        stop();
+        crate::app::tests::age_session(&st, "ssh-console").await;
+        let t = Instant::now();
+        assert_eq!(console("select 2").await.expect("doesn't hang").expect("goes on").rows[0][0], serde_json::json!(2));
+        println!("idle console recovered in {:?}", t.elapsed());
+        assert!(t.elapsed() < Duration::from_secs(10), "less than one connect timeout: {:?}", t.elapsed());
+        assert_eq!(logins.load(SeqCst), 3);
+
+        stop();
+        let t = Instant::now();
+        let p = crate::app::ensure_pool(&st, &format!("{id}::template1")).await.expect("a new database reconnects");
+        recovered(t);
+        assert!(p.server_version().await.is_ok());
+        assert_eq!(logins.load(SeqCst), 4);
+        st.disconnect(id).await.unwrap();
+
+        // An SSH server that can't reach the database
+        let silent = crate::app::tests::silent_server().await;
+        let (port, logins, _) = sshd(format!("127.0.0.1:{silent}").parse().unwrap(), kh.path()).await;
+        let id = st.save_connection(source(port), None, Some("pw".into())).await.unwrap().id;
+        let e = crate::app::ensure_pool(&st, &id).await.err().expect("times out").to_string();
+        assert!(e.contains(&format!("through the SSH tunnel (127.0.0.1:{port})")) && e.contains("also after Qurry opened the tunnel again") && !e.contains("VPN"), "{e}");
+        assert_eq!(logins.load(SeqCst), 2, "the first session and one new one");
         st.disconnect(id).await.unwrap();
     }
 }

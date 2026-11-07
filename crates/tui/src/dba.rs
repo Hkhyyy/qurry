@@ -246,6 +246,7 @@ impl App {
         if let Some(Tab { kind: TabKind::Console(c), .. }) = self.tabs.get_mut(self.active) {
             c.editor.insert_str(q);
         }
+        self.update_assist();
     }
 
     /// ⌃K › Show Diagram (ERD): relationships of the schema selected in the tree (or all user schemas of the DB) as text + Mermaid (copy with y)

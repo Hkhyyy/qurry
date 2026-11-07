@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Cell, Dialect, QueryResult } from "../lib/api";
+import { Cell, DbKind, Dialect, QueryResult, TableRef } from "../lib/api";
 import { filterSuggestions } from "../lib/completion";
+import { pairKey } from "../lib/pairs";
 import type { CompletionItem } from "../lib/shared";
 import { EditTarget, ResultGrid } from "./ResultGrid";
 import { ColumnIcon, IcFilter, IcOrder, SchemaIcon, TableIcon } from "../ui/icons";
@@ -39,6 +40,8 @@ interface Props {
   onFindSimilar?: (column: string, row: Record<string, Cell>) => void;
   /** Absent: the fields are plain text */
   completion?: FilterCompletion;
+  /** The table its column widths are kept for (shared with the TUI) */
+  table?: TableRef;
 }
 
 export function TableEditor(p: Props) {
@@ -49,7 +52,7 @@ export function TableEditor(p: Props) {
   const apply = (w = where, o = orderBy) => p.onApply(w.trim(), o.trim());
 
   const field = (icon: ReactNode, kw: "WHERE" | "ORDER BY", value: string, set: (v: string) => void, reset: string, onClear: () => void) => (
-    <FilterField icon={icon} kw={kw} value={value} onChange={set} reset={reset} onApply={() => apply()} onClear={onClear} completion={p.completion} />
+    <FilterField icon={icon} kw={kw} value={value} onChange={set} reset={reset} onApply={() => apply()} onClear={onClear} completion={p.completion} kind={p.dialect?.quoting ?? "postgres"} />
   );
 
   const filterBar = (
@@ -95,6 +98,7 @@ export function TableEditor(p: Props) {
           onCopyQueryToConsole={p.onCopyQueryToConsole}
           onFindSimilar={p.onFindSimilar}
           filterBar={filterBar}
+          widthsOf={p.table}
         />
         {p.error && (
           <Notice tone="danger" className="grid-overlay">
@@ -107,26 +111,27 @@ export function TableEditor(p: Props) {
   );
 }
 
-/** Keywords (and values, which the filter doesn't list) keep an empty icon slot, so every label starts in one column */
-const ITEM_ICON: Record<CompletionItem["kind"], ReactNode> = { column: <ColumnIcon />, table: <TableIcon />, schema: <SchemaIcon />, keyword: <></>, value: <></> };
+/** Keywords and functions (and the kinds the filter doesn't list) keep an empty icon slot, so every label starts in one column */
+const ITEM_ICON: Record<CompletionItem["kind"], ReactNode> = { column: <ColumnIcon />, table: <TableIcon />, schema: <SchemaIcon />, keyword: <></>, value: <></>, join: <></>, function: <></>, snippet: <></> };
 
 /**
  * One field of the filter bar. While an identifier is typed it lists the console's candidates for the field's text in its query
  * (`SELECT * FROM schema.table WHERE <text>`), with the keys of the column type ComboBox: ↑↓ PgUp PgDn move, ↩ / ⇥ pick, ⎋ closes the
- * list. With the list closed, ↩ applies the filter and ⎋ resets the field
+ * list. With the list closed, ↩ applies the filter and ⎋ resets the field. Quotes and brackets pair up as in the console and the TUI
+ * (lib/pairs: qurry_shared::pairs)
  */
-function FilterField(p: { icon: ReactNode; kw: "WHERE" | "ORDER BY"; value: string; onChange: (v: string) => void; reset: string; onApply: () => void; onClear: () => void; completion?: FilterCompletion }) {
+function FilterField(p: { icon: ReactNode; kw: "WHERE" | "ORDER BY"; value: string; onChange: (v: string) => void; reset: string; onApply: () => void; onClear: () => void; completion?: FilterCompletion; kind: DbKind }) {
   const input = useRef<HTMLInputElement>(null);
   const [list, setList] = useState<{ from: number; caret: number; items: CompletionItem[] } | null>(null);
   const [active, setActive] = useState(0);
   /** The last request: an answer to an older one is dropped */
   const asked = useRef(0);
-  /** Where the caret goes after a pick (set once React has rendered the new value) */
-  const caretAfter = useRef<number | null>(null);
+  /** The selection after a pick or a pair edit (set once React has rendered the new value) */
+  const selAfter = useRef<[number, number] | null>(null);
   useLayoutEffect(() => {
-    if (caretAfter.current === null) return;
-    input.current?.setSelectionRange(caretAfter.current, caretAfter.current);
-    caretAfter.current = null;
+    if (selAfter.current === null) return;
+    input.current?.setSelectionRange(...selAfter.current);
+    selAfter.current = null;
   });
   const close = () => {
     asked.current++;
@@ -144,7 +149,8 @@ function FilterField(p: { icon: ReactNode; kw: "WHERE" | "ORDER BY"; value: stri
   const pick = (it: CompletionItem) => {
     if (!list) return;
     const v = p.value.slice(0, list.from) + it.insert + p.value.slice(list.caret);
-    caretAfter.current = list.from + it.insert.length;
+    const caret = list.from + it.insert.length;
+    selAfter.current = [caret, caret];
     p.onChange(v);
     close();
   };
@@ -177,6 +183,18 @@ function FilterField(p: { icon: ReactNode; kw: "WHERE" | "ORDER BY"; value: stri
               e.preventDefault();
               const el = e.target as HTMLInputElement;
               void ask(el.value, el.selectionStart ?? el.value.length, true);
+              return;
+            }
+            // ' " ( [ close themselves, a closing one types over, ⌫ in an empty pair removes both, around a selection they wrap it
+            const el = e.target as HTMLInputElement;
+            const pair = e.ctrlKey || e.metaKey || e.altKey ? undefined : pairKey(el.value, el.selectionStart ?? 0, el.selectionEnd ?? 0, e.key, p.kind);
+            if (pair) {
+              e.preventDefault();
+              // Typing over leaves the value as it was: nothing renders again, so the caret moves here
+              if (pair.value === el.value) el.setSelectionRange(pair.selStart, pair.selEnd);
+              else selAfter.current = [pair.selStart, pair.selEnd];
+              p.onChange(pair.value);
+              if (open || e.key !== "Backspace") void ask(pair.value, pair.selEnd);
               return;
             }
             if (open) {

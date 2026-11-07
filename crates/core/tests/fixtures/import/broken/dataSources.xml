@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="half" uuid="bad00000-0000-4000-8000-000000000001">
+      <driver-ref>postgresql</driver-ref>
+      <jdbc-url>jdbc:postgresql://half.internal:5432/half</jdbc-url>
+  </component>
+</project>

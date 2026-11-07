@@ -1,5 +1,5 @@
 use super::*;
-use crate::theme::Theme;
+use qurry_core::theme::{Kind, SYSTEM};
 use qurry_core::format::{align, Align, ValueClass};
 
 /// The GUI's names (Settings › Appearance › Alignment, src/lib/gridAlign.ts VALUE_CLASSES)
@@ -236,7 +236,7 @@ impl App {
                     self.activate(i)
                 }
             }
-            PAction::Run { stmts, rows, explain } => self.run_marked(stmts, rows, explain, false),
+            PAction::Run { stmts, spans, explain } => self.run_marked(stmts, spans, explain, false),
             PAction::ExportFormat(f) => self.export_dest(f),
             PAction::Dba(r) => self.dba_open(r),
             PAction::InsertSql(q) => self.insert_sql(q),
@@ -254,12 +254,15 @@ impl App {
                 }
             }
             PAction::Channel(c) => self.set_update_channel(c),
+            PAction::KeywordCase(c) => self.set_keyword_case(c),
             PAction::AlignClass(c) => self.palette_align_of(c),
             PAction::Align(c, a) => {
                 self.set_grid_align(c, a);
                 self.palette_grid_align(c);
             }
             PAction::Theme(t) => self.set_theme(t),
+            PAction::ImportFrom(path) => self.ds_import_location(path),
+            PAction::ImportPath => self.ds_import_path(),
             PAction::Object { conn, db, e } => {
                 let kind = match e.kind.as_str() {
                     "function" | "procedure" => "routine".to_string(),
@@ -287,7 +290,7 @@ impl App {
         let mut t = TextArea::new(vec![init.to_string()]);
         t.move_cursor(tui_textarea::CursorMove::End);
         t.set_cursor_line_style(ratatui::style::Style::default());
-        self.popup = Some(Popup::Input { title: title.into(), body: String::new(), input: t, on_ok: Box::new(on_ok), filter: None, complete: None });
+        self.popup = Some(Popup::Input { title: title.into(), body: String::new(), input: t, on_ok: Box::new(on_ok), filter: None, redis: None, complete: None });
     }
 
     /// Input with an explanation box under it (answers, reasons); the title stays one line on the border
@@ -302,11 +305,11 @@ impl App {
     pub fn input_filter(&mut self, id: u64, order_by: bool) {
         let Some(t) = self.tabs.iter().find(|t| t.id == id) else { return };
         let TabKind::Table(tt) = &t.kind else { return };
-        let (target, db, mysql) = (t.target.clone(), t.db.clone(), self.kind_of(&t.conn) == DbKind::Mysql);
+        let (target, db, kind) = (t.target.clone(), t.db.clone(), self.kind_of(&t.conn));
         let init = if order_by { tt.order.clone() } else { tt.where_.clone() };
         let meta = self.completion.get(&target).cloned().unwrap_or_else(|| {
             let columns = tt.grid.as_ref().map(|g| g.result.columns.iter().map(|c| (c.name.clone(), c.type_name.clone())).collect()).unwrap_or_default();
-            Arc::new(complete::Meta::new(vec![complete::CompletionTable { schema: tt.schema.clone(), name: tt.table.clone(), columns }]))
+            Arc::new(complete::Meta::new(vec![complete::CompletionTable { schema: tt.schema.clone(), name: tt.table.clone(), columns, ..Default::default() }]))
         });
         let (schema, table) = (tt.schema.clone(), tt.table.clone());
         if !self.completion.contains_key(&target) {
@@ -319,7 +322,7 @@ impl App {
             a.reload_table_checked(id);
         });
         if let Some(Popup::Input { filter, .. }) = &mut self.popup {
-            *filter = Some(FilterSource { meta, schema, table, order_by, db, mysql });
+            *filter = Some(FilterSource { meta, schema, table, order_by, db, kind });
         }
     }
 
@@ -381,6 +384,26 @@ impl App {
         };
     }
 
+    /// ⌃K › Keyword Case…: Off, UPPER or lower for SQL keywords as you type and in Reformat Code (the GUI's Settings › Appearance ›
+    /// Keyword case, shared through settings.json). Reads the file again, so a pick made in the GUI since the TUI started shows here
+    pub fn palette_keyword_case(&mut self) {
+        use qurry_core::format::KeywordCase;
+        self.keyword_case = self.state.store.keyword_case();
+        let on = self.keyword_case;
+        let reformat = self.keys.label(Action::Reformat);
+        let hint = |c| match c {
+            KeywordCase::Off => format!("typing left as it is; Reformat Code ({reformat}) writes UPPER (default)"),
+            _ => "as you type and in Reformat Code".to_string(),
+        };
+        let items = KeywordCase::ALL
+            .iter()
+            .map(|&c| PItem { label: format!("{} {}", if c == on { "●" } else { " " }, super::reformat::keyword_case_name(c)), hint: hint(c), action: PAction::KeywordCase(c) })
+            .collect();
+        // Opens on the saved case, so Enter keeps it
+        let sel = KeywordCase::ALL.iter().position(|&c| c == on).unwrap_or(0);
+        self.popup = Some(Popup::Palette(Palette { title: "Keyword Case".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
+    }
+
     /// ⌃K › Grid Alignment…: one row per value class with where it sits (the GUI's Settings › Appearance › Alignment, shared through
     /// settings.json). Reads the file again, so a change made in the GUI since the TUI started shows here and in the grids
     pub fn palette_grid_align(&mut self, sel: ValueClass) {
@@ -421,39 +444,55 @@ impl App {
         };
     }
 
-    /// ⌃K › Theme…: Auto (light on a light terminal background, from COLORFGBG), Dark or Light. Opened on the current one (Enter keeps it)
+    /// The theme picked (settings.json "theme", shared with the GUI): Sync with OS when none was
+    pub fn theme_pick(&self) -> &str {
+        self.themes.theme.as_deref().unwrap_or(SYSTEM)
+    }
+
+    /// ⌃K › Theme…: the built-in themes, the custom ones (made in the GUI's Settings › Appearance) and Sync with OS (the GUI's dark or
+    /// light pick by the terminal background, COLORFGBG). Reads settings.json again (the GUI may have changed it); opened on the
+    /// current one (Enter keeps it)
     pub fn palette_theme(&mut self) {
-        let auto = if self.auto_light { "light now" } else { "dark now" };
-        let items = Theme::ALL
-            .into_iter()
+        self.themes = self.state.store.theme_settings();
+        let pick = self.theme_pick().to_string();
+        let all = self.themes.all();
+        let name = |id: &str| all.iter().find(|t| t.id == id).map_or(id.to_string(), |t| t.name.clone());
+        let (dark, light) = (name(&self.themes.sync.dark), name(&self.themes.sync.light));
+        let now = if self.auto_light { &light } else { &dark };
+        let sync = PItem { label: String::new(), hint: format!("{dark} / {light} by the terminal background (COLORFGBG): {now} now"), action: PAction::Theme(SYSTEM.into()) };
+        let items: Vec<_> = all
+            .iter()
             .map(|t| {
-                let hint = match t {
-                    Theme::Auto => format!("follows the terminal background (COLORFGBG): {auto}"),
-                    Theme::Dark => "for a dark terminal background".into(),
-                    Theme::Light => "for a light terminal background".into(),
-                };
-                PItem { label: format!("{} {}", if t == self.theme { "●" } else { " " }, t.name()), hint, action: PAction::Theme(t) }
+                let kind = if t.kind == Kind::Light { "light" } else { "dark" };
+                let hint = if t.custom { format!("custom, {kind}") } else { kind.to_string() };
+                PItem { label: t.name.clone(), hint, action: PAction::Theme(t.id.clone()) }
+            })
+            .chain([PItem { label: "Sync with OS".into(), ..sync }])
+            .map(|it| {
+                let on = matches!(&it.action, PAction::Theme(id) if *id == pick);
+                PItem { label: format!("{} {}", if on { "●" } else { " " }, it.label), ..it }
             })
             .collect();
-        let sel = Theme::ALL.iter().position(|&t| t == self.theme).unwrap_or(0);
+        let sel = items.iter().position(|it| matches!(&it.action, PAction::Theme(id) if *id == pick)).unwrap_or(0);
         self.popup = Some(Popup::Palette(Palette { title: "Theme".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
-    /// Switch to a theme now and save it in settings.json (a failed save still switches, for this session)
-    fn set_theme(&mut self, t: Theme) {
-        self.theme = t;
-        let colors = if t.light(self.auto_light) { "light" } else { "dark" };
-        self.status = match self.state.store.set_tui_theme(&t.name().to_lowercase()) {
-            Ok(()) => format!("Theme: {} — {colors} colors", t.name()),
-            Err(e) => format!("Couldn't save the theme: {e} — {} for this session only", t.name()),
+    /// Switch to a theme now and save it in settings.json for both apps (a failed save still switches, for this session)
+    fn set_theme(&mut self, id: String) {
+        self.themes.theme = Some(id.clone());
+        let t = self.themes.resolve(SYSTEM, !self.auto_light);
+        let what = if id == SYSTEM { format!("Sync with OS — {} now", t.name) } else { t.name.clone() };
+        self.status = match self.state.store.set_theme(&id) {
+            Ok(()) => format!("Theme: {what} — saved for the GUI too"),
+            Err(e) => format!("Couldn't save the theme: {e} — {what} for this session only"),
         };
     }
 
-    /// Status line text at startup: one notice, so it fits the status text's half of an 80-cell line. Auto picking the light
-    /// palette comes first, since the colors changed by themselves (NO_COLOR draws no palette, so nothing changed there);
+    /// Status line text at startup: one notice, so it fits the status text's half of an 80-cell line. Sync with OS picking the
+    /// light palette comes first, since the colors changed by themselves (NO_COLOR draws no palette, so nothing changed there);
     /// otherwise how to get more colors
     pub fn startup_notice(&self) -> Option<String> {
-        if self.theme == Theme::Auto && self.auto_light && self.color != crate::theme::ColorMode::NoColor {
+        if self.theme_pick() == SYSTEM && self.auto_light && self.color != crate::theme::ColorMode::NoColor {
             return Some(format!("Light palette — {} › Theme… › Dark to undo", self.keys.label(Action::Palette)));
         }
         self.color.notice().map(String::from)

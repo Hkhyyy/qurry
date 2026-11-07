@@ -1,5 +1,6 @@
 NewConsole	New Query Console	⌃l
-Execute	Execute (asks what to run — see Query Execution Settings)	F5 / ⌃Enter / ⌥Enter
+Execute	Execute (asks what to run — see Query Execution Settings)	F5 / ⌃Enter
+QuickFix	Quick Fixes (an underlined unknown name's closest names; elsewhere Execute)	⌥Enter
 Explain	Explain Plan	⌥e
 ExplainAnalyze	Explain Analyze (runs the statement: real times and row counts)	—
 Cancel	Cancel Running Statement	⌃c
@@ -22,6 +23,11 @@ ExportCsv	Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)	x (grid)
 CopyInList	Copy Column as IN List  ('a', 'b', …)	Y (grid)
 MarkRow	Mark Row (add the row to the selection or take it out: y copies, d deletes the marked rows)	m (grid)
 ValueEditor	Value Panel (the current cell's whole value, beside the grid)	v (grid)
+ColumnNarrower	Narrow Column (the current one)	< (grid)
+ColumnWider	Widen Column (the current one)	> (grid)
+ColumnFit	Fit Column to its content (the rows loaded so far)	= (grid)
+ColumnFitAll	Fit All Columns	—
+ColumnReset	Reset Column Widths (back to the computed widths)	—
 FindSimilar	Find Similar Rows (pgvector, by the vector column)	—
 RagSearch	AI Search (RAG)… — ask a table in plain words	—
 RagBuild	Build RAG Index… (embed the rows)	—
@@ -44,6 +50,7 @@ ShowDiagram	Show Diagram (ERD): foreign keys of a schema, as text + Mermaid	—
 CompareSchemas	Compare Schemas… (DDL to make one schema look like another)	—
 CompareData	Compare Table Data… (sync SQL by primary key)	—
 RunMigrations	Run Migrations… (folder of V1__name.sql files)	—
+ImportDataSources	Import Data Sources… (DataGrip, IntelliJ, DBeaver, a Qurry export)	—
 BackupDb	Back Up Database… (pg_dump / mysqldump)	—
 RestoreDb	Restore Database… (from a .dump / .sql backup)	—
 DbaReports	Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges)	—
@@ -74,6 +81,7 @@ PrevTab	Previous Tab	⌥Left / ⌃PgUp
 ToggleExplorer	Database Explorer	⌥0
 ToggleOutput	Toggle Output / Result	⌥o
 Complete	Code Completion	⌃Space
+Reformat	Reformat Code (the selection or the statement at the cursor)	⌥⇧F
 SplitRight	Split Right (focused pane, up to 4)	⌥\
 SplitDown	Split Down (focused pane, up to 4)	⌥-
 Unsplit	Unsplit All	—
@@ -91,8 +99,9 @@ PaneRight	Go to the Split on the Right	⌃⌥Right
 CycleFocus	Cycle Focus (explorer → editor → results)	F6
 TrustSshHost	Trust SSH Host Key (after checking its fingerprint)	—
 PasswordKey	Password Key… (keep it in the config folder or the system keychain)	—
+KeywordCase	Keyword Case… (UPPER or lower SQL keywords as you type and in Reformat Code; shared with the GUI)	—
 GridAlign	Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI)	—
-Theme	Theme… (Auto follows the terminal background, or Dark / Light)	—
+Theme	Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background)	—
 CheckUpdate	Check for Updates	—
 UpdateChannel	Update Channel… (stable releases only, or beta: also every merge to main)	—
 InstallUpdate	Update Qurry & Restart (download the latest release)	—

@@ -3,8 +3,9 @@
 #   including the per-backend matrix in crates/core/tests/backend_matrix.rs.
 #   SSL·TLS·Sentinel·Cluster·SSH tunnel tests are left out since they need separate servers.
 #   The GUI (src-tauri) needs webkit on Linux, so it's checked by the Release (macOS) build.
-# Web: vitest + tsc/vite build. E2E: Playwright against the mock app (Chromium and WebKit, one job each).
-# Actions pinned to the same commit SHAs as release.yml.
+# Web: vitest + tsc/vite build. E2E: Playwright against the mock app, two shards per browser and one summary check per browser.
+# A docs-only pull request (docs/**, *.md) skips the Rust and e2e jobs; their checks still report (see the changes job).
+# Known vulnerabilities in the dependencies: audit.yml. Actions pinned to the same commit SHAs as release.yml.
 name: CI
 
 on:
@@ -18,12 +19,43 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels the run of its previous push. Runs on main never cancel or wait for each other (one group per run)
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
+  # Whether the pull request changes more than docs: every changed file under docs/ or a .md file (but SECURITY.md, which a Rust test
+  # reads) skips rust, compat and e2e. A skipped job reports as passing, so the required checks (rust, web) don't wait. Pushes to main
+  # and manual runs always run everything
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          # A pull request checks out its merge commit: its first parent is the base, so HEAD^1..HEAD is what the PR changes
+          fetch-depth: 2
+
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # --no-renames: a moved file lists its old path too (SECURITY.md moved into docs/, or code renamed to .md, is a code change)
+          files=$(git diff --name-only --no-renames HEAD^1 HEAD)
+          printf '%s\n' "$files"
+          # An empty list (nothing to compare) counts as code too
+          code=$(printf '%s\n' "$files" | awk '$0 == "SECURITY.md" || ($0 !~ /^docs\// && $0 !~ /\.md$/) { c = 1 } END { print c ? "true" : "false" }')
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          [ "$code" = true ] || echo "::notice::Docs-only change: rust, compat and e2e are skipped"
+
   rust:
+    needs: changes
+    # Runs when the changes job failed too (no answer): only a docs-only answer skips it
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -95,7 +127,7 @@ jobs:
         run: cargo build --locked -p qurry-driver-sqlite -p qurry-driver-duckdb -p qurry-driver-clickhouse -p qurry-driver-mongodb -p qurry-driver-qdrant -p qurry-driver-chroma -p qurry-driver-milvus
 
       - name: Wait for Milvus
-        run: for i in $(seq 1 90); do curl -sf -XPOST localhost:19530/v2/vectordb/collections/list -d '{}' | grep -q '"code":0' && break; sleep 2; done
+        run: for _ in $(seq 1 90); do curl -sf -XPOST localhost:19530/v2/vectordb/collections/list -d '{}' | grep -q '"code":0' && break; sleep 2; done
 
       - name: Unit tests
         run: cargo test --locked -p qurry-core -p qurry-tui -p qurry-mcp -p qurry-shared -p qurry-shared-wasm
@@ -106,6 +138,7 @@ jobs:
           USER: postgres
           QURRY_TEST_PG: localhost:5432:postgres:postgres
           QURRY_TEST_MY: localhost:13306:root:dbtool:shop
+          QURRY_TEST_REDIS: localhost:16379
           QURRY_TEST_CH: localhost:18123:qurry:pw:default
           QURRY_TEST_MONGO: localhost:17017:qurry:pw:qurrytest
           QURRY_TEST_QDRANT: "localhost:16333:::qdrant"
@@ -115,6 +148,8 @@ jobs:
 
   # Older server versions: whether most features work (latest versions are in the rust job above)
   compat:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -166,7 +201,7 @@ jobs:
         run: cargo build --locked -p qurry-driver-clickhouse -p qurry-driver-mongodb -p qurry-driver-mssql
 
       - name: Wait for SQL Server
-        run: for i in $(seq 1 60); do (echo > /dev/tcp/127.0.0.1/11433) 2>/dev/null && break; sleep 2; done; sleep 10
+        run: for _ in $(seq 1 60); do (echo > /dev/tcp/127.0.0.1/11433) 2>/dev/null && break; sleep 2; done; sleep 10
 
       - name: Integration tests on older servers
         env:
@@ -195,22 +230,27 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      # Shared WASM (pnpm wasm runs before test / build / build-storybook): wasm32 target, wasm-bindgen-cli, wasm-opt
-      - uses: ./.github/actions/wasm-toolchain
+      # Shared WASM for test / build / build-storybook (cached; their `pnpm wasm` pre-scripts then have nothing to do)
+      - uses: ./.github/actions/wasm
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
       - run: pnpm build-storybook --quiet
 
-  # GUI end-to-end: Playwright drives the Vite app in mock mode (?mock), one job per browser in parallel
-  e2e:
+  # GUI end-to-end: Playwright drives the Vite app in mock mode (?mock), two shards per browser in parallel (Playwright splits the
+  # spec files); the e2e job below reports one check per browser
+  e2e-shard:
+    name: e2e (${{ matrix.project }} ${{ matrix.shard }}/2)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     strategy:
-      # Let the other browser finish too, so one run shows every failing test
+      # Let the other shards finish too, so one run shows every failing test
       fail-fast: false
       matrix:
         project: [chromium, webkit]
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -225,19 +265,60 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      # Playwright's web server (pnpm dev) builds the shared WASM first (predev: pnpm wasm)
-      - uses: ./.github/actions/wasm-toolchain
+      # Shared WASM for Playwright's web server (pnpm dev): ready before it starts, so a build doesn't count against its start-up timeout
+      - uses: ./.github/actions/wasm
 
       - run: pnpm install --frozen-lockfile
-      # Built here so the first cargo build doesn't count against the web server's start-up timeout (predev then finds it built)
-      - run: pnpm wasm
-      - run: npx playwright install --with-deps ${{ matrix.project }}
+
+      # The browser build is cached per runner image and Playwright version; its system libraries come from apt every time
+      - name: Playwright browser cache key
+        id: pw
+        env:
+          PROJECT: ${{ matrix.project }}
+        run: echo "key=playwright-$ImageOS-$(npx playwright --version | cut -d' ' -f2)-$PROJECT" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.pw.outputs.key }}
+      - if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps ${{ matrix.project }}
+      - if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps ${{ matrix.project }}
+
       # ubuntu-latest has 4 vCPUs: two test workers next to the dev server
-      - run: npx playwright test --project=${{ matrix.project }} --workers=2
+      - run: npx playwright test --project=${{ matrix.project }} --workers=2 --shard=${{ matrix.shard }}/2
 
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: playwright-traces-${{ matrix.project }}
+          name: playwright-traces-${{ matrix.project }}-${{ matrix.shard }}
           path: test-results/
           retention-days: 7
+
+  # One check per browser, named as before the e2e tests were sharded: passes when both shards of that browser passed, or when the
+  # pull request only changes docs. A job's matrix legs share one result, so the shards are looked up by name in this run
+  e2e:
+    name: e2e (${{ matrix.project }})
+    needs: [changes, e2e-shard]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    strategy:
+      matrix:
+        project: [chromium, webkit]
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          CODE: ${{ needs.changes.outputs.code }}
+          PROJECT: ${{ matrix.project }}
+        run: |
+          if [ "$CODE" = false ]; then echo "Docs-only change: e2e skipped"; exit 0; fi
+          shards=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | select(.name | startswith("e2e ('"$PROJECT"' ")) | "\(.name): \(.conclusion)"')
+          printf '%s\n' "$shards"
+          if [ "$(printf '%s\n' "$shards" | grep -c ': success$')" != 2 ]; then
+            echo "::error::A $PROJECT e2e shard did not pass: open its job above for the failing tests (traces: the playwright-traces-$PROJECT-<shard> artifact)"
+            exit 1
+          fi

@@ -1,13 +1,15 @@
 import Editor from "@monaco-editor/react";
 import { useEffect, useRef } from "react";
-import { format as formatSql } from "sql-formatter";
-import { monaco } from "../lib/monaco";
+import { markUnbalanced, monaco, setRunError } from "../lib/monaco";
 import { bindModel, unbindModel } from "../lib/completion";
-import { monacoTheme, useTheme } from "../lib/theme";
+import { MONACO_THEME } from "../lib/theme";
 import { font, fontStack } from "../lib/prefs";
-import { setStatusWidget } from "../lib/statusbar";
+import { caretText, setFocusWidgets } from "../lib/statusbar";
 import { bindings, onKeymapChange } from "../lib/shortcuts";
 import { markHover, shownMark, type MarkStmt, type StmtMark } from "../lib/stmtMark";
+import { shared, sharedReady } from "../lib/shared";
+import { keywordCase } from "../lib/keywordCase";
+import type { DbKind } from "../lib/api";
 
 /** Run request: passes editor content·caret·selection; the console decides what actually runs (DataGrip run rules) */
 export interface RunRequest {
@@ -37,6 +39,9 @@ interface Props {
   database: string;
   initialSql: string;
   language: string;
+  /** The data source's kind: how Reformat Code, the keyword case and the unclosed quote and bracket marks read strings, comments and
+   * quoted names (Redis, MongoDB and vector consoles: none of them runs) */
+  kind: DbKind;
   onChange: (sql: string) => void;
   onRun: (req: RunRequest) => void;
   /** A statement's gutter mark was clicked: its Output line */
@@ -64,16 +69,20 @@ function monacoKey(spec: string): number | null {
 }
 const keysOf = (id: string) => bindings(id).map(monacoKey).filter((n): n is number => n !== null);
 
-export function ConsoleEditor({ tabId, connId, database, initialSql, language, onChange, onRun, onMarkClick, registerApi, readOnly }: Props) {
+/** One character typed (or an auto-closed pair, or a newline with its indent) that can end a keyword: not a letter, digit, _ or $ */
+const TYPED_END = /^(?:[^\p{L}\p{N}_$]|[([{'"`][)\]}'"`]|\r?\n[ \t]*)$/u;
+
+export function ConsoleEditor({ tabId, connId, database, initialSql, language, kind, onChange, onRun, onMarkClick, registerApi, readOnly }: Props) {
   const modelUri = useRef<string | null>(null);
   useEffect(() => {
     if (modelUri.current) bindModel(modelUri.current, connId, database);
   }, [connId, database]);
-  const theme = useTheme();
   const onRunRef = useRef(onRun);
   onRunRef.current = onRun;
   const onMarkRef = useRef(onMarkClick);
   onMarkRef.current = onMarkClick;
+  const kindRef = useRef(kind);
+  kindRef.current = kind;
 
   return (
     <Editor
@@ -82,7 +91,7 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
       // Read-only (DDL): the text follows initialSql, so a reload shows the new text
       value={readOnly ? initialSql : undefined}
       defaultLanguage={language}
-      theme={monacoTheme(theme)}
+      theme={MONACO_THEME}
       onChange={(v) => onChange(v ?? "")}
       options={{
         minimap: { enabled: false },
@@ -107,16 +116,19 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
           modelUri.current = model.uri.toString();
           bindModel(modelUri.current, connId, database);
         }
+        // The status bar's Ln, Col (and the selection's length), shown while focus is in this editor (its find bar too)
+        const owner = ed.getContainerDomNode();
         const caret = () => {
           const pos = ed.getPosition();
           const sel = ed.getSelection();
           const m = ed.getModel();
           if (!pos || !m) return;
           const n = sel && !sel.isEmpty() ? m.getValueInRange(sel).length : 0;
-          setStatusWidget("caret", `${pos.lineNumber}:${pos.column}${n ? ` (${n} chars)` : ""}`);
+          setFocusWidgets(owner, { pos: caretText(pos.lineNumber, pos.column, n) });
         };
+        caret();
         ed.onDidChangeCursorSelection(caret);
-        ed.onDidFocusEditorText(caret);
+        const unbalanced = !readOnly ? markUnbalanced(ed, () => kindRef.current) : undefined;
         const deco = ed.createDecorationsCollection();
         const preview = ed.createDecorationsCollection();
         const highlight = (ranges: { start: number; end: number }[]) => {
@@ -154,6 +166,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
           const m = ed.getModel();
           if (!m) return;
           highlight(ranges);
+          // The next run: the last one's error mark goes
+          setRunError(m, null);
           // Statements of an earlier press that never started (cancelled, or after an error) aren't kept
           drop(marks.filter((x) => !x.m));
           const ids = m.deltaDecorations(
@@ -173,10 +187,35 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
             drop(marks.filter((o) => !run.includes(o)));
             x.m = s;
             drawMarks();
+            // A failed statement: its error in the editor too, where the server points (else over the statement)
+            const r = rangeOf(x);
+            const model = ed.getModel()!;
+            if (s.state === "error" && r) {
+              const start = model.getOffsetAt(r.getStartPosition());
+              const message = `${s.text ?? "Failed"}\n\nFix the statement and run it again (Output keeps the error).`;
+              setRunError(model, { start, end: model.getOffsetAt(r.getEndPosition()), at: s.at === undefined ? undefined : start + s.at, message });
+            }
           };
         };
+        // Keyword case as you type (Settings › Appearance › Keyword case): a space, newline or punctuation typed after a keyword
+        // re-cases it, outside strings, comments and quoted names; in the keystroke's undo step
+        ed.onDidChangeModelContent((e) => {
+          const m = ed.getModel();
+          const c = e.changes[0];
+          if (!m || e.isUndoing || e.isRedoing || e.isFlush || e.changes.length !== 1 || c.rangeLength !== 0 || !TYPED_END.test(c.text)) return;
+          if (keywordCase() === "off" || !sharedReady()) return;
+          // Not while Monaco dispatches the change: right after it, if nothing changed meanwhile
+          const version = m.getVersionId();
+          queueMicrotask(() => {
+            if (ed.getModel() !== m || m.getVersionId() !== version) return;
+            const r = shared().keywordCaseAt(m.getValue(), c.rangeOffset, kindRef.current, keywordCase());
+            if (r) ed.executeEdits("keywordCase", [{ range: monaco.Range.fromPositions(m.getPositionAt(r.start), m.getPositionAt(c.rangeOffset)), text: r.text }]);
+          });
+        });
         ed.onDidChangeModelContent(() => {
           const m = ed.getModel();
+          // An edit clears the run's error mark (a gutter mark stays until its own statement is edited)
+          if (m) setRunError(m, null);
           if (!m || !marks.length) return;
           drop(
             marks.filter((x) => {
@@ -213,18 +252,17 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
           registered.push(ed.addAction({ id: "dbtool.run", label: "Execute", keybindings: keysOf("editor.run"), contextMenuGroupId: "navigation", contextMenuOrder: 0, run: () => run() }));
           registered.push(ed.addAction({ id: "dbtool.explain", label: "Explain Plan", keybindings: keysOf("editor.explain"), contextMenuGroupId: "navigation", contextMenuOrder: 1, run: () => run("plan") }));
           registered.push(ed.addAction({ id: "dbtool.explainAnalyse", label: "Explain Analyse", keybindings: keysOf("editor.explainAnalyze"), contextMenuGroupId: "navigation", contextMenuOrder: 2, run: () => run("analyze") }));
+          // The selection, or the statement at the caret (qurry_shared::format::reformat, as the TUI's ⌥⇧F): one undo step
           act("dbtool.reformat", "Reformat Code", "editor.reformat", () => {
             const m = ed.getModel();
-            if (!m) return;
             const sel = ed.getSelection();
-            const whole = !sel || sel.isEmpty();
-            const range = whole ? m.getFullModelRange() : sel!;
-            try {
-              const out = formatSql(m.getValueInRange(range), { language: language === "mysql" ? "mysql" : "postgresql", keywordCase: "upper", tabWidth: 4 });
-              ed.executeEdits("reformat", [{ range, text: out }]);
-            } catch {
-              /* leave unparsable SQL as is */
-            }
+            if (!m || !sel || !sharedReady()) return;
+            const at = (p: monaco.IPosition) => m.getOffsetAt(p);
+            const r = shared().reformat(m.getValue(), at(sel.getStartPosition()), at(sel.getEndPosition()), at(sel.getPosition()), kindRef.current, keywordCase());
+            if (!r) return;
+            ed.pushUndoStop();
+            ed.executeEdits("reformat", [{ range: monaco.Range.fromPositions(m.getPositionAt(r.start), m.getPositionAt(r.end)), text: r.text }]);
+            ed.pushUndoStop();
           });
           act("dbtool.duplicate", "Duplicate Line or Selection", "editor.duplicate", () => ed.trigger("k", "editor.action.copyLinesDownAction", null));
           act("dbtool.deleteLine", "Delete Line", "editor.deleteLine", () => ed.trigger("k", "editor.action.deleteLines", null));
@@ -245,12 +283,16 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
             ed.executeEdits("case", [{ range: sel, text: t === t.toUpperCase() ? t.toLowerCase() : t.toUpperCase() }]);
           });
           act("dbtool.blockComment", "Comment with Block Comment", "editor.blockComment", () => ed.trigger("k", "editor.action.blockComment", null));
+          // An underlined unknown name: its closest names (lib/completion.ts code actions)
+          act("dbtool.quickFix", "Show Quick Fixes", "editor.quickFix", () => ed.trigger("k", "editor.action.quickFix", null));
         };
         register();
         const offKeymap = onKeymapChange(register);
         // addAction's commands·shortcuts·menus stay in the global registry, so dispose them manually when the editor closes
         ed.onDidDispose(() => {
           offKeymap();
+          unbalanced?.dispose();
+          setFocusWidgets(owner, undefined);
           registered.forEach((d) => d.dispose());
           registered = [];
           if (modelUri.current) unbindModel(modelUri.current);

@@ -62,9 +62,13 @@ async fn saved_keymap_file_loads_the_same() {
     // Keep the old id (keymap.json stores the Action's name) and the old default; change effective.json only for an intended default change
     let old: BTreeMap<String, Vec<String>> = now.iter().filter(|(id, _)| want.contains_key(*id)).map(|(id, k)| (id.clone(), k.clone())).collect();
     assert_eq!(old, want);
-    // Lines added since (commands without a default key, pane keys) start at their defaults: the file has nothing for them
+    // Lines added since (commands without a default key, pane keys) start at their defaults: the file has nothing for them, except
+    // a default key the file gives another command (its Execute keeps ⌥↩, so Quick Fix, ⌥↩ since 0.3.2, goes without it)
+    let quick_fix = Slot::global(Action::QuickFix);
+    assert!(next.keys.shadowed.iter().any(|(s, k, by)| *s == quick_fix && k == "Alt+Enter" && by.id() == "Execute"), "{:?}", next.keys.shadowed.iter().map(|(s, k, _)| (s.id(), k)).collect::<Vec<_>>());
     for (s, keys) in COMMANDS.iter().filter(|(s, _)| !want.contains_key(&s.id())) {
-        assert_eq!(next.keys.slot_keys(*s), *keys, "{}", s.id());
+        let keys: Vec<String> = keys.iter().filter(|k| !next.keys.shadowed.iter().any(|(o, key, _)| o == s && key == *k)).cloned().collect();
+        assert_eq!(next.keys.slot_keys(*s), keys.as_slice(), "{}", s.id());
     }
 }
 

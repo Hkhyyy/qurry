@@ -1,6 +1,6 @@
 //! Data export (CSV · TSV · JSON · SQL INSERT · Markdown, file/clipboard) and import (CSV · TSV · JSON · Excel → table).
 //! Long-running work reports progress through a Job and can be cancelled
-use crate::app::{AppState, ensure_pool};
+use crate::app::{AppState, checked_pool};
 use crate::backend::{Backend, dispatch};
 use crate::db::Pool;
 use crate::error::{AppError, AppResult};
@@ -488,13 +488,15 @@ impl AppState {
     /// Exports the full query result. table = target of SQL INSERT (schema, name). Deletes the partial file on failure · cancel
     pub async fn export(&self, id: String, sql: String, format: Format, dest: Dest, table: Option<(String, String)>, job_id: String) -> AppResult<Exported> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
+        // Its connections and tunnel are in use until it ends (in_use)
+        let _running = self.job_running(&id);
         let r = async {
             if format == Format::Xlsx {
                 return Err(AppError::Msg("Excel is for import only — export as CSV to open it in Excel".into()));
             }
             self.check_read_only(&id, &sql)?;
             let kind = self.kind_of(&id)?;
-            let pool = ensure_pool(self, &id).await?;
+            let pool = checked_pool(self, &id).await?;
             let q = |s: &str| crate::sql::quote_ident(kind, s);
             let table = match table {
                 Some((s, t)) if !s.is_empty() => format!("{}.{}", q(&s), q(&t)),
@@ -519,6 +521,8 @@ impl AppState {
     /// Inserts the file into a table (one transaction: nothing is inserted on failure · cancel). Returns rows inserted
     pub async fn import(&self, id: String, spec: ImportSpec, job_id: String) -> AppResult<u64> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
+        // Its connections and tunnel are in use until it ends (in_use)
+        let _running = self.job_running(&id);
         let r = async {
             let cfg = self.source(&id)?;
             if cfg.read_only {
@@ -527,7 +531,7 @@ impl AppState {
             if spec.columns.is_empty() {
                 return Err(AppError::Msg("Pick at least one column to import".into()));
             }
-            self.import_with(&ensure_pool(self, &id).await?, cfg.kind, &id, &spec, &job).await
+            self.import_with(&checked_pool(self, &id).await?, cfg.kind, &id, &spec, &job).await
         }
         .await;
         self.end_job(&job_id);

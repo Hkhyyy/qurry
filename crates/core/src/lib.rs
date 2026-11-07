@@ -19,6 +19,7 @@ pub mod backup;
 mod backend;
 pub mod db;
 pub mod dba;
+pub mod dsn;
 pub mod ddl;
 pub mod editable;
 pub mod erd;
@@ -29,6 +30,7 @@ pub mod fake;
 pub mod guard;
 pub mod hints;
 pub mod history;
+pub mod import;
 /// Command shortcut table and key notation, shared with the GUI through WASM
 pub use qurry_shared::keymap;
 pub mod meta;
@@ -43,6 +45,7 @@ pub mod secrets;
 pub mod session;
 pub mod sql;
 pub mod ssm;
+pub mod ssh_config;
 #[cfg(test)]
 mod testenv;
 pub mod store;
@@ -54,7 +57,7 @@ pub mod workspaces;
 /// Console autocompletion rules (one copy, also the GUI's through WASM)
 pub use qurry_shared::complete;
 /// Grid and search helpers shared with the GUI through WASM (time fractions, tab labels, extractors, fuzzy scores, key folders, auto-map)
-pub use qurry_shared::{automap, extract, format, fuzzy, keytree, labels};
+pub use qurry_shared::{automap, extract, format, fuzzy, keytree, labels, theme};
 
 /// Same config folder as the Tauri app (shares the Data Source list·encrypted passwords)
 /// macOS: ~/Library/Application Support/com.hyunkyo.dbtool

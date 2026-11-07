@@ -65,7 +65,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⇧⎋` | Hide active tool window (in a grid: its Value Editor panel) |
 | `⇧⌘F12` | Maximize editor (also: double-click a tab) |
 | `⌘,` | Settings (theme, fonts) |
-| `` ⌃` `` | Quick switch theme (Dark / Light / High contrast / Sync with OS) |
+| `` ⌃` `` | Quick switch theme (built-in and custom themes, Sync with OS) |
 | `⌃⇧.` | Editor font size bigger |
 | `⌃⇧,` | Editor font size smaller |
 
@@ -118,6 +118,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌘F2` | Cancel running statement |
 | `⌥⌘e` | Query history |
 | `⌃Space` | Code completion |
+| `⌥↩` | Quick fixes for an underlined unknown name (the closest names) |
 | `⌥⌘l` | Reformat code |
 | `⌘/` | Line comment |
 | `⌥⌘/` | Block comment |
@@ -157,6 +158,9 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌘F2` | Cancel Running Statements |
 | `⌘b` | Go to DDL |
 | `click header · ⌥ click` | Sort · add to multi-column sort |
+| `⌃⌥←` | Narrow Column |
+| `⌃⌥→` | Widen Column |
+| `drag · double-click a header's right edge` | Resize the column · fit it to its content (right-click a header: Fit All Columns, Reset Widths) |
 
 ## Query history & Redis browser
 
@@ -166,6 +170,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌘r` | Redis: scan keys again |
 | `⌘s` | Redis: save the value being edited |
 | `⌃l` | Redis terminal: clear |
+| `⇥ · ↑↓ · ↩` | Redis terminal: complete (commands with arguments, key names) · choose / history · pick / run |
 
 ## Other actions (menus, toolbars, Find Action — give them a key in Settings › Keymap)
 
@@ -239,6 +244,9 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `—` | View Query |
 | `—` | Copy Query to Console |
 | `—` | Copy Query to Clipboard |
+| `—` | Fit Column to its content (the rows loaded so far; also: double-click the header's right edge) |
+| `—` | Fit All Columns |
+| `—` | Reset Widths (back to the computed widths) |
 | `—` | Commit |
 | `—` | Roll Back |
 | `—` | Explain Analyse |

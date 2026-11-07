@@ -74,12 +74,13 @@ impl App {
             self.status = "Nothing to save — write or select a query".into();
             return;
         }
-        let conn = conn.clone();
+        // A temporary source's id is gone after this run: its snippet is usable everywhere
+        let conn = Some(conn.clone()).filter(|c| !self.state.store.is_temporary(c));
         self.input("Snippet name", &one_line(&sql, 40), move |a, name| {
             if name.trim().is_empty() {
                 return;
             }
-            a.status = match a.state.history.save_snippet(Snippet { id: String::new(), name: name.trim().into(), sql: sql.trim().into(), conn_id: Some(conn) }) {
+            a.status = match a.state.history.save_snippet(Snippet { id: String::new(), name: name.trim().into(), sql: sql.trim().into(), conn_id: conn }) {
                 Ok(s) => format!("Snippet \"{}\" saved (⌃k › Snippets…)", s.name),
                 Err(e) => e.to_string(),
             };
@@ -134,6 +135,7 @@ impl App {
         if let Some(Tab { kind: TabKind::Console(c), .. }) = self.tabs.get_mut(self.active) {
             c.editor.insert_str(undo);
             self.focus = crate::app::Focus::Editor;
+            self.update_assist();
         }
         self.status = "Undo SQL opened — check it, then run it".into();
     }
@@ -148,6 +150,7 @@ impl App {
         if let Some(Tab { kind: TabKind::Console(c), .. }) = self.tabs.get_mut(self.active) {
             c.editor.insert_str(sql);
             self.focus = crate::app::Focus::Editor;
+            self.update_assist();
         }
     }
 }

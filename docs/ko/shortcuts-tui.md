@@ -68,9 +68,11 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `⌥⇧Right` | Move Split Divider Right / Down |
 | `⌥[` | Database Explorer Narrower |
 | `⌥]` | Database Explorer Wider |
-| `F5 / ⌃Enter / ⌥Enter` | Execute (asks what to run — see Query Execution Settings) |
+| `F5 / ⌃Enter` | Execute (asks what to run — see Query Execution Settings) |
+| `⌥Enter` | Quick Fixes (an underlined unknown name's closest names; elsewhere Execute) |
 | `⌥e` | Explain Plan |
 | `⌃Space` | Code Completion |
+| `⌥⇧F` | Reformat Code (the selection or the statement at the cursor) |
 | `⌃c` | Cancel Running Statement |
 | `⌥t` | Toggle Transaction Mode (Auto/Manual) |
 | `⌥c` | Commit |
@@ -90,11 +92,17 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 
 | Key | Action |
 |---|---|
+| — | Import Data Sources… (DataGrip, IntelliJ, DBeaver, a Qurry export) |
 | — | Data Source Properties… |
 | — | New Data Source… |
 | — | Refresh |
 | — | Query History… (shared with the GUI) |
 | — | Value Panel (the current cell's whole value, beside the grid) |
+| — | Narrow Column (the current one) |
+| — | Widen Column (the current one) |
+| — | Fit Column to its content (the rows loaded so far) |
+| — | Fit All Columns |
+| — | Reset Column Widths (back to the computed widths) |
 | — | Explain Analyze (runs the statement: real times and row counts) |
 | — | Query Execution Settings (what ⌃Enter runs) |
 | — | Clear Console (delete all text) |
@@ -145,8 +153,9 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | — | Unsplit All |
 | — | Trust SSH Host Key (after checking its fingerprint) |
 | — | Password Key… (keep it in the config folder or the system keychain) |
+| — | Keyword Case… (UPPER or lower SQL keywords as you type and in Reformat Code; shared with the GUI) |
 | — | Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI) |
-| — | Theme… (Auto follows the terminal background, or Dark / Light) |
+| — | Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background) |
 | — | Check for Updates |
 | — | Update Channel… (stable releases only, or beta: also every merge to main) |
 | — | Update Qurry & Restart (download the latest release) |
@@ -172,6 +181,9 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | Key | Action |
 |---|---|
 | `v` | Value Panel (the current cell's whole value, beside the grid) |
+| `<` | Narrow Column (the current one) |
+| `>` | Widen Column (the current one) |
+| `=` | Fit Column to its content (the rows loaded so far) |
 | `⌃z` | Revert Changes |
 | `a / Insert` | Add Row |
 | `d / Delete` | Delete Row |
@@ -186,8 +198,9 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 |---|---|
 | `↑ ↓  (j k)` | Move |
 | `→ / ←  (l h)` | Expand / collapse (← on a child jumps to its parent) |
-| `Enter / double-click` | Expand / collapse (connects) · open table data · open a Redis key · show DDL of routines |
-| `F4 / ⌃↓` | Open a query console for the data source / database (Redis: the key browser) |
+| `Enter / double-click` | Expand / collapse (connects) · open table data · show DDL of routines · Redis database: the source's Redis tab on it |
+| `click (Redis database)` | Switch the source's open Redis tab to that database |
+| `F4 / ⌃↓` | Open a query console for the data source / database (Redis: the source's Redis tab) |
 | `/` | Filter loaded nodes (/ again edits it · empty or Esc clears) |
 | `F5` | Refresh (the run key refreshes in the explorer) |
 | `y  ⌘c` | Copy reference: schema.name, as the GUI's Copy Reference (OSC 52 clipboard; marked nodes: one per line) |
@@ -223,7 +236,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `arrows  (h j k l)` | Move |
 | `PgUp / PgDn · g / G` | Page · first / last row (more rows load automatically) |
 | `Home / End` | First / last column |
-| `⇧↑↓←→ / drag` | Select a range of cells (Esc clears) · scroll sideways: wheel over the header row, ⌥+wheel, or drag the bar on the bottom border |
+| `⇧↑↓←→ / drag` | Select a range of cells (Esc clears) · scroll sideways: wheel over the header row, ⌥+wheel, or click / drag the bar on the bottom border (its heavier part is the columns shown; ◀ cols 3–8 of 14 ▶ at its right end) |
 | `Enter / F2` | Edit cell (table data) |
 | `s` | Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows) |
 | `w or / · o` | Edit WHERE · ORDER BY (table data) |
@@ -258,14 +271,15 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 |---|---|
 | `→ / Enter · ←` | Folder: expand · collapse (← on a key: go to its folder) |
 | `Enter / → / Tab` | Key: go to the value |
-| `/` | Key pattern (SCAN MATCH) |
+| `d` | Show another database (with key counts; one Redis tab per data source) |
+| `/` | Filter keys (SCAN MATCH pattern, e.g. prod:user:*) |
 | `m` | Scan more |
 | `r` | Rescan |
 | `a` | Add key (SET / HSET / RPUSH / SADD / ZADD …) |
 | `D / Delete` | Delete key |
 | `R` | Rename key |
 | `t` | Set TTL (empty = persist) |
-| `:` | Run any command |
+| `:` | Command line: Tab completes commands (with arguments) and key names, ↑↓ history, HELP command; read-only runs reads only, Production asks before writes, FLUSHDB / DEL always ask |
 | `e / Enter (value)` | Edit selected element / string |
 | `a (value)` | Add element |
 | `x / Delete (value)` | Delete element |

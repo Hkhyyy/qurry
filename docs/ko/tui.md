@@ -2,7 +2,38 @@
 
 [English](../tui.md) | 한국어
 
-`qurry-tui` 는 돌고 있는 터미널에 맞춥니다: 색을 몇 개 쓸 수 있는지, 배경이 밝은지, 창이 얼마나 큰지, tmux 나 터미널이 가져가는 키가 무엇인지. 글꼴까지 모두 환경을 따르고, 설정은 터미널이 배경색을 알려 주지 않을 때 고르는 테마 하나뿐입니다.
+`qurry-tui` 는 돌고 있는 터미널에 맞춥니다: 색을 몇 개 쓸 수 있는지, 배경이 밝은지, 창이 얼마나 큰지, tmux 나 터미널이 가져가는 키가 무엇인지. 글꼴까지 모두 환경을 따르고, 설정은 (GUI 와 함께 쓰는) 테마 하나뿐입니다.
+
+## URL 로 접속
+
+온콜 때처럼 Data Source 를 먼저 저장하지 않고, `psql` · `mysql` · `redis-cli` 처럼 바로 접속할 수 있습니다:
+
+```sh
+qurry-tui postgres://app@db.internal:5432/shop
+qurry-tui --read-only mysql://root@127.0.0.1:3306/shop
+qurry-tui redis://cache.internal:6379/2
+qurry-tui rediss://default@cache.example.com:6380/0          # TLS
+qurry-tui --incident postgres://postgres@db.internal/postgres # 바로 Database Admin › Sessions
+qurry-tui --ssh bastion postgres://app@10.0.3.12/shop         # SSH 터널을 거쳐서 (~/.ssh/config 의 Host 도 됨)
+qurry-tui --env                                               # DATABASE_URL 의 URL
+```
+
+URL 은 탐색기 맨 위에 **임시 Data Source** 를 열고 (이름 앞에 **TEMP**, `--read-only` 면 **TEMP · READ-ONLY** 표시), 선택해서 접속합니다. 이 `qurry-tui` 프로세스 안에만 있습니다: `connections.json` 에도 비밀번호 파일에도 쓰지 않고, Qurry 앱 · 다른 `qurry-tui` 창 · MCP 서버는 보지 못하며, 그 탭은 다음에 복원되지 않고, 실행한 문장은 쿼리 히스토리에 남지 않으며 (그 콘솔에서 저장한 스니펫은 모든 Data Source 에서 쓸 수 있습니다), 모든 워크스페이스에 보여서 워크스페이스에 추가 · 이동 · 제거할 수 없고, `qurry-tui` 를 끝내면 사라집니다. 폼으로 저장할 수도 없습니다 (메시지가 알려 줍니다). 계속 쓰려면 같은 설정으로 Data Source 를 추가하세요 (탐색기에서 `n`). 그 밖에는 저장된 Data Source 와 똑같이 동작합니다 (콘솔, 테이블, Database Admin, Read-only 규칙). 저장된 Data Source 들은 그 아래에 평소처럼 있습니다. URL (또는 `--env`) 없이 실행하면 `qurry-tui` 는 전과 똑같이 시작합니다.
+
+URL 에 없는 부분은 `psql` · `mysql` · `redis-cli` 처럼 환경에서 가져옵니다 (URL 이 먼저, 그다음 환경 변수, 그다음 `~/.pgpass`):
+
+| | 가져오는 곳 |
+|---|---|
+| PostgreSQL (`postgres://`, `postgresql://`) | `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD`, `PGSSLMODE`, 그다음 `~/.pgpass` (또는 `PGPASSFILE`). 기본값은 libpq 와 같습니다: `localhost`, `5432`, 내 로그인 이름, 사용자 이름과 같은 데이터베이스. URL 의 `?host=`, `port`, `user`, `dbname`, `sslmode`, `sslrootcert`, `sslcert`, `sslkey` 도 됩니다. `connect_timeout`, `application_name`, `pgbouncer`, `schema` 는 알림과 함께 무시합니다 |
+| MySQL (`mysql://`) | 비밀번호는 `MYSQL_PWD`. 그 밖에는 `localhost`, `3306`, 내 로그인 이름. `?ssl-mode=`, `ssl-ca`, `ssl-cert`, `ssl-key`. `charset`, `connect_timeout` 은 알림과 함께 무시합니다 |
+| Redis (`redis://`, `rediss://`) | 비밀번호는 `REDISCLI_AUTH`. 그 밖에는 `127.0.0.1`, `6379`, 데이터베이스 `0`. 데이터베이스는 경로입니다 (`/2`) |
+
+- **비밀번호.** 명령줄의 URL 이 아니라 환경 변수 (`PGPASSWORD`, `MYSQL_PWD`, `REDISCLI_AUTH`, 또는 `--env` 와 함께 URL 전체를 `DATABASE_URL` 에) 나 `~/.pgpass` 에 두세요. 명령줄은 `qurry-tui` 가 실행되는 동안 이 컴퓨터의 다른 사용자도 `ps` 로 볼 수 있어서, 거기 비밀번호가 있으면 상태 줄이 (화면을 열기 전 터미널에도) 경고합니다. 환경 변수는 그 URL 의 서버에만 씁니다: 저장된 Data Source 는 받지 않습니다 (비밀번호가 저장되지 않은 저장된 PostgreSQL Data Source 는 자기 `~/.pgpass` 줄을 씁니다). `~/.pgpass` 는 `psql` 처럼 다른 사람이 읽을 수 없을 때만 (`chmod 600 ~/.pgpass`) 읽고, 아니면 무시했다는 것과 고치는 법을 상태 줄이 알려 줍니다. 비밀번호는 Data Source 이름, 상태 줄, 오류, 히스토리, Production 로그 어디에도 나오지 않습니다 (`postgres://app:***@…`). 사용자나 비밀번호의 특수 문자는 URL 에서 %-인코딩합니다 (`@` 는 `%40`, `:` 는 `%3A`). IPv6 호스트는 대괄호로 씁니다 (`postgres://app@[::1]/shop`).
+- **TLS** 는 저장된 Data Source 와 같은 규칙입니다. `sslmode=require`, `verify-ca`, `verify-full` (`sslrootcert` 가 있는 `require` 는 libpq 처럼 그것으로 인증서를 확인합니다: `verify-ca`) (MySQL `ssl-mode=REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`) 은 그 모드로 SSL 을 켭니다. 인증서 파일은 절대 그냥 넘어가지 않습니다: 모드 없이 `sslrootcert` (MySQL `ssl-ca`) 를 주면 서버 인증서를 그것으로 확인하고 (`verify-ca`, `mysql --ssl-ca` 처럼. `ssl-ca` 가 있는 MySQL `REQUIRED` 도), `sslcert` / `sslkey` 만 주면 TLS 를 켭니다 (`require`). 그 파일을 쓰지 않는 `disable`, `allow`, `prefer` (MySQL `DISABLED`, `PREFERRED`) 와 함께면 쓸 모드를 알려 주며 URL 을 거부합니다. 모드도 파일도 없으면 (또는 `prefer`) 이 컴퓨터의 서버나 `--ssh` 뒤의 서버는 그대로 접속하고, 원격 PostgreSQL · MySQL 은 여전히 TLS 를 맺어야 합니다: `psql` 의 기본값 `prefer` 처럼 평문으로 물러서지 않습니다. `sslmode=disable` (MySQL `ssl-mode=DISABLED`) 은 이 접속 하나에 대해 직접 고른 "Allow unencrypted connection" 이고, 그때 상태 줄이 `Not encrypted` 라고 알려 줍니다. `rediss://` 는 항상 TLS 를 쓰고 인증서를 확인합니다 (`?sslmode=require` 는 암호화만). TLS 설정이 붙은 `redis://` 는 `rediss://` 를 쓰라는 안내와 함께 거부합니다.
+- **`--read-only`** 는 Read-only Data Source 와 똑같이 데이터를 바꾸는 문장을 거부합니다 (PostgreSQL 은 서버의 세션도 읽기 전용입니다). 상태 표시줄에 `READ-ONLY` 가 보입니다.
+- **`--incident`** 는 그 Data Source 의 Database Admin › Sessions 를 엽니다 (PostgreSQL, MySQL). 3초마다 새로 읽고, `c` 는 쿼리 취소, `K` 는 세션 종료입니다.
+- **`--ssh DEST`** 는 SSH 터널을 거칩니다. `DEST` 는 `[user@]host[:port]` 또는 `~/.ssh/config` 의 `Host` 이고, 그 `HostName`, `User`, `Port`, `IdentityFile`, `IdentityAgent`, `ProxyJump` 가 적용됩니다. ssh-agent 로, 그다음 `IdentityFile` 키 (없으면 `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa`) 로 로그인합니다. URL 의 데이터베이스 호스트는 SSH 서버에서 본 주소입니다. 처음 보는 호스트 키는 저장된 Data Source 처럼 지문을 보여 주며 멈춥니다. 확인한 뒤 `⌃k › Trust SSH Host Key` 를 하고 Data Source 를 다시 펼치세요. `~/.ssh/config` 에서 무엇을 읽는지는 [SSH 터널](data-sources.md#지원하는-데이터베이스) 을 보세요.
+- **잘못 쓰면** 화면을 열기 전에 무엇이 잘못됐는지 알려 주고 종료 코드 2 로 멈춥니다: 모르는 스킴 (`mongodb://` 는 안 됩니다), 모르는 URL 파라미터, URL 없는 `--read-only`, 잘못 쓴 URL 로 보이는 인자 (`postgres:/…`, `user:pw@host`: 비밀번호가 있을 수 있어 되풀이해 보여 주지 않습니다), 잘못 쓴 옵션 (`--readonly` 는 거부하므로 실수로 쓰기 가능한 접속을 열지 않습니다). `qurry-tui --help` 가 쓸 수 있는 형태를 보여 줍니다.
 
 ## 색
 
@@ -22,21 +53,21 @@ TUI 는 시작할 때 아래 환경 변수로 색 모드를 하나 고릅니다 
 
 `ssh` 나 `sudo` 로 (그리고 아래 `tmux` 안에서) 실행하면 보통 `COLORTERM` 이 전달되지 않아 24비트 터미널에서도 256색이나 16색이 됩니다: 접속한 쪽에서 `export COLORTERM=truecolor` 를 하거나, `~/.ssh/config` 의 `SendEnv COLORTERM` 과 서버 `sshd_config` 의 `AcceptEnv COLORTERM` 으로 넘기세요 (sudo 는 `sudo --preserve-env=COLORTERM`).
 
-### 밝은 테마, 어두운 테마
+### 테마
 
-TUI 에는 어두운 팔레트 (어두운 터미널 배경용) 와 밝은 팔레트가 있습니다. **⌃k › Theme…** 에서 고릅니다:
+TUI 는 GUI 의 테마를 그대로 씁니다: 기본 테마 일곱 가지 (Dark, Light, High contrast, Dracula, One Dark, Solarized Dark, Solarized Light) 와 GUI 의 **Settings › Appearance › Theme › Edit Colors…** 에서 만든 사용자 테마 ([설정 › 테마](settings.md#테마)). **⌃k › Theme…** 에서 고르며, 고른 테마는 [설정 폴더](getting-started.md#설정이-저장되는-곳)의 `settings.json` 에 두 앱 공용으로 저장됩니다. 목록을 열 때마다 파일을 다시 읽으므로 GUI 에서 저장한 테마도 바로 나옵니다.
 
-| 테마 | 팔레트 |
+| 테마 | 색 |
 |---|---|
-| **Auto** (기본) | `COLORFGBG` 가 배경이 흰색이라고 하면 (마지막 숫자가 `7` 이나 `15`, 예: `COLORFGBG=0;15`) 밝게, 그 밖에는 (`COLORFGBG` 가 없을 때도) 어둡게 |
-| **Dark** | 항상 어둡게 |
-| **Light** | 항상 밝게 |
+| **Sync with OS** (기본) | GUI 에서 Sync with OS 용으로 고른 어두운 테마 또는 밝은 테마 (바꾸지 않았으면 Dark 와 Light): `COLORFGBG` 가 배경이 흰색이라고 하면 (마지막 숫자가 `7` 이나 `15`, 예: `COLORFGBG=0;15`) 밝은 테마, 그 밖에는 (`COLORFGBG` 가 없을 때도) 어두운 테마 |
+| **Dark**, **Light**, **High contrast** | 터미널 자체의 배경과 글자 색 위에 테마 색. 예전 TUI 의 어두운 · 밝은 팔레트처럼 |
+| **Dracula**, **One Dark**, **Solarized Dark**, **Solarized Light**, 사용자 테마 | 테마 자신의 배경과 글자 색까지 (트루컬러 · 256색) |
 
-밝은 팔레트는 GUI 밝은 테마의 색을 씁니다: Data Source 색은 같은 색조의 아주 옅은 색이 되어 그 위의 아이콘과 흐린 글자도 잘 읽히고 (활성 탭이 더 진합니다. 옅은 색조가 없는 256색 · 16색은 색조가 남도록 더 진한 색을 씁니다), 선택·고친 셀·배지는 서로 구분되고, JSON 셀은 GUI 의 밝은 JSON 색을, 운영은 계속 빨간색을 씁니다. 위의 모든 색 모드에서 동작합니다: 256색은 가장 가까운 팔레트 색으로, 16색은 (밝은 색이 아닌) 보통 터미널 색으로, `NO_COLOR` 는 어두운 테마와 같은 규칙의 흑백 그대로입니다.
+트루컬러에서 **Red** (운영) 나 **Green** 으로 칠한 Data Source 는 GUI 처럼 테마의 운영 · 초록 배경색을 쓰고 (사용자 테마의 색도. 활성 탭은 더 진하게), NULL 은 테마의 NULL 색을, 결과 표의 범위 선택은 선택 색과 배경의 중간 색을 씁니다. 256색 · 16색은 그 팔레트가 보여 줄 수 있는 Data Source 색 자신의 색조를 씁니다. 밝은 테마는 GUI 의 밝은 색을 씁니다: 그 밖의 Data Source 색은 같은 색조의 아주 옅은 색이 되어 그 위의 아이콘과 흐린 글자도 잘 읽히고 (활성 탭이 더 진합니다. 옅은 색조가 없는 256색 · 16색은 색조가 남도록 더 진한 색을 씁니다), 선택·고친 셀·배지는 서로 구분되고, JSON 셀은 테마의 JSON 색을, 운영은 계속 빨간색을 씁니다. 모든 테마가 위의 모든 색 모드에서 동작합니다: 256색은 가장 가까운 팔레트 색으로 (상태 줄이나 머리글이 배경과 같은 색이 되지 않게), 16색은 터미널 자체의 배경을 두고 밝은 테마에서는 (밝은 색이 아닌) 보통 터미널 색으로, `NO_COLOR` 는 어느 테마에서나 같은 규칙의 흑백입니다. 트리의 객체 아이콘과 Redis 키 종류는 TUI 고유의 색을 씁니다.
 
-iTerm2, rxvt, Konsole 같은 터미널은 배경색에 맞춰 `COLORFGBG` 를 설정하지만, 많은 터미널 (kitty, WezTerm, Ghostty, Alacritty) 은 설정하지 않으므로 밝은 배경이라면 직접 **Light** 를 고르세요. 테마는 [설정 폴더](getting-started.md#설정이-저장되는-곳)의 `settings.json` 에 `"tuiTheme"` 으로 저장됩니다 (GUI 테마 설정은 따로입니다).
+iTerm2, rxvt, Konsole 같은 터미널은 배경색에 맞춰 `COLORFGBG` 를 설정하지만, 많은 터미널 (kitty, WezTerm, Ghostty, Alacritty) 은 설정하지 않으므로 밝은 배경이라면 직접 밝은 테마를 고르세요. 0.3.1 까지 TUI 는 고른 테마를 `"tuiTheme"` (Auto, Dark, Light) 으로 저장했습니다: 어느 앱에서든 테마를 고르기 전까지는 그 값을 씁니다 (Auto 는 Sync with OS).
 
-Auto 가 밝은 팔레트를 골랐으면 시작할 때 상태 줄에 `Light palette — ⌃k › Theme… › Dark to undo` 가 나옵니다. 예전 색을 그대로 쓰려면 **⌃k › Theme… › Dark** 를 고르세요. 이 안내가 `16 colors` 안내 대신 나오며, `NO_COLOR` 에서는 팔레트가 달라지는 것이 없으므로 `Colors off` 안내가 나옵니다.
+Sync with OS 가 밝은 테마를 골랐으면 시작할 때 상태 줄에 `Light palette — ⌃k › Theme… › Dark to undo` 가 나옵니다. 어두운 색을 그대로 쓰려면 **⌃k › Theme… › Dark** 를 고르세요. 이 안내가 `16 colors` 안내 대신 나오며, `NO_COLOR` 에서는 테마가 달라지는 것이 없으므로 `Colors off` 안내가 나옵니다.
 
 색과 상관없이 보이는 것:
 
@@ -44,6 +75,7 @@ Auto 가 밝은 팔레트를 골랐으면 시작할 때 상태 줄에 `Light pal
 - **범위 안의 셀 커서**: 반전을 쓰는 모드 (16색, `NO_COLOR`) 에서는 범위가 반전되고, 커서는 그 안에서 반전되지 않은 한 칸입니다 (스프레드시트처럼).
 - **활성 탭**: 굵게. 16색이나 `NO_COLOR` 에서는 포커스가 있는 창의 탭이 반전으로(Data Source 색을 뒤집어 보여 주므로 운영 탭은 계속 빨간색), 창을 나눴을 때 다른 창에 보이는 탭은 밑줄로 보입니다.
 - **콘솔에서 실행한 문장**: 줄 번호 칸, 문장의 첫 줄에 `✓` 성공, `✗` 실패, `…` 실행 중.
+- **실패한 문장의 오류**: 서버가 가리키는 곳에 밑줄 (말해 주지 않으면 문장 전체); 상태 줄에 위치가 나옵니다. 고치거나 다시 실행하면 사라집니다.
 
 `qurry-tui --help` 에도 같은 규칙이 나옵니다.
 

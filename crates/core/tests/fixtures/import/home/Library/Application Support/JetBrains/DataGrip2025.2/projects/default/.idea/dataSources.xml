@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="scratch" uuid="1c2d3e4f-5555-4e6f-8a9b-000000000001">
+      <driver-ref>duckdb</driver-ref>
+      <jdbc-url>jdbc:duckdb:$PROJECT_DIR$/scratch.duckdb</jdbc-url>
+    </data-source>
+  </component>
+</project>

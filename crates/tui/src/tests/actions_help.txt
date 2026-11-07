@@ -3,7 +3,7 @@ Start here
   ⌃p                             Search everything: tables, columns, tabs, actions (not sure? start here)
   ⌃k                             All actions, each with its shortcut
   ⌃l                             New query console for the selected data source
-  F5 / ⌃Enter / ⌥Enter           Run (asks what to run when there are several statements)
+  F5 / ⌃Enter                    Run (asks what to run when there are several statements)
   ⌃e                             Recent tabs
   ⌃w                             Close tab
   Enter (explorer)               Connect · open a table
@@ -36,9 +36,11 @@ Commands (change them with F1)
   ⌥⇧Right                        Move Split Divider Right / Down
   ⌥[                             Database Explorer Narrower
   ⌥]                             Database Explorer Wider
-  F5 / ⌃Enter / ⌥Enter           Execute (asks what to run — see Query Execution Settings)
+  F5 / ⌃Enter                    Execute (asks what to run — see Query Execution Settings)
+  ⌥Enter                         Quick Fixes (an underlined unknown name's closest names; elsewhere Execute)
   ⌥e                             Explain Plan
   ⌃Space                         Code Completion
+  ⌥⇧F                            Reformat Code (the selection or the statement at the cursor)
   ⌃c                             Cancel Running Statement
   ⌥t                             Toggle Transaction Mode (Auto/Manual)
   ⌥c                             Commit
@@ -69,6 +71,9 @@ Database Explorer keys (change them with F1)
 
 Data grid keys (change them with F1)
   v                              Value Panel (the current cell's whole value, beside the grid)
+  <                              Narrow Column (the current one)
+  >                              Widen Column (the current one)
+  =                              Fit Column to its content (the rows loaded so far)
   ⌃z                             Revert Changes
   a / Insert                     Add Row
   d / Delete                     Delete Row
@@ -80,8 +85,9 @@ Data grid keys (change them with F1)
 Database Explorer
   ↑ ↓  (j k)                     Move
   → / ←  (l h)                   Expand / collapse (← on a child jumps to its parent)
-  Enter / double-click           Expand / collapse (connects) · open table data · open a Redis key · show DDL of routines
-  F4 / ⌃↓                        Open a query console for the data source / database (Redis: the key browser)
+  Enter / double-click           Expand / collapse (connects) · open table data · show DDL of routines · Redis database: the source's Redis tab on it
+  click (Redis database)         Switch the source's open Redis tab to that database
+  F4 / ⌃↓                        Open a query console for the data source / database (Redis: the source's Redis tab)
   /                              Filter loaded nodes (/ again edits it · empty or Esc clears)
   F5                             Refresh (the run key refreshes in the explorer)
   y  ⌘c                          Copy reference: schema.name, as the GUI's Copy Reference (OSC 52 clipboard; marked nodes: one per line)
@@ -108,7 +114,7 @@ Data grid (results & table data)
   arrows  (h j k l)              Move
   PgUp / PgDn · g / G            Page · first / last row (more rows load automatically)
   Home / End                     First / last column
-  ⇧↑↓←→ / drag                   Select a range of cells (Esc clears) · scroll sideways: wheel over the header row, ⌥+wheel, or drag the bar on the bottom border
+  ⇧↑↓←→ / drag                   Select a range of cells (Esc clears) · scroll sideways: wheel over the header row, ⌥+wheel, or click / drag the bar on the bottom border (its heavier part is the columns shown; ◀ cols 3–8 of 14 ▶ at its right end)
   Enter / F2                     Edit cell (table data)
   s                              Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows)
   w or / · o                     Edit WHERE · ORDER BY (table data)
@@ -135,14 +141,15 @@ Redis browser (Medis style)
   ↑ ↓                            Select key or folder (keys are grouped by ":")
   → / Enter · ←                  Folder: expand · collapse (← on a key: go to its folder)
   Enter / → / Tab                Key: go to the value
-  /                              Key pattern (SCAN MATCH)
+  d                              Show another database (with key counts; one Redis tab per data source)
+  /                              Filter keys (SCAN MATCH pattern, e.g. prod:user:*)
   m                              Scan more
   r                              Rescan
   a                              Add key (SET / HSET / RPUSH / SADD / ZADD …)
   D / Delete                     Delete key
   R                              Rename key
   t                              Set TTL (empty = persist)
-  :                              Run any command
+  :                              Command line: Tab completes commands (with arguments) and key names, ↑↓ history, HELP command; read-only runs reads only, Production asks before writes, FLUSHDB / DEL always ask
   e / Enter (value)              Edit selected element / string
   a (value)                      Add element
   x / Delete (value)             Delete element

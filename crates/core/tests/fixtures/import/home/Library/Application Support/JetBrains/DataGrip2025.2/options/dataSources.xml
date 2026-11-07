@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<application>
+  <component name="dataSourceStorage" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="orders-prod" read-only="true" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000001">
+      <driver-ref>postgresql</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>org.postgresql.Driver</jdbc-driver>
+      <jdbc-url>jdbc:postgresql://orders-db.internal:5432/orders</jdbc-url>
+      <working-dir>$ProjectFileDir$</working-dir>
+    </data-source>
+    <data-source source="LOCAL" name="analytics" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000002">
+      <driver-ref>mysql.8</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>com.mysql.cj.jdbc.Driver</jdbc-driver>
+      <jdbc-url>jdbc:mysql://10.0.3.21:3306/stats</jdbc-url>
+      <driver-properties>
+        <property name="serverTimezone" value="UTC" />
+      </driver-properties>
+    </data-source>
+    <data-source source="LOCAL" name="events" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000003">
+      <driver-ref>clickhouse</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>com.clickhouse.jdbc.ClickHouseDriver</jdbc-driver>
+      <jdbc-url>jdbc:clickhouse://ch.internal:8123/default</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="local-pg" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000004">
+      <driver-ref>postgresql</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>org.postgresql.Driver</jdbc-driver>
+      <jdbc-url>jdbc:postgresql://localhost:5432/postgres</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="cache" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000005">
+      <driver-ref>redis</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>jdbc.RedisDriver</jdbc-driver>
+      <jdbc-url>jdbc:redis://localhost:6379/0</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="warehouse" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000006">
+      <driver-ref>snowflake</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>net.snowflake.client.jdbc.SnowflakeDriver</jdbc-driver>
+      <jdbc-url>jdbc:snowflake://acme.snowflakecomputing.example/?warehouse=WH</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="billing" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000007">
+      <driver-ref>postgresql</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>org.postgresql.Driver</jdbc-driver>
+      <jdbc-url>jdbc:postgresql://billing-db.internal:5432/billing</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="legacy" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000008">
+      <driver-ref>sqlserver.ms</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>com.microsoft.sqlserver.jdbc.SQLServerDriver</jdbc-driver>
+      <jdbc-url>jdbc:sqlserver://mssql.internal:1433;databaseName=legacy;encrypt=true</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="hr" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000009">
+      <driver-ref>oracle</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>oracle.jdbc.OracleDriver</jdbc-driver>
+      <jdbc-url>jdbc:oracle:thin:@//ora.internal:1521/ORCLPDB1</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="app.db" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000010">
+      <driver-ref>sqlite.xerial</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
+      <jdbc-url>jdbc:sqlite:/var/data/app.db</jdbc-url>
+    </data-source>
+  </component>
+</application>

@@ -121,7 +121,7 @@ fn hint_golden() -> Golden {
         o.insert("hintInsert".into(), complete::hint_items(&h, &hints, Some('\''), false, Options::TUI)[0].insert.clone().into());
         // hint_at decides hintable: a one-table statement whose only column is the hinted one
         let name = c.r#ref.clone().unwrap_or_else(|| "t".into());
-        let m = Meta::new(vec![CompletionTable { schema: "public".into(), name: name.clone(), columns: vec![(c.column.clone(), ty.into())] }]);
+        let m = Meta::new(vec![CompletionTable { schema: "public".into(), name: name.clone(), columns: vec![(c.column.clone(), ty.into())], ..Default::default() }]);
         o.insert("hintable".into(), complete::hint_at(&m, &format!("select * from \"{name}\""), before, "", mysql).is_some().into());
         if c.mode == HintMode::Keys {
             o.insert("pairsForKeys".into(), complete::hint_items(&h, &hints, Some('\''), true, Options::TUI)[0].insert.clone().into());

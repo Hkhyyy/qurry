@@ -74,9 +74,13 @@ pub fn run() {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     let state = handle.state::<app::AppState>();
-                    for id in app::housekeeping(&state).await {
-                        eprintln!("[qurry] auto-disconnect {id}");
-                        let _ = handle.emit("conn-disconnected", id);
+                    for (id, message) in app::housekeeping(&state).await {
+                        eprintln!("[qurry] {message} ({id})");
+                        let _ = handle.emit("conn-disconnected", serde_json::json!({ "id": id, "message": message }));
+                    }
+                    // A Production console's transaction left open (#106)
+                    for (tab_id, message) in state.tx_reminders().await {
+                        let _ = handle.emit("tx-idle", serde_json::json!({ "tabId": tab_id, "message": message }));
                     }
                 }
             });
@@ -138,7 +142,9 @@ pub fn run() {
             commands::pick_data_file,
             commands::import_data,
             commands::save_text_file,
-            commands::pick_import_file,
+            commands::import_locations,
+            commands::import_location,
+            commands::pick_import,
             commands::import_picked,
             commands::tx_state,
             commands::explain_wrap,
@@ -168,13 +174,15 @@ pub fn run() {
             commands::set_tx_mode,
             commands::commit_tx,
             commands::rollback_tx,
-            commands::execute_batch,
+            commands::submit_edits,
             commands::object_index,
             commands::cached_index,
             commands::warm_search_cache,
             commands::full_text_search,
             commands::redis_scan,
             commands::redis_key,
+            commands::redis_overview,
+            commands::redis_key_names,
             commands::redis_exec,
             commands::redis_exec_line,
             commands::load_keymap,
@@ -189,6 +197,18 @@ pub fn run() {
             commands::set_update_channel,
             commands::grid_align,
             commands::set_grid_align,
+            commands::keyword_case,
+            commands::set_keyword_case,
+            commands::theme_settings,
+            commands::set_theme,
+            commands::set_theme_sync,
+            commands::save_custom_theme,
+            commands::delete_custom_theme,
+            commands::import_theme,
+            commands::export_theme,
+            commands::column_widths,
+            commands::set_column_widths,
+            commands::reset_column_widths,
             fonts::font_families,
             fonts::custom_fonts,
             fonts::add_font_file,

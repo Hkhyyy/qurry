@@ -5,13 +5,14 @@ import "../src/ui/tokens.css";
 import "../src/ui/ui.css";
 import { initShared } from "../src/lib/shared";
 import { setFont } from "../src/lib/prefs";
+import { BUILT_IN, previewTheme } from "../src/lib/theme";
 
-// Switch the theme from the top toolbar (same data-theme as the app's Settings › Appearance)
+// Switch the theme from the top toolbar: every built-in theme (the app's Settings › Appearance › Theme draws it the same way)
 const preview: Preview = {
   globalTypes: {
     theme: {
       description: "Theme",
-      toolbar: { title: "Theme", icon: "paintbrush", items: ["dark", "light", "hc"], dynamicTitle: true },
+      toolbar: { title: "Theme", icon: "paintbrush", items: BUILT_IN.map((t) => ({ value: t.id, title: t.name })), dynamicTitle: true },
     },
   },
   initialGlobals: { theme: "dark" },
@@ -24,7 +25,7 @@ const preview: Preview = {
     (Story, ctx) => {
       const theme = ctx.globals.theme as string;
       useEffect(() => {
-        document.documentElement.dataset.theme = theme;
+        previewTheme(BUILT_IN.find((t) => t.id === theme) ?? BUILT_IN[0]);
       }, [theme]);
       return (
         <div style={{ minHeight: "100vh", padding: 16, margin: -16, background: "var(--ui-bg)", color: "var(--ui-text)", fontFamily: "-apple-system, BlinkMacSystemFont, Inter, sans-serif", fontSize: 13 }}>

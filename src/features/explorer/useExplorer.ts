@@ -150,17 +150,20 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     for (const fn of reload.values()) fn?.();
   };
 
-  /** Redis browser tab (Medis style) */
-  const openRedis = (c: ConnectionView, db?: string, key?: string) => {
-    const database = redisDb(db ?? c.database);
-    const target = targetId(c.id, database);
-    const existing = useTabsStore.getState().tabs.find((t) => t.kind === "redis" && t.target === target);
+  /** The data source's Redis tab (one per source, Medis style): opened, or switched to `db` (and `key`). `onlyIfOpen`: a
+   *  click on a database in the explorer switches an open tab and opens none */
+  const openRedis = (c: ConnectionView, db?: string, key?: string, onlyIfOpen = false) => {
+    const existing = useTabsStore.getState().tabs.find((t) => t.kind === "redis" && t.connId === c.id);
+    if (!existing && onlyIfOpen) return;
+    const database = redisDb(db ?? existing?.database ?? c.database);
+    const at = { database, target: targetId(c.id, database), title: `${c.name} [${database}]` };
     if (existing) {
-      if (key) patch(existing.id, { redisKey: key });
+      if (existing.target !== at.target) patch(existing.id, { ...at, redisKey: key });
+      else if (key) patch(existing.id, { redisKey: key });
       return activate(existing);
     }
-    const tab = addTab(c, "redis", { title: `${c.name} [${database}]`, database, group: undefined });
-    patch(tab.id, { target, redisKey: key });
+    const tab = addTab(c, "redis", { title: at.title, database, group: undefined });
+    patch(tab.id, { target: at.target, redisKey: key });
   };
 
   /** DBA report tab (for the same connection target, only switch the report in that tab) */
@@ -210,11 +213,13 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
   };
 
   /** Tree node double-click / F4 */
-  const activateNode = (info: NodeInfo) => {
+  const activateNode = (info: NodeInfo, click = false) => {
     if (info.conn.kind === "redis") {
       if (info.kind === "key") return openRedis(info.conn, info.db, info.name);
-      if (info.kind === "conn" || info.kind === "db") return openRedis(info.conn, info.db);
+      if (info.kind === "conn") return openRedis(info.conn);
+      if (info.kind === "db") return openRedis(info.conn, info.db, undefined, click);
     }
+    if (click) return;
     if (isRelation(info.kind) && info.schema && info.name) openTable(info.conn, info.schema, info.name, info.db, info.kind);
     else if (info.kind === "routine" || info.kind === "sequence") openDdl(info);
   };
@@ -351,7 +356,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     const every = (ok: (i: NodeInfo) => boolean, run: () => void) => (all.every(ok) ? run : undefined);
     const oneDb = all.every((i) => i.conn.id === all[0].conn.id && nodeTarget(i) === nodeTarget(all[0]));
     return {
-      "tree.editData": every((i) => isRelation(i.kind), () => all.forEach(activateNode)),
+      "tree.editData": every((i) => isRelation(i.kind), () => all.forEach((i) => activateNode(i))),
       "tree.ddl": every((i) => !!i.name, () => all.forEach(openDdl)),
       "tree.copyName": () => void navigator.clipboard.writeText(all.map(nodeName).join("\n")),
       "tree.copyRef": () => void navigator.clipboard.writeText(all.map(reference).join("\n")),

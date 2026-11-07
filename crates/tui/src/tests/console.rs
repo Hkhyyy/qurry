@@ -1,6 +1,7 @@
 use crate::app::{Popup, TabKind};
 use crate::testkit::Harness;
 use qurry_core::db::{ColumnInfo, QueryResult};
+use serde_json::Value;
 
 /// Stands in for the database: SELECT returns two rows, "boom" fails, anything else changes 3 rows
 fn fake(q: &str) -> Result<QueryResult, String> {
@@ -23,6 +24,14 @@ fn fake(q: &str) -> Result<QueryResult, String> {
 
 fn console(h: &Harness) -> &crate::app::Console {
     match &h.app.tabs[h.app.active].kind {
+        TabKind::Console(c) => c,
+        _ => panic!("active tab is not a console"),
+    }
+}
+
+fn console_mut(h: &mut Harness) -> &mut crate::app::Console {
+    let i = h.app.active;
+    match &mut h.app.tabs[i].kind {
         TabKind::Console(c) => c,
         _ => panic!("active tab is not a console"),
     }
@@ -300,7 +309,7 @@ async fn completion_popup_lists_and_inserts() {
     let mut h = Harness::new().await;
     let sql = "select u. from users u";
     h.console_with(sql, 0, 9);
-    let t = |n: &str, cols: &[&str]| CompletionTable { schema: "public".into(), name: n.into(), columns: cols.iter().map(|c| (c.to_string(), "text".to_string())).collect() };
+    let t = |n: &str, cols: &[&str]| CompletionTable { schema: "public".into(), name: n.into(), columns: cols.iter().map(|c| (c.to_string(), "text".to_string())).collect(), ..Default::default() };
     let target = h.app.tabs[h.app.active].target.clone();
     h.app.completion.insert(target, std::sync::Arc::new(qurry_core::complete::Meta::new(vec![t("users", &["id", "user_name", "email"]), t("orders", &["id", "total"])])));
     h.key("Ctrl+Space");
@@ -368,6 +377,9 @@ async fn output_shows_the_last_wrapped_line() {
 fn users(q: &str) -> Result<QueryResult, String> {
     use qurry_core::editable::{EditTarget, Editable};
     let col = |n: &str| ColumnInfo { name: n.into(), type_name: "text".into() };
+    if q.contains("voc") {
+        return voc_join(q);
+    }
     let editable = if q.contains("join") {
         Some(Editable::ReadOnly("Read-only: the columns come from more than one table.".into()))
     } else if q.contains("users") {
@@ -376,6 +388,20 @@ fn users(q: &str) -> Result<QueryResult, String> {
         None
     };
     Ok(QueryResult { columns: vec![col("id"), col("name")], rows: vec![vec!["1".into(), "kim".into()], vec!["2".into(), "lee".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable })
+}
+
+/// #102's join, as the backend reports it: voc (idx, status) left join users (idx, role, and a computed column); voc 2 has no user
+fn voc_join(_: &str) -> Result<QueryResult, String> {
+    use qurry_core::editable::{ColumnEdit, Editable, JoinEdit, JoinTable};
+    let col = |n: &str| ColumnInfo { name: n.into(), type_name: "text".into() };
+    let jt = |s: &str, t: &str, at: usize| JoinTable { schema: s.into(), table: t.into(), pk: vec!["idx".into()], pk_at: vec![at] };
+    let to = |t: usize, c: &str| ColumnEdit::To { table: t, column: c.into() };
+    let j = JoinEdit {
+        tables: vec![jt("crm", "voc", 0), jt("public", "users", 2)],
+        columns: vec![to(0, "idx"), to(0, "status"), to(1, "idx"), to(1, "role"), ColumnEdit::ReadOnly { read_only: qurry_shared::errors::edit_computed("shout") }],
+    };
+    let rows = vec![vec!["1".into(), "open".into(), "10".into(), "member".into(), "MEMBER".into()], vec!["2".into(), "new".into(), Value::Null, Value::Null, Value::Null]];
+    Ok(QueryResult { columns: ["idx", "status", "idx", "role", "shout"].map(col).to_vec(), rows, rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: Some(Editable::Join(j)) })
 }
 
 /// A Production console whose result is shown, with the grid focused
@@ -400,10 +426,12 @@ async fn prod_console(sql: &str) -> Harness {
 }
 
 /// A console result from one table with its key edits as a table tab does: ↩ edits a cell, Submit builds the SQL with the table's
-/// column names (the result has an alias) and asks first on Production
+/// column names (the result has an alias) and asks first on Production. Production consoles start in Manual (#106): the edits
+/// run in its transaction, and the question says they stay pending
 #[tokio::test]
 async fn console_result_edits_and_submits_like_a_table() {
     let mut h = prod_console("select id, user_name as name from users").await;
+    assert!(console(&h).tx_manual, "Production starts in Manual");
     assert!(console(&h).grid.is_some(), "{}", h.app.status);
     h.key("Down");
     h.key("Right");
@@ -418,11 +446,91 @@ async fn console_result_edits_and_submits_like_a_table() {
     assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
     h.key("Ctrl+S");
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
-    assert_eq!(text, "Production data source \"PROD\" — save 2 change(s)?\n\n  UPDATE public.users SET user_name = 'LEE' WHERE id = '2'\n  INSERT INTO public.users DEFAULT VALUES");
+    let sql = "\n\n  UPDATE public.users SET user_name = 'LEE' WHERE id = '2'\n  INSERT INTO public.users DEFAULT VALUES";
+    assert_eq!(text, &format!("Production data source \"PROD\" — run 2 change(s) in this console's transaction? They stay pending until you Commit or Roll back.{sql}"));
+    // In Auto mode (the option off, or Tx: Auto) they are saved at once
+    h.app.popup = None;
+    if let TabKind::Console(c) = &mut h.app.tabs[h.app.active].kind {
+        c.tx_manual = false;
+    }
+    h.key("Ctrl+S");
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
+    assert_eq!(text, &format!("Production data source \"PROD\" — save 2 change(s)?{sql}"));
+}
+
+/// A join result (#102) edits per table: each cell by its table's key, the outer side where no row matched and a computed column
+/// read-only with the reason, no rows added or deleted; Submit builds one UPDATE per row and table
+#[tokio::test]
+async fn console_join_result_edits_per_table() {
+    use qurry_shared::errors as e;
+    let mut h = prod_console("select vo.idx, vo.status, pu.idx, pu.role, upper(pu.role) as shout from crm.voc vo left join users pu on pu.idx = vo.user_idx").await;
+    let edit = |h: &mut Harness, row: usize, col: usize, v: &str| {
+        let g = console_mut(h).grid.as_mut().unwrap();
+        (g.row, g.col) = (row, col);
+        h.key("Enter");
+        if h.app.popup.is_some() {
+            h.type_str(v);
+            h.key("Enter");
+        }
+    };
+    edit(&mut h, 0, 1, "-done");
+    edit(&mut h, 0, 3, "-x");
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    // users' side of voc 2: no row matched
+    edit(&mut h, 1, 3, "x");
+    assert_eq!(h.app.status, e::edit_no_row("public.users"));
+    edit(&mut h, 0, 4, "x");
+    assert_eq!(h.app.status, e::edit_computed("shout"));
+    h.key("a");
+    assert_eq!(h.app.status, e::EDIT_JOIN_ROWS);
+    h.key("d");
+    assert_eq!(h.app.status, e::EDIT_JOIN_ROWS);
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    // A paste reaching a read-only cell writes nothing
+    let g = console_mut(&mut h).grid.as_mut().unwrap();
+    (g.row, g.col) = (0, 3);
+    h.app.paste_grid("a\tb");
+    assert_eq!(h.app.status, e::edit_computed("shout"));
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    h.key("Ctrl+S");
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
+    assert!(text.ends_with("\n\n  UPDATE crm.voc SET status = 'open-done' WHERE idx = '1'\n  UPDATE public.users SET role = 'member-x' WHERE idx = '10'"), "{text}");
+}
+
+/// A new console of a Production data source starts in Manual and says so once, with where to turn it off (#106); with the
+/// option off it starts in the source's Transaction control mode
+#[tokio::test]
+async fn production_console_starts_in_manual_and_says_so_once() {
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+    }))
+    .unwrap();
+    cfg.options.confirm_changes = true;
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    let told = |h: &Harness| console(h).output.iter().any(|(_, l)| l == qurry_shared::errors::PRODUCTION_MANUAL);
+    h.app.open_console("p", None);
+    assert!(console(&h).tx_manual && told(&h));
+    assert_eq!(h.app.status, qurry_shared::errors::PRODUCTION_MANUAL);
+    h.app.open_console("p", None);
+    assert!(console(&h).tx_manual && !told(&h), "once");
+    cfg.options.production_manual = Some(false);
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.open_console("p", None);
+    assert!(!console(&h).tx_manual);
+    // The reminder about a transaction left open goes into that console and the status line
+    let session = console(&h).session.clone();
+    h.app.tx_reminded(vec![(session, "open for 5 min".into())]);
+    assert_eq!(console(&h).output.last().map(|l| l.1.as_str()), Some("open for 5 min"));
+    assert_eq!(h.app.status, "open for 5 min");
 }
 
 /// Edit keys on a console result that can't be edited say why in the status line: the backend's reason, the generic text when it
-/// didn't check, the transaction rule in Manual mode
+/// didn't check. In Manual mode it can be edited (Submit runs in the transaction)
 #[tokio::test]
 async fn console_result_read_only_says_why() {
     let mut h = prod_console("select u.id, u.name from users u join orders o on o.uid = u.id").await;
@@ -437,8 +545,7 @@ async fn console_result_read_only_says_why() {
         c.tx_manual = true;
     }
     h.key("a");
-    assert_eq!(h.app.status, qurry_shared::errors::CONSOLE_IN_TX);
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 0);
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 1);
 }
 
 /// Running again with pending edits asks first: no keeps them, yes drops them and runs
@@ -458,4 +565,246 @@ async fn console_rerun_with_pending_edits_asks_first() {
     h.settle().await;
     assert!(h.console_output().len() > before, "it ran");
     assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 0);
+}
+
+/// Metadata with a foreign key (orders.user_id → users.id) and a user function, for the console's target
+fn assist_meta(h: &mut Harness) {
+    use qurry_core::complete::{ForeignKey, Routine};
+    use qurry_core::meta::CompletionTable;
+    let t = |n: &str, cols: &[&str]| CompletionTable { schema: "public".into(), name: n.into(), columns: cols.iter().map(|c| (c.to_string(), "text".to_string())).collect(), ..Default::default() };
+    let mut orders = t("orders", &["id", "user_id", "status"]);
+    orders.fks = vec![ForeignKey { columns: vec!["user_id".into()], ref_schema: "public".into(), ref_table: "users".into(), ref_columns: vec!["id".into()] }];
+    let f = CompletionTable { schema: "public".into(), name: "order_total".into(), routine: Some(Routine { args: "order_id bigint, with_tax boolean".into(), returns: "numeric".into() }), ..Default::default() };
+    let target = h.app.tabs[h.app.active].target.clone();
+    h.app.completion.insert(target, std::sync::Arc::new(qurry_core::complete::Meta::new(vec![t("users", &["id", "user_name", "email"]), orders, f])));
+}
+
+fn items(h: &Harness) -> Vec<String> {
+    console(h).complete.as_ref().map(|c| c.items.iter().map(|i| i.label.clone()).collect()).unwrap_or_default()
+}
+
+/// After `join <table>`, ⌃Space offers the whole ON condition from the foreign key; after `join`, the related table comes first
+#[tokio::test]
+async fn completion_offers_fk_join_conditions() {
+    let mut h = Harness::new().await;
+    h.console_with("select * from orders o join users u ", 0, 36);
+    assist_meta(&mut h);
+    h.key("Ctrl+Space");
+    assert_eq!(items(&h), ["on o.user_id = u.id"]);
+    let s = h.screen(120, 30);
+    assert!(s.contains("⋈ on o.user_id = u.id") && s.contains("fk orders → users"), "{s}");
+    h.key("Enter");
+    assert_eq!(h.console_text(), "select * from orders o join users u on o.user_id = u.id");
+    h.console_with("select * from orders o join ", 0, 28);
+    assist_meta(&mut h);
+    h.key("Ctrl+Space");
+    assert_eq!(items(&h)[0], "users", "the table with a foreign key to orders first");
+}
+
+/// Templates at a statement start: `sel` writes `select * from ` with the caret at its end; `upd` selects its first placeholder,
+/// so typing replaces it. Statement keywords come first at a statement start, not the previous statement's columns
+#[tokio::test]
+async fn templates_expand_and_select_their_placeholder() {
+    let mut h = Harness::new().await;
+    h.console_with("select * from orders", 0, 20);
+    assist_meta(&mut h);
+    h.key("Enter");
+    h.type_str("se");
+    assert_eq!(items(&h), ["select", "set", "sel"], "statement keywords first, no columns of orders");
+    h.key("Down");
+    h.key("Down");
+    h.key("Enter");
+    assert_eq!(h.console_text(), "select * from orders\nselect * from ");
+    assert_eq!(console(&h).editor.cursor(), (1, 14));
+    h.console_with("", 0, 0);
+    assist_meta(&mut h);
+    h.type_str("upd");
+    assert_eq!(items(&h), ["update", "upd"]);
+    h.key("Down");
+    h.key("Enter");
+    h.type_str("users");
+    assert_eq!(h.console_text(), "update users set column = value where condition");
+}
+
+/// ⌃Space right after `*` lists the column list it stands for; picking it writes the columns
+#[tokio::test]
+async fn star_expands_into_columns_on_request() {
+    let mut h = Harness::new().await;
+    h.console_with("select * from users", 0, 8);
+    assist_meta(&mut h);
+    h.key("Ctrl+Space");
+    assert_eq!(items(&h), ["expand *"]);
+    h.key("Enter");
+    assert_eq!(h.console_text(), "select id, user_name, email from users");
+}
+
+/// Inside a call's parentheses the hint line above the caret shows its signature, the current parameter highlighted
+#[tokio::test]
+async fn hint_line_shows_the_signature_inside_a_call() {
+    let mut h = Harness::new().await;
+    h.console_with("\nselect order_total(", 1, 19);
+    assist_meta(&mut h);
+    h.app.focus = crate::app::Focus::Editor;
+    h.type_str("1, ");
+    let sig = console(&h).assist.sig.clone().expect("a signature");
+    assert_eq!(sig.active, 1);
+    let buf = h.buffer(120, 30);
+    let row = |y: u16| (0..120).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    let y = (0..30).find(|&y| row(y).contains("order_total(order_id bigint, with_tax boolean) → numeric")).expect("hint line");
+    let x = row(y).find("with_tax").map(|b| row(y)[..b].chars().count() as u16).unwrap();
+    assert_eq!(buf[(x, y)].fg, crate::kit::ACCENT, "the parameter at the caret is highlighted");
+    h.type_str("true)");
+    assert!(console(&h).assist.sig.is_none(), "past the closing parenthesis");
+}
+
+/// An unknown column is underlined; ⌥↩ on it lists the closest names and picking one replaces it. ⌥↩ anywhere else still runs
+#[tokio::test]
+async fn unknown_names_are_underlined_and_alt_enter_fixes_them() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(fake);
+    h.console_with("select nme from users", 0, 21);
+    assist_meta(&mut h);
+    h.app.focus = crate::app::Focus::Editor;
+    h.key("Left");
+    assert_eq!(console(&h).assist.names.iter().map(|m| (m.row, m.from, m.to, m.fixes.clone())).collect::<Vec<_>>(), [(0, 7, 10, vec!["user_name".to_string()])]);
+    let buf = h.buffer(120, 30);
+    let row = |y: u16| (0..120).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    let y = (0..30).find(|&y| row(y).contains("select nme from users")).unwrap();
+    let x = row(y).find("nme").map(|b| row(y)[..b].chars().count() as u16).unwrap();
+    let under = |x: u16| buf[(x, y)].modifier.contains(ratatui::style::Modifier::UNDERLINED);
+    assert!(under(x) && under(x + 2) && !under(x + 3) && !under(x - 1));
+    // The caret on it: the hint line says why and how to fix it
+    h.console_with("select nme from users", 0, 9);
+    assist_meta(&mut h);
+    h.key("Right");
+    let s = h.screen(120, 30);
+    assert!(s.contains("Unknown column \"nme\" · ⌥Enter user_name"), "{s}");
+    h.key("Alt+Enter");
+    assert_eq!(items(&h), ["user_name"]);
+    h.key("Enter");
+    assert_eq!(h.console_text(), "select user_name from users");
+    assert!(console(&h).assist.names.is_empty());
+    h.key("Alt+Enter");
+    h.settle().await;
+    assert!(h.console_output().iter().any(|l| l.ends_with("> select user_name from users")), "{:?}", h.console_output());
+}
+
+/// A paste is marked at once, and ⌥↩ reads the marks of the text as it is now: SQL that moved the name without a key (inserted
+/// by a command) still gets its name fixed, not the text at its old place
+#[tokio::test]
+async fn pasted_and_moved_names_are_marked_where_they_are() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(fake);
+    h.console_with("", 0, 0);
+    assist_meta(&mut h);
+    h.app.focus = crate::app::Focus::Editor;
+    h.paste("select nme from users");
+    assert_eq!(console(&h).assist.names.iter().map(|m| (m.row, m.from, m.to)).collect::<Vec<_>>(), [(0, 7, 10)]);
+    if let TabKind::Console(c) = &mut h.app.tabs[h.app.active].kind {
+        c.editor.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+        c.editor.insert_str("\n");
+        c.editor.move_cursor(tui_textarea::CursorMove::Jump(1, 9));
+    }
+    h.key("Alt+Enter");
+    assert_eq!(items(&h), ["user_name"]);
+    h.key("Enter");
+    assert_eq!(h.console_text(), "\nselect user_name from users");
+    // Valid SQL the metadata has no names for (FETCH, a named window): no mark, so ⌥↩ at it runs the statement
+    h.console_with("select id from users fetch next 5 rows only", 0, 27);
+    assist_meta(&mut h);
+    h.key("Right");
+    assert!(console(&h).assist.names.is_empty(), "{:?}", console(&h).assist.names);
+    h.key("Alt+Enter");
+    h.settle().await;
+    assert!(h.console_output().iter().any(|l| l.ends_with("> select id from users fetch next 5 rows only")), "{:?}", h.console_output());
+}
+
+/// No marks for what the metadata can't tell: a CTE, an alias, a function, another database's table, or before the metadata loads
+#[tokio::test]
+async fn no_marks_when_unsure() {
+    let mut h = Harness::new().await;
+    h.console_with("with r as (select id k from users) select r.k, lower(x.anything), n from r, otherdb.t x, (select 1 n) s", 0, 0);
+    h.key("Right");
+    assert!(console(&h).assist.names.is_empty(), "no metadata yet");
+    assist_meta(&mut h);
+    h.key("Right");
+    assert!(console(&h).assist.names.is_empty(), "{:?}", console(&h).assist.names);
+}
+
+/// The text of each editor row drawn on the selection background (the Execute chooser's highlight)
+fn highlighted(h: &mut Harness) -> Vec<String> {
+    let buf = h.buffer(140, 24);
+    let ed = h.app.hits.editor;
+    (ed.top()..ed.bottom()).map(|y| (ed.left()..ed.right()).filter(|&x| buf[(x, y)].bg == crate::ui::SEL).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).filter(|s| !s.trim().is_empty()).collect()
+}
+
+/// Inside a subquery F5 offers it after the whole statement, innermost first (DataGrip); the editor highlights exactly its text,
+/// and picking it runs only that text
+#[tokio::test]
+async fn execute_chooser_offers_the_subqueries_around_the_caret() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(fake);
+    let sql = "select 1;\nselect * from orders where user_id in (select id from users where n > (select avg(n) from users));";
+    h.console_with(sql, 1, 75);
+    h.key("F5");
+    let Some(Popup::Palette(p)) = &h.app.popup else { panic!("no chooser") };
+    let labels: Vec<_> = p.items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(labels[1..], ["select avg(n) from users", "select id from users where n > (select avg(n) from users)", "All statements (2)"]);
+    assert!(highlighted(&mut h)[0].contains("from orders where user_id in (select id"), "{:?}", highlighted(&mut h));
+    h.key("Down");
+    assert_eq!(highlighted(&mut h), ["select avg(n) from users"]);
+    h.key("Down");
+    assert_eq!(highlighted(&mut h), ["select id from users where n > (select avg(n) from users)"]);
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(h.console_output(), ["> select id from users where n > (select avg(n) from users)", "2 row(s) retrieved in 7 ms"]);
+}
+
+/// A subquery picked in the chooser goes through the same checks as any run: on a Production source a write in it asks first
+/// with its counted rows, on a read-only one the server-side check refuses it (the fake refuses what core's check_read_only does)
+#[tokio::test]
+async fn a_picked_subquery_goes_through_the_guards() {
+    let sql = "select 1;\nselect * from (with d as (delete from payment where id = 4 returning id) select id from d) x;";
+    let pick = |h: &mut Harness| {
+        let TabKind::Console(c) = &mut h.app.tabs[h.app.active].kind else { panic!() };
+        c.editor.move_cursor(tui_textarea::CursorMove::Jump(1, 85));
+        h.key("F5");
+        let Some(Popup::Palette(p)) = &h.app.popup else { panic!("no chooser: {}", h.app.status) };
+        assert_eq!(p.items[1].label, "with d as (delete from payment where id = 4 returning id) select id from d");
+        h.key("Down");
+        h.key("Enter");
+    };
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+    }))
+    .unwrap();
+    cfg.options.confirm_changes = true;
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.fake_db = Some(fake);
+    let id = h.app.restore_console("p", "d".into(), "console".into(), sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    pick(&mut h);
+    h.settle().await;
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    assert!(text.starts_with("Production data source \"PROD\" — this changes data:\n\n  with d as (delete from payment where id = 4 returning id) select"), "{text}");
+    assert!(h.console_output().is_empty(), "nothing runs before the answer");
+    h.key("Esc");
+
+    fn read_only(q: &str) -> Result<QueryResult, String> {
+        match qurry_core::guard::read_only_violation(q, qurry_core::store::DbKind::Postgres, false) {
+            Some(why) => Err(why),
+            None => fake(q),
+        }
+    }
+    h.app.fake_db = Some(read_only);
+    h.console_with(sql, 0, 0);
+    pick(&mut h);
+    h.settle().await;
+    let out = h.console_output();
+    assert_eq!(out[0], "> with d as (delete from payment where id = 4 returning id) select id from d");
+    assert!(out[1].contains("Read-only"), "{out:?}");
 }

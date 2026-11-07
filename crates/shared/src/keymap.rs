@@ -394,6 +394,7 @@ mod tests {
             ("tab.prev", "PrevTab"),
             ("split.other", "OtherSplit"),
             ("editor.run", "Execute"),
+            ("editor.quickFix", "QuickFix"),
             ("editor.cancel", "Cancel"),
             ("editor.history", "QueryHistory"),
             ("ws.new", "WsNew"),
@@ -403,6 +404,7 @@ mod tests {
             ("split.down", "SplitDown"),
             ("unsplit", "Unsplit"),
             ("editor.explain", "Explain"),
+            ("editor.reformat", "Reformat"),
             ("editor.explainAnalyze", "ExplainAnalyze"),
             ("tx.commit", "Commit"),
             ("tx.rollback", "Rollback"),
@@ -413,6 +415,7 @@ mod tests {
             ("tree.backup", "BackupDb"),
             ("tree.restore", "RestoreDb"),
             ("tree.import", "ImportData"),
+            ("ds.import", "ImportDataSources"),
             ("tree.genTestData", "GenerateTestData"),
             ("tree.newTable", "NewTable"),
             ("tree.newView", "NewView"),
@@ -432,6 +435,11 @@ mod tests {
             ("grid.copyInList", "CopyInList"),
             ("grid.valueEditor", "ValueEditor"),
             ("grid.submit", "Submit"),
+            ("grid.colNarrow", "ColumnNarrower"),
+            ("grid.colWiden", "ColumnWider"),
+            ("grid.colFit", "ColumnFit"),
+            ("grid.colFitAll", "ColumnFitAll"),
+            ("grid.colReset", "ColumnReset"),
         ];
         for (gui, tui) in pairs {
             assert_eq!(tui_command(tui).and_then(|c| c.gui.as_deref()), Some(gui), "{tui} should share a row with {gui}");

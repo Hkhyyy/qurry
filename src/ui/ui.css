@@ -150,6 +150,7 @@
 .ui-tab { padding: var(--ui-sp-2) var(--ui-sp-1) var(--ui-sp-3); font: inherit; color: var(--ui-text-muted); background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; cursor: pointer; }
 .ui-tab:hover { color: var(--ui-text); background: none; }
 .ui-tab.active { color: var(--ui-text); border-bottom-color: var(--ui-accent); }
+.ui-tab.disabled, .ui-tab.disabled:hover { color: var(--ui-text-muted); opacity: 0.45; cursor: default; }
 
 /* ── Notice / EmptyState ── */
 .ui-notice { padding: var(--ui-sp-3) var(--ui-sp-4); border-radius: var(--ui-radius-md); font-size: var(--ui-fs-sm); line-height: 1.5; background: var(--ui-surface-2); border: 1px solid var(--ui-border); white-space: pre-wrap; }
@@ -222,7 +223,8 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-detail-text { flex: 1; min-width: 0; font-family: var(--ui-font-mono); font-size: var(--ui-fs-sm); white-space: pre-wrap; word-break: break-word; }
 .ui-detail-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--ui-sp-1); }
 .ui-detail-note { font-size: var(--ui-fs-sm); color: var(--ui-text-muted); }
-.ui-detail-value { flex: none; font-size: var(--ui-fs-sm); color: var(--ui-text-muted); }
+.ui-detail-lead { flex: none; width: 16px; align-self: flex-start; display: flex; justify-content: center; }
+.ui-detail-value { flex: none; max-width: 45%; text-align: right; font-size: var(--ui-fs-sm); color: var(--ui-text-muted); }
 .ui-detail-value.tone-danger { color: var(--ui-danger); font-weight: 600; }
 .ui-detail-value.tone-warn { color: var(--ui-warn); font-weight: 600; }
 .ui-menu-item { position: relative; display: flex; align-items: center; gap: var(--ui-sp-6); min-height: 24px; padding: 0 var(--ui-sp-3); border-radius: var(--ui-radius-sm); white-space: nowrap; cursor: default; }

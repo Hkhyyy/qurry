@@ -1,7 +1,7 @@
-import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { ConnectionView, meta, targetId } from "../../lib/api";
 import type { FtsRequest } from "../../lib/api";
-import { setThemePref } from "../../lib/theme";
+import { allThemes, getThemeSettings, setThemePick, SYSTEM } from "../../lib/theme";
 import { saveSnippet } from "../../components/HistoryDialog";
 import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "../../components/FullTextSearch";
 import { isRelation, NodeInfo, revealInTree } from "../../components/SchemaTree";
@@ -40,7 +40,7 @@ type Deps = {
 
 /** Switcher (⌃⇥), Recent Files (⌘e), Search Everywhere (⇧⇧) with Go to … and Find Action, Full-text Search and its Find tool window */
 export function useSearch({
-  conns, setStatus, treeSel, active, labelOf, setMaximized, setExplorerHidden, toggleExplorer, bumpFont, openConsole, activate, newWs, renameWs, deleteWs, switchWs, exportConns, importConns, cancelRun, canCancel, txEnd, setTxMode, reopen, reopenClosed, splitClone, unsplit, refreshAll, activateNode, openDdl, showQuickDoc, openTableTab,
+  conns, setStatus, treeSel, active, labelOf, setMaximized, setExplorerHidden, toggleExplorer, bumpFont, openConsole, activate, newWs, renameWs, deleteWs, switchWs, exportConns, importConns, importFrom, importLocs, loadImportLocs, cancelRun, canCancel, txEnd, setTxMode, reopen, reopenClosed, splitClone, unsplit, refreshAll, activateNode, openDdl, showQuickDoc, openTableTab,
 }: Deps) {
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
@@ -69,6 +69,10 @@ export function useSearch({
 
   // ───────── Search Everywhere (⇧⇧) / Go to Database Object (⌘o) / Find Action (⇧⌘A) ─────────
   const [se, setSe] = useState<SeTab | null>(null);
+  // Find Action lists the Import Data Sources locations: look for them again when it opens
+  useEffect(() => {
+    if (se) loadImportLocs();
+  }, [se]);
 
   const [findOpen, setFindOpen] = useState(false);
   const [findRuns, setFindRuns] = useState<FindRun[]>([]);
@@ -126,6 +130,7 @@ export function useSearch({
         items.push({ key: r.key, icon: kindIcon(r), title: r.title, hint: hintOf(r.connId, r.database), open: openKeys.has(r.key) });
     return items;
   };
+  const pickTheme = (id: string) => setThemePick(id).catch((e) => setStatus(String(e)));
   /** Find Action's list. An item with a command id (cmd) is what that command's key runs too, for global commands (useGlobalShortcuts) */
   const seActions = (): ActionItem[] => {
     const t = active;
@@ -139,14 +144,16 @@ export function useSearch({
       ...workspaces.map((w, i) => ({ name: `Workspace: ${w.name}`, ...(i < 9 ? cmd(`ws.${i + 1}`) : {}), group: "Window", run: () => switchWs(w.id), disabled: w.id === curWs })),
       { name: "Data Source Properties", ...cmd("tree.properties"), group: "File", run: () => c && setDialog({ edit: c }), disabled: !c },
       { name: "Export Data Sources…", ...cmd("ds.export"), group: "File", run: () => exportConns() },
-      { name: "Import Data Sources…", ...cmd("ds.import"), group: "File", run: () => importConns() },
+      { name: "Import Data Sources: File…", ...cmd("ds.import"), group: "File", run: () => importConns() },
+      { name: "Import Data Sources: Folder…", group: "File", run: () => importFrom({ folder: true }) },
+      ...importLocs.map((l) => ({ name: `Import Data Sources: ${l.label} (${l.count})`, group: "File", run: () => importFrom({ path: l.path }) })),
       { name: "Settings…", ...cmd("settings"), group: "File", run: () => setSettingsOpen("appearance") },
       { name: "Keymap Reference", ...cmd("keymap"), group: "Help", run: () => setKeymapOpen(true) },
       { name: "Edit Keymap…", ...cmd("keymap.edit"), group: "Help", run: () => setSettingsOpen("keymap") },
-      { name: "Theme: Dark", ...cmd("theme.dark"), group: "Appearance", run: () => setThemePref("dark") },
-      { name: "Theme: Light", ...cmd("theme.light"), group: "Appearance", run: () => setThemePref("light") },
-      { name: "Theme: High contrast", ...cmd("theme.hc"), group: "Appearance", run: () => setThemePref("hc") },
-      { name: "Theme: Sync with OS", ...cmd("theme.system"), group: "Appearance", run: () => setThemePref("system") },
+      // Every built-in and custom theme; Dark, Light and High contrast have a command a key can be bound to
+      ...allThemes(getThemeSettings()).map((th) => ({ name: `Theme: ${th.name}`, ...({ dark: cmd("theme.dark"), light: cmd("theme.light"), hc: cmd("theme.hc") } as Record<string, object>)[th.id], group: "Appearance", run: () => pickTheme(th.id) })),
+      { name: "Theme: Sync with OS", ...cmd("theme.system"), group: "Appearance", run: () => pickTheme(SYSTEM) },
+      { name: "Edit Theme Colors…", group: "Appearance", run: () => setSettingsOpen("theme") },
       { name: "Quick Switch Theme…", ...cmd("theme"), group: "Appearance", run: () => setSchemeOpen(true) },
       { name: "Execute", ...cmd("editor.run"), group: "Run", run: () => t && editorApis.get(t.id)?.run(), disabled: t?.kind !== "console" },
       { name: "Explain Plan", ...cmd("editor.explain"), group: "Run", run: () => t && editorApis.get(t.id)?.run("plan"), disabled: t?.kind !== "console" },

@@ -141,13 +141,14 @@ pub(super) fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
         KeyCode::Enter | KeyCode::Right | KeyCode::Tab => r.focus_value = true,
         KeyCode::Char('/') => {
             let p = r.pattern.clone();
-            app.input("Key pattern (SCAN MATCH)", &p, move |a, s| {
+            app.input("Filter keys (pattern, e.g. prod:user:*; empty = all)", &p, move |a, s| {
                 if let Some(TabKind::Redis(r)) = a.tab_mut(id).map(|t| &mut t.kind) {
-                    r.pattern = if s.trim().is_empty() { "*".into() } else { s };
+                    r.pattern = s.trim().to_string();
                 }
                 a.redis_scan(id, true);
             });
         }
+        KeyCode::Char('d') => app.redis_pick_db(id),
         KeyCode::Char('m') => app.redis_scan(id, false),
         KeyCode::Char('r') => app.redis_scan(id, true),
         KeyCode::Char('D') | KeyCode::Delete => {
@@ -196,24 +197,7 @@ pub(super) fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
                 });
             });
         }
-        KeyCode::Char(':') => {
-            app.input("redis>", "", move |a, line| {
-                let run = move |a: &mut App, line: String| {
-                    let st = a.state.clone();
-                    let target = a.tab_mut(id).map(|t| t.target.clone()).unwrap_or_default();
-                    let shown = line.clone();
-                    a.spawn(async move { st.redis_exec_line(target, line).await.map_err(|e| e.to_string()) }, move |a, r| match r {
-                        Ok(v) => a.notice(shown, crate::ui::format_reply(&v)),
-                        Err(e) => a.notice(shown, format!("(error) {e}")),
-                    });
-                };
-                // Destructive commands like FLUSHALL·FLUSHDB·DEL ask once more
-                match qurry_core::guard::unsafe_statement(&line, qurry_core::store::DbKind::Redis) {
-                    Some(why) => a.popup = Some(Popup::Confirm { opened: None, text: format!("{why}:\n  {line}\nRun it anyway?"), on_yes: Box::new(move |a| run(a, line)) }),
-                    None => run(a, line),
-                }
-            });
-        }
+        KeyCode::Char(':') => app.redis_prompt(id),
         KeyCode::Esc => app.focus = Focus::Tree,
         _ => {}
     }
@@ -256,10 +240,12 @@ mod tests {
         assert_eq!(sel(&h), 1);
         h.key("Left");
         assert_eq!(rows(&h), ["▾ dev 2", "  ▸ sessions 2", "▸ prod 1", "token"]);
-        // Folders and counts on screen too (counts at the right edge, like the GUI)
+        // On screen: a folder's count beside its name (like "tables 68"), the right column only has key TTLs (— without expiry)
         let s = h.screen(120, 20);
         let line = s.lines().find(|l| l.contains("▸ ▤ sessions")).unwrap_or_else(|| panic!("{s}"));
-        assert!(line.trim_end_matches(['┃', '│', ' ']).ends_with('2') && s.contains("token"), "{s}");
+        assert!(line.contains("▸ ▤ sessions 2 "), "{s}");
+        let token = s.lines().find(|l| l.contains("token")).unwrap_or_else(|| panic!("{s}"));
+        assert!(token.trim_end_matches(['┃', '│', ' ']).ends_with('—'), "{s}");
     }
 
     /// Redis: the key list and value side have different status-line hints (D·t·R·: don't work on the value side)
@@ -267,17 +253,251 @@ mod tests {
     async fn redis_status_bar_follows_side() {
         use crate::app::{RedisTab, TabKind};
         let mut h = Harness::new().await;
-        let r = RedisTab { pattern: "*".into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, open: Default::default(), detail: None, text: None, value: None, focus_value: false, scanning: false, want: None };
-        h.app.push_tab("test", "db0".into(), "redis".into(), TabKind::Redis(r));
+        h.app.push_tab("test", "db0".into(), "redis".into(), TabKind::Redis(RedisTab::new("", None)));
         h.app.focus = crate::app::Focus::Grid;
         let last = |h: &mut Harness| h.screen(220, 20).lines().last().unwrap().to_string();
         let s = last(&mut h);
-        assert!(s.contains("D del key") && s.contains("/ pattern"), "{s}");
+        assert!(s.contains("D del key") && s.contains("/ filter") && s.contains("d database"), "{s}");
         if let Some(TabKind::Redis(r)) = h.app.tabs.last_mut().map(|t| &mut t.kind) {
             r.focus_value = true;
         }
         let s = last(&mut h);
         assert!(s.contains("e edit") && s.contains("x delete") && s.contains("Esc keys"), "{s}");
         assert!(!s.contains("D del key"), "{s}");
+    }
+
+    /// A Redis data source saved in the harness (nothing connects until something runs)
+    async fn redis_source(h: &mut Harness, id: &str, read_only: bool, production: bool) {
+        let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": id, "name": id, "kind": "redis", "host": "127.0.0.1", "port": 1, "user": "", "database": "0", "readOnly": read_only, "options": { "confirmChanges": production } })).unwrap();
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+    }
+    fn input_line(h: &Harness) -> String {
+        match &h.app.popup {
+            Some(Popup::Input { input, .. }) => input.lines().join(""),
+            _ => panic!("no input"),
+        }
+    }
+
+    /// `:` completes commands with their arguments from the shared command table (⇥ picks), shows the arguments still to type,
+    /// and ↑↓ walk this data source's history, newest first, with passwords masked
+    #[tokio::test]
+    async fn command_line_completes_and_walks_history() {
+        let mut h = Harness::new().await;
+        for l in ["GET a", "AUTH s3cret"] {
+            h.app.state.history.add("test", Some("db0"), l).unwrap();
+        }
+        h.app.state.history.add("other", None, "GET elsewhere").unwrap();
+        h.redis_tab(&["user:1"]);
+        h.app.focus = crate::app::Focus::Grid;
+        h.key(":");
+        h.type_str("HG");
+        let Some(Popup::Input { complete: Some(c), .. }) = &h.app.popup else { panic!("a list") };
+        assert_eq!(c.items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["HGET", "HGETALL"]);
+        assert!(c.items[0].detail.starts_with("key field — Returns the value of a field in a hash"));
+        let s = h.screen(120, 30);
+        assert!(s.contains("db0>") && s.contains("HGETALL") && s.contains("↑↓ history"), "{s}");
+        h.key("Tab");
+        assert_eq!(input_line(&h), "HGET ");
+        let s = h.screen(120, 30);
+        assert!(s.lines().any(|l| l.contains("HGET key field")), "the arguments still to type, after the text\n{s}");
+        h.key("Up");
+        assert_eq!(input_line(&h), "AUTH ***");
+        h.key("Up");
+        assert_eq!(input_line(&h), "GET a");
+        h.key("Up");
+        assert_eq!(input_line(&h), "GET a", "only this source's history");
+        h.key("Down");
+        h.key("Down");
+        assert_eq!(input_line(&h), "");
+    }
+
+    /// Key names: ↩ runs a line whose key is typed out (`GET user:1` with `user:10` there too) instead of picking the longer key;
+    /// after ↑↓ ↩ picks; ⇥ picks; a key with a space goes in quoted, as one argument
+    #[tokio::test]
+    async fn command_line_key_names_dont_replace_a_typed_key() {
+        let mut h = Harness::new().await;
+        redis_source(&mut h, "plain", false, false).await;
+        h.app.push_tab("plain", "db0".into(), "plain [db0]".into(), TabKind::Redis(crate::app::RedisTab::new("", None)));
+        // The names a bounded SCAN would read for the prefix
+        let scanned = |h: &mut Harness, prefix: &str, names: &[&str]| {
+            if let Some(Popup::Input { input, redis: Some(p), complete, .. }) = &mut h.app.popup {
+                p.keys = Some((prefix.into(), names.iter().map(|s| s.to_string()).collect()));
+                *complete = App::redis_complete(input, p).0;
+            }
+        };
+        let labels = |h: &Harness| match &h.app.popup {
+            Some(Popup::Input { complete: Some(c), .. }) => c.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>(),
+            _ => vec![],
+        };
+        let open = |h: &mut Harness, line: &str| {
+            h.app.popup = None;
+            h.app.focus = crate::app::Focus::Grid;
+            h.key(":");
+            h.type_str(line);
+        };
+        open(&mut h, "GET user:1");
+        scanned(&mut h, "user:1", &["user:10", "user:1"]);
+        assert_eq!(labels(&h), ["user:1", "user:10"], "the typed key first");
+        h.key("Enter");
+        assert!(!matches!(h.app.popup, Some(Popup::Input { .. })), "↩ ran the line");
+        assert_eq!(h.app.state.history.list(Some("plain"), "", 10)[0].sql, "GET user:1");
+        // ↓ to the longer one, then ↩ picks it
+        open(&mut h, "GET user:1");
+        scanned(&mut h, "user:1", &["user:10", "user:1"]);
+        h.key("Down");
+        h.key("Enter");
+        assert_eq!(input_line(&h), "GET user:10 ");
+        // ⇥ picks; a key with a space stays one argument
+        open(&mut h, "DEL us");
+        scanned(&mut h, "us", &["user 1"]);
+        h.key("Tab");
+        assert_eq!(input_line(&h), r#"DEL "user 1" "#);
+    }
+
+    /// The command line follows the console's rules: HELP answers from the table, a read-only source refuses a write without
+    /// sending it, Production asks before a write, FLUSHDB / DEL always ask. Each line lands in this source's history
+    #[tokio::test]
+    async fn command_line_follows_the_console_rules() {
+        let mut h = Harness::new().await;
+        let run = |h: &mut Harness, line: &str| {
+            h.app.focus = crate::app::Focus::Grid;
+            h.key(":");
+            h.type_str(line);
+            h.key("Enter");
+        };
+        let text = |h: &Harness| match &h.app.popup {
+            Some(Popup::Message { title, text }) => format!("{title}: {text}"),
+            Some(Popup::Confirm { text, .. }) => format!("confirm: {text}"),
+            _ => String::new(),
+        };
+        redis_source(&mut h, "ro", true, false).await;
+        h.app.push_tab("ro", "db0".into(), "ro [db0]".into(), TabKind::Redis(crate::app::RedisTab::new("", None)));
+        run(&mut h, "help hget");
+        assert_eq!(text(&h), "help hget: HGET key field — Returns the value of a field in a hash. (read)");
+        h.app.popup = None;
+        run(&mut h, "SET greeting hi");
+        assert!(text(&h).contains("is read-only: SET changes data"), "{}", text(&h));
+        h.app.popup = None;
+        run(&mut h, "FLUSHDB");
+        assert!(text(&h).contains("is read-only: FLUSHDB changes data"), "read-only refuses before asking: {}", text(&h));
+        h.app.popup = None;
+        assert_eq!(h.app.state.history.list(Some("ro"), "", 10).iter().map(|i| i.sql.as_str()).collect::<Vec<_>>(), ["FLUSHDB", "SET greeting hi", "help hget"]);
+
+        redis_source(&mut h, "prod", false, true).await;
+        h.app.push_tab("prod", "db0".into(), "prod [db0]".into(), TabKind::Redis(crate::app::RedisTab::new("", None)));
+        run(&mut h, "SET greeting hi");
+        assert_eq!(text(&h), "confirm: Production: prod — this command changes data:\n  SET greeting hi\nRun it?");
+        h.key("n");
+        assert!(h.app.state.history.list(Some("prod"), "", 10).is_empty(), "a cancelled line isn't kept");
+        run(&mut h, "DEL tags");
+        assert_eq!(text(&h), "confirm: Production: prod — DEL deletes or replaces data:\n  DEL tags\nRun it anyway?");
+        h.key("n");
+
+        redis_source(&mut h, "plain", false, false).await;
+        h.app.push_tab("plain", "db0".into(), "plain [db0]".into(), TabKind::Redis(crate::app::RedisTab::new("", None)));
+        run(&mut h, "FLUSHDB");
+        assert_eq!(text(&h), "confirm: FLUSHDB deletes or replaces data:\n  FLUSHDB\nRun it anyway?");
+        h.key("n");
+        run(&mut h, "SET greeting hi");
+        assert!(!text(&h).starts_with("confirm"), "off Production a write runs without asking");
+    }
+
+    /// One Redis tab per source: a workspace saved before 0.3.2 with a tab per database restores one, on the database saved last
+    #[tokio::test]
+    async fn old_per_database_redis_tabs_restore_as_one() {
+        let mut h = Harness::new().await;
+        redis_source(&mut h, "rd", false, false).await;
+        let a = h.app.restore_redis("rd", "db0".into(), "rd [db0]".into(), "*");
+        let b = h.app.restore_redis("rd", "db3".into(), "rd [db3]".into(), "user:*");
+        assert_eq!(a, b);
+        let t: Vec<_> = h.app.tabs.iter().map(|t| (t.title.as_str(), t.db.as_str(), t.target.as_str())).collect();
+        assert_eq!(t, [("rd [db3]", "db3", "rd::db3")]);
+        let pattern = |h: &Harness| match &h.app.tabs[0].kind {
+            TabKind::Redis(r) => r.pattern.clone(),
+            _ => panic!(),
+        };
+        assert_eq!(pattern(&h), "user:*");
+        // The "*" saved for every key before 0.3.2 is no filter now (the title and / don't show one)
+        h.app.restore_redis("rd", "db0".into(), "rd [db0]".into(), "*");
+        assert_eq!(pattern(&h), "");
+    }
+
+    /// On a real server (QURRY_TEST_REDIS, own db12 and redis-browser:tui:* keys): the explorer lists the source's databases with
+    /// key counts and no keys; Enter on one opens the source's tab, a click on another switches it, d picks one from the list;
+    /// / filters the keys; `:` completes key names from a bounded SCAN and shows a hash as a field / value table
+    #[tokio::test]
+    #[ignore]
+    async fn redis_explorer_and_tab_on_a_real_server() {
+        let addr = std::env::var("QURRY_TEST_REDIS").unwrap_or_else(|_| "127.0.0.1:16379".into());
+        let (host, port) = addr.rsplit_once(':').unwrap();
+        let mut h = Harness::new().await;
+        let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "rb", "name": "rb", "kind": "redis", "host": host, "port": port.parse::<u16>().unwrap(), "user": "", "database": "12" })).unwrap();
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        let st = h.app.state.clone();
+        for l in ["SET redis-browser:tui:a:1 x", "SET redis-browser:tui:b y", "HSET redis-browser:tui:h name kim tier gold"] {
+            st.redis_exec_line("rb::db12".into(), l.into()).await.unwrap();
+        }
+        // The explorer: databases with key counts, leaves
+        let conn = h.app.tree.visible().into_iter().map(|(_, n)| n.clone()).find(|n| n.conn == "rb").unwrap();
+        h.app.toggle_node(&conn);
+        h.settle().await;
+        let dbs: Vec<_> = h.app.tree.visible().into_iter().map(|(_, n)| n.clone()).filter(|n| n.conn == "rb" && n.kind == crate::tree::NodeKind::Db).collect();
+        let db12 = dbs.iter().find(|n| n.label == "db12").expect("db12 listed");
+        assert!(db12.hint.parse::<i64>().unwrap() >= 3 && dbs.iter().all(|n| !n.expandable), "{dbs:?}");
+        assert!(h.app.tree.visible().iter().all(|(_, n)| !matches!(&n.kind, crate::tree::NodeKind::Object(k) if k == "key")), "no keys in the tree");
+        h.app.activate_node(db12, false);
+        h.settle().await;
+        let tab = |h: &Harness| h.app.tabs.iter().filter(|t| matches!(t.kind, TabKind::Redis(_))).map(|t| (t.db.clone(), t.target.clone())).collect::<Vec<_>>();
+        assert_eq!(tab(&h), [("db12".to_string(), "rb::db12".to_string())]);
+        let s = h.screen(140, 30);
+        assert!(s.contains("db12 · 3 keys") && s.contains("▸ ▤ redis-browser 3"), "{s}");
+        // A click on db0 switches the open tab (still one), d picks db12 back from the list. A db12 key still loading when it
+        // switches doesn't land in the db0 tab (its value edits would write into db0)
+        let id = h.app.tabs[h.app.active].id;
+        h.app.redis_load_key(id, "redis-browser:tui:h".into());
+        h.app.redis_db_clicked("rb", "db0".into());
+        h.settle().await;
+        assert_eq!(tab(&h), [("db0".to_string(), "rb::db0".to_string())]);
+        let TabKind::Redis(r) = &h.app.tabs[h.app.active].kind else { panic!() };
+        assert!(r.detail.as_ref().is_none_or(|d| d.0 != "redis-browser:tui:h"), "db12's key in the db0 tab");
+        h.app.focus = crate::app::Focus::Grid;
+        h.key("d");
+        h.settle().await;
+        let Some(Popup::Palette(p)) = &h.app.popup else { panic!("the database list") };
+        let i = p.items.iter().position(|it| it.label.starts_with("db12 · ")).expect("db12 with its key count");
+        if let Some(Popup::Palette(p)) = &mut h.app.popup {
+            p.sel = i;
+        }
+        h.key("Enter");
+        h.settle().await;
+        assert_eq!(tab(&h), [("db12".to_string(), "rb::db12".to_string())]);
+        // / filters the keys (SCAN MATCH)
+        h.key("/");
+        h.type_str("redis-browser:tui:a*");
+        h.key("Enter");
+        h.settle().await;
+        let keys = |h: &Harness| match &h.app.tabs[h.app.active].kind {
+            TabKind::Redis(r) => r.keys.iter().map(|k| k.key.clone()).collect::<Vec<_>>(),
+            _ => panic!(),
+        };
+        assert_eq!(keys(&h), ["redis-browser:tui:a:1"]);
+        // : completes key names from a bounded SCAN
+        h.key(":");
+        h.type_str("HGETALL redis-browser:tui:");
+        h.settle().await;
+        let Some(Popup::Input { complete: Some(c), .. }) = &h.app.popup else { panic!("key names") };
+        assert_eq!(c.items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["redis-browser:tui:a:1", "redis-browser:tui:b", "redis-browser:tui:h"]);
+        h.key("Down");
+        h.key("Down");
+        h.key("Enter");
+        h.key("Enter");
+        h.settle().await;
+        let Some(Popup::Message { text, .. }) = &h.app.popup else { panic!("the reply") };
+        assert_eq!(text, "field  value\nname   kim\ntier   gold");
+        st.redis_exec_line("rb::db12".into(), "DEL redis-browser:tui:a:1 redis-browser:tui:b redis-browser:tui:h".into()).await.unwrap();
     }
 }

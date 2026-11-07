@@ -76,7 +76,7 @@ fn field(text: &str) -> TextArea<'static> {
 }
 
 /// Byte offset in the text → (line, column)
-fn pos_of(text: &str, byte: usize) -> (u16, u16) {
+pub(crate) fn pos_of(text: &str, byte: usize) -> (u16, u16) {
     let before = &text[..byte];
     let row = before.matches('\n').count();
     let start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);

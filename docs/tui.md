@@ -2,7 +2,38 @@
 
 English | [한국어](ko/tui.md)
 
-`qurry-tui` adapts to the terminal it runs in: how many colors it has, whether its background is light, how big the window is, and what tmux or the terminal keeps for itself. It all follows the environment, down to the font; the only setting is the theme, for when the terminal doesn't say its background.
+`qurry-tui` adapts to the terminal it runs in: how many colors it has, whether its background is light, how big the window is, and what tmux or the terminal keeps for itself. It all follows the environment, down to the font; the only setting is the theme (shared with the GUI).
+
+## Connect from a URL
+
+For on-call work, `qurry-tui` connects the way `psql`, `mysql` and `redis-cli` do, without saving a data source first:
+
+```sh
+qurry-tui postgres://app@db.internal:5432/shop
+qurry-tui --read-only mysql://root@127.0.0.1:3306/shop
+qurry-tui redis://cache.internal:6379/2
+qurry-tui rediss://default@cache.example.com:6380/0          # TLS
+qurry-tui --incident postgres://postgres@db.internal/postgres # straight into Database Admin › Sessions
+qurry-tui --ssh bastion postgres://app@10.0.3.12/shop         # through an SSH tunnel (a ~/.ssh/config Host works)
+qurry-tui --env                                               # the URL in DATABASE_URL
+```
+
+The URL opens a **temporary data source** at the top of the explorer (marked **TEMP** before its name, **TEMP · READ-ONLY** with `--read-only`), selects it and connects. It lives only in this `qurry-tui` process: it isn't written to `connections.json` or the password file, the Qurry app, other `qurry-tui` windows and the MCP server never see it, its tabs aren't restored next time, its statements aren't kept in the query history (a snippet saved from its console is usable with every data source), every workspace shows it (it can't be added to, moved to or removed from one), and it is gone when `qurry-tui` exits. Its form can't save it (the message says so); to keep it, add a data source with the same settings (`n` in the explorer). Everything else works as with a saved data source (consoles, tables, Database Admin, the Read-only rules). Your saved data sources are in the explorer below it as usual. Without a URL (or `--env`), `qurry-tui` starts as it always did.
+
+What the URL leaves out comes from the environment, as `psql`, `mysql` and `redis-cli` read it (the URL wins, then the environment, then `~/.pgpass`):
+
+| | Taken from |
+|---|---|
+| PostgreSQL (`postgres://`, `postgresql://`) | `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD`, `PGSSLMODE`, then `~/.pgpass` (or `PGPASSFILE`). Defaults as in libpq: `localhost`, `5432`, your login name, a database named after the user. `?host=`, `port`, `user`, `dbname`, `sslmode`, `sslrootcert`, `sslcert`, `sslkey` in the URL work too; `connect_timeout`, `application_name`, `pgbouncer` and `schema` are ignored with a note |
+| MySQL (`mysql://`) | `MYSQL_PWD` for the password; `localhost`, `3306` and your login name otherwise. `?ssl-mode=`, `ssl-ca`, `ssl-cert`, `ssl-key`; `charset` and `connect_timeout` are ignored with a note |
+| Redis (`redis://`, `rediss://`) | `REDISCLI_AUTH` for the password; `127.0.0.1`, `6379`, database `0` otherwise. The database is the path (`/2`) |
+
+- **Passwords.** Put them in the environment (`PGPASSWORD`, `MYSQL_PWD`, `REDISCLI_AUTH`, or the whole URL in `DATABASE_URL` with `--env`) or `~/.pgpass`, not in a URL on the command line: other users of this computer can see a command line with `ps` for as long as `qurry-tui` runs, so a password there makes the status line (and the terminal, before the screen opens) warn. The environment variables go only to the URL's server: saved data sources never get them (a saved PostgreSQL source without a saved password uses its own `~/.pgpass` line). `~/.pgpass` is read only when no one else can read it (`chmod 600 ~/.pgpass`), as `psql` does; otherwise the status line says it was ignored and how to fix it. A password never appears in the data source's name, the status line, errors, history or the Production log (`postgres://app:***@…`). A special character in a user or password is %-encoded in the URL (`@` is `%40`, `:` is `%3A`); an IPv6 host goes in brackets (`postgres://app@[::1]/shop`).
+- **TLS** follows the same rules as a saved data source. `sslmode=require`, `verify-ca`, `verify-full` (`require` with `sslrootcert` checks the certificate against it, as libpq does: `verify-ca`) (MySQL `ssl-mode=REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`) turn SSL on with that mode. Certificate files are never skipped: `sslrootcert` (MySQL `ssl-ca`) without a mode checks the server's certificate against it (`verify-ca`, as `mysql --ssl-ca` does; MySQL `REQUIRED` with `ssl-ca` too), and `sslcert` / `sslkey` alone turn TLS on (`require`); with `disable`, `allow` or `prefer` (MySQL `DISABLED`, `PREFERRED`), which wouldn't use them, the URL is refused with the mode to use. Without a mode or files (or with `prefer`), a server on this computer or behind `--ssh` connects as it is, and a remote PostgreSQL or MySQL must still set up TLS: Qurry doesn't fall back to plain text the way `psql`'s default `prefer` does. `sslmode=disable` (MySQL `ssl-mode=DISABLED`) is your explicit "Allow unencrypted connection" for this one connection; the status line then says `Not encrypted`. `rediss://` always uses TLS and verifies the certificate (`?sslmode=require` only encrypts); `redis://` with TLS settings is refused with a pointer to `rediss://`.
+- **`--read-only`** refuses statements that change data exactly as a Read-only data source does (PostgreSQL sessions are read-only on the server too). The status bar shows `READ-ONLY`.
+- **`--incident`** opens Database Admin › Sessions on the data source (PostgreSQL, MySQL), reloading every 3 seconds: `c` cancels a query, `K` ends a session.
+- **`--ssh DEST`** goes through an SSH tunnel: `DEST` is `[user@]host[:port]` or a `Host` from `~/.ssh/config`, whose `HostName`, `User`, `Port`, `IdentityFile`, `IdentityAgent` and `ProxyJump` apply. It logs in with ssh-agent, then the `IdentityFile` keys (or `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa`); the database host in the URL is as seen from the SSH server. An unknown host key stops with its fingerprint, as for a saved data source: check it, then `⌃k › Trust SSH Host Key` and expand the data source again. See [SSH tunnel](data-sources.md#supported-databases) for what is read from `~/.ssh/config`.
+- **Mistakes** stop before the screen opens, with exit code 2 and what is wrong: an unknown scheme (`mongodb://` isn't one of them), an unknown URL parameter, `--read-only` without a URL, something that looks like a mistyped URL (`postgres:/…`, `user:pw@host`: not echoed, it may hold a password), or a misspelled option (`--readonly` is refused, so it never opens a writable connection by mistake). `qurry-tui --help` lists the forms.
 
 ## Colors
 
@@ -22,21 +53,21 @@ When colors are off or limited to 16, the status line says so at startup, with w
 
 Over `ssh` or `sudo` (and in `tmux`, below) `COLORTERM` usually doesn't arrive, so a 24-bit terminal gets the 256 or 16 colors: `export COLORTERM=truecolor` on the other side, or pass it along with `SendEnv COLORTERM` in `~/.ssh/config` and `AcceptEnv COLORTERM` in the server's `sshd_config` (`sudo --preserve-env=COLORTERM` for sudo).
 
-### Light or dark
+### Themes
 
-The TUI has a dark palette (made for a dark terminal background) and a light one. Pick it with **⌃k › Theme…**:
+The TUI draws the GUI's themes: the seven built-in ones (Dark, Light, High contrast, Dracula, One Dark, Solarized Dark, Solarized Light) and the custom ones made in the GUI's **Settings › Appearance › Theme › Edit Colors…** ([Settings › Themes](settings.md#themes)). Pick one with **⌃k › Theme…**; the pick is saved in `settings.json` in the [config folder](getting-started.md#where-qurry-keeps-your-settings) for both apps, and the list reads the file again when it opens, so a theme saved in the GUI shows up there.
 
-| Theme | Palette |
+| Theme | Colors |
 |---|---|
-| **Auto** (default) | Light when `COLORFGBG` says the background is white (its last number is `7` or `15`, e.g. `COLORFGBG=0;15`); dark otherwise, also when `COLORFGBG` isn't set |
-| **Dark** | Always dark |
-| **Light** | Always light |
+| **Sync with OS** (default) | The dark or the light theme picked for Sync with OS in the GUI (Dark and Light unless changed): the light one when `COLORFGBG` says the background is white (its last number is `7` or `15`, e.g. `COLORFGBG=0;15`), the dark one otherwise, also when `COLORFGBG` isn't set |
+| **Dark**, **Light**, **High contrast** | The theme's colors on the terminal's own background and text, as the TUI's dark and light palettes did before |
+| **Dracula**, **One Dark**, **Solarized Dark**, **Solarized Light**, custom themes | The theme's colors on its own background and text (in truecolor and 256 colors) |
 
-The light palette takes the GUI's light theme colors: Data Source colors become pale tints of the same hue, so icons and dim text on them stay readable (the active tab is the stronger one; 256 and 16 colors, which have no pale hues, keep a stronger tint so the hue survives), selections, edited cells and badges stay apart from each other, JSON cells use the GUI's light JSON colors, and production keeps its red. It works in every color mode above: 256 colors map it to the nearest palette colors, 16 colors use the normal (not the bright) terminal colors, and `NO_COLOR` stays monochrome with the same rules as in the dark theme.
+In truecolor a Data Source colored **Red** (Production) or **Green** takes the theme's Production or Green tint, as in the GUI (custom themes' too; the active tab a stronger one), NULL the theme's NULL color, and a range in the grid the selection's color halfway to the background; 256 and 16 colors keep the Data Source color's own hue, which their palettes can show. A light theme takes the GUI's light colors: the other Data Source colors become pale tints of the same hue, so icons and dim text on them stay readable (the active tab is the stronger one; 256 and 16 colors, which have no pale hues, keep a stronger tint so the hue survives), selections, edited cells and badges stay apart from each other, JSON cells use the theme's JSON colors, and production keeps its red. Every theme works in every color mode above: 256 colors map it to the nearest palette colors (a status line or header never lands on the background's color), 16 colors keep the terminal's own background and use the normal (not the bright) terminal colors in a light theme, and `NO_COLOR` stays monochrome with the same rules in every theme. The tree's object icons and Redis key types keep the TUI's own colors.
 
-Terminals such as iTerm2, rxvt and Konsole set `COLORFGBG` from their background color; many others (kitty, WezTerm, Ghostty, Alacritty) don't, so on a light background there pick **Light** yourself. The theme is saved in `settings.json` in the [config folder](getting-started.md#where-qurry-keeps-your-settings) under `"tuiTheme"` (the GUI has its own theme setting).
+Terminals such as iTerm2, rxvt and Konsole set `COLORFGBG` from their background color; many others (kitty, WezTerm, Ghostty, Alacritty) don't, so on a light background there pick a light theme yourself. Up to 0.3.1 the TUI saved its pick as `"tuiTheme"` (Auto, Dark or Light): it is used until a theme is picked in either app (Auto is Sync with OS).
 
-When Auto picked the light palette, the status line says so at startup: `Light palette — ⌃k › Theme… › Dark to undo`. To keep the colors you had before, pick **⌃k › Theme… › Dark**. It takes the place of the `16 colors` notice; with `NO_COLOR` the palette makes no difference, so the `Colors off` notice shows instead.
+When Sync with OS picked the light theme, the status line says so at startup: `Light palette — ⌃k › Theme… › Dark to undo`. To keep the dark colors, pick **⌃k › Theme… › Dark**. It takes the place of the `16 colors` notice; with `NO_COLOR` the theme makes no difference, so the `Colors off` notice shows instead.
 
 Some things never depend on color:
 
@@ -44,6 +75,7 @@ Some things never depend on color:
 - **The cell cursor inside a range**: with reverse video (16 colors, `NO_COLOR`) the range is reversed and the cursor is the one cell in it left plain, as in a spreadsheet.
 - **The active tab**: bold. With 16 colors or `NO_COLOR` the focused pane's tab is in reverse video (its Data Source color inverted, so a production tab stays red) and, in split panes, the other panes' visible tab is underlined.
 - **Statements that ran in a console**: `✓` done, `✗` failed, `…` running, in the line-number column on the statement's first line.
+- **A failed statement's error**: underlined where the server points (the whole statement when it doesn't say); the status line says where. An edit or the next run clears it.
 
 `qurry-tui --help` lists the same rules.
 

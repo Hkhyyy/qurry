@@ -133,6 +133,9 @@ test("AWS SSM: a Test Connection that keeps starting shows the elapsed time and 
   await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssh");
   await expect(d.getByRole("status")).toHaveCount(0);
   await expect(d.getByRole("button", { name: "Test SSH Connection" })).toBeEnabled();
+  // An empty private key uses ssh-agent, then the ~/.ssh/config IdentityFile keys (core tunnel.rs)
+  await expect(d.getByRole("textbox", { name: "Private key" })).toHaveAttribute("placeholder", /ssh-agent/);
+  await expect(d.getByText(/~\/\.ssh\/config Host/)).toBeVisible();
   await page.waitForTimeout(300);
   await expect(d.getByText("Test cancelled")).toHaveCount(0);
   await expect(d.locator(".conn-test-actions")).toHaveCount(0);

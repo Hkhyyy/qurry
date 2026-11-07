@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { analyzePlan, api, auditLog, ConnectionView, dialectOf, DbKind, meta, previewImpact, QueryResult, targetId } from "../../lib/api";
 import { ask, notice } from "../../lib/dialogs";
 import { pushHistory } from "../../components/HistoryDialog";
@@ -229,7 +230,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
           r = await api.runQuery(tab.target, sql, tabId);
         }
         pushHistory({ connId: tab.connId, database: tab.database, sql: sql0 });
-        updTab(tabId, (t) => ({ ...t, inTx: !!r.inTransaction }));
+        updTab(tabId, (t) => ({ ...t, inTx: !!r.inTransaction, txIdle: undefined }));
         if (!r.inTransaction && !isRead(kind, sql0) && !dry) committed++;
         if (r.warning) {
           warned++;
@@ -264,7 +265,10 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
         }
       } catch (e) {
         log(tabId, "error", String(e));
-        mark?.(i, { state: "error", out, ts, text: String(e) });
+        // The server's spot, in the statement's own text (Explain sent it after its EXPLAIN …)
+        const pre = explain ? sql.length - bare.length : 0;
+        const pos = sharedOr(undefined, (s) => s.errorPosition(String(e), sql));
+        mark?.(i, { state: "error", out, ts, text: sharedOr(String(e), (s) => s.withoutPosition(String(e))), at: pos !== undefined && pos >= pre ? pos - pre : undefined });
         if (committed > 0) log(tabId, "error", `Note: ${committed} earlier statement${committed > 1 ? "s" : ""} of this run ${committed > 1 ? "were" : "was"} already committed (Auto mode) and ${committed > 1 ? "were" : "was"} not rolled back`);
         // Even on error a transaction may be open (e.g. first statement fails in Manual) → sync the Commit/Roll back buttons
         syncTx(tabId);
@@ -272,7 +276,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
         if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
         lastActive = "output";
         updTab(tabId, (t) => ({ ...t, running: false, activeResult: "output" }));
-        setStatus("Query failed");
+        setStatus(mark ? "Query failed: the error is marked in the editor and kept in Output — fix the statement and run it again" : "Query failed (see Output)");
         refresh();
         return;
       }
@@ -317,7 +321,21 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
   };
 
   /** Read the console's transaction state into the tab (after an error the Commit / Roll back buttons may be stale) */
-  const syncTx = (tabId: string) => api.txState(tabId).then((inTx) => updTab(tabId, (t) => ({ ...t, inTx })), () => {});
+  const syncTx = (tabId: string) => api.txState(tabId).then((inTx) => updTab(tabId, (t) => ({ ...t, inTx, txIdle: inTx ? t.txIdle : undefined })), () => {});
+  // A Production console's transaction left open (core tx_reminders, on the housekeeping beat): in its Output, on its pending badge
+  // and in the status bar
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    listen<{ tabId: string; message: string }>("tx-idle", (e) => {
+      const { tabId, message } = e.payload;
+      log(tabId, "warn", message);
+      updTab(tabId, (t) => ({ ...t, txIdle: message }));
+      setStatus(message);
+    })
+      .then((u) => (off = u))
+      .catch(() => {});
+    return () => off?.();
+  }, []);
   /** Commit / Roll back failed: in Output (the status bar cuts it off) and the status bar; a failed COMMIT also in a notice, since it
    * may say the changes were not saved, or that it is unknown whether they were and the data needs a check */
   const txFailed = (tab: Tab, e: unknown, commit: boolean) => {
@@ -340,7 +358,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
         if (warning) log(tab.id, "warn", `Warning: ${warning}`);
       }
       await api.setTxMode(tab.target, tab.id, manual);
-      updTab(tab.id, (t) => ({ ...t, txManual: manual, inTx: manual ? t.inTx : false }));
+      updTab(tab.id, (t) => ({ ...t, txManual: manual, inTx: manual ? t.inTx : false, txIdle: manual ? t.txIdle : undefined }));
       log(tab.id, "info", `Transaction mode: ${manual ? "Manual" : "Auto"}`);
     } catch (e) {
       txFailed(tab, e, commit);
@@ -349,7 +367,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
   const txEnd = async (tab: Tab, what: "commit" | "rollback") => {
     try {
       const warning = what === "commit" ? await api.commitTx(tab.id) : await api.rollbackTx(tab.id);
-      updTab(tab.id, (t) => ({ ...t, inTx: false }));
+      updTab(tab.id, (t) => ({ ...t, inTx: false, txIdle: undefined }));
       log(tab.id, "info", what === "commit" ? "Transaction committed" : "Transaction rolled back");
       if (warning) {
         log(tab.id, "warn", `Warning: ${warning}`);
@@ -405,7 +423,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
 
   // Renders the status bar again when a ⌘↩ starts or stops waiting for the module (the wait lives in ConsolePane)
   const [, setPendingRuns] = useState(0);
-  /** ⌘F2 and the status bar's ■: cancel the running statement or load-more (it reads on the tab's session, so the same cancel
+  /** ⌘F2, the toolbars' ■ and the status bar's ✕: cancel the running statement or load-more (it reads on the tab's session, so the same cancel
    * stops it), or the ⌘↩ still waiting for the WebAssembly module */
   const canCancel = (t?: Tab | null) => !!t && (t.running || t.loadingMore || !!editorApis.get(t.id)?.loading());
   /** What the status bar says while a console or table tab is busy (its RunningBar), or undefined */
@@ -425,19 +443,31 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     else cancel(t);
   };
 
-  /** Save a grid's edits, for a table tab and a console result alike. then = show the saved rows (run the grid's statement again) */
+  /** Save a grid's edits, for a table tab and a console result alike. then = show the saved rows (run the grid's statement again).
+   *  A console in Manual mode or with a transaction open runs them in it: they stay pending until Commit / Roll back (#106) */
   const submitEdits = async (tab: Tab, statements: string[], then = () => void (tab.lastSql && run(tab, tab.lastSql))) => {
-    // Production asks first, listing the statements (each changes exactly one row: exactOne below)
+    const console_ = tab.kind === "console";
+    const inTx = console_ && (tab.txManual || tab.inTx);
+    // Production asks first, listing the statements (each changes exactly one row)
     const c = conns.find((x) => x.id === tab.connId);
     if (c?.options?.confirmChanges) {
       const detail = statements.map((s) => ({ text: s.replace(/\s+/g, " ").slice(0, 300), value: /^\s*insert/i.test(s) ? "new row" : "1 row", tone: "warn" as const }));
       const n = statements.length;
-      if (!(await ask(`Save ${n} change${n === 1 ? "" : "s"} to this data source?`, { title: `Production: ${c.name}`, detail, okLabel: "Save", danger: true }))) return;
+      const what = `${n} change${n === 1 ? "" : "s"}`;
+      const text = inTx ? `Run ${what} in this console's transaction? They stay pending until you Commit or Roll back.` : `Save ${what} to this data source?`;
+      if (!(await ask(text, { title: `Production: ${c.name}`, detail, okLabel: inTx ? "Run" : "Save", danger: true }))) return;
     }
-    // Save only if each UPDATE/DELETE affects exactly 1 row (otherwise roll back everything)
-    const r = await api.executeBatch(tab.target, statements, true);
+    // None is saved unless each UPDATE/DELETE affects exactly 1 row
+    const r = await api.submitEdits(tab.target, console_ ? tab.id : undefined, statements).catch((e) => {
+      // A failure may have ended the transaction (a deadlock, a lost connection): the Commit / Roll back buttons follow
+      if (console_) syncTx(tab.id);
+      throw e;
+    });
+    if (inTx) updTab(tab.id, (t) => ({ ...t, inTx: true, txIdle: undefined }));
     // A warning means it was saved (only the Production log couldn't record it): reload as on success, so it isn't submitted twice
-    setStatus(`Submitted ${statements.length} statements, ${r.rows} rows affected${r.warning ? ` · Warning: ${r.warning}` : ""}`);
+    const pending = inTx ? " · pending until Commit / Roll back" : "";
+    setStatus(`Submitted ${statements.length} statements, ${r.rows} rows affected${pending}${r.warning ? ` · Warning: ${r.warning}` : ""}`);
+    if (inTx) log(tab.id, "info", `Submitted ${statements.length} grid edit${statements.length === 1 ? "" : "s"} in the transaction (${r.rows} row${r.rows === 1 ? "" : "s"}): pending until Commit / Roll back`);
     then();
     // The reload replaces the status line right away, and a table tab has no Output: tell them in a dialog (as the TUI does)
     if (r.warning) void notice(r.warning, "Submitted, with a warning");

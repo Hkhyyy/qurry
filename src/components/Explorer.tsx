@@ -19,12 +19,14 @@ interface Props {
   onAddExisting?: (id: string) => void;
   onRefresh: () => void;
   onExport: () => void;
-  onImport: () => void;
+  /** The Import Data Sources submenu, and a call to look for the locations again when the ⋮ menu opens */
+  importItems: () => MenuEntry[];
+  onImportOpen: () => void;
   /** The workspace shown: only its explorer tells onSelect (each workspace keeps its own explorer, hidden ones mounted) */
   shown: boolean;
   /** info: the node the keys act on (the last clicked); all: every selected node */
   onSelect: (info: NodeInfo | null, all: NodeInfo[]) => void;
-  onActivate: (info: NodeInfo) => void;
+  onActivate: (info: NodeInfo, click?: boolean) => void;
   /** A line for the status bar (a key that doesn't work on the selected nodes) */
   onStatus: (text: string) => void;
   /** The node's context menu; with several selected nodes (all), for all of them */
@@ -101,7 +103,7 @@ export function Explorer(p: Props) {
     { label: `${showSystem ? "✓ " : "　"}Show System Schemas`, ...cmd("tree.showSystem"), action: () => setShowSystem((v) => !v) },
     { separator: true },
     { label: "Export Data Sources…", ...cmd("ds.export"), action: p.onExport },
-    { label: "Import Data Sources…", ...cmd("ds.import"), action: p.onImport },
+    { label: "Import Data Sources", submenu: p.importItems() },
   ];
   const onTreeKey = (e: React.KeyboardEvent) => {
     // A control inside the tree (Allow unencrypted, Install driver, an input) keeps its own keys: Enter presses the button
@@ -235,7 +237,7 @@ export function Explorer(p: Props) {
           <IconButton size="sm"
             title="More"
             onMouseDown={(e) => e.stopPropagation()}
-            onClick={() => setMore((m) => !m)}
+            onClick={() => (more || p.onImportOpen(), setMore((m) => !m))}
           >
             <IcMoreV />
           </IconButton>

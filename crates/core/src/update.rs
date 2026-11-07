@@ -244,20 +244,39 @@ pub fn cached(dir: &Path, current: &str, channel: Channel) -> Option<Option<Rele
     read_cache(dir).map(|c| c.latest.of(channel).filter(|r| is_newer(current, &r.version)))
 }
 
-/// Update signing public key (same as plugins.updater.pubkey in the GUI tauri.conf.json — checked by a test)
-pub const UPDATE_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA0MjA1NDlDN0EyODFEM0YKUldRL0hTaDZuRlFnQklTVks5ZFNkdVBNamNqK0JJWEY0akRmR3p3azVGQ2ZiTXUwM2xiL3VtUWwK";
-
+/// Update signing public keys whose signature on SHA256SUMS is accepted (`qurry-tui --update` and driver plugins).
+/// The first one is the current key, the same as plugins.updater.pubkey in the GUI tauri.conf.json (checked by a test).
+/// Only a key rotation's bridge release lists the old key after it (SECURITY.md, "Rotating the key")
+pub const UPDATE_PUBKEYS: &[&str] = &["dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA0MjA1NDlDN0EyODFEM0YKUldRL0hTaDZuRlFnQklTVks5ZFNkdVBNamNqK0JJWEY0akRmR3p3azVGQ2ZiTXUwM2xiL3VtUWwK"];
 
 /// Verify the SHA256SUMS signature (the release's SHA256SUMS.sig, tauri signer format = base64 of the minisign signature text)
 pub fn verify_sums(sums: &[u8], sig_b64: &str) -> Result<(), String> {
+    verify_sums_with(UPDATE_PUBKEYS, sums, sig_b64)
+}
+
+/// Accepted if any of the keys signed it. A key that doesn't decode fails the check (it is never skipped), and no keys accept nothing
+pub fn verify_sums_with(keys: &[&str], sums: &[u8], sig_b64: &str) -> Result<(), String> {
     use base64::Engine;
     let b64 = |s: &str| -> Result<String, String> {
         let raw = base64::engine::general_purpose::STANDARD.decode(s.trim()).map_err(|e| format!("bad base64: {e}"))?;
         String::from_utf8(raw).map_err(|e| e.to_string())
     };
-    let pk = minisign_verify::PublicKey::decode(&b64(UPDATE_PUBKEY)?).map_err(|e| format!("bad public key: {e}"))?;
+    let pks = keys
+        .iter()
+        .map(|k| minisign_verify::PublicKey::decode(&b64(k)?).map_err(|e| format!("bad public key: {e}")))
+        .collect::<Result<Vec<_>, _>>()?;
     let sig = minisign_verify::Signature::decode(&b64(sig_b64)?).map_err(|e| format!("bad signature: {e}"))?;
-    pk.verify(sums, &sig, false).map_err(|e| format!("signature check failed: {e}"))
+    // When nothing verifies, the key that made the signature says why (e.g. a changed file); the others only say it isn't
+    // theirs, which is also the error when no listed key made it. Either way the text is the same as with a single key
+    let mut failed = minisign_verify::Error::UnexpectedKeyId;
+    for pk in &pks {
+        match pk.verify(sums, &sig, false) {
+            Ok(()) => return Ok(()),
+            Err(minisign_verify::Error::UnexpectedKeyId) => {}
+            Err(e) => failed = e,
+        }
+    }
+    Err(format!("signature check failed: {failed}"))
 }
 
 /// Hash for a file name from SHA256SUMS
@@ -446,5 +465,61 @@ mod tests {
         let v = serde_json::json!({"tag_name":"v0.3.0","html_url":"s","body":"## What's Changed\n* [feat] x by @a in https://github.com/Hkhyyy/qurry/pull/5","assets":[]});
         let r = with_own_notes(parse_release(&v).unwrap());
         assert_eq!(r.changes_since("0.2.9"), vec![VersionNotes { version: "0.3.0".into(), changes: vec!["[feat] x (#5)".into()] }]);
+    }
+
+    // Three throwaway key pairs (private keys not kept) and each one's signature of SUMS, made with `tauri signer`
+    const KEY_A: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ4MDRERkVCOEMwMDI3MzcKUldRM0p3Q002OThFMkVMUmVmZHduZXRWWndFb3hRMjZ2NDJIV0x5NzBNWURCa0VHS0xoYjZQZEwK";
+    const KEY_B: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1QTZDRDczNjlCMTcxQjQKUldTMGNiRnBjODJtdGVRTnFqM0R1UXNxaU8rcmhsSVhhU3B6aDlydWhMMjY0V1lZOHVDOS9vWEkK";
+    const KEY_C: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFDNEEwQTI2MUM1RTgyNjkKUldScGdsNGNKZ3BLSEhDQkRjTmpOY3hBekYwUG1PTXB4bVJSakxySytHbGlLVGJ6ZmxmU0NyNHIK";
+    const SUMS: &[u8] = b"abc123  qurry-cli_x.tar.gz\n";
+    const SIG_A: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRM0p3Q002OThFMkQ2ZVFyT1pLdjkvYTcwc0czZ0dqYmhhb0dUcmEzVnZKTlNxZWFaMXkxbmtkbDFZbnY5VGxJbW5Fdm1LNXd1WnJFTjFadHI4Ykp3WWFvcUk1dnF5YmdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTczODQxCWZpbGU6c3VtcwpCa2ZRaXRST3NDTHNEU2E2RkxVd0pBdlovcis4bzdLcWl3ejhlRGdvbERJaGRyVDNxQ1hwVnZNK3hVVEh6V09lTUhYQTQ4YitoR01uWlJBM01ZaU5DQT09Cg==";
+    const SIG_B: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTMGNiRnBjODJtdGZFcGlzSC81OU1wSzdrOUdxNU1iSWU2emdYK205STdZODlWd3pyWmxyMVN1ZzJHN0ZZTi95NUJCYWgvMW4yL01sZ2t3cmthUGJnNEUwaWxQMGlVVVFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTczODQxCWZpbGU6c3VtcwpmYVdGRWdMMi9tRGZFYjlwcTBYdG9WK2lFYkhYOVAxK2NVMFVFTERCZGI4cnZ6bTkzMkd4aHB3TmJaaFc3L2lFL3lPaUcxMUowZmUwTVY5M2l6eWxDUT09Cg==";
+    const SIG_C: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVScGdsNGNKZ3BLSEkwZml3cjFVbTJFWUJiSElUMS9OcEgrbDFsUHRZRXZrTy9IeGJjUEZjRitSVS9WdGs4WDdnSndGUHR2TFhQODM2MkppTUdTbjljNXpPdDY4TzJMTWdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTczODQxCWZpbGU6c3VtcwpvdS9yS1I2NjQzUWR2NDd4VUxlWXB6ZEpPWTlPcXNxZTFQZHAxbHhDK1JtaU5TV3FCVStXS0tuQnNjdVptMFpFNDhLRmlKTmRMeWVLQ3Rua0YrczdCZz09Cg==";
+
+    /// A bridge release trusts the old and the new key: a SHA256SUMS signed with either verifies, whatever the order
+    #[test]
+    fn sums_signed_with_any_listed_key_verify() {
+        for keys in [[KEY_A, KEY_B], [KEY_B, KEY_A]] {
+            assert_eq!(verify_sums_with(&keys, SUMS, SIG_A), Ok(()));
+            assert_eq!(verify_sums_with(&keys, SUMS, SIG_B), Ok(()));
+        }
+        assert_eq!(verify_sums_with(&[KEY_A], SUMS, SIG_A), Ok(()));
+    }
+
+    /// Signed with no listed key, or changed after signing (checked with each key): refused, with the same text as with one key
+    #[test]
+    fn sums_not_signed_by_a_listed_key_or_changed_fail() {
+        let other_key = "signature check failed: The signature was created with a different key than the one provided";
+        assert_eq!(verify_sums_with(&[KEY_C], SUMS, SIG_C), Ok(()), "SIG_C is a good signature, only by a key not listed below");
+        for keys in [&[KEY_A, KEY_B][..], &[KEY_A]] {
+            assert_eq!(verify_sums_with(keys, SUMS, SIG_C).unwrap_err(), other_key);
+        }
+        let tampered = b"abc124  qurry-cli_x.tar.gz\n";
+        let changed = "signature check failed: The signature verification failed";
+        for (key, sig) in [(KEY_A, SIG_A), (KEY_B, SIG_B)] {
+            assert_eq!(verify_sums_with(&[key], tampered, sig).unwrap_err(), changed);
+            assert_eq!(verify_sums_with(&[KEY_A, KEY_B], tampered, sig).unwrap_err(), changed);
+            assert_eq!(verify_sums_with(&[KEY_B, KEY_A], tampered, sig).unwrap_err(), changed);
+        }
+        // A sums file signed with C, then changed, says it isn't from a listed key
+        assert_eq!(verify_sums_with(&[KEY_A, KEY_B], tampered, SIG_C).unwrap_err(), other_key);
+    }
+
+    /// Nothing gets through by an empty list, a key that doesn't decode (even next to a good one) or a broken signature
+    #[test]
+    fn sums_check_fails_closed() {
+        assert!(verify_sums_with(&[], SUMS, SIG_A).is_err());
+        assert!(verify_sums_with(&[KEY_A, "bm90IGEga2V5"], SUMS, SIG_A).unwrap_err().starts_with("bad public key"));
+        assert!(verify_sums_with(&["%%%", KEY_A], SUMS, SIG_A).unwrap_err().starts_with("bad base64"));
+        assert!(verify_sums_with(&[KEY_A], SUMS, "bm90IGEgc2lnbmF0dXJl").unwrap_err().starts_with("bad signature"));
+        assert!(verify_sums_with(&[KEY_A], SUMS, "").is_err());
+    }
+
+    /// The shipped list has a key and every key in it decodes (a broken key would fail every check, not be skipped)
+    #[test]
+    fn shipped_update_keys_decode() {
+        assert!(!UPDATE_PUBKEYS.is_empty());
+        assert!(verify_sums(SUMS, "bm90IGEgc2lnbmF0dXJl").unwrap_err().starts_with("bad signature"));
+        assert!(verify_sums(SUMS, SIG_A).unwrap_err().starts_with("signature check failed"));
     }
 }

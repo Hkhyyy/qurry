@@ -51,7 +51,16 @@ drivers/*     드라이버 프로그램 (SQLite, DuckDB, SQL Server, ClickHouse,
 
 ## 테스트
 
-단위 테스트와 실제 PostgreSQL · MySQL · Redis 컨테이너로 도는 테스트를 실행하는 방법: [CONTRIBUTING › Tests](../../CONTRIBUTING.md#tests) (영어). 모든 풀 리퀘스트에서 CI 가 돕니다: Rust 단위 테스트, PostgreSQL (pgvector 포함) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus 컨테이너로 통합 테스트, 같은 테스트를 옛 서버 (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017) 로, vitest 와 웹 빌드.
+단위 테스트와 실제 PostgreSQL · MySQL · Redis 컨테이너로 도는 테스트를 실행하는 방법: [CONTRIBUTING › Tests](../../CONTRIBUTING.md#tests) (영어). 모든 풀 리퀘스트에서 CI 워크플로 (`.github/workflows/ci.yml`) 가 돕니다:
+
+- `rust`: Rust 단위 테스트와 PostgreSQL (pgvector 포함) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus 컨테이너로 통합 테스트
+- `compat`: 같은 테스트를 옛 서버 (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017) 로
+- `web`: vitest, 웹 빌드, Storybook 빌드
+- `e2e (chromium)` 과 `e2e (webkit)`: mock 앱에 대한 Playwright. 브라우저마다 두 조각 (shard) 으로 나눠 동시에 돌고, 두 조각이 다 통과하면 그 브라우저의 검사가 통과합니다
+
+`docs/` 아래 파일이나 `.md` 파일만 바꾼 풀 리퀘스트 (`SECURITY.md` 는 Rust 테스트가 읽어서 빼고) 는 `rust`, `compat`, e2e 를 건너뜁니다. 그 검사들은 그래도 통과로 나옵니다. 풀 리퀘스트에 새로 push 하면 이전 push 의 실행은 취소됩니다. `main` 에서는 언제나 전부 돌고 서로 취소하지 않습니다.
+
+Audit 워크플로 (`.github/workflows/audit.yml`) 는 lockfile 의 알려진 취약점을 검사합니다 (`cargo deny check advisories`, `pnpm audit --prod`). lockfile 을 바꾼 풀 리퀘스트와 매주 `main` 에서 돌고, 필수 검사는 아닙니다. 실패했을 때 할 일: [CONTRIBUTING › Dependencies](../../CONTRIBUTING.md#dependencies) (영어). Dependabot 이 매주 Cargo · npm · GitHub Actions 업데이트 풀 리퀘스트를 엽니다.
 
 Redis TLS (16391), Sentinel (26392 → 16392), Cluster (17001-17003) 서버는 `crates/core/src/redisdb.rs` 의 테스트 주석에 있습니다 (TLS 인증서 폴더: `QURRY_TEST_TLS_DIR`, 기본 `/tmp/dbtool-tls`).
 

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<application>
+  <component name="dataSourceStorage" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="old-pg" uuid="7d0e3a55-3333-4c2b-a1e4-000000000001">
+      <driver-ref>postgresql</driver-ref>
+      <jdbc-url>jdbc:postgresql://old-db.internal/legacy</jdbc-url>
+    </data-source>
+  </component>
+</application>

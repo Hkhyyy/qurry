@@ -3,7 +3,7 @@
  * Spec in README.md
  */
 import { HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useState } from "react";
-import { Avatar, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
+import { Avatar, Badge, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { Chevron } from "./icons";
 
@@ -109,12 +109,14 @@ export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttribu
 }
 
 // ───────── Tabs · titles ─────────
-export function Tabs<T extends string>({ items, value, onChange, size, label }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (id: T) => void; size?: "sm"; label?: string }) {
-  // ←/→ (and Home/End) select the previous/next tab and move focus with it, as in the ARIA tab pattern
+/** A `disabled` tab is greyed out and can't be picked, but still shows its `title` (why) on hover: aria-disabled, not disabled */
+export function Tabs<T extends string>({ items, value, onChange, size, label }: { items: { id: T; label: ReactNode; disabled?: boolean; title?: string }[]; value: T; onChange: (id: T) => void; size?: "sm"; label?: string }) {
+  // ←/→ (and Home/End) select the previous/next tab and move focus with it, as in the ARIA tab pattern (skipping disabled ones)
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const i = items.findIndex((t) => t.id === value);
-    const n = { ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: items.length - 1 }[e.key];
-    if (n === undefined || n < 0 || n >= items.length || n === i) return;
+    const on = items.map((t, j) => (t.disabled ? -1 : j)).filter((j) => j >= 0);
+    const n = { ArrowLeft: on.filter((j) => j < i).pop(), ArrowRight: on.find((j) => j > i), Home: on[0], End: on[on.length - 1] }[e.key];
+    if (n === undefined || n === i) return;
     e.preventDefault();
     onChange(items[n].id);
     e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[n]?.focus();
@@ -122,7 +124,16 @@ export function Tabs<T extends string>({ items, value, onChange, size, label }: 
   return (
     <div className={cx("ui-tabs", size === "sm" && "size-sm")} role="tablist" aria-label={label} onKeyDown={onKeyDown}>
       {items.map((t) => (
-        <button key={t.id} type="button" role="tab" aria-selected={value === t.id} className={cx("ui-tab", value === t.id && "active")} onClick={() => onChange(t.id)}>
+        <button
+          key={t.id}
+          type="button"
+          role="tab"
+          aria-selected={value === t.id}
+          aria-disabled={t.disabled || undefined}
+          title={t.title}
+          className={cx("ui-tab", value === t.id && "active", t.disabled && "disabled")}
+          onClick={() => !t.disabled && onChange(t.id)}
+        >
           {t.label}
         </button>
       ))}
@@ -133,6 +144,19 @@ export function Tabs<T extends string>({ items, value, onChange, size, label }: 
 export const SectionTitle = ({ children, className }: { children: ReactNode; className?: string }) => <div className={cx("ui-section-title", className)}>{children}</div>;
 
 // ───────── Hints ─────────
+/**
+ * A console's open transaction (#106), beside its Commit / Roll back: its changes aren't saved until one of them, and closing the
+ * tab, switching the database or quitting asks first. production = a Production data source (red); idle = the reminder fired
+ */
+export function TxPending({ production, idle }: { production?: boolean; idle?: string }) {
+  const title = `A transaction is open in this console: Commit saves what changed in it, Roll back undoes it. Closing the tab, switching the database or quitting asks first.${idle ? `\n${idle}` : ""}`;
+  return (
+    <span role="status" className="tx-pending" title={title}>
+      <Badge tone={production ? "danger" : "warn"}>● Transaction pending{idle ? " · idle" : ""}</Badge>
+    </span>
+  );
+}
+
 export function Notice({ tone, children, className }: { tone?: "warn" | "danger" | "ok"; children: ReactNode; className?: string }) {
   return <div className={cx("ui-notice", tone && `tone-${tone}`, className)}>{children}</div>;
 }
@@ -278,9 +302,11 @@ export function ListItem({
 
 /** Detail row: code (statement · query) + value on the right (rows · pid · version), a note in plain text under the code (why it
  *  asks). Value colored by tone */
-export function DetailRow({ children, value, tone, note }: { children: ReactNode; value?: ReactNode; tone?: "danger" | "warn"; note?: ReactNode }) {
+/** lead = a control before the text (a checkbox to leave the row out) */
+export function DetailRow({ children, value, tone, note, lead }: { children: ReactNode; value?: ReactNode; tone?: "danger" | "warn"; note?: ReactNode; lead?: ReactNode }) {
   return (
     <div className="ui-detail-row">
+      {lead !== undefined && <span className="ui-detail-lead">{lead}</span>}
       {note === undefined ? (
         <code className="ui-detail-text">{children}</code>
       ) : (

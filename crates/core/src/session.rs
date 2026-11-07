@@ -18,6 +18,8 @@ pub const PENDING_TX: &str = "There are uncommitted changes — commit or roll b
 /// savepoint of the one that is open
 pub const EXPLAIN_BEGIN: [&str; 2] = ["BEGIN", "ROLLBACK"];
 pub const EXPLAIN_SAVEPOINT: [&str; 2] = ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"];
+/// A result grid's edits in the console's transaction (Session::submit): set, undo when one fails, release
+const SUBMIT_SAVEPOINT: [&str; 3] = ["SAVEPOINT qurry_submit", "ROLLBACK TO SAVEPOINT qurry_submit", "RELEASE SAVEPOINT qurry_submit"];
 /// A COMMIT of a PostgreSQL transaction an earlier error aborted: the server rolled it back
 const ABORTED_COMMIT: &str =
     "Not committed: an earlier statement in this transaction failed, so PostgreSQL rolled back the whole transaction and none of its changes were saved. Run the changes again (without the failing statement).";
@@ -34,6 +36,10 @@ pub struct PgSession {
     manual: bool,
     /// Whether a transaction is open in Manual mode
     pub in_tx: bool,
+    /// A change ran in the open transaction (audit::is_change, as MySession::changed)
+    changed: bool,
+    /// Production (Session::set_reads_outside_tx): in Manual mode a plain read before the transaction is open runs as in Auto
+    reads_outside_tx: bool,
     /// Last time the cursor was used (closed when unused for long)
     cursor_used: Instant,
     /// Whether the cursor was closed for being unused (reopened on load more)
@@ -104,6 +110,29 @@ pub fn is_select_like(sql: &str) -> bool {
     ["select", "with", "values", "table", "("].iter().any(|k| s.starts_with(k))
 }
 
+/// A read that takes no row locks (guard::is_read: no side-effect call either), and no transaction statement or SET: on Production
+/// it doesn't open Manual mode's transaction (Session::set_reads_outside_tx)
+pub(crate) fn plain_read(sql: &str, kind: crate::store::DbKind) -> bool {
+    let s = strip_comments_lead(sql);
+    let word = s.split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("");
+    let tx = ["begin", "start", "commit", "rollback", "end", "abort", "savepoint", "release", "set", "xa"].contains(&word);
+    !tx && crate::guard::is_read(sql, kind) && !crate::guard::locks_rows(sql, kind)
+}
+
+/// A read run outside the console's transaction (Session::set_reads_outside_tx) runs in a read-only one, so a function in it that
+/// writes can't commit by itself: the server refuses it (PostgreSQL 25006, MySQL 1792), and the error says how to run it
+pub(crate) fn read_first_refused(e: AppError) -> AppError {
+    let code = match &e {
+        AppError::Db(sqlx::Error::Database(d)) => d.code().map(|c| c.to_string()),
+        _ => None,
+    };
+    if code.as_deref() == Some("25006") || crate::mysql::error_number(&e) == Some(1792) {
+        AppError::Msg(format!("{e}\n{}", qurry_shared::errors::READ_FIRST_WROTE))
+    } else {
+        e
+    }
+}
+
 /// EXPLAIN (GENERIC_PLAN) of a statement with $1 … has no values to bind, which the extended protocol expects: it goes over the simple protocol.
 /// One statement only (the simple protocol would run everything after a `;` too)
 pub fn is_generic_plan(sql: &str) -> bool {
@@ -119,7 +148,7 @@ impl PgSession {
     pub async fn open(pool: &PgPool) -> AppResult<Self> {
         let mut conn = pool.acquire().await?;
         let pid: i32 = sqlx::query_scalar("select pg_backend_pid()").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), origins: Vec::new(), manual: false, in_tx: false, cursor_used: Instant::now(), idle_closed: false, fetched: 0 })
+        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), origins: Vec::new(), manual: false, in_tx: false, changed: false, reads_outside_tx: false, cursor_used: Instant::now(), idle_closed: false, fetched: 0 })
     }
 
     /// keep-alive: so idle session connections are not dropped
@@ -132,10 +161,11 @@ impl PgSession {
         self.cursor_open
     }
 
-    /// Whether a user-opened transaction exists (Manual mode, or BEGIN run directly in Auto). The cursor then only uses savepoints
-    /// and never ends the user's transaction with COMMIT/ROLLBACK
+    /// Whether a user-opened transaction exists (Manual mode once a statement opened it, or BEGIN run directly in Auto). The cursor
+    /// then only uses savepoints and never ends the user's transaction with COMMIT/ROLLBACK. A read that runs before it (Production,
+    /// reads_outside_tx) has a cursor transaction of its own, as in Auto
     fn user_tx(&self) -> bool {
-        self.manual || self.in_tx
+        self.in_tx
     }
 
     pub async fn close_cursor(&mut self) {
@@ -147,10 +177,14 @@ impl PgSession {
         }
     }
 
-    /// In Auto mode, close cursors unused for long and end the transaction (Manual is left alone since it is the user's transaction)
+    /// In Auto mode, close cursors unused for long and end the transaction (Manual is left alone since it is the user's transaction).
+    /// Within 5s, like the keep-alive ping: through a tunnel that stopped forwarding it would wait forever, holding the session
+    /// and housekeeping (keep-alive and auto-disconnect of every source)
     pub async fn close_idle_cursor(&mut self, idle: std::time::Duration) -> bool {
         if self.cursor_open && !self.user_tx() && self.cursor_used.elapsed() >= idle {
-            self.close_cursor().await;
+            if tokio::time::timeout(std::time::Duration::from_secs(5), self.close_cursor()).await.is_err() {
+                return false;
+            }
             self.idle_closed = true;
             return true;
         }
@@ -216,7 +250,13 @@ impl PgSession {
                 self.in_tx = false;
                 Err(AppError::Msg(ABORTED_COMMIT.into()))
             }
-            _ => Ok(()),
+            // The session is gone (the server ended it after it sat idle in the transaction, a lost connection): the COMMIT isn't
+            // sent, and the error says why (app::recover)
+            Err(e) => {
+                let e = AppError::Db(e);
+                if crate::app::is_conn_lost(&e) { Err(e) } else { Ok(()) }
+            }
+            Ok(_) => Ok(()),
         }
     }
 
@@ -228,23 +268,36 @@ impl PgSession {
             self.in_tx = true;
         } else if ["commit", "rollback", "end", "abort"].iter().any(|k| s.starts_with(k)) && !s.starts_with("rollback to") {
             self.in_tx = ok && chains(&s);
+            self.changed = false;
         }
     }
 
     pub async fn run(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
-        let mut r = self.run_inner(sql, limit).await;
+        if !self.in_tx {
+            self.changed = false;
+        }
+        // Production: a plain read doesn't open the Manual transaction (Session::set_reads_outside_tx)
+        let read_first = self.reading_first() && plain_read(sql, crate::store::DbKind::Postgres);
+        let mut r = self.run_inner(sql, limit, read_first).await;
         if let Ok(q) = &mut r {
             q.in_transaction = self.in_tx;
+            self.changed |= self.in_tx && crate::audit::is_change(sql, crate::store::DbKind::Postgres);
         }
-        r
+        if read_first { r.map_err(read_first_refused) } else { r }
     }
 
-    async fn run_inner(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
+    /// Manual mode on Production with no transaction open yet: a plain read runs in a read-only transaction of its own
+    /// (Session::set_reads_outside_tx)
+    fn reading_first(&self) -> bool {
+        self.manual && !self.in_tx && self.reads_outside_tx
+    }
+
+    async fn run_inner(&mut self, sql: &str, limit: usize, read_first: bool) -> AppResult<QueryResult> {
         self.close_cursor().await;
         self.idle_closed = false;
         self.origins.clear();
         let start = Instant::now();
-        if self.manual && !self.in_tx && !strip_comments_lead(sql).starts_with("begin") {
+        if self.manual && !self.in_tx && !read_first && !strip_comments_lead(sql).starts_with("begin") {
             self.conn.execute("BEGIN").await?;
             self.in_tx = true;
         }
@@ -261,21 +314,36 @@ impl PgSession {
                     r.elapsed_ms = start.elapsed().as_millis() as u64;
                     return Ok(r);
                 }
-                Err(_) => {
+                Err(e) => {
+                    // The session is gone (the server ended it, idle in the transaction): its error says why, the retry below wouldn't
+                    let e = AppError::Db(e);
+                    if crate::app::is_conn_lost(&e) {
+                        return Err(e);
+                    }
                     // Statements DECLARE cannot take (e.g. WITH ... DELETE) → run normally. A real error will surface again below.
                     self.rollback().await;
                 }
             }
+        }
+        if read_first {
+            // A read DECLARE can't take (several statements, SHOW, EXPLAIN): read-only too, ended with it
+            self.conn.execute("BEGIN READ ONLY").await?;
+            let r = self.run_direct(sql, limit, start).await;
+            let _ = self.conn.execute(if r.is_ok() { "COMMIT" } else { "ROLLBACK" }).await;
+            return r;
         }
         let r = self.run_direct(sql, limit, start).await;
         self.track_tx_keywords(sql, r.is_ok());
         r
     }
 
-    /// Short transaction for the cursor. Inside a user transaction (Manual, or BEGIN run directly in Auto), protected by a savepoint.
+    /// Short transaction for the cursor. Inside a user transaction (Manual, or BEGIN run directly in Auto), protected by a savepoint;
+    /// a read before Manual mode's transaction opens (reading_first) can't write
     async fn declare(&mut self, query: &str) -> Result<(), sqlx::Error> {
         let declare = if self.user_tx() {
             format!("SAVEPOINT dbtool_sp; DECLARE {CURSOR} NO SCROLL CURSOR FOR {query}")
+        } else if self.reading_first() {
+            format!("BEGIN READ ONLY; DECLARE {CURSOR} NO SCROLL CURSOR FOR {query}")
         } else {
             format!("BEGIN; DECLARE {CURSOR} NO SCROLL CURSOR FOR {query}")
         };
@@ -293,13 +361,13 @@ impl PgSession {
     /// A change with its undo snapshot right before it, in one transaction (Session::run_with_snapshot)
     async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
         self.close_cursor().await;
-        let own = !self.user_tx();
+        let own = !self.manual && !self.in_tx;
         let began = !self.in_tx;
         if began {
             if let Err(e) = self.conn.execute("BEGIN").await {
                 return (Err(AppError::Msg(e.to_string())), Err(e.into()));
             }
-            self.in_tx = true;
+            (self.in_tx, self.changed) = (true, false);
         }
         let shot = pg_snapshot(&mut self.conn, snap).await;
         // Cancelled · timed out while locking the rows: don't run the change (the savepoint kept the user's transaction as it was)
@@ -374,7 +442,7 @@ impl PgSession {
             Ok(r) => r,
             Err(e) => {
                 self.rollback().await;
-                return Err(e.into());
+                return Err(if self.reading_first() { read_first_refused(e.into()) } else { e.into() });
             }
         };
         if self.columns.is_empty() {
@@ -500,6 +568,46 @@ impl Session {
             _ => (Err(AppError::Msg("Undo is kept for PostgreSQL and MySQL only".into())), self.run(sql, limit).await),
         }
     }
+    /// A result grid's edits in the console's transaction (Manual mode, or BEGIN in Auto: #106): under a savepoint, so that when
+    /// one fails or doesn't change exactly one row (check_exact_one) only they are undone, and the transaction goes on as it was.
+    /// They stay pending until Commit / Roll back. snaps = each statement's undo snapshot (run_with_snapshot).
+    /// → rows changed, and each snapshot with the rows its statement changed
+    pub(crate) async fn submit(&mut self, statements: &[String], snaps: &[Option<&str>]) -> (AppResult<u64>, crate::backend::Snapshots) {
+        if let Err(e) = self.run(SUBMIT_SAVEPOINT[0], 1).await {
+            return (Err(e), vec![]);
+        }
+        let (mut n, mut shots) = (0, Vec::new());
+        for (i, st) in statements.iter().enumerate() {
+            let (shot, r) = match snaps.get(i).copied().flatten() {
+                Some(q) => {
+                    let (shot, r) = self.run_with_snapshot(q, st, 1).await;
+                    (Some(shot), r)
+                }
+                None => (None, self.run(st, 1).await),
+            };
+            // A lost connection keeps its error as it is: app::recover reads it
+            let r = r.map_err(|e| if crate::app::is_conn_lost(&e) { e } else { AppError::Msg(format!("{e}\n→ {st}")) });
+            match r.and_then(|q| check_exact_one(st, q.rows_affected, true).map(|_| q.rows_affected)) {
+                Ok(k) => {
+                    n += k;
+                    shots.push(shot.map(|s| (s, k)));
+                }
+                Err(e) => {
+                    // Undo these edits only; unless the transaction ended with the failure (a deadlock, a lost connection)
+                    if self.in_tx() && !crate::app::is_conn_lost(&e) {
+                        for back in &SUBMIT_SAVEPOINT[1..] {
+                            let _ = self.run(back, 1).await;
+                        }
+                    }
+                    return (Err(e), vec![]);
+                }
+            }
+        }
+        match self.run(SUBMIT_SAVEPOINT[2], 1).await {
+            Ok(_) => (Ok(n), shots),
+            Err(e) => (Err(e), vec![]),
+        }
+    }
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
         match self {
             Session::Pg(s) => s.fetch(limit).await,
@@ -579,9 +687,24 @@ impl Session {
             Session::Redis(_) | Session::Plugin(_) => false,
         }
     }
-    /// Whether a change ran in the open MySQL transaction (MySession::changed)
+    /// Whether a change ran in the open transaction (MySession::changed, PgSession::changed)
     pub fn tx_changed(&self) -> bool {
-        matches!(self, Session::My(s) if s.in_tx && s.changed)
+        match self {
+            Session::Pg(s) => s.in_tx && s.changed,
+            Session::My(s) => s.in_tx && s.changed,
+            Session::Redis(_) | Session::Plugin(_) => false,
+        }
+    }
+    /// Production (#106 review): in Manual mode, a plain read (plain_read) run while no transaction is open runs as in Auto, in a
+    /// transaction of its own that ends with it, and the transaction opens at the first other statement. So reading a production
+    /// server holds no snapshot or table locks (an ALTER TABLE would wait behind them, and every query behind it), and nothing
+    /// shows as pending; a change still stays pending until Commit / Roll back. A BEGIN typed first opens it as before
+    pub fn set_reads_outside_tx(&mut self, on: bool) {
+        match self {
+            Session::Pg(s) => s.reads_outside_tx = on,
+            Session::My(s) => s.reads_outside_tx = on,
+            Session::Redis(_) | Session::Plugin(_) => {}
+        }
     }
     /// How the last statement ended the open MySQL transaction by itself (MySession::ended)
     pub fn tx_ended(&self) -> Option<&'static str> {
@@ -590,12 +713,39 @@ impl Session {
             _ => None,
         }
     }
-    /// On tab close: roll back the open transaction, reset session settings and return the connection to the pool
+    /// On tab close: roll back the open transaction, reset session settings and return the connection to the pool. Within 5s: on
+    /// a server or tunnel that doesn't answer it would wait forever (closing the tab, switching its database). Then the connection
+    /// is closed instead, and the server rolls the transaction back itself
     pub async fn discard(&mut self) {
+        let done = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            match self {
+                Session::Pg(s) => s.discard().await,
+                Session::My(s) => s.discard().await,
+                Session::Redis(_) | Session::Plugin(_) => {}
+            }
+        })
+        .await;
+        if done.is_err() {
+            self.abandon();
+        }
+    }
+    /// Its connection is closed when the session is dropped, not given back to the pool: it didn't answer, and a statement
+    /// cut off by a time limit may have left it halfway through a message
+    pub fn abandon(&mut self) {
         match self {
-            Session::Pg(s) => s.discard().await,
-            Session::My(s) => s.discard().await,
+            Session::Pg(s) => s.conn.close_on_drop(),
+            Session::My(s) => s.abandon(),
             Session::Redis(_) | Session::Plugin(_) => {}
+        }
+    }
+    /// A round trip that runs nothing (PostgreSQL: the protocol's ping; MySQL: DO 0): whether the connection still answers. Callers
+    /// set the time limit; when it runs out the session stays usable, since its next use reads past the answer left unread
+    pub async fn check(&mut self) -> AppResult<()> {
+        match self {
+            Session::Pg(s) => Ok(sqlx::Connection::ping(&mut *s.conn).await?),
+            Session::My(s) => s.check().await,
+            Session::Redis(m) => crate::redisdb::check(m).await,
+            Session::Plugin(_) => Ok(()),
         }
     }
     pub async fn close_idle_cursor(&mut self, idle: std::time::Duration) -> bool {

@@ -8,6 +8,9 @@ import "monaco-editor/languages/definitions/redis/register";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import JsonWorker from "monaco-editor/language/json/json.worker?worker";
 import { loader } from "@monaco-editor/react";
+import { MONACO_THEME, monacoThemeData, onTheme } from "./theme";
+import type { DbKind } from "./api";
+import { initShared, sharedOr } from "./shared";
 
 // JSON (the grid's Value Editor panel) validates and folds in its own worker
 self.MonacoEnvironment = { getWorker: (_, label) => (label === "json" ? new JsonWorker() : new EditorWorker()) };
@@ -25,60 +28,35 @@ const comments = [
 ];
 monaco.languages.setMonarchTokensProvider("mysql", { ...mysqlLanguage, tokenizer: { ...mysqlLanguage.tokenizer, comments } } as monaco.languages.IMonarchLanguage);
 
-monaco.editor.defineTheme("dbtool-dark", {
-  base: "vs-dark",
-  inherit: true,
-  rules: [
-    { token: "keyword", foreground: "CF8E6D" },
-    { token: "string", foreground: "6AAB73" },
-    { token: "number", foreground: "2AACB8" },
-    { token: "comment", foreground: "7A7E85", fontStyle: "italic" },
-    { token: "predefined", foreground: "56A8F5" },
-    { token: "string.key.json", foreground: "C77DBB" },
-  ],
-  colors: {
-    "editor.background": "#1E1F22",
-    "editor.lineHighlightBackground": "#26282E",
-    "editorLineNumber.foreground": "#4B5059",
-    "editorLineNumber.activeForeground": "#A1A3AB",
-    "editor.selectionBackground": "#214283",
-  },
+// One Monaco theme, redefined from the theme drawn whenever it changes (lib/theme.ts monacoThemeData)
+onTheme((t) => {
+  monaco.editor.defineTheme(MONACO_THEME, monacoThemeData(t));
+  monaco.editor.setTheme(MONACO_THEME);
 });
 
 export { monaco };
 
-monaco.editor.defineTheme("dbtool-light", {
-  base: "vs",
-  inherit: true,
-  rules: [
-    { token: "keyword", foreground: "0033B3" },
-    { token: "string", foreground: "067D17" },
-    { token: "number", foreground: "1750EB" },
-    { token: "comment", foreground: "8C8C8C", fontStyle: "italic" },
-    { token: "predefined", foreground: "00627A" },
-    { token: "string.key.json", foreground: "871094" },
-  ],
-  colors: {
-    "editor.background": "#FFFFFF",
-    "editor.lineHighlightBackground": "#F5F8FE",
-    "editorLineNumber.foreground": "#AEB3C2",
-    "editorLineNumber.activeForeground": "#767A8A",
-    "editor.selectionBackground": "#A6D2FF",
-  },
-});
+/** Owner of a console's run error marker, apart from every other marker so setting or clearing it leaves theirs alone */
+const RUN_ERROR = "qurry.runError";
 
-monaco.editor.defineTheme("dbtool-hc", {
-  base: "hc-black",
-  inherit: true,
-  rules: [
-    { token: "keyword", foreground: "FFB86C" },
-    { token: "string", foreground: "8DF08D" },
-    { token: "number", foreground: "6FE8F5" },
-    { token: "comment", foreground: "B0B0B0", fontStyle: "italic" },
-    { token: "string.key.json", foreground: "F5A8F0" },
-  ],
-  colors: { "editor.background": "#000000" },
-});
+/**
+ * Mark a failed run's error in the console (DataGrip): at the server's spot (`at`, an offset into the model; the word there, else one
+ * character) or, when the error doesn't say, over the whole statement (`start`–`end`). null clears it (an edit, the next run)
+ */
+export function setRunError(m: monaco.editor.ITextModel, err: { start: number; end: number; at?: number; message: string } | null) {
+  if (!err) return monaco.editor.setModelMarkers(m, RUN_ERROR, []);
+  let range: monaco.IRange = monaco.Range.fromPositions(m.getPositionAt(err.start), m.getPositionAt(err.end));
+  if (err.at !== undefined) {
+    const p = m.getPositionAt(err.at);
+    // The word from the spot on (not one that only ends there: `foo(` with the spot on the parenthesis)
+    const w = [m.getWordAtPosition(p)].find((x) => x && p.column < x.endColumn);
+    const max = m.getLineMaxColumn(p.lineNumber);
+    // Past the line's last character (MySQL's near '' is the statement's end): the character before it
+    const col = w ? w.startColumn : Math.max(Math.min(p.column, max - 1), 1);
+    range = new monaco.Range(p.lineNumber, col, p.lineNumber, w ? w.endColumn : Math.min(col + 1, max));
+  }
+  monaco.editor.setModelMarkers(m, RUN_ERROR, [{ ...range, severity: monaco.MarkerSeverity.Error, message: err.message }]);
+}
 
 /**
  * When closing a console tab: discard that console's undo history.
@@ -92,4 +70,37 @@ export function forgetConsoleModel(tabId: string) {
   const tmp = monaco.editor.createModel("\u0000forget", undefined, uri);
   tmp.setValue("");
   tmp.dispose();
+}
+
+/**
+ * Quotes and brackets left open, and closing brackets without an opener (qurry_shared::pairs::unbalanced, the TUI editor's marks), as
+ * error markers of their own owner: from the opening character to the end of the line it opens on. Read again shortly after each edit
+ */
+export function markUnbalanced(ed: monaco.editor.IStandaloneCodeEditor, kind: () => DbKind): monaco.IDisposable {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const update = () => {
+    const m = ed.getModel();
+    if (!m || m.isDisposed()) return;
+    const marks = sharedOr([], (s) => s.unbalanced(m.getValue(), kind()));
+    monaco.editor.setModelMarkers(
+      m,
+      "qurry.unbalanced",
+      marks.map((u) => {
+        const at = m.getPositionAt(u.start);
+        const end = Math.max(m.getPositionAt(u.end).column, m.getLineMaxColumn(at.lineNumber));
+        return { severity: monaco.MarkerSeverity.Error, message: u.message, startLineNumber: at.lineNumber, startColumn: at.column, endLineNumber: at.lineNumber, endColumn: end };
+      }),
+    );
+  };
+  void initShared().then(update, () => {});
+  const sub = ed.onDidChangeModelContent(() => {
+    clearTimeout(timer);
+    timer = setTimeout(update, 250);
+  });
+  return {
+    dispose() {
+      clearTimeout(timer);
+      sub.dispose();
+    },
+  };
 }

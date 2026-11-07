@@ -150,26 +150,104 @@ test("MySQL: `--` greys out as a comment only where the server reads one (`selec
   await expect.poll(italic).toBe("-- note");
 });
 
-test("a run shows in the status bar (bar · Executing… · elapsed) for the focused tab only; ■ cancels it", async ({ page }) => {
+test("a run shows in the status bar (bar · Executing… · elapsed) for the focused tab only; hovering it shows ✕, which cancels it (#107)", async ({ page }) => {
   const bar = page.locator(".statusbar .running-bar");
-  const stop = page.locator(".statusbar").getByTitle("Cancel Running Statements");
-  await typeSql(page, "select pg_sleep(3)");
+  const x = bar.getByRole("button", { name: "Cancel (⌘F2)" });
+  // Long enough to outlast the tab switches below on a slow runner; the ✕ ends it
+  await typeSql(page, "select pg_sleep(30)");
   await page.keyboard.press("Meta+Enter");
-  await expect(bar).toContainText(/^Executing… \d+\.\d s$/);
+  await expect(bar).toContainText(/^Executing… \d+\.\d s/);
   await expect(work(page).locator(".running-bar")).toHaveCount(0);
-  await expect(stop).toBeEnabled();
-  // Another tab that isn't running: its status text and a disabled ■
+  // No ▶ ■ buttons in the status bar any more; the ✕ only on hover (its room kept, so nothing moves)
+  await expect(page.locator(".statusbar").getByRole("button", { name: /^Execute/ })).toHaveCount(0);
+  await expect(x).toBeHidden();
+  const before = (await bar.boundingBox())!;
+  await bar.hover();
+  await expect(x).toBeVisible();
+  expect((await bar.boundingBox())!.width).toBe(before.width);
+  // Another tab that isn't running: its status text, no indicator
   await treeItem(page, "users").first().dblclick();
   await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
   await expect(bar).toHaveCount(0);
   await expect(status(page)).toBeVisible();
-  await expect(stop).toBeDisabled();
   // Back on the console: its indicator again, the time going on from the run's start
   await page.locator("[role=tab].tab", { hasText: "console" }).first().click();
-  await expect(bar).toContainText(/^Executing… (?:[1-9]|\d{2,})\.\d s$/);
+  await expect(bar).toContainText(/^Executing… (?:[1-9]|\d{2,})\.\d s/);
+  const cancels = await spyCancels(page);
+  await bar.hover();
+  await x.click();
+  await expect.poll(cancels).toBe(1);
+});
+
+test("the console toolbar's ▶ is ■ in the same spot while a statement runs; ■ cancels, and it is ▶ again after (#107)", async ({ page }) => {
+  const toolbar = work(page).locator(".console-toolbar");
+  const run = toolbar.getByRole("button", { name: "Execute (⌘↩)" });
+  const stop = toolbar.getByRole("button", { name: "Cancel (⌘F2)" });
+  await expect(run).toBeEnabled();
+  await expect(stop).toHaveCount(0);
+  const at = (await run.boundingBox())!;
+  await typeSql(page, "select pg_sleep(2)");
+  await run.click();
+  await expect(stop).toBeVisible();
+  await expect(run).toHaveCount(0);
+  const box = (await stop.boundingBox())!;
+  expect([box.x, box.y, box.width]).toEqual([at.x, at.y, at.width]);
+  // One button: no second ■ further along the toolbar
+  await expect(toolbar.locator(".ui-icon-btn.tone-danger")).toHaveCount(1);
   const cancels = await spyCancels(page);
   await stop.click();
   await expect.poll(cancels).toBe(1);
+  // The mock lets the statement finish: ▶ again, in the same spot
+  await expect(run).toBeVisible({ timeout: 5000 });
+  await expect(stop).toHaveCount(0);
+});
+
+test("a console result's load-more is the grid's ■, not the console's: ▶ stays (#107)", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 1500));
+  await typeSql(page, "select * from users");
+  await page.keyboard.press("Meta+Enter");
+  await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
+  const grid = work(page).locator(".grid-wrap");
+  await grid.locator(".grid-scroll").evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(page.locator(".statusbar .running-bar")).toContainText("Loading more rows");
+  await expect(work(page).locator(".console-toolbar").getByRole("button", { name: "Execute (⌘↩)" })).toBeEnabled();
+  await expect(grid.getByRole("button", { name: "Cancel (⌘F2)" })).toBeVisible();
+  await expect(grid.getByRole("button", { name: /^Reload Page/ })).toHaveCount(0);
+  // ■ cancels the fetch in flight: the 500 rows stay, the grid says why no more came, ↻ is back
+  await grid.getByRole("button", { name: "Cancel (⌘F2)" }).click();
+  await expect(work(page).locator(".grid-more-error")).toHaveText("Couldn't load more rows: ERROR: canceling statement due to user request");
+  await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
+  await expect(grid.getByRole("button", { name: "Reload Page (⌘r)" })).toBeVisible();
+});
+
+test("the status bar shows Ln, Col only while the console editor has focus, Row, Col for a focused result grid, nothing for a table tab (#107)", async ({ page }) => {
+  const pos = page.locator(".statusbar .ui-status-item").filter({ hasText: /^(Ln|Row) / });
+  // Inserted at once: an Enter typed after `select *` could pick a completion
+  await typeSql(page, "");
+  await page.keyboard.insertText("select *\nfrom users");
+  await expect(pos).toHaveText("Ln 2, Col 11");
+  await page.keyboard.press("Shift+Home");
+  await expect(pos).toHaveText("Ln 2, Col 1 (10 chars)");
+  await page.keyboard.press("End");
+  await page.keyboard.press("Meta+Enter");
+  // The result grid focused: its current cell, the editor's position gone
+  const grid = work(page).locator(".grid-wrap");
+  await grid.getByRole("gridcell", { name: "user_3", exact: true }).click();
+  await expect(pos).toHaveText("Row 3, Col 2");
+  await page.keyboard.press("ArrowRight");
+  await expect(pos).toHaveText("Row 3, Col 3");
+  // Back in the editor
+  await editor(page).click();
+  await expect(pos).toHaveText(/^Ln \d+, Col \d+$/);
+  // A table tab (its grid not clicked yet): nothing, not the console's last position
+  await treeItem(page, "users").first().dblclick();
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  await expect(pos).toHaveCount(0);
+  await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();
+  await expect(pos).toHaveText("Row 1, Col 2");
+  // The explorer focused: nothing
+  await treeItem(page, "users").first().click();
+  await expect(pos).toHaveCount(0);
 });
 
 test("a console result whose load-more fails keeps the reason in its grid (#80)", async ({ page }) => {

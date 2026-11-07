@@ -51,30 +51,40 @@ export const GridHeaderRow = ({ width, height, children }: { width: number; heig
 
 /**
  * Header cell: 🔑 name type ……… sort button (↑ ↓ · order number if several).
- * sort = current sort (if none, ⇅ only on hover)
+ * sort = current sort (if none, ⇅ only on hover). With onResize the right edge is a resize handle: drag it to resize,
+ * double-click it to fit (onFit). readOnly = why the column can't be edited in a grid whose other columns can (a join's)
  */
 export function GridHeaderCell({
   name,
   type,
   pk,
+  readOnly,
   width,
   colSelected,
   sort,
   onMouseDown,
   onSortClick,
+  onContextMenu,
+  onResize,
+  onFit,
 }: {
   name: string;
   type: string;
   pk?: boolean;
+  readOnly?: string;
   width: number;
   colSelected?: boolean;
   sort?: { dir: "asc" | "desc"; order?: number };
   onMouseDown?: Mouse;
   onSortClick?: (e: MouseEvent) => void;
+  onContextMenu?: Mouse;
+  onResize?: Mouse;
+  onFit?: () => void;
 }) {
   return (
-    <div className={cx("cell head", sort && "sorted", colSelected && "col-sel")} style={{ width }} title={`${name} : ${type}`} role="columnheader" onMouseDown={onMouseDown}>
+    <div className={cx("cell head", sort && "sorted", colSelected && "col-sel", readOnly && "read-only")} style={{ width }} title={readOnly ? `${name} : ${type}\n${readOnly}` : `${name} : ${type}`} aria-description={readOnly} role="columnheader" onMouseDown={onMouseDown} onContextMenu={onContextMenu}>
       {pk && <span className="pk-mark">🔑</span>}
+      {readOnly && <span className="ro-mark" aria-hidden>🔒</span>}
       <span className="col-name">{name}</span>
       <span className="col-type">{type.toLowerCase()}</span>
       {onSortClick && (
@@ -82,6 +92,17 @@ export function GridHeaderCell({
           {sort ? (sort.dir === "asc" ? "↑" : "↓") : "⇅"}
           {sort?.order !== undefined && <sub>{sort.order}</sub>}
         </span>
+      )}
+      {onResize && (
+        <span
+          className="col-resize"
+          title="Drag to resize · double-click to fit the content"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            onResize(e);
+          }}
+          onDoubleClick={onFit}
+        />
       )}
     </div>
   );
@@ -111,12 +132,15 @@ export function GridCell({
   active,
   changed,
   match,
+  title,
   onMouseDown,
   onMouseEnter,
   onDoubleClick,
   onContextMenu,
 }: {
   children: ReactNode;
+  /** Hover text: why this cell can't be edited where others can (a join's outer side) */
+  title?: string;
   width: number;
   kind?: "null" | "num";
   align?: "left" | "right" | "center";
@@ -136,6 +160,7 @@ export function GridCell({
     <div
       className={cx("cell", kind, align && `al-${align}`, selected && "sel", active && "active", changed && "changed", match && "match")}
       style={{ width }}
+      title={title}
       role="gridcell"
       aria-selected={selected}
       onMouseDown={onMouseDown}

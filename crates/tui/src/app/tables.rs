@@ -1,6 +1,34 @@
 use super::*;
-use qurry_core::editable::{EditTarget, Editable};
+use qurry_core::editable::{EditTarget, Editable, JoinEdit};
+
+/// Where a grid's edits go (App::edit_to)
+pub(crate) enum EditTo {
+    /// One table: cells, and rows added and deleted
+    Table(EditTarget),
+    /// A join (#102): each cell to its table, found by that table's key; no rows added or deleted
+    Join(JoinEdit),
+}
+use qurry_core::format::{column_width, ColumnWidths};
+use qurry_core::store::TableRef;
 use qurry_shared::errors;
+
+/// What < > = and the palette's Fit All Columns / Reset Column Widths do to the grid's columns
+#[derive(Clone, Copy)]
+pub enum Resize {
+    /// Narrow (-1) / widen (+1) the current column by one step
+    Step(i64),
+    Fit,
+    FitAll,
+    Reset,
+}
+
+/// The table a table tab shows, which its column widths are kept for (settings.json "columnWidths", shared with the GUI)
+fn table_ref(t: &Tab) -> Option<TableRef> {
+    match &t.kind {
+        TabKind::Table(tt) => Some(TableRef { source: t.conn.clone(), database: t.db.clone(), schema: tt.schema.clone(), table: tt.table.clone() }),
+        _ => None,
+    }
+}
 
 impl App {
     pub fn open_table(&mut self, conn: &str, db: String, schema: String, table: String, kind: String) {
@@ -68,16 +96,21 @@ impl App {
                 if fresh {
                     a.reload_conns();
                 }
+                let saved = a.tab_mut(id).and_then(|t| table_ref(t)).map(|r| a.state.store.column_widths(&r)).unwrap_or_default();
                 let Some(t) = a.tab_mut(id) else { return };
                 let TabKind::Table(tt) = &mut t.kind else { return };
                 tt.running = false;
                 tt.pk = pk;
+                // The widths the tab has (also ones a failed save kept, until it closes) with the saved ones on top (the GUI's changes)
+                let mut widths = tt.grid.as_ref().map(|g| g.user_widths.clone()).unwrap_or_default();
+                widths.extend(saved);
                 match r {
                     Ok(res) => {
                         let n = res.rows.len();
                         let more = res.truncated;
                         let (row, col) = tt.grid.as_ref().map(|g| (g.row, g.col)).unwrap_or((0, 0));
                         let mut g = Grid::new(res);
+                        g.set_user_widths(widths);
                         g.more_session = Some(tt.session.clone());
                         g.row = row.min(n.saturating_sub(1));
                         g.col = col.min(g.cols().saturating_sub(1));
@@ -97,7 +130,9 @@ impl App {
                                 None => cols.into_iter().map(|(name, type_name)| qurry_core::db::ColumnInfo { name, type_name }).collect(),
                             };
                             let empty = qurry_core::db::QueryResult { columns, rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None };
-                            tt.grid = Some(Grid::new(empty));
+                            let mut g = Grid::new(empty);
+                            g.set_user_widths(widths);
+                            tt.grid = Some(g);
                         }
                         tt.error = Some(e.clone());
                         a.status = e;
@@ -233,22 +268,22 @@ impl App {
 
     // ───────── Table editing ─────────
 
-    /// Where the active grid's edits go: a table tab's table, or the table a console result comes from (QueryResult::editable).
+    /// Where the active grid's edits go: a table tab's table, the table a console result comes from, or a join's tables
+    /// (QueryResult::editable). In Manual mode or an open transaction a console's edits run in it (AppState::submit_edits).
     /// Err: why the grid can't be edited ("" when the tab has no editable grid at all)
-    pub(crate) fn edit_to(&self) -> Result<EditTarget, String> {
+    pub(crate) fn edit_to(&self) -> Result<EditTo, String> {
         let none = || String::new();
         let t = self.tabs.get(self.active).ok_or_else(none)?;
         match &t.kind {
             TabKind::Table(tt) => {
                 let g = tt.grid.as_ref().ok_or_else(none)?;
-                Ok(EditTarget { schema: tt.schema.clone(), table: tt.table.clone(), pk: tt.pk.clone(), columns: g.result.columns.iter().map(|c| c.name.clone()).collect() })
+                Ok(EditTo::Table(EditTarget { schema: tt.schema.clone(), table: tt.table.clone(), pk: tt.pk.clone(), columns: g.result.columns.iter().map(|c| c.name.clone()).collect() }))
             }
             TabKind::Console(c) => {
                 let g = c.grid.as_ref().filter(|_| !c.show_output).ok_or_else(none)?;
                 match &g.result.editable {
-                    // Edits save in a transaction of their own (execute_batch): not while the console's transaction is open
-                    Some(Editable::Table(_)) if c.tx_manual || c.in_tx => Err(errors::CONSOLE_IN_TX.into()),
-                    Some(Editable::Table(e)) => Ok(e.clone()),
+                    Some(Editable::Table(e)) => Ok(EditTo::Table(e.clone())),
+                    Some(Editable::Join(j)) => Ok(EditTo::Join(j.clone())),
                     Some(Editable::ReadOnly(why)) => Err(why.clone()),
                     None => Err(errors::CONSOLE_READ_ONLY.into()),
                 }
@@ -257,16 +292,93 @@ impl App {
         }
     }
 
-    /// The active grid when its rows can be edited; otherwise the status line says why
+    /// The status line says why; None
+    fn refuse(&mut self, why: String) -> Option<&mut Grid> {
+        if !why.is_empty() {
+            self.status = why;
+        }
+        None
+    }
+
+    /// The active grid when its current cell can be edited (a join: per table, its outer side where no row matched read-only);
+    /// otherwise the status line says why
     pub(crate) fn edit_grid(&mut self) -> Option<&mut Grid> {
         match self.edit_to() {
-            Ok(_) => self.grid_mut(),
-            Err(why) => {
-                if !why.is_empty() {
-                    self.status = why;
+            Ok(EditTo::Table(_)) => self.grid_mut(),
+            Ok(EditTo::Join(j)) => {
+                let g = self.grid_mut()?;
+                let row = g.result.rows.get(g.row).cloned().unwrap_or_default();
+                match j.cell(g.col, |i| row.get(i).is_none_or(serde_json::Value::is_null)) {
+                    Ok(_) => self.grid_mut(),
+                    Err(why) => self.refuse(why),
                 }
-                None
             }
+            Err(why) => self.refuse(why),
+        }
+    }
+
+    /// The active grid when rows can be added or deleted in it (one table, not a join); otherwise the status line says why
+    pub(crate) fn edit_rows(&mut self) -> Option<&mut Grid> {
+        match self.edit_to() {
+            Ok(EditTo::Table(_)) => self.grid_mut(),
+            Ok(EditTo::Join(_)) => self.refuse(errors::EDIT_JOIN_ROWS.into()),
+            Err(why) => self.refuse(why),
+        }
+    }
+
+    /// Paste into the active grid from its current cell. A join's paste reaches only cells that can be edited and adds no rows
+    pub(crate) fn paste_grid(&mut self, text: &str) {
+        let join = match self.edit_to() {
+            Ok(EditTo::Join(j)) => Some(j),
+            _ => None,
+        };
+        let Some(g) = self.edit_grid().filter(|g| g.cols() > 0) else { return };
+        if let Some(j) = join {
+            let bad = g.paste_spots(text).into_iter().find_map(|(r, c)| match g.result.rows.get(r) {
+                None => Some(errors::EDIT_JOIN_ROWS.to_string()),
+                Some(row) => j.cell(c, |i| row.get(i).is_none_or(serde_json::Value::is_null)).err(),
+            });
+            if let Some(why) = bad {
+                self.status = why;
+                return;
+            }
+        }
+        g.paste(text);
+    }
+
+    /// < > =, Fit All Columns, Reset Column Widths on a table tab or a result (the GUI's header menu and ⌃⌥← / ⌃⌥→). A table tab's
+    /// widths are saved for its table, so the GUI shows them too; a console result keeps them until it runs again
+    pub fn resize_columns(&mut self, how: Resize) {
+        let Some(t) = self.tabs.get(self.active).filter(|t| matches!(t.kind, TabKind::Table(_) | TabKind::Console(_) | TabKind::Dba(_))) else {
+            self.status = "Open a result or table to resize its columns".into();
+            return;
+        };
+        let table = table_ref(t);
+        let Some(g) = self.grid_mut().filter(|g| g.cols() > 0) else { return };
+        let c = g.col;
+        let name = g.result.columns[c].name.clone();
+        let changed: ColumnWidths = match how {
+            Resize::Step(s) => [g.set_width(c, column_width(g.widths[c].into(), s))].into(),
+            Resize::Fit => [g.set_width(c, g.fit_width(c))].into(),
+            Resize::FitAll => (0..g.cols()).map(|c| g.set_width(c, g.fit_width(c))).collect(),
+            Resize::Reset => {
+                g.set_user_widths(ColumnWidths::new());
+                ColumnWidths::new()
+            }
+        };
+        self.status = match (how, changed.iter().next()) {
+            (Resize::Reset, _) => "Column widths are the computed ones again".into(),
+            (Resize::FitAll, _) => "Every column fits its content".into(),
+            (_, Some((_, w))) => format!("{name}: {w} cells wide"),
+            _ => String::new(),
+        };
+        let Some(table) = table else { return };
+        let saved = match how {
+            Resize::Reset => self.state.store.reset_column_widths(&table),
+            _ => self.state.store.set_column_widths(&table, &changed).map(|_| ()),
+        };
+        if let Err(e) = saved {
+            self.status = format!("Couldn't save the column widths ({e}). They apply until the tab closes; Reset Column Widths in the actions palette ({}) goes back to the computed widths.", self.keys.label(Action::Palette));
         }
     }
 
@@ -277,119 +389,153 @@ impl App {
         let ro = conn.map(|c| c.config.read_only).unwrap_or(false);
         let prod = conn.filter(|c| c.config.options.confirm_changes).map(|c| c.config.name.clone());
         let (id, target) = (t.id, t.target.clone());
-        let Some(g) = (match &t.kind {
-            TabKind::Table(tt) => tt.grid.as_ref(),
-            TabKind::Console(c) => c.grid.as_ref(),
-            _ => None,
-        }) else {
-            return;
+        // A console's edits run in its transaction in Manual mode or with one open, and stay pending (AppState::submit_edits)
+        let (g, tab, in_tx) = match &t.kind {
+            TabKind::Table(tt) => (tt.grid.as_ref(), None, false),
+            TabKind::Console(c) => (c.grid.as_ref(), Some(c.session.clone()), c.tx_manual || c.in_tx),
+            _ => (None, None, false),
         };
+        let Some(g) = g else { return };
         if !g.dirty() {
             self.status = "No pending changes".into();
             return;
         }
-        let to = match self.edit_to() {
-            Ok(to) => to,
+        let stmts = match self.edit_to() {
+            Ok(EditTo::Table(to)) => table_stmts(kind, &to, g),
+            Ok(EditTo::Join(j)) => Ok(join_stmts(kind, &j, g)),
+            Err(why) => Err(why),
+        };
+        let stmts = match stmts {
+            _ if ro => return self.status = "Data source is read-only".into(),
+            Ok(s) => s,
             Err(why) => return self.status = why,
         };
-        if ro {
-            self.status = "Data source is read-only".into();
-            return;
-        }
-        let q = |s: &str| sql::quote_ident(kind, s);
-        let table = format!("{}.{}", q(&to.schema), q(&to.table));
-        // The table column of each result column (a console result's aliases): what the SQL names
-        let col = |i: usize| q(&to.columns[i]);
-        let pk_idx: Vec<usize> = to.pk.iter().filter_map(|p| to.columns.iter().position(|c| c == p)).collect();
-        let where_of = |r: usize| -> Option<String> {
-            if pk_idx.is_empty() || pk_idx.len() != to.pk.len() {
-                return None;
-            }
-            Some(pk_idx.iter().map(|&i| format!("{} = {}", col(i), sql::literal(kind, raw_text(&g.result.rows[r][i]).as_deref()))).collect::<Vec<_>>().join(" AND "))
-        };
-        let mut stmts = vec![];
-        let base = g.rows() - g.added;
-        let mut rows_with_edits: Vec<usize> = g.edits.keys().map(|(r, _)| *r).collect();
-        rows_with_edits.dedup();
-        for r in rows_with_edits.iter().copied().filter(|r| *r < base && !g.deleted.contains(r)) {
-            let sets: Vec<String> = g.edits.iter().filter(|((rr, _), _)| *rr == r).map(|((_, c), v)| format!("{} = {}", col(*c), sql::literal(kind, v.as_deref()))).collect();
-            match where_of(r) {
-                Some(w) => stmts.push(format!("UPDATE {table} SET {} WHERE {w}", sets.join(", "))),
-                None => {
-                    self.status = "Table has no primary key — cannot update rows".into();
-                    return;
-                }
-            }
-        }
-        for &r in &g.deleted {
-            if r >= base {
-                continue;
-            }
-            match where_of(r) {
-                Some(w) => stmts.push(format!("DELETE FROM {table} WHERE {w}")),
-                None => {
-                    self.status = "Table has no primary key — cannot delete rows".into();
-                    return;
-                }
-            }
-        }
-        for r in base..g.rows() {
-            if g.deleted.contains(&r) {
-                continue;
-            }
-            let set: Vec<(usize, &Option<String>)> = g.edits.iter().filter(|((rr, _), _)| *rr == r).map(|((_, c), v)| (*c, v)).collect();
-            if set.is_empty() {
-                stmts.push(match kind {
-                    DbKind::Mysql => format!("INSERT INTO {table} () VALUES ()"),
-                    _ => format!("INSERT INTO {table} DEFAULT VALUES"),
-                });
-            } else {
-                stmts.push(format!(
-                    "INSERT INTO {table} ({}) VALUES ({})",
-                    set.iter().map(|(c, _)| col(*c)).collect::<Vec<_>>().join(", "),
-                    set.iter().map(|(_, v)| sql::literal(kind, v.as_deref())).collect::<Vec<_>>().join(", ")
-                ));
-            }
-        }
-        // Production asks first, listing the statements (each changes exactly one row: execute_batch's exact_one)
+        // Production asks first, listing the statements (each changes exactly one row)
         let gid = g.id;
         match prod {
             Some(name) => {
                 let lines: Vec<String> = stmts.iter().map(|s| format!("  {}", s.chars().take(100).collect::<String>())).collect();
+                let what = match in_tx {
+                    true => format!("run {} change(s) in this console's transaction? They stay pending until you Commit or Roll back.", stmts.len()),
+                    false => format!("save {} change(s)?", stmts.len()),
+                };
                 self.popup = Some(Popup::Confirm {
                     opened: None,
-                    text: format!("Production data source \"{name}\" — save {} change(s)?\n\n{}", stmts.len(), lines.join("\n")),
-                    on_yes: Box::new(move |a| a.submit_stmts(id, gid, target, stmts)),
+                    text: format!("Production data source \"{name}\" — {what}\n\n{}", lines.join("\n")),
+                    on_yes: Box::new(move |a| a.submit_stmts(id, gid, target, tab, stmts)),
                 });
             }
-            None => self.submit_stmts(id, gid, target, stmts),
+            None => self.submit_stmts(id, gid, target, tab, stmts),
         }
     }
 
-    /// Save the statements Submit built for grid `gid` of tab `id`, then show the saved rows (reload the table, run the console's statement again)
-    fn submit_stmts(&mut self, id: u64, gid: u64, target: String, stmts: Vec<String>) {
+    /// Save the statements Submit built for grid `gid` of tab `id`, then show the saved rows (reload the table, run the console's
+    /// statement again). tab = the console's session: in Manual mode or with a transaction open they run in it and stay pending
+    fn submit_stmts(&mut self, id: u64, gid: u64, target: String, tab: Option<String>, stmts: Vec<String>) {
         let n = stmts.len();
         let st = self.state.clone();
         self.status = format!("Submitting {n} statement(s)…");
-        self.spawn(async move { st.execute_batch(target, stmts, true).await.map_err(err) }, move |a, r| match r {
-            Ok(r) => {
-                a.status = format!("{n} statement(s) submitted, {} row(s) affected", r.rows);
-                match a.tab_mut(id).map(|t| &t.kind) {
-                    Some(TabKind::Table(_)) => a.reload_table(id),
-                    // The console still shows that result: run its statement again (a newer result stays as it is)
-                    Some(TabKind::Console(c)) if c.grid.as_ref().is_some_and(|g| g.id == gid) => {
-                        let sql = c.result_sql.clone();
-                        Self::in_console(id, move |a| a.run_stmts(vec![sql], false, false))(a);
+        self.spawn(
+            async move {
+                let r = st.submit_edits(target, tab.clone(), stmts).await.map_err(err);
+                // Pending now, or ended by the failure (a deadlock, a lost connection)
+                let in_tx = match &tab {
+                    Some(t) => st.tx_state(t.clone()).await,
+                    None => false,
+                };
+                (r, in_tx)
+            },
+            move |a, (r, in_tx)| {
+                if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                    c.in_tx = in_tx;
+                }
+                match r {
+                    Ok(r) => {
+                        let pending = if in_tx { " · pending until Commit / Roll back" } else { "" };
+                        a.status = format!("{n} statement(s) submitted, {} row(s) affected{pending}", r.rows);
+                        match a.tab_mut(id).map(|t| &t.kind) {
+                            Some(TabKind::Table(_)) => a.reload_table(id),
+                            // The console still shows that result: run its statement again (a newer result stays as it is)
+                            Some(TabKind::Console(c)) if c.grid.as_ref().is_some_and(|g| g.id == gid) => {
+                                let sql = c.result_sql.clone();
+                                Self::in_console(id, move |a| a.run_stmts(vec![sql], false, false))(a);
+                            }
+                            _ => {}
+                        }
+                        // Saved, but its result couldn't be logged: not a failure (submitting again would save it twice)
+                        if let Some(w) = r.warning {
+                            a.status.push_str(" · Warning: the Production log couldn't record it");
+                            a.notice("Submitted, with a warning".into(), w);
+                        }
                     }
-                    _ => {}
+                    Err(e) => a.notice("Submit failed".into(), e),
                 }
-                // Saved, but its result couldn't be logged: not a failure (submitting again would save it twice)
-                if let Some(w) = r.warning {
-                    a.status.push_str(" · Warning: the Production log couldn't record it");
-                    a.notice("Submitted, with a warning".into(), w);
-                }
-            }
-            Err(e) => a.notice("Submit failed".into(), e),
-        });
+            },
+        );
     }
+}
+
+/// One table's statements: UPDATE / DELETE by its key, INSERT for the added rows. Err: the table has no key
+fn table_stmts(kind: DbKind, to: &EditTarget, g: &Grid) -> Result<Vec<String>, String> {
+    let q = |s: &str| sql::quote_ident(kind, s);
+    let table = format!("{}.{}", q(&to.schema), q(&to.table));
+    // The table column of each result column (a console result's aliases): what the SQL names
+    let col = |i: usize| q(&to.columns[i]);
+    let pk_idx: Vec<usize> = to.pk.iter().filter_map(|p| to.columns.iter().position(|c| c == p)).collect();
+    let where_of = |r: usize| -> Option<String> {
+        if pk_idx.is_empty() || pk_idx.len() != to.pk.len() {
+            return None;
+        }
+        Some(pk_idx.iter().map(|&i| format!("{} = {}", col(i), sql::literal(kind, raw_text(&g.result.rows[r][i]).as_deref()))).collect::<Vec<_>>().join(" AND "))
+    };
+    let mut stmts = vec![];
+    let base = g.rows() - g.added;
+    let mut rows_with_edits: Vec<usize> = g.edits.keys().map(|(r, _)| *r).collect();
+    rows_with_edits.dedup();
+    for r in rows_with_edits.iter().copied().filter(|r| *r < base && !g.deleted.contains(r)) {
+        let sets: Vec<String> = g.edits.iter().filter(|((rr, _), _)| *rr == r).map(|((_, c), v)| format!("{} = {}", col(*c), sql::literal(kind, v.as_deref()))).collect();
+        let w = where_of(r).ok_or("Table has no primary key — cannot update rows")?;
+        stmts.push(format!("UPDATE {table} SET {} WHERE {w}", sets.join(", ")));
+    }
+    for &r in g.deleted.iter().filter(|r| **r < base) {
+        let w = where_of(r).ok_or("Table has no primary key — cannot delete rows")?;
+        stmts.push(format!("DELETE FROM {table} WHERE {w}"));
+    }
+    for r in (base..g.rows()).filter(|r| !g.deleted.contains(r)) {
+        let set: Vec<(usize, &Option<String>)> = g.edits.iter().filter(|((rr, _), _)| *rr == r).map(|((_, c), v)| (*c, v)).collect();
+        if set.is_empty() {
+            stmts.push(match kind {
+                DbKind::Mysql => format!("INSERT INTO {table} () VALUES ()"),
+                _ => format!("INSERT INTO {table} DEFAULT VALUES"),
+            });
+        } else {
+            stmts.push(format!(
+                "INSERT INTO {table} ({}) VALUES ({})",
+                set.iter().map(|(c, _)| col(*c)).collect::<Vec<_>>().join(", "),
+                set.iter().map(|(_, v)| sql::literal(kind, v.as_deref())).collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
+    Ok(stmts)
+}
+
+/// A join's statements (#102): per edited row, one UPDATE for each table its edits go to, found by that table's key (never by a
+/// column's name). Cells that can't be edited never got an edit (App::edit_grid)
+fn join_stmts(kind: DbKind, j: &JoinEdit, g: &Grid) -> Vec<String> {
+    let q = |s: &str| sql::quote_ident(kind, s);
+    let mut sets: std::collections::BTreeMap<(usize, usize), Vec<String>> = Default::default();
+    for ((r, c), v) in &g.edits {
+        let row = &g.result.rows[*r];
+        if let Ok((t, column)) = j.cell(*c, |i| row.get(i).is_none_or(serde_json::Value::is_null)) {
+            let ti = j.tables.iter().position(|x| std::ptr::eq(x, t)).unwrap_or_default();
+            sets.entry((*r, ti)).or_default().push(format!("{} = {}", q(column), sql::literal(kind, v.as_deref())));
+        }
+    }
+    sets.into_iter()
+        .map(|((r, ti), set)| {
+            let t = &j.tables[ti];
+            let key = t.pk.iter().zip(&t.pk_at).map(|(k, &i)| format!("{} = {}", q(k), sql::literal(kind, raw_text(&g.result.rows[r][i]).as_deref()))).collect::<Vec<_>>().join(" AND ");
+            format!("UPDATE {}.{} SET {} WHERE {key}", q(&t.schema), q(&t.table), set.join(", "))
+        })
+        .collect()
 }

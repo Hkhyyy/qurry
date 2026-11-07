@@ -5,6 +5,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# CI restored or built src/wasm/pkg for these sources already (.github/actions/wasm): nothing to do, and no toolchain needed
+if [ -n "${QURRY_WASM_PREBUILT:-}" ] && [ -f src/wasm/pkg/qurry_shared_wasm_bg.wasm ]; then exit 0; fi
+
 want=$(sed -n 's/^wasm-bindgen = "=\(.*\)"/\1/p' crates/shared-wasm/Cargo.toml)
 
 if command -v rustup >/dev/null && ! rustup target list --installed | grep -qx wasm32-unknown-unknown; then

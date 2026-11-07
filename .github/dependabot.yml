@@ -1,0 +1,29 @@
+# Weekly update pull requests, so locked versions and pinned action SHAs get reviewed updates instead of going stale.
+# Minor and patch updates come grouped, one pull request per ecosystem; a major update gets its own (it may need code changes).
+# Known vulnerabilities fail the audit workflow (.github/workflows/audit.yml) on these pull requests and every week.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        update-types: [minor, patch]
+
+  # Workflows and the composite actions in .github/actions (all pinned by SHA; the comment after the SHA is updated with it)
+  - package-ecosystem: github-actions
+    directories: [/, /.github/actions/*]
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        update-types: [minor, patch]

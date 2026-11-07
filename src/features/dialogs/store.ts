@@ -5,7 +5,7 @@ import { setter } from "../setter";
 
 /** Which dialogs are open, and what each was opened for (null / false = closed) */
 interface DialogsState {
-  settingsOpen: false | "appearance" | "keymap";
+  settingsOpen: false | "appearance" | "theme" | "keymap";
   /** Quick Switch Theme */
   schemeOpen: boolean;
   /** Keymap Reference */

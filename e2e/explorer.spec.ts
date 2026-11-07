@@ -160,16 +160,6 @@ test("Enter with several tables opens a tab for each", async ({ page }) => {
   await expect.poll(() => tabStrips(page)).toEqual(["contracts | users"]);
 });
 
-test("⌦ on a range of Redis keys asks no Drop… (DROP isn't a Redis command)", async ({ page }) => {
-  // [Redis] cache's db0 lists its keys (session and user are folders)
-  await treeItem(page, "X events").click();
-  await treeItem(page, "S tags").click({ modifiers: ["Shift"] });
-  await expect(selectedRows(page)).toHaveCount(3);
-  await page.keyboard.press("Delete");
-  await expect(status(page)).toHaveText(/^Works on one node/);
-  await expect(dialog(page)).toHaveCount(0);
-});
-
 test("Manage Shown Schemas: unchecking one schema under All schemas keeps the others; checking it again turns All back on", async ({ page }) => {
   await page.locator(".ws-explorer.on .scope-badge", { hasText: / of 3$/ }).first().click();
   const popup = page.locator(".scope-popup");

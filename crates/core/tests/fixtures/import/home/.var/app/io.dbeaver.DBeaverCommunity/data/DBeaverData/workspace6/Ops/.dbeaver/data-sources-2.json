@@ -1,0 +1,39 @@
+{
+	"folders": {},
+	"connections": {
+		"postgres-jdbc-19a0b1c2d3e-8b9c0d1e2f3a4b5c": {
+			"provider": "postgresql",
+			"driver": "postgres-jdbc",
+			"name": "ops-pg",
+			"configuration": {
+				"host": "ops-db.internal",
+				"port": "5432",
+				"database": "ops",
+				"configurationType": "MANUAL",
+				"type": "dev",
+				"handlers": {
+					"ssh_tunnel": {
+						"type": "TUNNEL",
+						"enabled": true,
+						"properties": {
+							"host": "ops-gw.example.org",
+							"port": 2222,
+							"authType": "PUBLIC_KEY",
+							"keyPath": "${project.path}/keys/ops_ed25519"
+						}
+					},
+					"postgre_ssl": {
+						"type": "CONFIG",
+						"enabled": true,
+						"properties": {
+							"sslMode": "verify-ca",
+							"ssl.ca.cert": "/etc/ssl/ops-ca.pem",
+							"ssl.client.cert": "/etc/ssl/ops-client.crt",
+							"ssl.client.key": "/etc/ssl/ops-client.key"
+						}
+					}
+				}
+			}
+		}
+	}
+}

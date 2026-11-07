@@ -1,6 +1,8 @@
 /** For development: opening in a browser with ?mock uses fake data instead of the Tauri backend (for checking screens). */
 // A real font file for the added custom fonts (FontFace has to load something): Monaco's icon font (by path: the package exports only .js)
 import fontBytesUrl from "/node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.ttf?url";
+import { shared } from "./shared";
+import THEMES from "../../crates/shared/src/themes.json";
 const conns = [
   { id: "dev", name: "[DEV] shop_app", kind: "postgres", host: "dev-db.example.com", port: 5432, user: "app", database: "shop_app", color: "#5f5b24", hasPassword: true, connected: true },
   { id: "prod", name: "[PROD] shop_app", kind: "postgres", host: "prod-db", port: 5432, user: "app", database: "shop_app", color: "#6e2a2a", hasPassword: true, connected: false, options: { confirmChanges: true },
@@ -55,6 +57,13 @@ const wide = {
   rows: Array.from({ length: 500 }, (_, r) => Array.from({ length: 30 }, (_, c) => (c % 2 ? `value ${r + 1}.${c + 1}` : r * 30 + c))),
   truncated: false,
 };
+/** `select … from cjk_demo`: a join's two `id` columns and Hangul text (wide characters) */
+const cjkDemo = {
+  ...result,
+  columns: [{ name: "id", typeName: "INT8" }, { name: "memo", typeName: "TEXT" }, { name: "id", typeName: "INT8" }],
+  rows: Array.from({ length: 20 }, (_, i) => [i + 1, i === 3 ? "배송 전에 꼭 전화 주세요 고객 요청 사항" : "고객 요청", 100 + i]),
+  truncated: false,
+};
 /** `select … from json_demo`: a jsonb column (colored cells); row 3 holds a ~100 KB value */
 const jsonDemo = {
   ...result,
@@ -74,26 +83,111 @@ const payments = {
   rows: Array.from({ length: 40 }, (_, i) => [i + 1, i % 2 ? "paid" : "ready", i === 2 ? null : `{"kind": "card", "meta": {"src": "web", "ip": "10.0.0.${i + 1}"}, "items": [${i}, ${i + 1}]}`, i % 4 ? "plain note" : "[1, 2]"]),
   truncated: false,
 };
-/** A console result's edit target or why it has none, as the backend says (#86): `select * from users` is one table with its key, a join isn't */
+/** `select … from crm.voc vo left join users pu …` (#102): edited per table, each by its own key. voc 2 has no user (the outer side is
+ *  NULL there), `shout` is computed */
+const vocJoin = {
+  ...result,
+  columns: ["idx", "user_idx", "status", "idx", "role", "status", "shout"].map((name, i) => ({ name, typeName: i === 6 || i === 2 || i === 4 || i === 5 ? "VARCHAR" : "INT8" })),
+  rows: [[1, 10, "open", 10, "member", "active", "MEMBER"], [2, 99, "new", null, null, null, null], [3, 11, "closed", 11, "admin", "active", "ADMIN"]],
+  truncated: false,
+  editJoin: {
+    tables: [{ schema: "crm", table: "voc", pk: ["idx"], pkAt: [0] }, { schema: "public", table: "users", pk: ["idx"], pkAt: [3] }],
+    columns: [{ table: 0, column: "idx" }, { table: 0, column: "user_idx" }, { table: 0, column: "status" }, { table: 1, column: "idx" }, { table: 1, column: "role" }, { table: 1, column: "status" }, { readOnly: "Read-only: shout is computed, not a column of the table." }],
+  },
+};
+/** A console result's edit target or why it has none, as the backend says (#86): `select * from users` is one table with its key; a
+ *  join of voc and users edits per table (vocJoin), other joins lack a key */
 const consoleEdit = (sql: string) =>
   /\bjoin\b/i.test(sql)
-    ? { readOnlyReason: "Read-only: the columns come from more than one table." }
+    ? { readOnlyReason: "Read-only: the result doesn't include the primary key of public.orders (id)." }
     : /^\s*select\s+\*\s+from\s+(public\.)?users\s*;?\s*$/i.test(sql)
       ? { edit: { schema: "public", table: "users", pk: ["id"], columns: result.columns.map((c) => c.name) } }
       : {};
+/** `select * from users limit n`: the first n rows, editable as `select * from users` is (a short result: Storybook's theme preview) */
+const usersLimit = (sql: string) => {
+  const m = /^\s*select\s+\*\s+from\s+(public\.)?users\s+limit\s+(\d+)\s*;?\s*$/i.exec(sql);
+  return m ? { ...result, rows: result.rows.slice(0, Number(m[2])), truncated: false, edit: { schema: "public", table: "users", pk: ["id"], columns: result.columns.map((c) => c.name) } } : null;
+};
 let flakyLoads = 0;
 let updateChannel = "stable";
 /** Font files added in Settings: each "Add Font File…" adds "Fira Code" (then "Fira Code 2"…, as the backend names a taken name) */
 let customFonts: { name: string; file: string }[] = [];
+/** settings.json "theme" / "themeSync" / "customThemes" (kept across a reload, as the file is; read on each call, so a test can change
+ *  it as the TUI would). Custom themes are checked as the core checks them (the shared WASM's theme file rules) */
+const themeSettings = () => JSON.parse(localStorage.getItem("mock-themeSettings") ?? "null") ?? { theme: null, sync: { dark: "dark", light: "light" }, custom: [] };
+const saveThemeSettings = (s: unknown) => localStorage.setItem("mock-themeSettings", JSON.stringify(s));
+const checkTheme = (t: any) => {
+  shared().parseThemeFile(shared().themeFileText({ ...t, id: "" }));
+};
+/** settings.json "keywordCase" (kept across a reload, as the file is) */
+let keywordCase = localStorage.getItem("mock-keywordCase") ?? "off";
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
 let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
+/** settings.json "columnWidths": table (source · database · schema · table) → its set widths (kept across a reload, as the file is;
+ *  read on each call, as the core reads the file, so a test can change it as the TUI would) */
+const columnWidths = (): Record<string, Record<string, number>> => JSON.parse(localStorage.getItem("mock-columnWidths") ?? "{}");
+const widthsKey = (t: any) => JSON.stringify([t.source, t.database, t.schema, t.table]);
+const saveWidths = (all: Record<string, Record<string, number>>) => localStorage.setItem("mock-columnWidths", JSON.stringify(all));
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
 let updateChecked = false;
+/** A delayed load-more in flight (__mockFetchMoreDelay): cancel_query makes it fail as the server does */
+let cancelMore: (() => void) | null = null;
 /** Test Connections waiting for cancel_test, by test id */
 const testsRunning: Record<string, () => void> = {};
+// Import Data Sources (core import.rs): the locations found and a preview in the core's words
+const IMPORT_LOCATIONS = [
+  { label: "DataGrip 2025.2 · global", path: "/Users/me/Library/Application Support/JetBrains/DataGrip2025.2/options", shown: "~/Library/Application Support/JetBrains/DataGrip2025.2/options", count: 7 },
+  { label: "IntelliJ IDEA · project shop-api", path: "/Users/me/work/shop-api/.idea", shown: "~/work/shop-api/.idea", count: 3 },
+  { label: "DBeaver · workspace6 General", path: "/Users/me/Library/DBeaverData/workspace6/General/.dbeaver", shown: "~/Library/DBeaverData/workspace6/General/.dbeaver", count: 6 },
+];
+const IMPORT_NOTE = "New data sources start with MCP Off. Passwords aren't imported: each asks on its first connect.";
+export function importPlan(from: string, path: string) {
+  const shown = path.replace(/^\/Users\/me/, "~");
+  const rows = [
+    { text: '+ add "orders-prod" (app@orders-db.internal:5432/orders)', note: "PostgreSQL · SSH ec2-user@bastion.example.com (key ~/.ssh/id_ed25519) · SSL verify-full (CA ~/certs/orders-ca.pem) · Read-only", value: "password on connect", tone: null, checkable: true },
+    { text: '+ add "analytics" (analyst@10.0.3.21:3306/stats)', note: "MySQL · SSL require", value: "SSL without certificate checks", tone: "warn", checkable: true },
+    { text: '+ add "events" (default@ch.internal:8123/default)', note: "ClickHouse · SSH deploy@jump-eu.example.com:2222 (ssh-agent)", value: "password on connect", tone: null, checkable: true },
+    { text: '+ add "local-pg" (postgres@localhost:5432/postgres)', note: "PostgreSQL", value: "no password", tone: null, checkable: true },
+    { text: '+ add "cache" (localhost:6379/0)', note: "Redis", value: "no password", tone: null, checkable: true },
+    { text: '− skip "warehouse" (Snowflake)', note: "Snowflake isn't supported", value: "skipped", tone: null, checkable: false },
+    { text: '− skip "billing" (PostgreSQL)', note: "already in Qurry (same server, user and database)", value: "skipped", tone: null, checkable: false },
+  ];
+  // window.__mockImportAllSkipped: every source is skipped (a notice instead of the confirm)
+  if ((window as any).__mockImportAllSkipped) {
+    const skipped = rows.filter((r) => !r.checkable);
+    return { title: "Import Data Sources", message: `Nothing to import from ${from}: its ${skipped.length} data sources are skipped.\n${shown}`, rows: skipped, importable: 0 };
+  }
+  return { title: "Import Data Sources", message: `Import these data sources from ${from}?\n${shown}\n\n5 to add, 2 skipped. ${IMPORT_NOTE}`, rows, importable: 5 };
+}
+
+/** [Redis] cache's keys: db0 (the default) and db3 */
+const redisKeys = (id: string) =>
+  String(id).endsWith("::db3")
+    ? [
+        { key: "jobs:1", type: "hash", ttl: -1 },
+        { key: "jobs:2", type: "hash", ttl: 600_000 },
+      ]
+    : [
+        { key: "session:abc", type: "string", ttl: 3_540_000 },
+        { key: "user:1", type: "hash", ttl: -1 },
+        { key: "user:1:name", type: "string", ttl: -1 },
+        { key: "queue:mail", type: "list", ttl: -1 },
+        { key: "tags", type: "set", ttl: -1 },
+        { key: "rank", type: "zset", ttl: 101_000_000 },
+        { key: "events", type: "stream", ttl: -1 },
+      ];
+/** SCAN MATCH with * and ? only */
+const redisMatch = (pattern: string | undefined, key: string) =>
+  new RegExp(`^${(pattern?.trim() || "*").replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(key);
+const historyAdded: { id: string; connId: string; database?: string; sql: string; ts: number }[] = [];
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
-  list_connections: () => structuredClone(conns),
+  // window.__mockRedis (set before load): { readOnly, production, managed } for [Redis] cache (managed: CONFIG refused, as on ElastiCache)
+  list_connections: () =>
+    structuredClone(conns).map((c: any) => {
+      const r = (globalThis as any).__mockRedis;
+      return c.id === "rd" && r ? { ...c, readOnly: !!r.readOnly, options: { ...c.options, confirmChanges: !!r.production } } : c;
+    }),
   // window.__mockDbListFail: the account can't connect to a source's default database, so listing through the source itself fails.
   // window.__mockDbListDelay (ms): the list arrives that late (a select asked for it only on its first click would open without it)
   list_databases: (a: any) => {
@@ -107,16 +201,10 @@ const handlers: Record<string, (a: any) => unknown> = {
   },
   redis_scan: (a: any) => ({
     cursor: "0",
-    keys: [
-      { key: "session:abc", type: "string", ttl: 3_540_000 },
-      { key: "user:1", type: "hash", ttl: -1 },
-      { key: "user:1:name", type: "string", ttl: -1 },
-      { key: "queue:mail", type: "list", ttl: -1 },
-      { key: "tags", type: "set", ttl: -1 },
-      { key: "rank", type: "zset", ttl: 86_400_000 },
-      { key: "events", type: "stream", ttl: -1 },
-    ].filter((k) => !a.typeFilter || k.type === a.typeFilter),
+    keys: redisKeys(a.id).filter((k) => (!a.typeFilter || k.type === a.typeFilter) && redisMatch(a.pattern, k.key)),
   }),
+  redis_overview: () => ({ configAllowed: !(globalThis as any).__mockRedis?.managed, databases: [{ name: "db0", keys: 7 }, { name: "db3", keys: 2 }] }),
+  redis_key_names: (a: any) => redisKeys(a.id).map((k) => k.key).filter((k) => k.startsWith(a.prefix)).sort().slice(0, a.max),
   redis_key: (a: any) =>
     a.key === "user:1"
       ? { type: "hash", ttl: -1, length: 3, memory: 96, encoding: "listpack", truncated: false, value: [["age", "30"], ["email", "a@b.c"], ["profile", '{"city":"Seoul","tags":["vip","beta"]}']] }
@@ -124,7 +212,25 @@ const handlers: Record<string, (a: any) => unknown> = {
       ? { type: "zset", ttl: 86400000, length: 2, memory: 72, encoding: "listpack", truncated: false, value: [["alice", "10"], ["bob", "20"]] }
       : { type: "string", ttl: 3540000, length: 42, memory: 80, encoding: "embstr", truncated: false, value: '{"uid":1,"roles":["admin"],"exp":1760000000}' },
   redis_exec: () => ({ status: "OK" }),
-  redis_exec_line: (a: any) => (/^hgetall/i.test(a.line) ? ["age", "30", "email", "a@b.c"] : /^incr/i.test(a.line) ? 7 : /^get/i.test(a.line) ? null : { status: "OK" }),
+  // As the backend: a read-only source refuses writes; replies by command (window.__mockRedisLines lists the lines that ran)
+  redis_exec_line: (a: any) => {
+    const g = globalThis as any;
+    const cmd = String(a.line).trim().split(/\s+/)[0].toUpperCase();
+    if (g.__mockRedis?.readOnly && !["GET", "HGETALL", "LRANGE", "SMEMBERS", "ZRANGE", "TTL", "TYPE", "DBSIZE", "PING", "SCAN"].includes(cmd)) throw `Data source "[Redis] cache" is read-only: ${cmd} changes data`;
+    (g.__mockRedisLines ??= []).push(a.line);
+    const reply: Record<string, unknown> = {
+      HGETALL: ["age", "30", "email", "a@b.c"],
+      LRANGE: ["mail-1", "mail-2", "mail-3"],
+      SMEMBERS: ["beta", "vip"],
+      ZRANGE: /withscores/i.test(a.line) ? ["alice", "10", "bob", "20"] : ["alice", "bob"],
+      INCR: 7,
+      GET: null,
+      DBSIZE: 7,
+      FLUSHDB: { status: "OK" },
+    };
+    if (cmd === "NOSUCH") throw "Redis: ERR unknown command 'NOSUCH', with args beginning with: ";
+    return cmd in reply ? reply[cmd] : { status: "OK" };
+  },
   warm_search_cache: () => null,
   cached_index: () => [
     { target: "prod::shop_app", objects: [{ schema: "public", name: "payments", kind: "table" }, { schema: "public", name: "refunds", kind: "table" }], columns: [{ schema: "public", name: "refunds", columns: [["payment_id", "bigint"]] }] },
@@ -212,9 +318,12 @@ const handlers: Record<string, (a: any) => unknown> = {
     };
   },
   // MySQL: the schema is the database (shop is the data source's default)
+  // Foreign keys (FK-aware joins) and a user function (signature help) as completion_meta returns them
   completion_meta: (a: any) => a.id.split("::")[0] === "my" ? [{ schema: "shop", name: "orders", columns: [["id", "bigint"], ["status", "varchar"]] }] : [
     { schema: "public", name: "users", columns: [["id", "bigint"], ["user_name", "varchar"]] },
-    { schema: "public", name: "orders", columns: [["id", "bigint"], ["status", "varchar"], ["amount", "numeric"], ["data", "jsonb"], ["reasons", "jsonb"]] },
+    { schema: "public", name: "orders", columns: [["id", "bigint"], ["user_id", "bigint"], ["status", "varchar"], ["amount", "numeric"], ["data", "jsonb"], ["reasons", "jsonb"]],
+      fks: [{ columns: ["user_id"], refSchema: "public", refTable: "users", refColumns: ["id"] }] },
+    { schema: "public", name: "order_total", columns: [], routine: { args: "order_id bigint, with_tax boolean", returns: "numeric" } },
   ],
   // Shared workspace list (mimics the file shared with the TUI). Tests replace it via window.__sharedWs
   shared_workspaces: () => (window as any).__sharedWs ?? null,
@@ -244,19 +353,23 @@ const handlers: Record<string, (a: any) => unknown> = {
       : a.req.column === "status" ? [{ value: "ready", count: 20 }, { value: "paid", count: 10 }, { value: "it's late", count: 1 }]
       : a.req.column === "amount" ? [{ value: "1000", count: 7 }, { value: "2500", count: 3 }]
       : [{ value: "k0", count: 15 }, { value: "k1", count: 15 }],
-  // A statement on no_such_table fails (console gutter marks)
+  // A statement on no_such_table fails (console gutter marks) at its position, as PostgreSQL says it (qurry_shared::errors::with_position)
   run_query: (a: any) =>
-    /\bno_such_table\b/i.test(a.sql) ? Promise.reject(`ERROR: relation "no_such_table" does not exist`) : (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN/i.test(a.sql)
+    /\bno_such_table\b/i.test(a.sql) ? Promise.reject(`ERROR: relation "no_such_table" does not exist (position ${[...a.sql.slice(0, a.sql.search(/\bno_such_table\b/i))].length + 1})`) : (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN/i.test(a.sql)
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }
       : /^\s*(insert|update|delete)/i.test(a.sql)
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
         : /\bwide_demo\b/i.test(a.sql)
           ? { ...wide, inTransaction: (globalThis as any).__mockManual === true }
+          : /\bcjk_demo\b/i.test(a.sql)
+          ? { ...cjkDemo, inTransaction: (globalThis as any).__mockManual === true }
           : /\bjson_demo\b/i.test(a.sql)
           ? { ...jsonDemo, inTransaction: (globalThis as any).__mockManual === true }
           : /\bpayments\b/i.test(a.sql)
           ? { ...payments, inTransaction: (globalThis as any).__mockManual === true }
-          : { ...result, ...consoleEdit(a.sql), inTransaction: (globalThis as any).__mockManual === true }),
+          : /\bvoc\b[\s\S]*\bjoin\b/i.test(a.sql)
+          ? { ...vocJoin, inTransaction: (globalThis as any).__mockManual === true }
+          : { ...(usersLimit(a.sql) ?? { ...result, ...consoleEdit(a.sql) }), inTransaction: (globalThis as any).__mockManual === true }),
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
   commit_tx: () => {
@@ -331,12 +444,17 @@ const handlers: Record<string, (a: any) => unknown> = {
     g.__mockFetchMoreCalls = (g.__mockFetchMoreCalls ?? 0) + 1;
     if (g.__mockFetchMoreError) throw g.__mockFetchMoreError;
     const more = { ...result, rows: result.rows.slice(0, 120).map((r) => [Number(r[0]) + 500, ...r.slice(1)]), truncated: false };
-    // __mockFetchMoreDelay (ms): an answer that arrives after the tab ran again
-    return g.__mockFetchMoreDelay ? new Promise((ok) => setTimeout(() => ok(more), g.__mockFetchMoreDelay)) : more;
+    // __mockFetchMoreDelay (ms): an answer that arrives after the tab ran again, or fails as the server's does when cancelled meanwhile
+    if (!g.__mockFetchMoreDelay) return more;
+    return new Promise((ok, fail) => {
+      const h = setTimeout(() => ((cancelMore = null), ok(more)), g.__mockFetchMoreDelay);
+      cancelMore = () => (clearTimeout(h), fail("ERROR: canceling statement due to user request"));
+    });
   },
-  cancel_query: () => true,
+  cancel_query: () => (cancelMore?.(), (cancelMore = null), true),
   close_session: () => null,
-  execute_batch: (a: any) => ({ rows: a.statements.length }),
+  // A console in Manual mode keeps them pending (tx_state)
+  submit_edits: (a: any) => ({ rows: a.statements.length }),
   load_keymap: () => ({}),
   load_workspace: () => JSON.parse(localStorage.getItem("mock-ws") ?? "null"),
   save_workspace: (a: any) => (localStorage.setItem("mock-ws", JSON.stringify(a.ws)), null),
@@ -344,7 +462,8 @@ const handlers: Record<string, (a: any) => unknown> = {
   explain_wrap: () => ((globalThis as any).__mockManual === true ? ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"] : ["BEGIN", "ROLLBACK"]),
   // Production confirmation: rows a change would touch; like the backend, only UPDATE/DELETE are counted (null = can't count, e.g. INSERT or DDL)
   preview_impact: (a: any) => (/^\s*(update|delete)\b/i.test(a.sql) ? (/\bwhere\b/i.test(a.sql) ? 3 : 500) : null),
-  unsafe_reason: (a: any) => (/^\s*(delete|update)\b(?![\s\S]*\bwhere\b)/i.test(a.sql) ? "DELETE without WHERE changes every row" : /^\s*(drop|truncate)\b/i.test(a.sql) ? "DROP removes data" : null),
+  // Redis as qurry_shared::guard::unsafe_statement words it
+  unsafe_reason: (a: any) => a.kind === "redis" ? ((c) => (/^(FLUSHALL|FLUSHDB|DEL|UNLINK|SHUTDOWN|SWAPDB|REPLICAOF|SLAVEOF)$/.test(c) ? `${c} deletes or replaces data` : /^(EVAL|EVALSHA|EVAL_RO|EVALSHA_RO|FCALL|FUNCTION|SCRIPT)$/.test(c) ? `${c} runs a script that can change anything` : null))(String(a.sql).trim().split(/\s+/)[0].toUpperCase()) : (/^\s*(delete|update)\b(?![\s\S]*\bwhere\b)/i.test(a.sql) ? "DELETE without WHERE changes every row" : /^\s*(drop|truncate)\b/i.test(a.sql) ? "DROP removes data" : null),
   trust_ssh_host: () => "Trusted",
   export_data: (a: any) => new Promise((ok) => setTimeout(() => ok({ rows: 500, path: a.clipboard ? null : `~/Downloads/${a.defaultName}.${a.format}`, text: a.clipboard ? "id\tname\n1\ta\n" : null }), 4000)),
   cancel_job: () => null,
@@ -431,11 +550,14 @@ const handlers: Record<string, (a: any) => unknown> = {
   ],
   apply_migrations: () => ["3"],
   save_migration: (a: any) => `${a.dir}/V4__x.sql`,
-  history_add: () => null,
-  history_list: () => [
-    { id: "h1", connId: "dev", sql: "SELECT client_ip, count(*) FROM logs.user_activity_log GROUP BY 1 ORDER BY 2 DESC LIMIT 20", ts: Date.now() - 60000 },
-    { id: "h2", connId: "dev", sql: "select * from users where id = 42", ts: Date.now() - 3600000 },
-  ],
+  // Kept for the session, newest first; the core masks passwords (AUTH …) as history::redact does
+  history_add: (a: any) => void historyAdded.unshift({ id: `ha${historyAdded.length}`, connId: a.connId, database: a.database ?? undefined, sql: String(a.sql).replace(/^(\s*auth\s+).*$/i, "$1***"), ts: Date.now() }),
+  history_list: (a: any) =>
+    [
+      ...historyAdded,
+      { id: "h1", connId: "dev", sql: "SELECT client_ip, count(*) FROM logs.user_activity_log GROUP BY 1 ORDER BY 2 DESC LIMIT 20", ts: Date.now() - 60000 },
+      { id: "h2", connId: "dev", sql: "select * from users where id = 42", ts: Date.now() - 3600000 },
+    ].filter((h) => !a?.connId || h.connId === a.connId),
   history_delete: () => null,
   fake_preview: () => ({
     plan: [
@@ -533,8 +655,25 @@ const handlers: Record<string, (a: any) => unknown> = {
   import_data: () => new Promise((ok) => setTimeout(() => ok(1234), 4000)),
   save_text_file: () => null,
   export_connections: () => null,
-  pick_import_file: () => ["~ update \"[PROD] shop_app\": turns Read-only OFF"],
-  import_picked: () => ({ added: 0, updated: 1 }),
+  // window.__mockImportNone: nothing found on this computer; __mockImportDelay: ms before the list comes back (a slow disk)
+  import_locations: () => {
+    const list = (window as any).__mockImportNone ? [] : structuredClone(IMPORT_LOCATIONS);
+    const ms = (window as any).__mockImportDelay;
+    return ms ? new Promise((ok) => setTimeout(() => ok(list), ms)) : list;
+  },
+  import_location: (a: any) => importPlan(IMPORT_LOCATIONS.find((l) => l.path === a.path)?.label ?? a.path, a.path),
+  // window.__mockImportPick: what the native picker returns (null = canceled); "broken" = a file that can't be read
+  pick_import: () => {
+    const p = (window as any).__mockImportPick;
+    if (p === null) return null;
+    if (p === "broken") throw "Can't read ~/work/shop-api/.idea/dataSources.xml:\nline 42, column 7: the element <data-source> isn't closed\n\nNothing was imported.";
+    return importPlan("DBeaver · General", "~/Library/DBeaverData/workspace6/General/.dbeaver");
+  },
+  import_picked: (a: any) => {
+    const n = (a.picked as boolean[]).filter(Boolean).length;
+    (window as any).__mockImported = a.picked;
+    return { added: n, updated: 0, message: `Imported ${n} data source${n === 1 ? "" : "s"} — passwords are asked on the first connect` };
+  },
   save_keymap: () => null,
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
   update_channel: () => updateChannel,
@@ -563,6 +702,52 @@ const handlers: Record<string, (a: any) => unknown> = {
   },
   // window.__mockFontBroken: the file passes the magic-byte check but isn't a loadable font (truncated)
   font_file: () => ((window as any).__mockFontBroken ? new Uint8Array([0, 1, 0, 0]).buffer : fetch(fontBytesUrl).then((r) => r.arrayBuffer())),
+  theme_settings: () => themeSettings(),
+  // As the core: the id must exist (or be "system"). window.__mockChannelSaveFails: the file can't be written
+  set_theme: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    const s = themeSettings();
+    if (a.id !== "system" && !THEMES.themes.some((t) => t.id === a.id) && !s.custom.some((c: any) => c.id === a.id)) throw `There is no theme "${a.id}"`;
+    saveThemeSettings({ ...s, theme: a.id });
+  },
+  set_theme_sync: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    saveThemeSettings({ ...themeSettings(), sync: a.sync });
+  },
+  save_custom_theme: (a: any) => {
+    checkTheme(a.theme);
+    const s = themeSettings();
+    const t = { ...a.theme, name: a.theme.name.trim() };
+    if (!t.id) for (let n = 1; !t.id; n++) if (!s.custom.some((c: any) => c.id === `custom-${n}`)) t.id = `custom-${n}`;
+    const custom = s.custom.some((c: any) => c.id === t.id) ? s.custom.map((c: any) => (c.id === t.id ? t : c)) : [...s.custom, t];
+    saveThemeSettings({ ...s, custom });
+    return t;
+  },
+  // As the core: where the deleted theme is picked, its base takes its place
+  delete_custom_theme: (a: any) => {
+    const s = themeSettings();
+    const gone = s.custom.find((c: any) => c.id === a.id);
+    if (!gone) return;
+    const side = (v: string) => (v === a.id ? gone.base : v);
+    saveThemeSettings({ theme: s.theme === a.id ? gone.base : s.theme, sync: { dark: side(s.sync.dark), light: side(s.sync.light) }, custom: s.custom.filter((c: any) => c.id !== a.id) });
+  },
+  // window.__mockThemeFile: the text of the file picked (unset: cancelled); refused as the core refuses it
+  import_theme: () => {
+    const text = (window as any).__mockThemeFile;
+    return text == null ? null : shared().parseThemeFile(text);
+  },
+  // The file's text goes to window.__mockThemeExported
+  export_theme: (a: any) => {
+    checkTheme(a.theme);
+    (window as any).__mockThemeExported = shared().themeFileText(a.theme);
+    return `/Users/me/Downloads/${a.theme.name}.qurry-theme.json`;
+  },
+  keyword_case: () => keywordCase,
+  set_keyword_case: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    keywordCase = a.case;
+    localStorage.setItem("mock-keywordCase", a.case);
+  },
   grid_align: () => gridAlign,
   set_grid_align: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
@@ -573,6 +758,21 @@ const handlers: Record<string, (a: any) => unknown> = {
     gridAlign = next;
     localStorage.setItem("mock-gridAlign", JSON.stringify(next));
     return next;
+  },
+  column_widths: (a: any) => columnWidths()[widthsKey(a.table)] ?? {},
+  // As the core: merged into what is saved, kept between 3 and 200 characters. window.__mockChannelSaveFails: the file can't be written
+  set_column_widths: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    const [all, k] = [columnWidths(), widthsKey(a.table)];
+    all[k] = { ...all[k], ...Object.fromEntries(Object.entries(a.widths as Record<string, number>).map(([c, w]) => [c, Math.min(Math.max(Math.round(w), 3), 200)])) };
+    saveWidths(all);
+    return all[k];
+  },
+  reset_column_widths: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    const all = columnWidths();
+    delete all[widthsKey(a.table)];
+    saveWidths(all);
   },
   // window.__mockChannelSaveFails: the settings file can't be written
   set_update_channel: (a: any) => {
