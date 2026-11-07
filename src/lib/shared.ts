@@ -27,7 +27,22 @@ export interface CompletionItem {
   label: string;
   detail: string;
   insert: string;
-  kind: "column" | "table" | "schema" | "keyword" | "value";
+  /** function and snippet: `insert` is a snippet (`${1:placeholder}`, `$0` the caret) */
+  kind: "column" | "table" | "schema" | "keyword" | "value" | "join" | "function" | "snippet";
+}
+
+/** The function call around the caret (qurry_shared::complete::Signature): its signatures and the parameter the caret is at */
+export interface SignatureHelp {
+  signatures: { label: string; params: string[] }[];
+  active: number;
+}
+
+/** A table or column its statement's scope lacks (qurry_shared::complete::Mark): UTF-16 offsets into the console, the closest names */
+export interface NameMark {
+  start: number;
+  end: number;
+  message: string;
+  fixes: string[];
 }
 
 /** Candidates and the range they replace on the caret's line: 1-based UTF-16 columns, as Monaco counts */
@@ -78,6 +93,9 @@ export interface Completion {
   suggest(text: string, caret: number, db: string, mysql: boolean): Suggestions;
   hintAt(text: string, caret: number, db: string, mysql: boolean): HintAt | undefined;
   hintItems(text: string, caret: number, hint: HintAt, hints: { value: string; count: number }[], asPairs: boolean): Suggestions;
+  signatureAt(text: string, caret: number, mysql: boolean): SignatureHelp | undefined;
+  /** Unknown tables and columns of every statement of the console (none before the metadata loads) */
+  marks(text: string, db: string, mysql: boolean): NameMark[];
   /** A table tab's WHERE / ORDER BY field (qurry_shared::complete::suggest_filter), `explicit` when asked for (⌃Space): the word from `from` to `caret` is replaced */
   suggestFilter(schema: string, table: string, orderBy: boolean, field: string, caret: number, db: string, mysql: boolean, explicit: boolean): FilterSuggestions;
   /** Release the WASM memory now (not when GC finalizes it). Calls after this find no candidates */
@@ -189,6 +207,8 @@ const api = {
       },
       hintAt: (text, caret, db, mysql) => idx?.hintAt(text, caret, db, mysql),
       hintItems: (text, caret, hint, hints, asPairs) => idx?.hintItems(text, caret, hint, hints, asPairs) ?? none,
+      signatureAt: (text, caret, mysql) => idx?.signatureAt(text, caret, mysql) ?? undefined,
+      marks: (text, db, mysql) => idx?.marks(text, db, mysql) ?? [],
       suggestFilter: (schema, table, orderBy, field, caret, db, mysql, explicit) => idx?.suggestFilter(schema, table, orderBy, field, caret, db, mysql, explicit) ?? { from: caret, items: [] },
       free() {
         idx?.free();

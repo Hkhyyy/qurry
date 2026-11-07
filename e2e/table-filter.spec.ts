@@ -113,11 +113,12 @@ test("a whole keyword or column closes the list, so ↩ applies (`is null` doesn
 test("other tables and schemas are never listed, typed or asked with ⌃Space", async ({ page }) => {
   const where = field(page, "WHERE");
   await where.click();
+  // The mock's user function order_total is a function, not a table: it stays
   await where.pressSequentially("orde");
-  await expect(rows(page)).toHaveText(["order"]);
+  await expect(rows(page)).toHaveText(["order_total", "order"]);
   await page.keyboard.press("Escape");
   await page.keyboard.press("Control+Space");
-  await expect(rows(page)).toHaveText(["order"]);
+  await expect(rows(page)).toHaveText(["order_total", "order"]);
   await page.keyboard.press("Escape");
   await where.fill("");
   await page.keyboard.press("Control+Space");

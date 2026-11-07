@@ -310,7 +310,14 @@ export interface TableStructure extends TableDetail {
 }
 /** One row of the workspace list (shared by GUI · TUI) */
 export interface WsInfo { id: string; name: string; connIds: string[] }
-export interface CompletionTable { schema: string; name: string; columns: [string, string][] }
+/** Completion metadata (qurry_shared::complete::CompletionTable): a table with its columns and foreign keys, or a user function (`routine`, no columns) */
+export interface CompletionTable {
+  schema: string;
+  name: string;
+  columns: [string, string][];
+  fks?: { columns: string[]; refSchema: string; refTable: string; refColumns: string[] }[];
+  routine?: { args: string; returns: string };
+}
 
 export type DbaAction = { kind: "kill"; label: string; terminate: boolean } | { kind: "sql"; label: string; template: string } | { kind: "explain"; label: string };
 export interface DbaReportInfo { id: string; title: string; group: string; help: string; actions: DbaAction[] }

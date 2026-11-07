@@ -303,9 +303,12 @@ const handlers: Record<string, (a: any) => unknown> = {
     };
   },
   // MySQL: the schema is the database (shop is the data source's default)
+  // Foreign keys (FK-aware joins) and a user function (signature help) as completion_meta returns them
   completion_meta: (a: any) => a.id.split("::")[0] === "my" ? [{ schema: "shop", name: "orders", columns: [["id", "bigint"], ["status", "varchar"]] }] : [
     { schema: "public", name: "users", columns: [["id", "bigint"], ["user_name", "varchar"]] },
-    { schema: "public", name: "orders", columns: [["id", "bigint"], ["status", "varchar"], ["amount", "numeric"], ["data", "jsonb"], ["reasons", "jsonb"]] },
+    { schema: "public", name: "orders", columns: [["id", "bigint"], ["user_id", "bigint"], ["status", "varchar"], ["amount", "numeric"], ["data", "jsonb"], ["reasons", "jsonb"]],
+      fks: [{ columns: ["user_id"], refSchema: "public", refTable: "users", refColumns: ["id"] }] },
+    { schema: "public", name: "order_total", columns: [], routine: { args: "order_id bigint, with_tax boolean", returns: "numeric" } },
   ],
   // Shared workspace list (mimics the file shared with the TUI). Tests replace it via window.__sharedWs
   shared_workspaces: () => (window as any).__sharedWs ?? null,

@@ -246,6 +246,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
             ed.executeEdits("case", [{ range: sel, text: t === t.toUpperCase() ? t.toLowerCase() : t.toUpperCase() }]);
           });
           act("dbtool.blockComment", "Comment with Block Comment", "editor.blockComment", () => ed.trigger("k", "editor.action.blockComment", null));
+          // An underlined unknown name: its closest names (lib/completion.ts code actions)
+          act("dbtool.quickFix", "Show Quick Fixes", "editor.quickFix", () => ed.trigger("k", "editor.action.quickFix", null));
         };
         register();
         const offKeymap = onKeymapChange(register);
