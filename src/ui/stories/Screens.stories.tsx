@@ -630,13 +630,34 @@ function ConsoleMarks() {
   );
 }
 export const ConsoleGutterMarks: S = { name: "Console — gutter marks", render: () => <ConsoleMarks /> };
-export const Redis: S = {
-  name: "Redis Browser",
-  render: () => (
-    <Frame h={600}>
-      <RedisBrowser target="rd" connId="rd" connName="[Redis] cache" database="db0" readOnly={false} production={false} onSwitchDb={noop} onStatus={noop} />
-    </Frame>
-  ),
+/** One Redis tab per data source (#108): the database picker (db0 · 7 keys) and key filter on top, folder counts beside the name, TTLs only for keys */
+const RedisTab = () => (
+  <Frame h={600}>
+    <RedisBrowser target="rd" connId="rd" connName="[Redis] cache" database="db0" readOnly={false} production={false} onSwitchDb={noop} onStatus={noop} />
+  </Frame>
+);
+export const Redis: S = { name: "Redis Browser", render: RedisTab };
+/** Managed Redis (ElastiCache, Memorystore …) refuses CONFIG: the Config tab is greyed out; hover it for why and where the settings are */
+export const RedisManaged: S = {
+  name: "Redis Browser — managed Redis (Config greyed out)",
+  beforeEach: () => {
+    (globalThis as any).__mockRedis = { managed: true };
+    return () => delete (globalThis as any).__mockRedis;
+  },
+  render: RedisTab,
+};
+/** Terminal: a hash as a field / value table, HELP from the bundled command table, completion with argument hints */
+export const RedisTerminal: S = {
+  name: "Redis Browser — Terminal",
+  render: RedisTab,
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(await c.findByRole("tab", { name: "Terminal" }));
+    const input = await c.findByRole("textbox", { name: "Redis command" });
+    await userEvent.type(input, "HGETALL user:1{Escape}{Enter}");
+    await userEvent.type(input, "HELP HGET{Enter}");
+    await userEvent.type(input, "HG");
+  },
 };
 const WS_NAMES = ["Default", "Reports", "Billing", "Analytics", "Ops", "Support", "Growth", "Search", "Mobile", "Payments"];
 /** The rail at a fixed window height: n workspaces, the 2nd current. Keymap and Settings stay at the bottom while the list scrolls */
