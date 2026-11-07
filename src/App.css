@@ -546,7 +546,25 @@ button.tb.danger:hover:not(:disabled) { color: var(--danger); }
 .rd-term-out pre.in { color: var(--accent); }
 .rd-term-out pre.err { color: var(--danger); }
 .rd-term-in { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--border); }
-.rd-term-in input { flex: 1; border: none; background: transparent; font: inherit; padding: 2px 0; }
+.rd-term-in input { width: 100%; border: none; background: transparent; font: inherit; padding: 2px 0; position: relative; }
+.rd-term-out pre.note, .rd-term-out pre.nil { color: var(--muted); }
+.rd-term-out pre.nil { font-style: italic; }
+.rd-term-table { border-collapse: collapse; margin: 2px 0 6px; }
+.rd-term-table th { text-align: left; font-weight: 500; color: var(--muted); padding: 1px 16px 1px 0; }
+.rd-term-table td { padding: 1px 16px 1px 0; vertical-align: top; white-space: pre-wrap; word-break: break-all; }
+.rd-term-field { flex: 1; min-width: 0; position: relative; }
+/* The arguments still to type, after the text: a hidden copy of the text pushes them there */
+.rd-term-ghost { position: absolute; left: 0; top: 50%; transform: translateY(-50%); white-space: pre; color: var(--muted); pointer-events: none; overflow: hidden; max-width: 100%; }
+.rd-term-ghost .pad { visibility: hidden; }
+.rd-term-pop { position: absolute; left: -6px; bottom: calc(100% + 6px); min-width: 320px; max-width: min(640px, 90vw); max-height: 220px; overflow-y: auto; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); box-shadow: var(--ui-shadow-pop); z-index: 2; }
+.rd-term-choice { display: flex; gap: 8px; align-items: baseline; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
+.rd-term-choice.sel { background: var(--sel); }
+.rd-term-choice .args { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.rd-term-choice .sum { margin-left: auto; padding-left: 12px; color: var(--muted); font-size: 11px; font-family: var(--ui-font, inherit); overflow: hidden; text-overflow: ellipsis; }
+.rd-term-w { flex: none; font-size: 10px; color: var(--danger); border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; }
+.rd-term-keys { flex: none; color: var(--muted); font-size: 11px; }
+.rd-ttl.none { color: var(--muted); }
+.rd-db { max-width: 220px; }
 .rd-server { height: 100%; display: flex; flex-direction: column; }
 .rd-server .rd-table-wrap { flex: 1; }
 

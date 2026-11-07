@@ -26,7 +26,7 @@ interface Props {
   shown: boolean;
   /** info: the node the keys act on (the last clicked); all: every selected node */
   onSelect: (info: NodeInfo | null, all: NodeInfo[]) => void;
-  onActivate: (info: NodeInfo) => void;
+  onActivate: (info: NodeInfo, click?: boolean) => void;
   /** A line for the status bar (a key that doesn't work on the selected nodes) */
   onStatus: (text: string) => void;
   /** The node's context menu; with several selected nodes (all), for all of them */

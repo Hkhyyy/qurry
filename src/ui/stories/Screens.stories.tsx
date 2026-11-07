@@ -634,7 +634,7 @@ export const Redis: S = {
   name: "Redis Browser",
   render: () => (
     <Frame h={600}>
-      <RedisBrowser target="rd" connName="[Redis] cache" database="0" dbList={["db0", "db3"]} readOnly={false} onSwitchDb={noop} onLoadDbs={noop} onStatus={noop} />
+      <RedisBrowser target="rd" connId="rd" connName="[Redis] cache" database="db0" readOnly={false} production={false} onSwitchDb={noop} onStatus={noop} />
     </Frame>
   ),
 };

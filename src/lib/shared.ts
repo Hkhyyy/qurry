@@ -119,6 +119,24 @@ export interface ExtractRowsInput {
 /** qurry_shared::keytree::KeyNode: a key is its index in the names passed in */
 export type SharedKeyNode = { kind: "folder"; name: string; path: string; count: number; children: SharedKeyNode[] } | { kind: "key"; item: number };
 
+/** A row of the Redis Terminal's bundled command table (qurry_shared::redis_cmd::CommandDoc) */
+export interface RedisCommandDoc {
+  name: string;
+  args: string;
+  summary: string;
+}
+/** What the Redis Terminal offers for the text before the caret (qurry_shared::redis_cmd::Assist) */
+export interface RedisAssist {
+  /** The typed part of the current word: a pick replaces it */
+  prefix: string;
+  commands: { insert: string; doc: RedisCommandDoc; read: boolean }[];
+  /** The word is a key name (completed from a bounded SCAN) */
+  key: boolean;
+  /** The arguments from the current one on */
+  hint: string;
+}
+export type RedisReplyShape = "plain" | "pairs" | "scored" | "members" | "list";
+
 /** Chart data (crates/shared/src/chart.rs): one label per X value, one series per Y */
 export interface ChartData {
   labels: string[];
@@ -200,6 +218,10 @@ const api = {
   extractRows: (fmt: Extractor, rows: ExtractRowsInput, kind: DbKind, opts: ExtractOptions): string => wasm.extractRows(fmt, rows, kind, opts),
   fuzzyScore: (query: string, text: string, wordStarts: boolean): number | undefined => wasm.fuzzyScore(query, text, wordStarts),
   keyTree: (names: string[], opts: KeyTreeOptions): SharedKeyNode[] => wasm.keyTree(names, opts),
+  redisAssist: (before: string): RedisAssist => wasm.redisAssist(before),
+  /** What HELP <command> prints, undefined when the line isn't a HELP */
+  redisHelp: (line: string): string | undefined => wasm.redisHelp(line),
+  redisReplyShape: (line: string): RedisReplyShape => wasm.redisReplyShape(line),
   autoMap: (file: string[], table: string[] | null): string[] => wasm.autoMap(file, table),
   numericColumns: (columns: Columns, rows: Cell[][]): number[] => wasm.numericColumns(columns, rows),
   /** y undefined = the row count */

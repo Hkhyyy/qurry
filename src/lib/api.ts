@@ -440,7 +440,13 @@ export const redisDb = (database?: string | null) => `db${String(database ?? "")
 export interface RedisKeyRow { key: string; type: string; ttl: number }
 export interface RedisKeyDetail { type: string; ttl: number; length: number; memory: number | null; encoding: string | null; value: unknown; truncated: boolean }
 export type RedisReply = null | number | string | boolean | { status: string } | RedisReply[];
+export interface RedisDbInfo { name: string; keys: number }
+/** The databases with their key counts, and whether CONFIG works (checked on connect: managed Redis refuses it) */
+export interface RedisOverview { configAllowed: boolean; databases: RedisDbInfo[] }
 export const redis = {
+  overview: (id: string) => invoke<RedisOverview>("redis_overview", { id }),
+  /** Key names starting with `prefix`, from a bounded SCAN (Terminal completion) */
+  keyNames: (id: string, prefix: string, max = 50) => invoke<string[]>("redis_key_names", { id, prefix, max }),
   scan: (id: string, cursor: string, pattern: string, count: number, typeFilter?: string) =>
     invoke<{ cursor: string; keys: RedisKeyRow[] }>("redis_scan", { id, cursor, pattern, count, typeFilter: typeFilter || null }),
   key: (id: string, key: string, limit?: number) => invoke<RedisKeyDetail>("redis_key", { id, key, limit: limit ?? null }),
