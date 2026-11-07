@@ -31,6 +31,26 @@ pub fn more_rows_failed(msg: &str) -> String {
     format!("Couldn't load more rows: {}", msg.trim())
 }
 
+/// Why the app disconnected a data source by itself (the status line of GUI and TUI: disconnected)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Disconnected {
+    /// Auto-disconnect (Options)
+    Idle,
+    /// Its tunnel's process (aws CLI) or SSH session ended
+    TunnelStopped,
+    /// Its tunnel carried nothing any more when the keep-alive checked (sleep, a network change)
+    TunnelSilent,
+}
+
+/// The status line when the app disconnected a data source by itself (GUI and TUI). tunnel = its kind ("AWS SSM tunnel", "SSH tunnel")
+pub fn disconnected(name: &str, tunnel: &str, why: Disconnected) -> String {
+    match why {
+        Disconnected::Idle => format!("Disconnected (idle): {name}"),
+        Disconnected::TunnelStopped => format!("Disconnected: the {tunnel} of {name} stopped — the next query opens a new one"),
+        Disconnected::TunnelSilent => format!("Disconnected: the {tunnel} of {name} stopped answering — the next query opens a new one"),
+    }
+}
+
 /// The DBA report's database picker couldn't list the databases (GUI and TUI): it lists through the report's database, or the
 /// source's default one, so the way out is a default database the account can connect to
 pub fn db_list_failed(msg: &str) -> String {
@@ -147,6 +167,13 @@ mod tests {
         for m in [format!("error returned from database: {NEEDS_TLS}"), format!("ERROR: {}", needs_tls_pg()), format!("invalid input syntax for type integer: \"{DROPPED_TLS}\"")] {
             assert!(!tls_opt_in(&m), "{m}");
         }
+    }
+
+    #[test]
+    fn disconnected_says_why_with_the_name() {
+        assert_eq!(disconnected("prod", "SSH tunnel", Disconnected::Idle), "Disconnected (idle): prod");
+        assert_eq!(disconnected("prod", "AWS SSM tunnel", Disconnected::TunnelSilent), "Disconnected: the AWS SSM tunnel of prod stopped answering — the next query opens a new one");
+        assert!(disconnected("prod", "SSH tunnel", Disconnected::TunnelStopped).starts_with("Disconnected: the SSH tunnel of prod stopped —"));
     }
 
     #[test]

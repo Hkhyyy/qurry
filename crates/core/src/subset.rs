@@ -427,6 +427,8 @@ impl AppState {
 
     /// Inserts the collected rows into target in one transaction (skipping existing rows). Returns rows sent for insert and the plan
     pub async fn subset_copy(&self, source: String, spec: SubsetSpec, target: String) -> AppResult<SubsetPlan> {
+        // Both sources' connections and tunnels are in use until it ends (in_use)
+        let _running = (self.job_running(&source), self.job_running(&target));
         let (sk, tk) = (self.kind_of(&source)?, self.kind_of(&target)?);
         if sk != tk {
             return Err(AppError::Msg("The target must be the same kind of database as the source".into()));

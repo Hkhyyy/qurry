@@ -74,9 +74,9 @@ pub fn run() {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     let state = handle.state::<app::AppState>();
-                    for id in app::housekeeping(&state).await {
-                        eprintln!("[qurry] auto-disconnect {id}");
-                        let _ = handle.emit("conn-disconnected", id);
+                    for (id, message) in app::housekeeping(&state).await {
+                        eprintln!("[qurry] {message} ({id})");
+                        let _ = handle.emit("conn-disconnected", serde_json::json!({ "id": id, "message": message }));
                     }
                 }
             });

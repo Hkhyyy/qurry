@@ -488,6 +488,8 @@ impl AppState {
     /// Exports the full query result. table = target of SQL INSERT (schema, name). Deletes the partial file on failure · cancel
     pub async fn export(&self, id: String, sql: String, format: Format, dest: Dest, table: Option<(String, String)>, job_id: String) -> AppResult<Exported> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
+        // Its connections and tunnel are in use until it ends (in_use)
+        let _running = self.job_running(&id);
         let r = async {
             if format == Format::Xlsx {
                 return Err(AppError::Msg("Excel is for import only — export as CSV to open it in Excel".into()));
@@ -519,6 +521,8 @@ impl AppState {
     /// Inserts the file into a table (one transaction: nothing is inserted on failure · cancel). Returns rows inserted
     pub async fn import(&self, id: String, spec: ImportSpec, job_id: String) -> AppResult<u64> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
+        // Its connections and tunnel are in use until it ends (in_use)
+        let _running = self.job_running(&id);
         let r = async {
             let cfg = self.source(&id)?;
             if cfg.read_only {

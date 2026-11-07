@@ -142,12 +142,13 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
                 }
                 let dropped = qurry_core::app::housekeeping(&st).await;
                 if !dropped.is_empty() && tx.send(Box::new(move |a: &mut app::App| {
-                    for id in &dropped {
+                    for (id, _) in &dropped {
                         a.forget_completion(id);
                         a.tree.forget(id);
                         a.tree.expanded.retain(|k| !(k == id || k.starts_with(&format!("{id}|"))));
                     }
-                    a.status = format!("Disconnected (idle): {}", dropped.len());
+                    // Why, with the data source's name (qurry_shared::errors::disconnected, the GUI's words)
+                    a.status = dropped.iter().map(|(_, why)| why.as_str()).collect::<Vec<_>>().join("  ·  ");
                     a.reload_conns();
                 })).is_err() {
                     break;

@@ -543,6 +543,21 @@ pub(crate) mod tests {
         std::fs::write(dir.join(format!("dead-{plugin}")), "").unwrap();
     }
 
+    /// The fake's connections open now stall (nothing goes either way) until release_forwarding, while new ones go through: a
+    /// session that is slow, not gone, through a tunnel that works (FAKE: hold-<plugin pid>)
+    pub(crate) fn hold_forwarding(dir: &Path) {
+        let pids = std::fs::read_to_string(dir.join("pids")).unwrap();
+        let plugin = pids.split_whitespace().nth(1).expect("a running plugin");
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+        std::fs::write(dir.join(format!("hold-{plugin}")), now.to_string()).unwrap();
+    }
+
+    pub(crate) fn release_forwarding(dir: &Path) {
+        let pids = std::fs::read_to_string(dir.join("pids")).unwrap();
+        let plugin = pids.split_whitespace().nth(1).expect("a running plugin");
+        std::fs::remove_file(dir.join(format!("hold-{plugin}"))).unwrap();
+    }
+
     #[tokio::test]
     async fn forwards_through_the_cli_and_stops_it_on_drop() {
         let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -568,7 +583,7 @@ pub(crate) mod tests {
             let mut s = tokio::net::TcpStream::connect(("127.0.0.1", t.local_port)).await.unwrap();
             s.write_all(b"ping").await.unwrap();
             let mut buf = [0u8; 4];
-            s.read_exact(&mut buf).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), s.read_exact(&mut buf)).await.expect("the fake forwards within 5s").unwrap();
             assert_eq!(&buf, b"ping");
         }
         let port = t.local_port;
@@ -1156,7 +1171,7 @@ pub(crate) mod tests {
         let id = st.save_connection(c.clone(), None, None).await.unwrap().id;
         let starts = || std::fs::read_to_string(fake.path().join("starts")).unwrap().lines().count();
         let run = |sql: &str, tab: &str| tokio::time::timeout(Duration::from_secs(40), st.run_query(id.clone(), sql.into(), None, Some(tab.into())));
-        let lost = |e: &str| e.contains("connection lost through the AWS SSM tunnel (instance i-0123456789abcdef0)");
+        let lost = |e: &str| e.starts_with("The connection through the AWS SSM tunnel (instance i-0123456789abcdef0) closed — connection lost");
 
         // A console that sat unused: checked (5s), the tunnel too (2s), then a new tunnel and session, and the statement runs once
         run("select 1", "c1").await.unwrap().expect("connects");
@@ -1177,7 +1192,9 @@ pub(crate) mod tests {
         age_session(&st, "c1").await;
         let t = Instant::now();
         let e = tokio::time::timeout(Duration::from_secs(40), st.commit_tx("c1".into())).await.expect("doesn't hang").err().expect("lost").to_string();
-        assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+        // The 5s check, then 5s for the tunnel (a transaction is open: a slow session through a working tunnel would be kept)
+        println!("transaction-open console answered in {:?}", t.elapsed());
+        assert!(t.elapsed() < Duration::from_secs(12), "{:?}", t.elapsed());
         assert!(e.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && e.contains("The transaction open in it is lost") && e.contains("nor did a new connection through the tunnel"), "{e}");
         assert!(!st.tx_state("c1".into()).await);
         run("select 1", "c1").await.unwrap().expect("a new session");
@@ -1206,7 +1223,7 @@ pub(crate) mod tests {
         run("select 1", "c2").await.unwrap().expect("connects");
         assert_eq!(starts(), 5);
         stop_forwarding(fake.path());
-        st.last_ping.lock().unwrap().insert(id.clone(), Instant::now() - Duration::from_secs(5));
+        st.last_ping.lock().unwrap().insert(id.clone(), std::time::SystemTime::now() - Duration::from_secs(5));
         let t = Instant::now();
         let (r, dropped) = tokio::join!(run("select 4", "c2"), async {
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1216,11 +1233,133 @@ pub(crate) mod tests {
         let took = t.elapsed();
         println!("hung statement ended by the keep-alive in {took:?}");
         assert!(lost(&e), "{e}");
-        assert_eq!(dropped, vec![id.clone()]);
+        assert_eq!(dropped, vec![(id.clone(), "Disconnected: the AWS SSM tunnel of ssm-console stopped answering — the next query opens a new one".to_string())], "the status line says why, with the name");
         assert!(took < Duration::from_secs(12), "a 5s ping and a 5s look at the tunnel: {took:?}");
         run("select 5", "c2").await.unwrap().expect("runs through a new tunnel");
         assert_eq!(starts(), 6);
         st.disconnect(id).await.unwrap();
         gone(fake.path()).await;
+    }
+
+    /// A fake aws first on PATH (only the tests that call this change PATH: run each on its own)
+    fn fake_aws_on_path() -> tempfile::TempDir {
+        let fake = tempfile::tempdir().unwrap();
+        fake_aws(fake.path(), "ok");
+        let path = std::env::join_paths(std::iter::once(fake.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()))).unwrap();
+        unsafe { std::env::set_var("PATH", path) };
+        fake
+    }
+
+    /// A tab that finds the tunnel dead closes it with every session through it. Another console that had a transaction open
+    /// there is never left to run its next statement in a new session (autocommit, the transaction's first part gone): that run
+    /// says the transaction is lost and sends nothing, once; so does a Disconnect. Nothing of the lost transaction is committed.
+    /// Run on its own (it changes PATH): QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres cargo test -p qurry-core dead_ssm_tunnel_tells_other_consoles -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn dead_ssm_tunnel_tells_other_consoles_their_transaction_is_lost() {
+        use crate::app::tests::age_session;
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let fake = fake_aws_on_path();
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut c: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "ssm-lost", "kind": "postgres", "host": &pg.host, "port": pg.port, "user": &pg.user, "database": &pg.database })).unwrap();
+        c.ssm = Some(cfg());
+        let id = st.save_connection(c, None, None).await.unwrap().id;
+        let run = |sql: &str, tab: Option<&str>| tokio::time::timeout(Duration::from_secs(40), st.run_query(id.clone(), sql.into(), None, tab.map(String::from)));
+        let count = || async { run("select count(*) from qurry_t110_lost", None).await.unwrap().expect("count").rows[0][0].clone() };
+        run("drop table if exists qurry_t110_lost", None).await.unwrap().unwrap();
+        run("create table qurry_t110_lost (v int)", None).await.unwrap().unwrap();
+        run("begin", Some("a")).await.unwrap().unwrap();
+        run("insert into qurry_t110_lost values (1)", Some("a")).await.unwrap().unwrap();
+        run("select 1", Some("b")).await.unwrap().unwrap();
+
+        // Tab b sat unused: its check finds the tunnel dead (5s, then 5s for the tunnel: a's transaction is open) and goes on
+        stop_forwarding(fake.path());
+        age_session(&st, "b").await;
+        let t = Instant::now();
+        run("select 2", Some("b")).await.expect("doesn't hang").expect("b goes on through a new tunnel");
+        println!("tab b recovered in {:?}", t.elapsed());
+        // Tab a's next statement isn't run in a new session
+        let e = run("insert into qurry_t110_lost values (2)", Some("a")).await.unwrap().err().expect("lost").to_string();
+        assert!(
+            e.starts_with("Qurry closed this console's connection to \"ssm-lost\" through the AWS SSM tunnel (instance i-0123456789abcdef0) because the data source stopped answering")
+                && e.contains("The transaction is lost")
+                && e.contains("nothing was sent"),
+            "{e}"
+        );
+        assert!(!st.tx_state("a".into()).await);
+        assert_eq!(count().await, serde_json::json!(0), "neither row is committed");
+        // Once: then the tab runs in a new session
+        assert_eq!(run("select count(*) from qurry_t110_lost", Some("a")).await.unwrap().expect("a new session").rows[0][0], serde_json::json!(0));
+
+        // Disconnect says so too
+        run("begin", Some("a")).await.unwrap().unwrap();
+        run("insert into qurry_t110_lost values (3)", Some("a")).await.unwrap().unwrap();
+        st.disconnect(id.clone()).await.unwrap();
+        let e = tokio::time::timeout(Duration::from_secs(40), st.commit_tx("a".into())).await.unwrap().err().expect("lost").to_string();
+        assert!(e.starts_with("\"ssm-lost\" was disconnected") && e.contains("nothing was sent"), "{e}");
+        assert_eq!(count().await, serde_json::json!(0));
+        // A tab without a transaction just reconnects
+        run("select 1", Some("b")).await.unwrap().expect("b reconnects");
+        run("drop table qurry_t110_lost", None).await.unwrap().unwrap();
+        st.disconnect(id).await.unwrap();
+        gone(fake.path()).await;
+    }
+
+    /// A console with a transaction open whose session is slow (its check gets no answer within 5s) through a tunnel that answers:
+    /// the session and the transaction are kept and nothing is sent; once the session answers, the next run and the Commit go to
+    /// it, past the check's late answer. PostgreSQL and MySQL. Run each on its own (they change PATH):
+    /// QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres cargo test -p qurry-core slow_ssm_session_keeps_its_transaction_pg -- --ignored
+    /// QURRY_TEST_MY=127.0.0.1:13306:root:dbtool:shop cargo test -p qurry-core slow_ssm_session_keeps_its_transaction_my -- --ignored
+    async fn slow_ssm_session_keeps_its_transaction(kind: crate::store::DbKind) {
+        use crate::app::tests::age_session;
+        let server = crate::testenv::server(kind).expect("QURRY_TEST_PG / QURRY_TEST_MY");
+        let fake = fake_aws_on_path();
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut c = server.cfg.clone();
+        c.id = String::new();
+        c.name = "ssm-slow".into();
+        c.ssm = Some(cfg());
+        let id = st.save_connection(c, server.password.clone(), None).await.unwrap().id;
+        let starts = || std::fs::read_to_string(fake.path().join("starts")).unwrap().lines().count();
+        let run = |sql: &str, tab: Option<&str>| tokio::time::timeout(Duration::from_secs(40), st.run_query(id.clone(), sql.into(), None, tab.map(String::from)));
+        run("drop table if exists qurry_t110_slow", None).await.unwrap().unwrap();
+        run("create table qurry_t110_slow (v int)", None).await.unwrap().unwrap();
+        run("begin", Some("s")).await.unwrap().unwrap();
+        run("insert into qurry_t110_slow values (1)", Some("s")).await.unwrap().unwrap();
+
+        hold_forwarding(fake.path());
+        age_session(&st, "s").await;
+        let t = Instant::now();
+        let e = run("insert into qurry_t110_slow values (2)", Some("s")).await.expect("doesn't hang").err().expect("not sent").to_string();
+        let took = t.elapsed();
+        println!("{kind:?}: slow session answered in {took:?}: {e}");
+        assert!(e.contains("though the tunnel answers, so Qurry kept it with the transaction open in it") && e.contains("Nothing was sent"), "{e}");
+        assert!(took >= Duration::from_secs(5) && took < Duration::from_secs(8), "the 5s check and a quick look at the tunnel: {took:?}");
+        assert!(st.tx_state("s".into()).await, "the transaction is kept");
+        assert_eq!(starts(), 1, "the tunnel is kept");
+
+        release_forwarding(fake.path());
+        run("insert into qurry_t110_slow values (2)", Some("s")).await.expect("doesn't hang").expect("runs in the same session");
+        tokio::time::timeout(Duration::from_secs(40), st.commit_tx("s".into())).await.unwrap().expect("commits");
+        let r = run("select count(*) from qurry_t110_slow", None).await.unwrap().unwrap();
+        assert_eq!(r.rows[0][0].to_string().trim_matches('"'), "2", "both rows, in the transaction that was kept");
+        assert_eq!(starts(), 1);
+        run("drop table qurry_t110_slow", None).await.unwrap().unwrap();
+        st.disconnect(id).await.unwrap();
+        gone(fake.path()).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn slow_ssm_session_keeps_its_transaction_pg() {
+        slow_ssm_session_keeps_its_transaction(crate::store::DbKind::Postgres).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn slow_ssm_session_keeps_its_transaction_my() {
+        slow_ssm_session_keeps_its_transaction(crate::store::DbKind::Mysql).await;
     }
 }

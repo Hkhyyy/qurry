@@ -619,7 +619,8 @@ impl Session {
             Session::Redis(_) | Session::Plugin(_) => {}
         }
     }
-    /// A round trip that runs nothing (the protocol's ping): whether the connection still answers. Callers set the time limit
+    /// A round trip that runs nothing (PostgreSQL: the protocol's ping; MySQL: DO 0): whether the connection still answers. Callers
+    /// set the time limit; when it runs out the session stays usable, since its next use reads past the answer left unread
     pub async fn check(&mut self) -> AppResult<()> {
         match self {
             Session::Pg(s) => Ok(sqlx::Connection::ping(&mut *s.conn).await?),

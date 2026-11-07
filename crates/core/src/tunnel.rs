@@ -150,14 +150,16 @@ pub(crate) fn expand_home(path: &str) -> String {
 /// Tests only the SSH login (Test Connection on the SSH/SSL tab).
 /// Whether a new connection through a tunnel's local port gets the database's first bytes `within`: false when the tunnel
 /// accepts but forwards nothing (its session died while the aws CLI or the SSH accept loop runs on). It authenticates nothing:
-/// PostgreSQL answers an SSLRequest with one byte, MySQL greets first. Other kinds have no such step and count as answering
-pub(crate) async fn answers(local_port: u16, kind: crate::store::DbKind, within: std::time::Duration) -> bool {
+/// PostgreSQL answers an SSLRequest with one byte, MySQL greets first, Redis answers a PING (with PONG, or -NOAUTH: any byte
+/// counts). Redis with TLS (it would want a TLS handshake first) and plugin drivers have no such step and count as answering
+pub(crate) async fn answers(local_port: u16, cfg: &crate::store::ConnectionConfig, within: std::time::Duration) -> bool {
     use crate::store::DbKind;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let hello: &[u8] = match kind {
+    let hello: &[u8] = match cfg.kind {
         // SSLRequest (length 8, code 80877103)
         DbKind::Postgres => &[0, 0, 0, 8, 4, 210, 22, 47],
         DbKind::Mysql => &[],
+        DbKind::Redis if cfg.active_ssl().is_none() => b"PING\r\n",
         _ => return true,
     };
     let probe = async {
@@ -271,8 +273,8 @@ mod tests {
                 let mut held = vec![];
                 while let Ok((mut s, _)) = l.accept().await {
                     let mut b = [0u8; 8];
-                    // MySQL greets first; PostgreSQL answers the SSLRequest
-                    if greet || s.read_exact(&mut b).await.is_ok() {
+                    // MySQL greets first; PostgreSQL answers the SSLRequest, Redis the PING
+                    if greet || s.read(&mut b).await.is_ok_and(|n| n > 0) {
                         let _ = s.write_all(if greet { b"J\0\0\0\n8.4" } else { b"N" }).await;
                     }
                     held.push(s);
@@ -282,15 +284,37 @@ mod tests {
         };
         let silent = crate::app::tests::silent_server().await;
         const TWO: std::time::Duration = std::time::Duration::from_secs(2);
-        assert!(answers(serve(false).await, DbKind::Postgres, TWO).await);
-        assert!(answers(serve(true).await, DbKind::Mysql, TWO).await);
+        let of = |kind: &str, ssl: bool| -> crate::store::ConnectionConfig {
+            serde_json::from_value(serde_json::json!({ "name": "a", "kind": kind, "host": "db", "port": 1, "user": "u", "ssl": { "enabled": ssl } })).unwrap()
+        };
+        let (pg, my, redis) = (of("postgres", false), of("mysql", false), of("redis", false));
+        assert_eq!(redis.kind, DbKind::Redis);
+        assert!(answers(serve(false).await, &pg, TWO).await);
+        assert!(answers(serve(true).await, &my, TWO).await);
+        // Redis answers the PING (here like PostgreSQL's server: it reads, then answers)
+        assert!(answers(serve(false).await, &redis, TWO).await);
         let t = std::time::Instant::now();
-        assert!(!answers(silent, DbKind::Postgres, TWO).await);
-        assert!(!answers(silent, DbKind::Mysql, TWO).await);
-        assert!(t.elapsed() < std::time::Duration::from_secs(5), "2s each: {:?}", t.elapsed());
+        assert!(!answers(silent, &pg, TWO).await);
+        assert!(!answers(silent, &my, TWO).await);
+        assert!(!answers(silent, &redis, TWO).await);
+        assert!(t.elapsed() < std::time::Duration::from_secs(8), "2s each: {:?}", t.elapsed());
         let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
-        assert!(!answers(closed, DbKind::Postgres, TWO).await);
-        assert!(answers(silent, DbKind::Mssql, TWO).await);
+        assert!(!answers(closed, &pg, TWO).await);
+        assert!(answers(silent, &of("mssql", false), TWO).await);
+        assert!(answers(silent, &of("redis", true), TWO).await, "Redis with TLS isn't probed");
+    }
+
+    /// A real Redis answers the tunnel check's PING (PONG, or -NOAUTH with a password: any byte counts).
+    /// Run: QURRY_TEST_REDIS=127.0.0.1:16379 cargo test -p qurry-core real_redis_answers_the_tunnel_check -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn real_redis_answers_the_tunnel_check() {
+        let addr = std::env::var("QURRY_TEST_REDIS").expect("QURRY_TEST_REDIS=host:port");
+        let port: u16 = addr.rsplit(':').next().unwrap().parse().unwrap();
+        let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "r", "kind": "redis", "host": "127.0.0.1", "port": port, "user": "" })).unwrap();
+        let t = std::time::Instant::now();
+        assert!(answers(port, &cfg, std::time::Duration::from_secs(2)).await);
+        assert!(t.elapsed() < std::time::Duration::from_secs(1), "{:?}", t.elapsed());
     }
 
     /// If a different key arrives after the fingerprint was shown (MITM), it isn't added

@@ -5,12 +5,21 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def dead():
     # The session died while the plugin runs on (sleep, a network change, ended on the AWS side): it accepts, nothing goes through
     return os.path.exists(os.path.join(HERE, f"dead-{os.getpid()}"))
-def pipe(a, b):
+def stalled(started):
+    # The connections open before hold-<pid> was written stall until it is removed, new ones go through (a slow session)
+    try:
+        with open(os.path.join(HERE, f"hold-{os.getpid()}")) as f:
+            return started < float(f.read())
+    except (OSError, ValueError):
+        return False
+def pipe(a, b, started):
     try:
         while True:
             d = a.recv(65536)
             if not d:
                 break
+            while stalled(started):
+                time.sleep(0.05)
             if not dead():
                 b.sendall(d)
     except OSError:
@@ -41,8 +50,9 @@ if sys.argv[1:2] == ["--plugin"]:
             print("Connection to destination port failed, check SSM Agent logs.", flush=True)
             c.close()
             continue
-        threading.Thread(target=pipe, args=(c, u), daemon=True).start()
-        threading.Thread(target=pipe, args=(u, c), daemon=True).start()
+        started = time.time()
+        threading.Thread(target=pipe, args=(c, u, started), daemon=True).start()
+        threading.Thread(target=pipe, args=(u, c, started), daemon=True).start()
 args = sys.argv[1:]
 if args[:2] == ["ssm", "terminate-session"]:
     with open(os.path.join(HERE, "terminated"), "a") as f:

@@ -985,6 +985,8 @@ impl AppState {
     /// Create a backup file. Bytes written (on failure or cancel, the partial file is deleted)
     pub async fn backup(&self, id: String, path: String, opts: BackupOptions, job_id: String) -> AppResult<u64> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
+        // Its connections and tunnel are in use until it ends (in_use)
+        let _running = self.job_running(&id);
         let file = PathBuf::from(&path);
         let r = async {
             let (host, port, user, db, password, cfg) = endpoint(self, &id).await?;
@@ -1043,6 +1045,8 @@ impl AppState {
     /// Restore from a backup file (pg_dump custom → pg_restore, SQL → psql / mysql). PostgreSQL: one transaction, rolled back on failure. MySQL: not atomic — what ran before a failure stays
     pub async fn restore(&self, id: String, path: String, opts: RestoreOptions, job_id: String) -> AppResult<()> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
+        // Its connections and tunnel are in use until it ends (in_use)
+        let _running = self.job_running(&id);
         let file = PathBuf::from(&path);
         let r = async {
             let cfg = self.source(&id)?;

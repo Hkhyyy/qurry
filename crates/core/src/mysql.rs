@@ -251,9 +251,12 @@ impl MySession {
         let _ = self.conn.execute("select 1").await;
     }
 
-    /// Session::check
+    /// Session::check. A statement that runs nothing, not the protocol's ping: sqlx reads past a statement's answer that was left
+    /// unread when its caller gave up waiting (the check's time limit), but not past a ping's, which the next statement would take
+    /// for its own answer. So a session whose check was slow is still usable
     pub(crate) async fn check(&mut self) -> AppResult<()> {
-        Ok(sqlx::Connection::ping(&mut *self.conn).await?)
+        self.conn.execute("DO 0").await?;
+        Ok(())
     }
 
     /// Session::abandon
