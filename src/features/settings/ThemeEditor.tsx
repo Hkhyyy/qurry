@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../../lib/api";
 import { ask } from "../../lib/dialogs";
 import { sharedOr, useSharedReady } from "../../lib/shared";
-import { BUILT_IN, TOKENS, deleteCustomTheme, findTheme, previewTheme, saveCustomTheme, setThemePick, useThemeState, type CustomTheme, type Palette, type ThemeDef, type ThemeToken, type ThemeWarning } from "../../lib/theme";
+import { BUILT_IN, SYSTEM, TOKENS, deleteCustomTheme, findTheme, previewTheme, saveCustomTheme, setThemePick, useThemeState, type CustomTheme, type Palette, type ThemeDef, type ThemeToken, type ThemeWarning } from "../../lib/theme";
 import { Button, cx, normalizeHex, Notice, Select, Text, TextInput } from "../../ui";
 import { ThemePreview } from "./ThemePreview";
 
@@ -10,6 +10,9 @@ import { ThemePreview } from "./ThemePreview";
 // Basic colors first, the rest behind "Advanced colors"; each color has a picker and its hex. The whole window draws the colors being
 // edited (previewTheme) and the preview shows every state; pointing at a color's name outlines what draws it. Contrast below a
 // minimum is warned about next to the color and in the header, never fixed silently; a hex that isn't one is not applied
+
+/** Leaving the editor, or replacing its colors (Based on, Import…), with colors not saved as a theme asks first */
+export const askDiscardColors = () => ask("The changed colors aren't saved as a theme. Discard them?", { title: "Theme Colors", okLabel: "Discard", danger: true });
 
 const LABEL = Object.fromEntries(TOKENS.map((t) => [t.key, t.label]));
 const GROUPS = [...new Set(TOKENS.map((t) => t.group))];
@@ -97,7 +100,8 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
     setHot(on ? k : null);
   };
 
-  const pickBase = (id: string) => {
+  const pickBase = async (id: string) => {
+    if (dirty && !(await askDiscardColors())) return;
     const t = findTheme(settings, id);
     const c = settings.custom.find((x) => x.id === id);
     setBaseId(c ? c.base : id);
@@ -112,9 +116,12 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
       const t = await saveCustomTheme({ ...theme(), id: asNew ? "" : editing ?? "" });
       setEditing(t.id);
       setName(t.name);
-      await setThemePick(t.id);
+      // Sync with OS stays on when a theme is replaced (drawn already if it is one of its two); a new one is switched to
+      const sync = settings.theme === SYSTEM;
+      if (!sync || asNew) await setThemePick(t.id);
       const low = warnings.length ? ` (${warnings.length} below the contrast minimum, as warned)` : "";
-      setMsg({ tone: "ok", text: `Saved "${t.name}" and switched to it${low}` });
+      const how = !sync ? " and switched to it" : asNew ? " and switched to it: Sync with OS is off" : ", Sync with OS stays on";
+      setMsg({ tone: "ok", text: `Saved "${t.name}"${how}${low}` });
     } catch (e) {
       setMsg({ tone: "danger", text: `Not saved: ${e}` });
     }
@@ -132,7 +139,7 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
   const importFile = async () => {
     try {
       const t = await api.importTheme();
-      if (!t) return;
+      if (!t || (dirty && !(await askDiscardColors()))) return;
       setBaseId(t.base);
       setOver(t.colors);
       setName(t.name);

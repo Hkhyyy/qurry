@@ -64,7 +64,7 @@ test("Edit Colors…: live preview, contrast warnings kept, an invalid hex not a
   // Too dark to read: warned next to the color and in the header, kept as typed
   await hex("Comment").fill("#2a2b33");
   const row = dialog(page).locator('[data-token="comment"]');
-  await expect(row.locator(".theme-warn")).toHaveText(/⚠ 1\.\d:1 on Background/);
+  await expect(row.locator(".theme-warn")).toHaveText(/⚠ 1\.\d:1 on Row numbers/);
   await expect(dialog(page).locator(".theme-editor-head")).toContainText("1 below the contrast minimum");
   await expect(hex("Comment")).toHaveValue("#2a2b33");
   // Pointing at a color's name outlines what draws it in the preview (the comment in the console sample)
@@ -105,6 +105,51 @@ test("leaving the editor with unsaved colors asks; discarding goes back to the t
   await expect(dialog(page)).toHaveCount(0);
   const text = await page.evaluate(() => getComputedStyle(document.body).color);
   expect(text).toBe(rgb(theme("dark").colors.text));
+});
+
+test("changing Based on with unsaved colors asks first: Cancel keeps them, Discard loads the other theme", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  const base = dialog(page).getByRole("combobox", { name: "Based on" });
+  const textHex = dialog(page).getByRole("textbox", { name: "Text hex", exact: true });
+  await base.selectOption("dracula");
+  await textHex.fill("#ffeedd");
+  const question = page.locator(".ui-modal", { hasText: "Discard them?" });
+  await base.selectOption("one-dark");
+  await expect(question).toBeVisible();
+  await question.getByRole("button", { name: "Cancel" }).click();
+  await expect(base).toHaveValue("dracula");
+  await expect(textHex).toHaveValue("#ffeedd");
+  await base.selectOption("one-dark");
+  await question.getByRole("button", { name: "Discard" }).click();
+  await expect(base).toHaveValue("one-dark");
+  await expect(textHex).toHaveValue(theme("one-dark").colors.text);
+  // Nothing unsaved: no question
+  await base.selectOption("dark");
+  await expect(question).toHaveCount(0);
+  await expect(base).toHaveValue("dark");
+});
+
+test("saving a custom theme under Sync with OS keeps Sync with OS; Save as new theme switches and says Sync with OS is off", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await openInTheme(page, "system", [{ id: "custom-1", name: "Night shift", base: "dracula", colors: { bg: "#1d1e26" } }]);
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem("mock-themeSettings")!);
+    localStorage.setItem("mock-themeSettings", JSON.stringify({ ...s, sync: { dark: "custom-1", light: "light" } }));
+  });
+  await page.reload();
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await expect(dialog(page).getByRole("combobox", { name: "Based on" })).toHaveValue("custom-1");
+  await dialog(page).getByRole("textbox", { name: "Accent hex", exact: true }).fill("#9580ff");
+  await dialog(page).getByRole("button", { name: "Save", exact: true }).click();
+  await expect(dialog(page).getByText('Saved "Night shift", Sync with OS stays on')).toBeVisible();
+  expect((await saved(page)).theme).toBe("system");
+  await dialog(page).getByRole("textbox", { name: "Theme name" }).fill("Night shift 2");
+  await dialog(page).getByRole("button", { name: "Save as new theme" }).click();
+  await expect(dialog(page).getByText('Saved "Night shift 2" and switched to it: Sync with OS is off')).toBeVisible();
+  expect((await saved(page)).theme).toBe("custom-2");
 });
 
 test("Import… / Export… a theme file: checked strictly, loaded into the editor to save", async ({ page }) => {

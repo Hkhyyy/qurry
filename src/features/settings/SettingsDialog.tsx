@@ -6,8 +6,7 @@ import type { FontFamily, UpdateChannel } from "../../lib/api";
 import { KeymapEditor } from "../../components/KeymapEditor";
 import { Button, Checkbox, cx, Field, List, ListItem, Modal, Select, Text } from "../../ui";
 import { allThemes, currentTheme, setThemePick, setThemeSync, SYSTEM, useThemeState, type ThemeDef } from "../../lib/theme";
-import { ask } from "../../lib/dialogs";
-import { ThemeEditor } from "./ThemeEditor";
+import { askDiscardColors, ThemeEditor } from "./ThemeEditor";
 import { FontTarget, setFont, SIZES, useFonts } from "../../lib/prefs";
 import { FontPicker } from "./FontPicker";
 import { isMac, sk } from "../shortcuts/labels";
@@ -213,7 +212,7 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
   // Leaving the theme editor with colors not saved asks first (they would be lost)
   const themeDirty = useRef(false);
   const leave = async (then: () => void) => {
-    if (page === "theme" && themeDirty.current && !(await ask("The changed colors aren't saved as a theme. Discard them?", { title: "Theme Colors", okLabel: "Discard", danger: true }))) return;
+    if (page === "theme" && themeDirty.current && !(await askDiscardColors())) return;
     themeDirty.current = false;
     then();
   };
