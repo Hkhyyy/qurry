@@ -172,6 +172,10 @@ pub struct Block {
     pub insert_cols: Option<(usize, usize)>,
     /// The token range the block covers
     pub toks: (usize, usize),
+    /// It can't see its parent's sources: a CTE body, a FROM subquery that isn't LATERAL (its CTEs it still sees)
+    pub closed: bool,
+    /// Token ranges that name no column: a SELECT … INTO target (`into temp t`, `into outfile '…'`, `into @v`)
+    pub skip: Vec<(usize, usize)>,
 }
 
 pub struct Scope {
@@ -186,7 +190,9 @@ pub struct Scope {
 const CLAUSES: [&str; 22] = [
     "from", "where", "group", "having", "order", "limit", "offset", "union", "intersect", "except", "window", "returning", "into", "set", "values", "on", "using", "join", "fetch", "for", "select", "qualify",
 ];
-const JOIN_WORDS: [&str; 7] = ["join", "left", "right", "full", "inner", "cross", "natural"];
+const JOIN_WORDS: [&str; 8] = ["join", "left", "right", "full", "inner", "cross", "natural", "straight_join"];
+/// MySQL's words between SELECT and its list
+const SELECT_MODIFIERS: [&str; 9] = ["distinctrow", "high_priority", "straight_join", "sql_small_result", "sql_big_result", "sql_buffer_result", "sql_no_cache", "sql_cache", "sql_calc_found_rows"];
 
 pub fn is_kw(w: &str, set: &[&str]) -> bool {
     set.iter().any(|k| w.eq_ignore_ascii_case(k))
@@ -335,6 +341,7 @@ impl Scope {
                     let c = self.close[i].unwrap_or(b);
                     let sp = (self.toks[i].e, self.toks.get(c).map_or(self.text.len(), |t| t.s));
                     let q = self.query(i + 1, c.min(b), Some(me), sp);
+                    self.close_blocks(q, me);
                     self.blocks[me].ctes.last_mut().unwrap().block = Some(q);
                     i = c + 1;
                 }
@@ -368,7 +375,7 @@ impl Scope {
             }
             if word && w == "select" {
                 i += 1;
-                while self.is(i, "distinct") || self.is(i, "all") {
+                while self.is(i, "distinct") || self.is(i, "all") || self.toks.get(i).is_some_and(|t| t.k == K::Word) && is_kw(self.t(i), &SELECT_MODIFIERS) {
                     i += 1;
                     if self.is(i, "on") && self.punct(i + 1, "(") {
                         i = self.close[i + 1].unwrap_or(b) + 1;
@@ -377,15 +384,30 @@ impl Scope {
                 sel_start = Some(i);
                 continue;
             }
+            // `a is [not] distinct from b` is an operator, not a FROM clause
+            let distinct_from = w == "from" && i > 0 && self.is(i - 1, "distinct");
             // A clause word ends the select list
-            if word && (is_kw(&w, &CLAUSES) || is_kw(&w, &JOIN_WORDS) || matches!(w.as_str(), "update" | "delete" | "group" | "order"))
+            if word && !distinct_from && (is_kw(&w, &CLAUSES) || is_kw(&w, &JOIN_WORDS) || matches!(w.as_str(), "update" | "delete" | "group" | "order"))
                 && let Some(s) = sel_start.take()
             {
                 self.items(s, i, me);
             }
+            // SELECT … INTO a variable, a new table or a file: no source, and its words aren't columns
+            if word && w == "into" && head == "select" {
+                let s = i + 1;
+                i = s;
+                while i < b && !(self.toks[i].k == K::Word && is_kw(self.t(i), &CLAUSES)) {
+                    if self.punct(i, "(") {
+                        i = self.close[i].unwrap_or(b);
+                    }
+                    i += 1;
+                }
+                self.blocks[me].skip.push((s, i.min(b)));
+                continue;
+            }
             let at_ref = word && match w.as_str() {
-                "from" => true,
-                "join" => true,
+                "from" => !distinct_from,
+                "join" | "straight_join" => true,
                 "into" => true,
                 "update" => i == body,
                 // DELETE … USING t: a source list (a join's USING is a column list in parentheses)
@@ -396,7 +418,7 @@ impl Scope {
                 natural = true;
             }
             if at_ref {
-                let join = w == "join";
+                let join = w == "join" || w == "straight_join";
                 i += 1;
                 loop {
                     let into = w == "into" && head == "insert";
@@ -455,14 +477,21 @@ impl Scope {
     fn source(&mut self, mut i: usize, b: usize, me: usize, join: bool, natural: bool, into: bool) -> usize {
         let first = i;
         let mut s = Source { join, natural, ..Default::default() };
+        let mut lateral = false;
         while self.is(i, "only") || self.is(i, "lateral") {
+            lateral |= self.is(i, "lateral");
             i += 1;
         }
         if self.punct(i, "(") {
             let c = self.close[i].unwrap_or(b);
             if self.is_query(i) {
                 let sp = (self.toks[i].e, self.toks.get(c).map_or(self.text.len(), |t| t.s));
-                s.sub = Some(self.query(i + 1, c.min(b), Some(me), sp));
+                let q = self.query(i + 1, c.min(b), Some(me), sp);
+                // Only a LATERAL subquery sees the sources before it
+                if !lateral {
+                    self.close_blocks(q, me);
+                }
+                s.sub = Some(q);
             } else {
                 self.nested(i + 1, c.min(b), me);
                 s.opaque = true;
@@ -491,7 +520,7 @@ impl Scope {
         if self.is(i, "as") {
             i += 1;
         }
-        if self.ident(i) && !(self.toks[i].k == K::Word && (crate::complete::is_keyword(self.t(i)) || is_kw(self.t(i), &CLAUSES) || is_kw(self.t(i), &JOIN_WORDS) || self.is(i, "default"))) {
+        if self.ident(i) && !(self.toks[i].k == K::Word && (crate::complete::is_keyword(self.t(i)) || is_kw(self.t(i), &CLAUSES) || is_kw(self.t(i), &JOIN_WORDS) || self.is(i, "default") || self.index_hint(i))) {
             s.alias = Some(self.name(i));
             i += 1;
         }
@@ -504,9 +533,35 @@ impl Scope {
             }
             i = c + 1;
         }
-        s.span = (first, i);
+        // MySQL's index hints: USE | FORCE | IGNORE INDEX | KEY [FOR JOIN | ORDER BY | GROUP BY] (names), … (index names, not columns)
+        while self.index_hint(i) {
+            i += 2;
+            if self.is(i, "for") {
+                i += if self.is(i + 1, "join") { 2 } else { 3 };
+            }
+            if self.punct(i, "(") {
+                i = self.close[i].unwrap_or(b) + 1;
+            }
+            if self.punct(i, ",") && self.index_hint(i + 1) {
+                i += 1;
+            }
+        }
+        s.span = (first, i.min(b));
         self.blocks[me].sources.push(s);
         i
+    }
+
+    fn index_hint(&self, i: usize) -> bool {
+        (self.is(i, "use") || self.is(i, "force") || self.is(i, "ignore")) && (self.is(i + 1, "index") || self.is(i + 1, "key"))
+    }
+
+    /// The branches of the query whose first block is `first` (blocks of `parent`) can't see `parent`'s sources
+    fn close_blocks(&mut self, first: usize, parent: usize) {
+        for b in &mut self.blocks[first..] {
+            if b.parent == Some(parent) {
+                b.closed = true;
+            }
+        }
     }
 
     /// The names in a comma list (a column list)
@@ -569,6 +624,11 @@ impl Scope {
     /// The block and its enclosing ones, innermost first
     pub fn chain(&self, b: usize) -> impl Iterator<Item = usize> + '_ {
         std::iter::successors(Some(b), |&i| self.blocks[i].parent)
+    }
+
+    /// The block and the enclosing ones whose sources it sees (up to a CTE body or a FROM subquery), innermost first
+    pub fn sees(&self, b: usize) -> impl Iterator<Item = usize> + '_ {
+        std::iter::successors(Some(b), |&i| if self.blocks[i].closed { None } else { self.blocks[i].parent })
     }
 
     /// The CTE `name` (lowercase compare) visible from block `b`
@@ -634,6 +694,20 @@ mod tests {
         let b = s.block_at(t.len());
         assert_ne!(b, 0);
         assert_eq!(s.blocks[b].parent, Some(0));
+    }
+
+    #[test]
+    fn cte_bodies_and_from_subqueries_dont_see_outer_sources() {
+        let t = "with c as (select 1 from t1) select * from t2, (select 2 from t3) d, lateral (select 3 from t4) e where exists (select 4 from t5)";
+        let s = Scope::new(t, false);
+        let sees = |w: &str| s.sees(s.block_at(t.find(w).unwrap())).count();
+        assert_eq!([sees("t1"), sees("t3"), sees("t4"), sees("t5")], [1, 1, 2, 2]);
+        // CTEs stay visible from a CTE body
+        assert!(s.cte(s.block_at(t.find("t1").unwrap()), "c").is_some());
+        // MySQL: index hints and SELECT … INTO targets aren't sources or aliases
+        let s = Scope::new("select id into @v from users use index (primary) where id is distinct from 2", true);
+        assert_eq!(s.blocks[0].sources.iter().map(|x| (x.name().unwrap(), x.alias.is_none())).collect::<Vec<_>>(), [("users", true)]);
+        assert_eq!(s.blocks[0].skip.len(), 1);
     }
 
     #[test]

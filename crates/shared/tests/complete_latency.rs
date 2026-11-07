@@ -42,8 +42,12 @@ fn p95(name: &str, mut f: impl FnMut()) -> Duration {
 fn completion_p95_under_2ms() {
     let m = mock();
     let script: String = (0..300).map(|i| format!("select * from s{}.t{i} a join t{} b on b.c{}_0 = a.c{i}_0 where a.c{i}_1 = 1;\n", i % 40, i + 1, i + 1)).collect();
+    // Six CTEs of ten columns, each reading the one before it: each block's columns are read once, not once per item above it
+    let list = (0..10).map(|c| format!("c5_{c}")).collect::<Vec<_>>().join(", ");
+    let chain = format!("with x0 as (select {list} from t5), {} select ", (1..6).map(|k| format!("x{k} as (select {list} from x{})", k - 1)).collect::<Vec<_>>().join(", "));
     // The console's text with the caret at its end
     let cases = [
+        ("six chained ctes", format!("{script}{chain}")),
         ("statement start `se`", format!("{script}se")),
         ("select list", format!("{script}select  from t5 a join t6 b on true where a.")),
         ("after join", format!("{script}select * from t5 a join ")),
@@ -69,6 +73,11 @@ fn completion_p95_under_2ms() {
     let typo = format!("{script}select a.c5_1, c5_9x, b.nope from t5 a join t6 b on b.c6_0 = a.c5_1 where c5_3 = 1");
     worst = worst.max(p95("marks (the caret's statement)", || {
         let (stmt, _) = at_caret(&typo, typo.len(), DbKind::Postgres);
+        std::hint::black_box(marks(&m, &stmt, "", false, &HashSet::new()));
+    }));
+    let chained = format!("{script}{chain}c5_1, c5_9x from x5");
+    worst = worst.max(p95("marks (six chained ctes)", || {
+        let (stmt, _) = at_caret(&chained, chained.len(), DbKind::Postgres);
         std::hint::black_box(marks(&m, &stmt, "", false, &HashSet::new()));
     }));
     // The GUI marks the whole console after a pause in typing (debounced), the TUI the lines around the caret: shown, not budgeted

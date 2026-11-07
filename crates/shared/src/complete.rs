@@ -143,9 +143,8 @@ impl Meta {
                 let (rs, rt) = (fk.ref_schema.to_lowercase(), fk.ref_table.to_lowercase());
                 let Some(j) = by_name.get(&rt).and_then(|v| v.iter().copied().find(|&j| lower[j].0 == rs)) else { continue };
                 links[i].push(Link { other: j, mine: fk.columns.clone(), theirs: fk.ref_columns.clone(), out: true });
-                if j != i {
-                    links[j].push(Link { other: i, mine: fk.ref_columns.clone(), theirs: fk.columns.clone(), out: false });
-                }
+                // A table referencing itself (employees.manager_id → employees.id) gets both: a self join goes either way
+                links[j].push(Link { other: i, mine: fk.ref_columns.clone(), theirs: fk.columns.clone(), out: false });
             }
         }
         let partial = tables.is_empty() || tables.iter().map(|t| t.columns.len()).sum::<usize>() >= COLUMN_LIMIT;
@@ -284,7 +283,7 @@ pub fn is_word(c: char) -> bool {
 }
 
 /// Keywords a table reference follows
-const REF_KEYWORDS: [&str; 4] = ["from", "join", "update", "into"];
+const REF_KEYWORDS: [&str; 5] = ["from", "join", "straight_join", "update", "into"];
 
 fn is_ref_keyword(w: &str) -> bool {
     REF_KEYWORDS.iter().any(|k| w.eq_ignore_ascii_case(k))
@@ -591,12 +590,20 @@ impl Caret {
             None => false,
         };
         let typed = text[start..].chars().take_while(|c| is_word(*c)).collect::<String>().to_lowercase();
-        if self.open.is_none() && line_start && ends && !typed.is_empty() && STATEMENT_KEYWORDS.iter().any(|k| k.starts_with(&typed)) {
+        // Only when the word can't go on the statement: `an` (and), `de` (desc) and `or` keep the clause's keywords first
+        let statement_only = STATEMENT_KEYWORDS.iter().any(|k| k.starts_with(&typed)) && !keywords().any(|k| !STATEMENT_KEYWORDS.contains(&k) && k.starts_with(&typed));
+        if self.open.is_none() && line_start && ends && !typed.is_empty() && statement_only {
             return Spot::StatementFirst;
         }
+        // `from` inside a call's parentheses (`extract(year from x)`, `substring(x from 2)`, `trim(both from x)`) or in
+        // `is [not] distinct from` is part of an expression, not a FROM clause
+        let in_call = self.open.is_some_and(|o| !sc.is_query(o));
+        let expr_from = |i: usize| sc.is(i, "from") && (in_call || i > 0 && sc.is(i - 1, "distinct"));
         // The clause the caret is in: the nearest clause word at its depth
         let clause = self.back.iter().map(|&i| (i, sc.t(i).to_lowercase())).find(|(i, w)| {
-            sc.toks[*i].k == K::Word && matches!(w.as_str(), "select" | "from" | "join" | "on" | "using" | "where" | "by" | "having" | "set" | "values" | "into" | "update" | "returning" | "limit" | "when" | "then" | "else" | "case")
+            sc.toks[*i].k == K::Word
+                && !expr_from(*i)
+                && matches!(w.as_str(), "select" | "from" | "join" | "straight_join" | "on" | "using" | "where" | "by" | "having" | "set" | "values" | "into" | "update" | "returning" | "limit" | "when" | "then" | "else" | "case")
         });
         // Right after an operand (a name, a number, a string, `)`, `null` …) or after `is` / `is not` in an expression: only
         // keywords come there (`and`, `desc`, `null` …), not another column or a function
@@ -607,14 +614,17 @@ impl Caret {
             None => false,
         };
         let after_is = prev_word == "is" || prev_word == "not" && self.word_at(1) == "is";
-        let in_sources = clause.as_ref().is_some_and(|(_, w)| matches!(w.as_str(), "from" | "join" | "update" | "into"));
+        let in_sources = clause.as_ref().is_some_and(|(_, w)| matches!(w.as_str(), "from" | "join" | "straight_join" | "update" | "into"));
         if (operand || after_is) && !in_sources {
             return Spot::AfterOperand;
         }
-        let Some((ci, cw)) = clause else { return Spot::Expr };
-        let is_ref = prev.is_some_and(|i| sc.toks[i].k == K::Word && is_ref_keyword(&prev_word) && (prev_word != "update" || self.back.len() == 1 || sc.is(self.back[1], "with") || sc.punct(self.back[1], ")")));
+        let Some((ci, mut cw)) = clause else { return Spot::Expr };
+        if cw == "straight_join" {
+            cw = "join".into();
+        }
+        let is_ref = prev.is_some_and(|i| sc.toks[i].k == K::Word && !expr_from(i) && is_ref_keyword(&prev_word) && (prev_word != "update" || self.back.len() == 1 || sc.is(self.back[1], "with") || sc.punct(self.back[1], ")")));
         if is_ref {
-            return Spot::TableRef { join: prev_word == "join" };
+            return Spot::TableRef { join: prev_word == "join" || prev_word == "straight_join" };
         }
         match cw.as_str() {
             "from" | "join" | "update" | "into" if prev_word == "," && cw == "from" => Spot::TableRef { join: false },
@@ -642,9 +652,10 @@ impl Caret {
     }
 }
 
-/// The sources visible in block `b`: its own, then the enclosing blocks'
+/// The sources visible in block `b`: its own, then those of the enclosing blocks it sees (a CTE body or a FROM subquery that
+/// isn't LATERAL sees none of them)
 fn visible(sc: &Scope, b: usize) -> impl Iterator<Item = (usize, &Source)> {
-    sc.chain(b).flat_map(move |b| sc.blocks[b].sources.iter().map(move |s| (b, s)))
+    sc.sees(b).flat_map(move |b| sc.blocks[b].sources.iter().map(move |s| (b, s)))
 }
 
 /// The source a qualifier (an alias, a table's name, a CTE) names among those visible in block `b`, innermost first
@@ -653,59 +664,95 @@ fn named_in<'s>(sc: &'s Scope, b: usize, q: &str) -> Option<(usize, &'s Source)>
     visible(sc, b).find(|(_, s)| s.alias.as_ref().is_some_and(|a| a.to_lowercase() == q)).or_else(|| visible(sc, b).find(|(_, s)| s.alias.is_none() && s.name().is_some_and(|n| n.to_lowercase() == q)))
 }
 
-/// A source's columns: a table's, a subquery's or a CTE's select list (`*` expanded), its column aliases. None when they can't be
-/// told (a function, a table that isn't loaded, an expression without a name in a select list …)
-fn source_columns(m: &Meta, sc: &Scope, block: usize, s: &Source, db: &str, depth: u8) -> Option<Vec<(String, String)>> {
-    if depth > 8 || s.opaque {
-        return None;
-    }
-    let mut cols = if let Some(sub) = s.sub {
-        block_columns(m, sc, sub, db, depth + 1)?
-    } else {
-        let r = s.table.as_deref()?;
-        match (!r.contains('.')).then(|| sc.cte(block, r)).flatten() {
-            Some(c) if !c.cols.is_empty() => c.cols.iter().map(|n| (n.clone(), String::new())).collect(),
-            Some(c) => block_columns(m, sc, c.block?, db, depth + 1)?,
-            None => find_table(m, r, db)?.columns.clone(),
-        }
-    };
-    for (i, n) in s.cols.iter().enumerate() {
-        if let Some(c) = cols.get_mut(i) {
-            c.0 = n.clone();
-        }
-    }
-    Some(cols)
+type Columns = Vec<(String, String)>;
+
+/// The columns of a statement's sources and query blocks, each block's worked out once: a chain of CTEs or subqueries reads
+/// every block once, not once per select item of each block above it
+struct Resolver<'a> {
+    m: &'a Meta,
+    sc: &'a Scope,
+    db: &'a str,
+    /// Per block: not asked yet (None), or its columns (Some(None) while they are being worked out, so a CTE reading itself is unknown)
+    memo: std::cell::RefCell<Vec<Option<Option<Columns>>>>,
 }
 
-/// The columns a query block returns: its select list's names, `*` as its sources' columns
-fn block_columns(m: &Meta, sc: &Scope, b: usize, db: &str, depth: u8) -> Option<Vec<(String, String)>> {
-    let blk = &sc.blocks[b];
-    let mut out = vec![];
-    for it in &blk.items {
-        match &it.star {
-            Some(None) => {
-                for s in &blk.sources {
-                    out.extend(source_columns(m, sc, b, s, db, depth)?);
-                }
+impl<'a> Resolver<'a> {
+    fn new(m: &'a Meta, sc: &'a Scope, db: &'a str) -> Self {
+        Resolver { m, sc, db, memo: std::cell::RefCell::new(vec![None; sc.blocks.len()]) }
+    }
+
+    /// A source's columns: a table's, a subquery's or a CTE's select list (`*` expanded), its column aliases. None when they
+    /// can't be told (a function, a table that isn't loaded, an expression without a name in a select list …). `block` holds it
+    fn source(&self, block: usize, s: &Source) -> Option<Columns> {
+        if s.opaque {
+            return None;
+        }
+        let mut cols = if let Some(sub) = s.sub {
+            // `(values …) t(a, b)`: the column aliases name its columns
+            if self.sc.blocks[sub].head == "values" && !s.cols.is_empty() {
+                return Some(s.cols.iter().map(|n| (n.clone(), String::new())).collect());
             }
-            Some(Some(q)) => {
-                let s = blk.sources.iter().find(|s| s.name().is_some_and(|n| n.eq_ignore_ascii_case(q)))?;
-                out.extend(source_columns(m, sc, b, s, db, depth)?);
+            self.block(sub)?
+        } else {
+            let r = s.table.as_deref()?;
+            match (!r.contains('.')).then(|| self.sc.cte(block, r)).flatten() {
+                Some(c) if !c.cols.is_empty() => c.cols.iter().map(|n| (n.clone(), String::new())).collect(),
+                Some(c) => self.block(c.block?)?,
+                None => find_table(self.m, r, self.db)?.columns.clone(),
             }
-            None => {
-                let name = it.alias.clone().or_else(|| {
-                    // A column (`x`, `t.x`) keeps its name
-                    let (x, y) = it.toks;
-                    let last = y - 1;
-                    let plain = matches!(sc.toks[last].k, K::Word | K::Quoted) && (y - x == 1 || y - x == 3 && sc.punct(x + 1, "."));
-                    plain.then(|| sc.name(last))
-                })?;
-                let ty = blk.sources.iter().find_map(|s| source_columns(m, sc, b, s, db, depth).and_then(|cs| cs.into_iter().find(|c| c.0.eq_ignore_ascii_case(&name)))).map(|c| c.1).unwrap_or_default();
-                out.push((name, ty));
+        };
+        for (i, n) in s.cols.iter().enumerate() {
+            if let Some(c) = cols.get_mut(i) {
+                c.0 = n.clone();
             }
         }
+        Some(cols)
     }
-    Some(out)
+
+    /// The columns a query block returns: its select list's names, `*` as its sources' columns (a VALUES list's: unknown)
+    fn block(&self, b: usize) -> Option<Columns> {
+        if let Some(done) = &self.memo.borrow()[b] {
+            return done.clone();
+        }
+        self.memo.borrow_mut()[b] = Some(None);
+        let out = self.work_out(b);
+        self.memo.borrow_mut()[b] = Some(out.clone());
+        out
+    }
+
+    fn work_out(&self, b: usize) -> Option<Columns> {
+        let (sc, blk) = (self.sc, &self.sc.blocks[b]);
+        if blk.head == "values" {
+            return None;
+        }
+        let srcs: Vec<Option<Columns>> = blk.sources.iter().map(|s| self.source(b, s)).collect();
+        let mut out = vec![];
+        for it in &blk.items {
+            match &it.star {
+                Some(None) => {
+                    for cs in &srcs {
+                        out.extend(cs.clone()?);
+                    }
+                }
+                Some(Some(q)) => {
+                    let k = blk.sources.iter().position(|s| s.name().is_some_and(|n| n.eq_ignore_ascii_case(q)))?;
+                    out.extend(srcs[k].clone()?);
+                }
+                None => {
+                    let name = it.alias.clone().or_else(|| {
+                        // A column (`x`, `t.x`) keeps its name
+                        let (x, y) = it.toks;
+                        let last = y - 1;
+                        let plain = matches!(sc.toks[last].k, K::Word | K::Quoted) && (y - x == 1 || y - x == 3 && sc.punct(x + 1, "."));
+                        plain.then(|| sc.name(last))
+                    })?;
+                    let ty = srcs.iter().flatten().find_map(|cs| cs.iter().find(|c| c.0.eq_ignore_ascii_case(&name))).map(|c| c.1.clone()).unwrap_or_default();
+                    out.push((name, ty));
+                }
+            }
+        }
+        Some(out)
+    }
 }
 
 /// The ON conditions a joined source can take from foreign keys to the sources before it in its block: `o.user_id = u.id`
@@ -748,6 +795,8 @@ enum Kw {
     Statement,
     /// Statement keywords and templates, then the others
     StatementFirst,
+    /// The others, then statement keywords (right after an operand: `id de` → desc before delete)
+    StatementLast,
     All,
 }
 
@@ -788,6 +837,7 @@ pub fn suggest_lead(m: &Meta, text: &str, caret: usize, db: &str, mysql: bool, o
         v
     };
     let c = Caret::new(text, caret, prefix.len(), mysql);
+    let rc = Resolver::new(m, &c.sc, db);
     let col = |name: &str, ty: &str, from: &str| Item::new(name, if from.is_empty() { ty.to_string() } else if ty.is_empty() { from.to_string() } else { format!("{ty} · {from}") }, name, ItemKind::Column);
 
     if let Some(h) = head.strip_suffix('.') {
@@ -806,9 +856,9 @@ pub fn suggest_lead(m: &Meta, text: &str, caret: usize, db: &str, mysql: bool, o
         // alias. / table. / cte. → columns
         let hit = if schema && at_ref { None } else { named_in(&c.sc, c.block, &q) };
         let cols = match hit {
-            Some((b, s)) => source_columns(m, &c.sc, b, s, db, 0),
+            Some((b, s)) => rc.source(b, s),
             None if schema => None,
-            None => c.sc.cte(c.block, &q).and_then(|x| if x.cols.is_empty() { block_columns(m, &c.sc, x.block?, db, 0) } else { Some(x.cols.iter().map(|n| (n.clone(), String::new())).collect()) }).or_else(|| find_table(m, &q, db).map(|t| t.columns.clone())),
+            None => c.sc.cte(c.block, &q).and_then(|x| if x.cols.is_empty() { rc.block(x.block?) } else { Some(x.cols.iter().map(|n| (n.clone(), String::new())).collect()) }).or_else(|| find_table(m, &q, db).map(|t| t.columns.clone())),
         };
         if let Some(cols) = cols {
             let items = cols.iter().filter(|(c, _)| matches(c)).map(|(c, ty)| col(c, ty, "")).collect();
@@ -828,30 +878,43 @@ pub fn suggest_lead(m: &Meta, text: &str, caret: usize, db: &str, mysql: bool, o
     let any_kw = !p.is_empty() || o.keywords_on_empty;
     let rest = |keywords: Kw, tables: bool, functions: bool, skip: Vec<usize>| Some(Rest { filter: filter.clone(), db: db.to_string(), keywords: if any_kw { keywords } else { Kw::None }, tables, functions: functions && any_kw, mysql, skip });
 
-    // `*` (or `x.*`) in a select list, asked for: the columns it stands for
+    // `*` (or `x.*`) in a select list, asked for: the columns it stands for, in the order the database returns them. None when a
+    // source it covers has columns that can't be told: a list missing them would return other columns
     if p.is_empty() && c.spot == Spot::SelectList && before.ends_with('*') {
         let blk = &c.sc.blocks[c.block];
         let it = blk.items.iter().find(|it| c.sc.toks.get(it.toks.1 - 1).is_some_and(|t| t.e == caret) && it.star.is_some());
         if let Some(it) = it {
-            let only = blk.sources.len() == 1;
-            let mut names = vec![];
-            for s in &blk.sources {
-                if let Some(Some(q)) = &it.star
-                    && !s.name().is_some_and(|x| x.eq_ignore_ascii_case(q))
-                {
-                    continue;
-                }
-                let Some(cols) = source_columns(m, &c.sc, c.block, s, db, 0) else { continue };
-                let qual = match &it.star {
-                    Some(Some(q)) => format!("{q}."),
-                    _ if only => String::new(),
-                    _ => format!("{}.", s.name().unwrap_or_default()),
+            let bare = it.star == Some(None);
+            let covered: Vec<&Source> = blk.sources.iter().filter(|s| match &it.star {
+                Some(Some(q)) => s.name().is_some_and(|x| x.eq_ignore_ascii_case(q)),
+                _ => true,
+            }).collect();
+            let known: Option<Vec<Columns>> = covered.iter().map(|s| rc.source(c.block, s)).collect();
+            // (qualifier, column)
+            let mut names: Vec<(Option<String>, String)> = vec![];
+            for (s, cols) in covered.iter().zip(known.unwrap_or_default()) {
+                let q = match &it.star {
+                    Some(Some(q)) => Some(q.clone()),
+                    _ if blk.sources.len() == 1 => None,
+                    _ => s.name().map(str::to_string),
                 };
-                names.extend(cols.into_iter().map(|(cn, _)| format!("{qual}{cn}")));
+                let mine: Vec<(Option<String>, String)> = cols.into_iter().map(|(cn, _)| (q.clone(), cn)).collect();
+                // `*` over USING / NATURAL: the join columns once (unqualified) and first, then the other columns of each side
+                let joined: Vec<String> = match () {
+                    _ if !bare || !s.join => vec![],
+                    _ if !s.using.is_empty() => s.using.clone(),
+                    _ if s.natural => mine.iter().filter(|(_, n)| names.iter().any(|(_, x)| x.eq_ignore_ascii_case(n))).map(|(_, n)| n.clone()).collect(),
+                    _ => vec![],
+                };
+                let is_joined = |n: &str| joined.iter().any(|j| j.eq_ignore_ascii_case(n));
+                let mut next: Vec<(Option<String>, String)> = joined.iter().map(|j| (None, j.clone())).collect();
+                next.extend(names.drain(..).filter(|(_, n)| !is_joined(n)));
+                next.extend(mine.into_iter().filter(|(_, n)| !is_joined(n)));
+                names = next;
             }
             if !names.is_empty() {
                 let star = c.sc.text_of(it.toks.0, it.toks.1);
-                let list = names.join(", ");
+                let list = names.iter().map(|(q, n)| q.as_ref().map_or(n.clone(), |q| format!("{q}.{n}"))).collect::<Vec<_>>().join(", ");
                 return (star.chars().count(), vec![Item::new(format!("expand {star}"), list.clone(), snip(&list), ItemKind::Snippet)], None);
             }
         }
@@ -862,7 +925,7 @@ pub fn suggest_lead(m: &Meta, text: &str, caret: usize, db: &str, mysql: bool, o
     let mut columns: Vec<Item> = vec![];
     let scope_columns = |columns: &mut Vec<Item>, seen: &mut HashSet<String>| {
         for (b, s) in c.sources() {
-            let Some(cols) = source_columns(m, &c.sc, b, s, db, 0) else { continue };
+            let Some(cols) = rc.source(b, s) else { continue };
             let from = s.table.as_deref().map(|t| t.rsplit('.').next().unwrap_or(t).to_string()).or(s.alias.clone()).unwrap_or_default();
             for (cn, ty) in cols {
                 if matches(&cn) && seen.insert(cn.clone()) {
@@ -875,7 +938,7 @@ pub fn suggest_lead(m: &Meta, text: &str, caret: usize, db: &str, mysql: bool, o
     match c.spot.clone() {
         Spot::Start => (n, vec![], rest(Kw::Statement, false, false, vec![])),
         Spot::StatementFirst => (n, vec![], rest(Kw::StatementFirst, false, false, vec![])),
-        Spot::AfterOperand => (n, vec![], rest(Kw::All, false, false, vec![])),
+        Spot::AfterOperand => (n, vec![], rest(Kw::StatementLast, false, false, vec![])),
         Spot::TableRef { join } => {
             let mut lead: Vec<Item> = vec![];
             for b in c.sc.chain(c.block) {
@@ -935,7 +998,7 @@ pub fn suggest_lead(m: &Meta, text: &str, caret: usize, db: &str, mysql: bool, o
         }
         Spot::InsertColumns => {
             let used: HashSet<String> = blk.insert_cols.map(|(a, b)| (a..b).filter(|&i| matches!(c.sc.toks[i].k, K::Word | K::Quoted)).map(|i| c.sc.name(i).to_lowercase()).collect()).unwrap_or_default();
-            let cols = blk.sources.first().and_then(|s| source_columns(m, &c.sc, c.block, s, db, 0)).unwrap_or_default();
+            let cols = blk.sources.first().and_then(|s| rc.source(c.block, s)).unwrap_or_default();
             let lead = cols.iter().filter(|(cn, _)| matches(cn) && !used.contains(&cn.to_lowercase())).map(|(cn, ty)| col(cn, ty, "")).collect();
             (n, lead, None)
         }
@@ -1017,6 +1080,11 @@ pub fn rest_items(m: &Meta, r: &Rest, o: Options) -> Vec<Item> {
         Kw::StatementFirst => keywords().filter(|k| !statement(k) && keeps_label(k, p, o)).collect(),
         Kw::All if o.editor_filters => SORTED_KEYWORDS.clone(),
         Kw::All => keywords().filter(|k| keeps_label(k, p, o)).collect(),
+        Kw::StatementLast => {
+            let order: Vec<&str> = if o.editor_filters { SORTED_KEYWORDS.clone() } else { keywords().collect() };
+            let (stmt, other): (Vec<&str>, Vec<&str>) = order.into_iter().filter(|k| keeps_label(k, p, o)).partition(statement);
+            other.into_iter().chain(stmt).collect()
+        }
     };
     items.extend(kws.into_iter().map(|k| Item::new(k, "keyword", k, ItemKind::Keyword)));
     items
@@ -1164,7 +1232,10 @@ array any some escape similar to overlaps at time zone year month day hour minut
 date timestamp timestamptz time interval varchar char character varying text int integer bigint smallint numeric decimal real double precision float \
 boolean bool json jsonb uuid bytea leading trailing both for collate symmetric asymmetric isnull notnull unknown current_user session_user user \
 localtime localtimestamp current_time current_schema current_catalog current_role div mod xor regexp rlike binary separator dual unsigned signed \
-nowait skip locked share of conflict do nothing recursive materialized ordinality default excluded new old row_number value values key";
+nowait skip locked share of conflict do nothing recursive materialized ordinality default excluded new old row_number value values key \
+fetch next percent grouping sets cube rollup lock mode boolean language query expansion primary index \
+distinctrow high_priority straight_join sql_small_result sql_big_result sql_buffer_result sql_no_cache sql_cache sql_calc_found_rows \
+ctid xmin xmax cmin cmax tableoid oid";
 
 static NOT_NAME_SET: std::sync::LazyLock<HashSet<&'static str>> = std::sync::LazyLock::new(|| NOT_NAMES.split_whitespace().chain(RESERVED.iter().copied()).collect());
 
@@ -1221,6 +1292,7 @@ pub fn marks(m: &Meta, text: &str, db: &str, mysql: bool, created: &HashSet<Stri
     }
     let db = db_schema(db, mysql);
     let sc = Scope::new(text, mysql);
+    let rc = Resolver::new(m, &sc, db);
     if !sc.blocks.first().is_some_and(|b| matches!(b.head.as_str(), "select" | "insert" | "update" | "delete" | "with" | "values")) {
         return vec![];
     }
@@ -1253,7 +1325,7 @@ pub fn marks(m: &Meta, text: &str, db: &str, mysql: bool, created: &HashSet<Stri
         }
         // Columns: those the block's sources are known to lack. A source whose columns can't be told makes the block's bare names unsure
         type Cols = Option<Vec<(String, String)>>;
-        let cols: Vec<(&Source, Cols)> = visible(&sc, bi).map(|(sb, s)| (s, source_columns(m, &sc, sb, s, db, 0))).collect();
+        let cols: Vec<(&Source, Cols)> = visible(&sc, bi).map(|(sb, s)| (s, rc.source(sb, s))).collect();
         let all_known = !cols.is_empty() && cols.iter().all(|c| c.1.is_some());
         let has = |cs: &[(String, String)], n: &str| cs.iter().any(|c| c.0.eq_ignore_ascii_case(n));
         let aliases: HashSet<String> = sc.chain(bi).flat_map(|x| sc.blocks[x].items.iter().filter_map(|it| it.alias.as_ref().map(|a| a.to_lowercase()))).collect();
@@ -1272,7 +1344,7 @@ pub fn marks(m: &Meta, text: &str, db: &str, mysql: bool, created: &HashSet<Stri
         let mut i = a;
         let mut in_values = false;
         while i < z {
-            if b.sources.iter().any(|s| s.span.0 <= i && i < s.span.1) || b.insert_cols.is_some_and(|(x, y)| x <= i && i < y) {
+            if b.sources.iter().any(|s| s.span.0 <= i && i < s.span.1) || b.insert_cols.is_some_and(|(x, y)| x <= i && i < y) || b.skip.iter().any(|&(x, y)| x <= i && i < y) {
                 i += 1;
                 continue;
             }
@@ -1300,7 +1372,9 @@ pub fn marks(m: &Meta, text: &str, db: &str, mysql: bool, created: &HashSet<Stri
             }
             let prev = i.checked_sub(1).map(|p| sc.t(p)).unwrap_or("");
             // A call, a typed literal (`date '…'`), a cast's type, a variable, an alias being named, a window's name
-            let skip = sc.punct(j + 1, "(") || sc.toks.get(j + 1).is_some_and(|t| t.k == K::Str) || sc.punct(j + 1, ".") || matches!(prev, "::" | "@" | ":" | "$" | ".") || i > 0 && (sc.is(i - 1, "as") || sc.is(i - 1, "over"));
+            let skip = sc.punct(j + 1, "(") || sc.toks.get(j + 1).is_some_and(|t| t.k == K::Str) || sc.punct(j + 1, ".") || matches!(prev, "::" | "@" | ":" | "$" | ".") || i > 0 && ["as", "over", "window", "collate"].iter().any(|w| sc.is(i - 1, w))
+                // `window w as (…)`, `, w2 as (…)`
+                || sc.is(j + 1, "as") && sc.punct(j + 2, "(");
             let item_alias = b.items.iter().any(|it| it.alias.is_some() && it.toks.1 == j + 1 && it.toks.0 < i);
             if skip || item_alias {
                 i = j + 1;
@@ -1309,7 +1383,7 @@ pub fn marks(m: &Meta, text: &str, db: &str, mysql: bool, created: &HashSet<Stri
             if j == i + 2 {
                 let (q, col) = (sc.name(i), sc.name(j));
                 if let Some((sb, s)) = named_in(&sc, bi, &q)
-                    && let Some(cs) = source_columns(m, &sc, sb, s, db, 0)
+                    && let Some(cs) = rc.source(sb, s)
                     && !has(&cs, &col)
                 {
                     let (start, end) = tok(j, j + 1);
@@ -1701,7 +1775,7 @@ mod tests {
         // The caret in the middle: only the text before it counts
         assert_eq!(f(false, "em = 1 and id > 2", 2).1[0], "email");
         assert_eq!(f(false, "id = 1 an", 9), (2, vec!["and".into(), "analyze".into()]));
-        assert_eq!(f(true, "id de", 5).1, ["delete", "desc"], "after a column: keywords only");
+        assert_eq!(f(true, "id de", 5).1, ["desc", "delete"], "after a column: keywords only, statement keywords last");
         assert_eq!(f(true, "users.", 6).1, ["id", "user_name", "email"]);
         // Not while typing a number, after a space or an operator, or in a string literal
         assert!(f(false, "id = 12", 7).1.is_empty());
