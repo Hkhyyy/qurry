@@ -1,8 +1,9 @@
 //! Connection settings store (JSON file). Passwords go in the encrypted file in secrets.rs.
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
+use qurry_shared::theme::{self, CustomTheme, ThemeSettings};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::{fs, path::PathBuf};
+use std::{fs, path::Path, path::PathBuf};
 
 /// User keyboard shortcut settings: action id → key list (only those differing from the defaults)
 pub type Keymap = BTreeMap<String, Vec<String>>;
@@ -843,13 +844,86 @@ impl Store {
         self.set_setting("columnWidths", all.into())
     }
 
-    /// The TUI's color theme ("auto" · "dark" · "light"; the GUI keeps its own). None when unset or not text
-    pub fn tui_theme(&self) -> Option<String> {
-        self.settings().remove("tuiTheme").and_then(|v| v.as_str().map(String::from))
+    /// The theme settings the GUI and the TUI share: "theme" (a theme id or "system"), "themeSync" and "customThemes". Before
+    /// 0.3.2 only the TUI kept its theme here ("tuiTheme": auto · dark · light, auto being Sync with OS); it stands in until a
+    /// theme is picked. A custom theme this version can't read is left out
+    pub fn theme_settings(&self) -> ThemeSettings {
+        let mut all = self.settings();
+        let str_of = |v: Option<serde_json::Value>| v.and_then(|v| v.as_str().map(String::from));
+        let theme = str_of(all.remove("theme")).or_else(|| str_of(all.remove("tuiTheme")).map(|t| if t == "auto" { theme::SYSTEM.into() } else { t }));
+        let sync = all.remove("themeSync").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        let custom = match all.remove("customThemes") {
+            Some(serde_json::Value::Array(v)) => v.into_iter().filter_map(|t| serde_json::from_value::<CustomTheme>(t).ok()).filter(|t| theme::check(t).is_ok()).collect(),
+            _ => vec![],
+        };
+        ThemeSettings { theme, sync, custom }
     }
 
-    pub fn set_tui_theme(&self, theme: &str) -> AppResult<()> {
-        self.set_setting("tuiTheme", theme.into())
+    /// Pick a theme for both apps: a built-in or custom theme id, or "system"
+    pub fn set_theme(&self, id: &str) -> AppResult<()> {
+        if id != theme::SYSTEM && self.theme_settings().find(id).is_none() {
+            return Err(AppError::Msg(format!("There is no theme \"{id}\"")));
+        }
+        self.set_setting("theme", id.into())
+    }
+
+    /// Sync with OS: the themes for a dark and a light appearance
+    pub fn set_theme_sync(&self, sync: &theme::ThemeSync) -> AppResult<()> {
+        let s = self.theme_settings();
+        if let Some(id) = [&sync.dark, &sync.light].into_iter().find(|id| s.find(id).is_none()) {
+            return Err(AppError::Msg(format!("There is no theme \"{id}\"")));
+        }
+        self.set_setting("themeSync", serde_json::to_value(sync)?)
+    }
+
+    /// Add a custom theme (an empty id gets a new one) or replace the one with its id, after checking it: a known base, known
+    /// colors, #rrggbb only. Returns the saved theme
+    pub fn save_custom_theme(&self, t: &CustomTheme) -> AppResult<CustomTheme> {
+        theme::check(t).map_err(AppError::Msg)?;
+        let mut t = CustomTheme { name: t.name.trim().to_string(), ..t.clone() };
+        let mut list = self.theme_settings().custom;
+        if t.id.is_empty() {
+            t.id = (1..).map(|n| format!("custom-{n}")).find(|id| !list.iter().any(|c| &c.id == id)).unwrap_or_default();
+        } else if !t.id.starts_with("custom-") {
+            return Err(AppError::Msg(format!("A custom theme's id starts with \"custom-\", not \"{}\"", t.id)));
+        }
+        match list.iter_mut().find(|c| c.id == t.id) {
+            Some(c) => *c = t.clone(),
+            None => list.push(t.clone()),
+        }
+        self.set_setting("customThemes", serde_json::to_value(&list)?)?;
+        Ok(t)
+    }
+
+    /// Delete a custom theme; where it is picked (the theme, or a Sync with OS side) its base takes its place
+    pub fn delete_custom_theme(&self, id: &str) -> AppResult<()> {
+        let s = self.theme_settings();
+        let Some(gone) = s.custom.iter().find(|c| c.id == id) else { return Ok(()) };
+        let list: Vec<_> = s.custom.iter().filter(|c| c.id != id).collect();
+        self.set_setting("customThemes", serde_json::to_value(&list)?)?;
+        if s.theme.as_deref() == Some(id) {
+            self.set_setting("theme", gone.base.clone().into())?;
+        }
+        if s.sync.dark == id || s.sync.light == id {
+            let side = |v: &String| if v == id { gone.base.clone() } else { v.clone() };
+            self.set_setting("themeSync", serde_json::to_value(theme::ThemeSync { dark: side(&s.sync.dark), light: side(&s.sync.light) })?)?;
+        }
+        Ok(())
+    }
+
+    /// Settings › Appearance › Theme › Import…: the file read and checked (a large one is refused unread), not saved yet
+    pub fn read_theme_file(&self, path: &Path) -> AppResult<CustomTheme> {
+        let size = fs::metadata(path)?.len();
+        if size > theme::FILE_MAX as u64 {
+            return Err(AppError::Msg(format!("Not a Qurry theme: the file is {} KB, a theme file is at most {} KB", size.div_ceil(1024), theme::FILE_MAX / 1024)));
+        }
+        theme::parse_file(&fs::read_to_string(path)?).map_err(AppError::Msg)
+    }
+
+    /// Export…: the theme as a file (its name, base and changed colors)
+    pub fn write_theme_file(&self, path: &Path, t: &CustomTheme) -> AppResult<()> {
+        theme::check(t).map_err(AppError::Msg)?;
+        Ok(fs::write(path, theme::file_text(t))?)
     }
 
     /// Change one key of settings.json, keeping the others
@@ -905,6 +979,50 @@ mod tests {
         store.set_update_channel(Channel::Beta).unwrap();
         let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved, serde_json::json!({ "updateChannel": "beta", "later": 1 }));
+    }
+
+    /// Theme, Sync with OS and custom themes round trip through settings.json for both apps; the TUI's older "tuiTheme" stands in
+    /// until a theme is picked; deleting the picked custom theme leaves its base picked; theme files are checked
+    #[test]
+    fn theme_settings_round_trip() {
+        use qurry_shared::theme::{ThemeSync, SYSTEM};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let path = dir.path().join("cfg/settings.json");
+        assert_eq!(store.theme_settings(), ThemeSettings::default());
+        fs::create_dir_all(dir.path().join("cfg")).unwrap();
+        fs::write(&path, r#"{"tuiTheme": "auto", "later": 1}"#).unwrap();
+        assert_eq!(store.theme_settings().theme.as_deref(), Some(SYSTEM), "the TUI's Auto is Sync with OS");
+        store.set_theme("dracula").unwrap();
+        assert!(store.set_theme("monokai").unwrap_err().to_string().contains("no theme"));
+        let mine = CustomTheme { id: String::new(), name: " Night ".into(), base: "dracula".into(), colors: [("bg".into(), "#101010".into())].into() };
+        let saved = store.save_custom_theme(&mine).unwrap();
+        assert_eq!((saved.id.as_str(), saved.name.as_str()), ("custom-1", "Night"));
+        assert_eq!(store.save_custom_theme(&mine).unwrap().id, "custom-2", "Save as new theme twice: two themes");
+        store.save_custom_theme(&CustomTheme { name: "Night 2".into(), ..saved.clone() }).unwrap();
+        assert!(store.save_custom_theme(&CustomTheme { colors: [("bg".into(), "#10101".into())].into(), ..mine.clone() }).is_err());
+        assert!(store.save_custom_theme(&CustomTheme { id: "dark".into(), ..mine.clone() }).is_err(), "not over a built-in id");
+        store.set_theme("custom-1").unwrap();
+        store.set_theme_sync(&ThemeSync { dark: "custom-1".into(), light: "solarized-light".into() }).unwrap();
+        assert!(store.set_theme_sync(&ThemeSync { dark: "custom-9".into(), light: "light".into() }).is_err());
+        let next = Store::new(dir.path().join("cfg")).theme_settings();
+        assert_eq!(next.theme.as_deref(), Some("custom-1"));
+        assert_eq!(next.sync, ThemeSync { dark: "custom-1".into(), light: "solarized-light".into() });
+        assert_eq!(next.custom.iter().map(|c| (c.id.as_str(), c.name.as_str())).collect::<Vec<_>>(), [("custom-1", "Night 2"), ("custom-2", "Night")]);
+        assert_eq!(next.resolve("dark", true).color("bg"), "#101010");
+        let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["later"], 1, "other settings are kept");
+        store.delete_custom_theme("custom-1").unwrap();
+        let s = store.theme_settings();
+        assert_eq!((s.theme.as_deref(), s.sync.dark.as_str(), s.custom.len()), (Some("dracula"), "dracula", 1));
+        // Theme files: written and read back; a bad or large file is refused with why
+        let file = dir.path().join("t.json");
+        store.write_theme_file(&file, &s.custom[0]).unwrap();
+        assert_eq!(store.read_theme_file(&file).unwrap().name, "Night");
+        fs::write(&file, "x".repeat(theme::FILE_MAX + 1)).unwrap();
+        assert!(store.read_theme_file(&file).unwrap_err().to_string().contains("at most 16 KB"));
+        fs::write(&file, r##"{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"bg": "#12"}}"##).unwrap();
+        assert!(store.read_theme_file(&file).unwrap_err().to_string().contains("#rrggbb"));
     }
 
     /// Grid alignment: defaults until a class is changed, other settings kept, a value this version doesn't know skipped; a change

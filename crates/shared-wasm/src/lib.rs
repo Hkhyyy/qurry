@@ -678,6 +678,25 @@ fn byte_offset(text: &str, utf16: usize) -> usize {
     text.len()
 }
 
+/// Theme editor: the tokens whose contrast pair a palette ({token: "#rrggbb"}) doesn't meet ([{token, fg, bg, ratio, min}])
+#[wasm_bindgen(js_name = themeWarnings)]
+pub fn theme_warnings(colors: JsValue) -> Result<JsValue, JsError> {
+    to(&qurry_shared::theme::warnings(&from(colors)?))
+}
+
+/// A theme file's text → {id: "", name, base, colors} (colors a plain object), or the error saying why it is refused
+#[wasm_bindgen(js_name = parseThemeFile)]
+pub fn parse_theme_file(text: &str) -> Result<JsValue, JsError> {
+    let t = qurry_shared::theme::parse_file(text).map_err(|e| JsError::new(&e))?;
+    Ok(t.serialize(&serde_wasm_bindgen::Serializer::json_compatible())?)
+}
+
+/// The file Export… writes for a custom theme
+#[wasm_bindgen(js_name = themeFileText)]
+pub fn theme_file_text(theme: JsValue) -> Result<String, JsError> {
+    Ok(qurry_shared::theme::file_text(&from(theme)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

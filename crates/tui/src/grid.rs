@@ -836,7 +836,7 @@ mod tests {
             let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 6)).unwrap();
             term.draw(|f| g.render(f, f.area(), "r".into(), true, mode, &Alignments::new())).unwrap();
             let mut buf = term.backend().buffer().clone();
-            mode.apply(&mut buf, false);
+            mode.apply(&mut buf, &crate::theme::Look::dark());
             buf
         };
         // Colors of the cells from the first `from` on row y, one per symbol (the second half of a wide char skipped)
@@ -1000,7 +1000,7 @@ mod tests {
         let mut term = Terminal::new(ratatui::backend::TestBackend::new(40, 8)).unwrap();
         term.draw(|f| {
             g.render(f, f.area(), "t".into(), true, mode, &Default::default());
-            mode.apply(f.buffer_mut(), false);
+            mode.apply(f.buffer_mut(), &crate::theme::Look::dark());
         })
         .unwrap();
         let buf = term.backend().buffer().clone();

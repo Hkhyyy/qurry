@@ -93,7 +93,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_screen(f, app);
     }
     sanitize(f.buffer_mut());
-    app.color.apply(f.buffer_mut(), app.theme.light(app.auto_light));
+    app.color.apply(f.buffer_mut(), &crate::theme::Look::of(&app.themes, app.auto_light));
 }
 
 /// Says the size and the size needed, centered and wrapped so it fits even a few cells

@@ -430,7 +430,7 @@ pub enum PAction {
     /// Grid alignment: where a value class sits, picked
     Align(qurry_core::format::ValueClass, qurry_core::format::Align),
     /// Theme picked
-    Theme(crate::theme::Theme),
+    Theme(String),
     /// Import Data Sources: a location found (its path)
     ImportFrom(String),
     /// Import Data Sources: File or folder… (asks for a path)
@@ -796,8 +796,8 @@ pub struct App {
     startup: Option<(String, bool)>,
     /// What the terminal can show (set from the environment at startup; drawing maps the frame to it)
     pub color: crate::theme::ColorMode,
-    /// The Theme setting (settings.json, read at startup and by ⌃k › Theme…) and what Auto picks for this terminal (COLORFGBG, set at startup)
-    pub theme: crate::theme::Theme,
+    /// The theme settings shared with the GUI (settings.json, read at startup and by ⌃k › Theme…) and whether this terminal is light (COLORFGBG, set at startup: Sync with OS goes by it)
+    pub themes: qurry_core::theme::ThemeSettings,
     pub auto_light: bool,
     /// Grid alignment per value class, shared with the GUI's Settings › Appearance › Alignment (settings.json, read at startup and by ⌃k › Grid Alignment…)
     pub align: qurry_core::format::Alignments,
@@ -837,7 +837,7 @@ impl App {
             Err(e) => (Default::default(), Some(format!("keymap.json ignored ({e}) — default keys in use; fix or delete {} and restart", state.store.dir().join("keymap.json").display()))),
         };
         let align = state.store.grid_align();
-        let theme = crate::theme::Theme::parse(state.store.tui_theme().as_deref());
+        let themes = state.store.theme_settings();
         let mut a = App {
             align,
             hits: Hits::default(),
@@ -879,7 +879,7 @@ impl App {
             ws_shared: None,
             ws_synced: false,
             color: Default::default(),
-            theme,
+            themes,
             auto_light: false,
             too_small: false,
             #[cfg(test)]

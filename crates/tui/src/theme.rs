@@ -1,80 +1,48 @@
-//! Color mode: what the terminal can show, decided once at startup from NO_COLOR · COLORTERM · TERM. Theme: dark or light
-//! colors (⌃k › Theme…; Auto follows COLORFGBG).
-//! Screen code keeps drawing with the dark truecolor tokens in kit/atoms.rs; `apply` maps the finished frame to the light palette
-//! when it is on, then to the mode (nearest of the 256 / 16 palette colors, or no colors at all with reverse video for selections).
+//! Color mode: what the terminal can show, decided once at startup from NO_COLOR · COLORTERM · TERM. Theme: the colors of a
+//! built-in or custom theme, the GUI's (qurry_shared::theme, settings.json; ⌃k › Theme…, Sync with OS follows COLORFGBG).
+//! Screen code keeps drawing with the dark truecolor tokens in kit/atoms.rs; `apply` maps the finished frame to the theme (`Look`),
+//! then to the mode (nearest of the 256 / 16 palette colors, or no colors at all with reverse video for selections).
 use crate::kit::*;
+use qurry_shared::theme::{self, Resolved, ThemeSettings};
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 
 /// tui-textarea draws selected text on this background (no input here sets its own selection style)
 const TEXTAREA_SEL: Color = Color::LightBlue;
 
-/// The Theme setting (settings.json "tuiTheme": the shared file, but the TUI's own key — the GUI has its own theme)
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Theme {
-    /// Light when the terminal says its background is light (COLORFGBG), dark otherwise
-    #[default]
-    Auto,
-    Dark,
-    Light,
-}
-
-impl Theme {
-    pub const ALL: [Theme; 3] = [Theme::Auto, Theme::Dark, Theme::Light];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Auto => "Auto",
-            Self::Dark => "Dark",
-            Self::Light => "Light",
-        }
-    }
-
-    /// The saved value is the name in lower case; anything else is Auto
-    pub fn parse(s: Option<&str>) -> Self {
-        Self::ALL.into_iter().find(|t| s == Some(t.name().to_lowercase().as_str())).unwrap_or_default()
-    }
-
-    /// Whether to draw the light palette; auto = what Auto picks for this terminal (`auto_light`)
-    pub fn light(self, auto: bool) -> bool {
-        match self {
-            Self::Auto => auto,
-            Self::Dark => false,
-            Self::Light => true,
-        }
-    }
-}
-
-/// Auto's pick: COLORFGBG ("fg;bg", some terminals "fg;default;bg") with background 7 or 15 (white) is a light terminal;
-/// anything else, or unset, is dark
+/// Sync with OS on a terminal: COLORFGBG ("fg;bg", some terminals "fg;default;bg") with background 7 or 15 (white) is a light
+/// terminal; anything else, or unset, is dark
 pub fn auto_light(var: impl Fn(&str) -> Option<String>) -> bool {
     var("COLORFGBG").is_some_and(|v| matches!(v.rsplit(';').next(), Some("7" | "15")))
 }
 
-/// The light palette: each dark token of kit/atoms.rs and its light value (GUI tokens.css light theme where it has one).
-/// C_SEQUENCE has WARN's value, so WARN's entry covers it. The Redis key types are darker than the GUI's (which keeps one set):
-/// 3:1 as icons on the Data Source tints and white badge text on them
-const LIGHT: [(Color, Color); 27] = [
-    (ACCENT, Color::Rgb(0x35, 0x74, 0xf0)),
-    (SEL, Color::Rgb(0xd5, 0xe1, 0xff)),
+/// The tokens of kit/atoms.rs by the names themes.json "tui" gives them (each one is drawn in that theme token's color)
+const ATOMS: [(&str, Color); 14] = [
+    ("ACCENT", ACCENT),
+    ("SEL", SEL),
+    ("SURFACE", SURFACE),
+    ("POPUP_BG", POPUP_BG),
+    ("OK", OK),
+    ("WARN", WARN),
+    ("DANGER", DANGER),
+    ("NUMBER", NUMBER),
+    ("GRID_LINE", GRID_LINE),
+    ("JSON_KEY", JSON_KEY),
+    ("JSON_STRING", JSON_STRING),
+    ("JSON_KEYWORD", JSON_KEYWORD),
+    ("JSON_PUNCT", JSON_PUNCT),
+    ("C_ROUTINE", C_ROUTINE),
+];
+
+/// The TUI's own colors, which no theme token stands for, in a light theme. The Redis key types are darker than the GUI's
+/// (which keeps one set): 3:1 as icons on the Data Source tints and white badge text on them
+const LIGHT_OWN: [(Color, Color); 13] = [
     (SEL_BLUR, Color::Rgb(0xd0, 0xd3, 0xda)),
-    (SURFACE, Color::Rgb(0xeb, 0xec, 0xf0)),
-    (POPUP_BG, Color::Rgb(0xf7, 0xf8, 0xfa)),
     (DROP, Color::Rgb(0xb4, 0xc8, 0xf5)),
-    (OK, Color::Rgb(0x20, 0x8a, 0x3c)),
-    (WARN, Color::Rgb(0xb0, 0x6f, 0x00)),
-    (DANGER, Color::Rgb(0xd1, 0x38, 0x4a)),
-    (NUMBER, Color::Rgb(0x17, 0x50, 0xeb)),
-    (GRID_LINE, Color::Rgb(0xc9, 0xcc, 0xd6)),
     (CELL_EDITED, Color::Rgb(0xb0, 0xc8, 0xff)),
     (CELL_RANGE, Color::Rgb(0xe4, 0xe8, 0xf0)),
-    (JSON_KEY, Color::Rgb(0x87, 0x10, 0x94)),
-    (JSON_STRING, Color::Rgb(0x06, 0x7d, 0x17)),
-    (JSON_KEYWORD, Color::Rgb(0x00, 0x33, 0xb3)),
-    (JSON_PUNCT, Color::Rgb(0x6c, 0x70, 0x7e)),
     (C_DB, Color::Rgb(0x20, 0x78, 0xaa)),
     (C_VIEW, Color::Rgb(0x4a, 0x8a, 0x35)),
-    (C_ROUTINE, Color::Rgb(0x25, 0x63, 0xc9)),
     (C_KEYWORD, Color::Rgb(0xb3, 0x5a, 0x00)),
     (R_STRING, Color::Rgb(0x4c, 0x7e, 0x80)),
     (R_HASH, Color::Rgb(0x90, 0x66, 0xa2)),
@@ -84,44 +52,101 @@ const LIGHT: [(Color, Color); 27] = [
     (R_STREAM, Color::Rgb(0x48, 0x83, 0x54)),
 ];
 
-/// One color in the light palette (truecolor). Tokens take their light value; other dark backgrounds (Data Source colors and
-/// their lighter variant on the active tab) keep their hue with the lightness turned over, so a Data Source tint stays a tint and
-/// the active tab the stronger one. Named text colors meant for a dark background get a dark counterpart
-pub fn to_light(c: Color, bg: bool) -> Color {
-    light_in(c, bg, ColorMode::TrueColor)
+/// The built-in themes that keep the terminal's own background and text (what they were made for: Dark on a dark terminal,
+/// Light on a light one); every other theme, custom ones too, draws its own in truecolor and 256 colors
+const TERMINAL_BG: [&str; 3] = ["dark", "light", "hc"];
+
+fn hex_color(h: &str) -> Color {
+    let (r, g, b) = theme::rgb(h).unwrap_or((0, 0, 0));
+    Color::Rgb(r, g, b)
 }
 
-/// `to_light` before the frame goes to `mode`. In truecolor a Data Source tint then goes 70% of the way to white: a pale tint on
-/// which the light text and icon colors keep 3:1 (WARN on the red one is the closest). The 256 and 16 palettes have no pale
-/// hues to land on (it would turn gray and lose the Production cue), so there it stays as turned over
-fn light_in(c: Color, bg: bool, mode: ColorMode) -> Color {
-    if let Some(&(_, l)) = LIGHT.iter().find(|t| t.0 == c) {
-        return l;
+/// A theme as the TUI draws it
+#[derive(Clone, Debug, PartialEq)]
+pub struct Look {
+    /// A light theme: the light rules below for the TUI's own colors and the terminal's named ones
+    pub light: bool,
+    /// Each atom (kit/atoms.rs) and its color in the theme
+    tokens: Vec<(Color, Color)>,
+    /// [background, text, dim text] in place of the terminal's default colors (not in 16 colors, which keep the terminal's)
+    paint: Option<[Color; 3]>,
+    /// The theme's background: in 256 colors no other background lands on its palette color
+    bg: Color,
+}
+
+impl Look {
+    pub fn new(t: &Resolved) -> Self {
+        let tokens = theme::table().tui.iter().filter_map(|(name, tok)| Some((ATOMS.iter().find(|a| a.0 == name)?.1, hex_color(t.color(tok))))).collect();
+        let bg = hex_color(t.color("bg"));
+        let paint = (!TERMINAL_BG.contains(&t.id.as_str())).then(|| [bg, hex_color(t.color("text")), hex_color(t.color("muted"))]);
+        Self { light: t.kind == theme::Kind::Light, tokens, paint, bg }
     }
-    match (c, bg) {
-        (Color::Rgb(r, g, b), true) if luma(r, g, b) < 128.0 => {
-            // HSL lightness L → 1 − L with hue and saturation kept: every channel moves by 255 − max − min
-            let shift = 255 - r.max(g).max(b) as i16 - r.min(g).min(b) as i16;
-            let pale = if mode == ColorMode::TrueColor { 0.3 } else { 1.0 };
-            let m = |v: u8| (255.0 - pale * (255 - (v as i16 + shift).clamp(0, 255)) as f32).round() as u8;
-            Color::Rgb(m(r), m(g), m(b))
+
+    /// The built-in Dark theme (tests draw with it)
+    #[cfg(test)]
+    pub fn dark() -> Self {
+        Self::of(&ThemeSettings::default(), false)
+    }
+
+    /// The theme the settings pick for this terminal: Sync with OS (the TUI's default) by COLORFGBG (`auto_light`)
+    pub fn of(s: &ThemeSettings, auto_light: bool) -> Self {
+        Self::new(&s.resolve(theme::SYSTEM, !auto_light))
+    }
+
+    /// One drawn color in the theme (before the mode). Tokens take the theme's color. In a light theme the TUI's own colors take
+    /// their light value; other dark backgrounds (Data Source colors and their lighter variant on the active tab) keep their hue
+    /// with the lightness turned over, so a Data Source tint stays a tint and the active tab the stronger one; named text colors
+    /// meant for a dark background get a dark counterpart
+    fn color(&self, c: Color, bg: bool, mode: ColorMode) -> Color {
+        if let Some(&(_, v)) = self.tokens.iter().find(|t| t.0 == c) {
+            return v;
         }
-        (Color::White, false) => Color::Black,
-        (Color::Gray, false) => Color::Rgb(0x50, 0x53, 0x5c),
-        (Color::Yellow, false) => to_light(WARN, false),
-        (Color::Cyan, false) => Color::Rgb(0x00, 0x7f, 0x8c),
-        _ => c,
+        if let (Some([pbg, fg, dim]), true) = (self.paint, mode != ColorMode::Ansi16) {
+            match (c, bg) {
+                (Color::Reset, true) => return pbg,
+                (Color::Reset, false) => return fg,
+                (Color::DarkGray, false) => return dim,
+                _ => {}
+            }
+        }
+        if !self.light {
+            return c;
+        }
+        if let Some(&(_, l)) = LIGHT_OWN.iter().find(|t| t.0 == c) {
+            return l;
+        }
+        match (c, bg) {
+            // In truecolor a Data Source tint then goes 70% of the way to white: a pale tint on which the light text and icon colors
+            // keep 3:1 (WARN on the red one is the closest). The 256 and 16 palettes have no pale hues to land on (it would turn gray
+            // and lose the Production cue), so there it stays as turned over
+            (Color::Rgb(r, g, b), true) if luma(r, g, b) < 128.0 => {
+                // HSL lightness L → 1 − L with hue and saturation kept: every channel moves by 255 − max − min
+                let shift = 255 - r.max(g).max(b) as i16 - r.min(g).min(b) as i16;
+                let pale = if mode == ColorMode::TrueColor { 0.3 } else { 1.0 };
+                let m = |v: u8| (255.0 - pale * (255 - (v as i16 + shift).clamp(0, 255)) as f32).round() as u8;
+                Color::Rgb(m(r), m(g), m(b))
+            }
+            (Color::White, false) => Color::Black,
+            (Color::Gray, false) => Color::Rgb(0x50, 0x53, 0x5c),
+            (Color::Yellow, false) => self.color(WARN, false, mode),
+            (Color::Cyan, false) => Color::Rgb(0x00, 0x7f, 0x8c),
+            _ => c,
+        }
     }
-}
 
-/// A cell's [fg, bg, underline] in the light palette for `mode`. Black / White text was picked for its background (kit::on): pick again for the new one
-fn light_cell([fg, bg, ul]: [Color; 3], mode: ColorMode) -> [Color; 3] {
-    let bg = light_in(bg, true, mode);
-    let fg = match (fg, bg) {
-        (Color::Black | Color::White, Color::Rgb(..)) => on(bg),
-        _ => to_light(fg, false),
-    };
-    [fg, bg, to_light(ul, false)]
+    /// A cell's [fg, bg, underline] in the theme for `mode`. Black / White text was picked for its background (kit::on): picked
+    /// again, by contrast, when the theme gives the background another color
+    fn cell(&self, [fg, bg, ul]: [Color; 3], mode: ColorMode) -> [Color; 3] {
+        let to = self.color(bg, true, mode);
+        let fg = match (fg, to) {
+            (Color::Black | Color::White, Color::Rgb(r, g, b)) if to != bg => {
+                let hex = format!("#{r:02x}{g:02x}{b:02x}");
+                if theme::contrast("#000000", &hex) > theme::contrast("#ffffff", &hex) { Color::Black } else { Color::White }
+            }
+            _ => self.color(fg, false, mode),
+        };
+        [fg, to, self.color(ul, false, mode)]
+    }
 }
 
 fn luma(r: u8, g: u8, b: u8) -> f32 {
@@ -179,10 +204,8 @@ impl ColorMode {
     }
 
     /// Map every cell of a drawn frame to the light palette (light) and to this mode
-    pub fn apply(self, buf: &mut Buffer, light: bool) {
-        if self == Self::TrueColor && !light {
-            return;
-        }
+    /// Map every cell of a drawn frame to the theme and to this mode
+    pub fn apply(self, buf: &mut Buffer, look: &Look) {
         // A frame has only a handful of distinct colors, mostly in runs of equal cells: map each color once and
         // reuse the previous cell's result while the colors don't change
         let mut seen = Vec::new();
@@ -211,7 +234,7 @@ impl ColorMode {
             let [fg, bg, ul] = match last {
                 Some((k, v)) if k == key => v,
                 _ => {
-                    let v = self.map_colors(if light { light_cell(key, self) } else { key }, &mut seen, light);
+                    let v = self.map_colors(look.cell(key, self), &mut seen, look);
                     last = Some((key, v));
                     v
                 }
@@ -224,16 +247,17 @@ impl ColorMode {
 
     /// A cell's [fg, bg, underline] in this mode. RGB colors go through `seen`, the frame's colors already mapped
     /// (a short list: a frame has a few dozen at most); named colors need no lookup
-    fn map_colors(self, [fg, bg, ul]: [Color; 3], seen: &mut Vec<(Color, bool, Color)>, light: bool) -> [Color; 3] {
+    fn map_colors(self, [fg, bg, ul]: [Color; 3], seen: &mut Vec<(Color, bool, Color)>, look: &Look) -> [Color; 3] {
         if self == Self::TrueColor {
             return [fg, bg, ul];
         }
+        let light = look.light;
+        let theme_bg = self.color(look.bg, true);
         let mut color = |c: Color, bg: bool| {
             if !matches!(c, Color::Rgb(..)) {
                 return self.color(c, bg);
             }
-            // Only the 16-color mapping depends on whether it is a background
-            let bg = bg && self == Self::Ansi16;
+            // The 16-color mapping depends on whether it is a background, and 256 colors keep backgrounds off the theme's
             match seen.iter().find(|e| e.0 == c && e.1 == bg) {
                 Some(e) => e.2,
                 None => {
@@ -241,6 +265,11 @@ impl ColorMode {
                         // The light palette keeps the normal of the 16 colors: light terminals make their bright ones dark or pale
                         // at will, while the normal ones stay mid-tones (text on them is picked below as in the dark palette)
                         (Self::Ansi16, Color::Rgb(r, g, b)) if light => normal16(ansi16(r, g, b, bg)),
+                        // A surface (the status line, a header) doesn't vanish into the background it sits on
+                        (Self::Ansi256, Color::Rgb(r, g, b)) if bg && c != look.bg && self.color(c, true) == theme_bg => {
+                            let Color::Indexed(avoid) = theme_bg else { unreachable!() };
+                            Color::Indexed(ansi256_except(r, g, b, avoid))
+                        }
                         _ => self.color(c, bg),
                     };
                     seen.push((c, bg, m));
@@ -291,6 +320,11 @@ pub fn rgb256(i: u8) -> (u8, u8, u8) {
 /// Nearest xterm 256-palette color (0–15 are skipped: they depend on the terminal's theme). Distance in brightness and color difference,
 /// the latter counted twice so dark tints keep their hue (by plain RGB distance the selection blue turns teal)
 pub fn ansi256(r: u8, g: u8, b: u8) -> u8 {
+    ansi256_except(r, g, b, 0)
+}
+
+/// `ansi256` without palette color `avoid`
+fn ansi256_except(r: u8, g: u8, b: u8, avoid: u8) -> u8 {
     let yuv = |(r, g, b): (u8, u8, u8)| {
         let y = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
         (y, b as f32 - y, r as f32 - y)
@@ -300,7 +334,7 @@ pub fn ansi256(r: u8, g: u8, b: u8) -> u8 {
         let (y2, u2, v2) = yuv(rgb256(i));
         (y - y2).powi(2) + 2.0 * ((u - u2).powi(2) + (v - v2).powi(2))
     };
-    (16..=255).min_by(|a, b| dist(*a).total_cmp(&dist(*b))).unwrap()
+    (16..=255).filter(|&i| i != avoid).min_by(|a, b| dist(*a).total_cmp(&dist(*b))).unwrap()
 }
 
 /// The normal variant of a bright 16-palette color
@@ -440,8 +474,18 @@ mod tests {
     fn cell_in(mode: ColorMode, light: bool, st: Style) -> ratatui::buffer::Cell {
         let mut buf = Buffer::empty(Rect::new(0, 0, 1, 1));
         buf[(0, 0)].set_symbol("x").set_style(st);
-        mode.apply(&mut buf, light);
+        mode.apply(&mut buf, &look(light));
         buf[(0, 0)].clone()
+    }
+
+    /// The built-in Light theme, or Dark
+    fn look(light: bool) -> Look {
+        builtin_look(if light { "light" } else { "dark" })
+    }
+
+    /// A color in the built-in Light theme (truecolor)
+    fn lt(c: Color, bg: bool) -> Color {
+        look(true).color(c, bg, ColorMode::TrueColor)
     }
 
     /// A whole frame maps each cell as it would alone: runs of equal cells, colors seen before, and the same color as text and background
@@ -460,7 +504,7 @@ mod tests {
             for (x, st) in styles.iter().enumerate() {
                 buf[(x as u16, 0)].set_symbol("x").set_style(*st);
             }
-            mode.apply(&mut buf, light);
+            mode.apply(&mut buf, &look(light));
             for (x, st) in styles.iter().enumerate() {
                 assert_eq!(buf[(x as u16, 0)], cell_in(mode, light, *st), "{mode:?} light {light} cell {x}");
             }
@@ -521,15 +565,67 @@ mod tests {
             assert_eq!(auto_light(env(&[("COLORFGBG", v)])), light, "COLORFGBG={v}");
         }
         assert!(!auto_light(env(&[])), "unset: dark, as before");
-        assert_eq!(Theme::parse(None), Theme::Auto);
-        assert_eq!(Theme::parse(Some("dark")), Theme::Dark);
-        assert_eq!(Theme::parse(Some("light")), Theme::Light);
-        assert_eq!(Theme::parse(Some("auto")), Theme::Auto);
-        assert_eq!(Theme::parse(Some("solarized")), Theme::Auto, "a value this version doesn't know");
+        let pick = |id: Option<&str>| ThemeSettings { theme: id.map(String::from), ..Default::default() };
         for auto in [false, true] {
-            assert_eq!(Theme::Auto.light(auto), auto);
-            assert!(!Theme::Dark.light(auto));
-            assert!(Theme::Light.light(auto));
+            assert_eq!(Look::of(&pick(None), auto).light, auto, "none picked: Sync with OS");
+            assert_eq!(Look::of(&pick(Some("system")), auto).light, auto);
+            assert!(!Look::of(&pick(Some("dark")), auto).light);
+            assert!(Look::of(&pick(Some("light")), auto).light);
+            assert!(Look::of(&pick(Some("solarized-light")), auto).light);
+            assert_eq!(Look::of(&pick(Some("a theme deleted since")), auto), Look::dark());
+        }
+    }
+
+    fn builtin_look(id: &str) -> Look {
+        Look::new(&ThemeSettings::default().find(id).unwrap())
+    }
+
+    /// Every built-in theme in truecolor: the tokens take the theme's colors (the TUI's light rules on top in a light one), the
+    /// built-in Dark, Light and High contrast keep the terminal's background and the others draw theirs (not in 16 colors)
+    #[test]
+    fn each_theme_draws_its_colors() {
+        let at = |look: &Look, mode: ColorMode, st: Style| {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 1, 1));
+            buf[(0, 0)].set_symbol("x").set_style(st);
+            mode.apply(&mut buf, look);
+            let c = buf[(0, 0)].clone();
+            (c.fg, c.bg)
+        };
+        let all = ThemeSettings::default().all();
+        assert_eq!(all.len(), 7);
+        for t in &all {
+            let look = Look::new(t);
+            let c = |tok: &str| hex_color(t.color(tok));
+            assert_eq!(at(&look, ColorMode::TrueColor, Style::default().fg(ACCENT).bg(SEL)), (c("link"), c("sel")), "{}", t.id);
+            assert_eq!(at(&look, ColorMode::TrueColor, Style::default().fg(NUMBER).bg(SURFACE)), (c("gridNum"), c("panel")), "{}", t.id);
+            assert_eq!(at(&look, ColorMode::TrueColor, Style::default().fg(JSON_KEY).bg(POPUP_BG)), (c("jsonKey"), c("bg")), "{}", t.id);
+            let plain = at(&look, ColorMode::TrueColor, Style::default());
+            let dim = at(&look, ColorMode::TrueColor, Style::default().fg(DIM)).0;
+            if TERMINAL_BG.contains(&t.id.as_str()) {
+                assert_eq!((plain, dim), ((Color::Reset, Color::Reset), DIM), "{}", t.id);
+            } else {
+                assert_eq!((plain, dim), ((c("text"), c("bg")), c("muted")), "{}", t.id);
+                let Color::Indexed(_) = at(&look, ColorMode::Ansi256, Style::default()).1 else { panic!("{}: 256 colors paint too", t.id) };
+                assert_eq!(at(&look, ColorMode::Ansi16, Style::default()), (Color::Reset, Color::Reset), "{}: 16 colors keep the terminal's", t.id);
+            }
+            // In 256 colors the status line doesn't vanish into the theme's background
+            let (_, status) = at(&look, ColorMode::Ansi256, Style::default().bg(SURFACE));
+            assert_ne!(status, ColorMode::Ansi256.color(c("bg"), true), "{}", t.id);
+            // Badge text is picked again for the theme's color under it (as before: 4:1, the badges are bold)
+            let (fg, bg) = at(&look, ColorMode::TrueColor, Style::default().fg(on(WARN)).bg(WARN));
+            assert!(contrast(fg, bg) >= 4.0, "{}: {fg:?} on {bg:?}", t.id);
+        }
+        // A custom theme's colors reach the TUI
+        let s = ThemeSettings {
+            theme: Some("custom-1".into()),
+            custom: vec![qurry_shared::theme::CustomTheme { id: "custom-1".into(), name: "Mine".into(), base: "dark".into(), colors: [("sel".into(), "#123456".into())].into() }],
+            ..Default::default()
+        };
+        assert_eq!(at(&Look::of(&s, false), ColorMode::TrueColor, Style::default().bg(SEL)).1, Color::Rgb(0x12, 0x34, 0x56));
+        assert_eq!(at(&Look::of(&s, false), ColorMode::TrueColor, Style::default()).1, Color::Rgb(0x1e, 0x1f, 0x22), "custom themes draw their background");
+        // NO_COLOR stays monochrome in every theme
+        for t in &all {
+            assert_eq!(at(&Look::new(t), ColorMode::NoColor, Style::default().fg(ACCENT).bg(SURFACE)), (Color::Reset, Color::Reset), "{}", t.id);
         }
     }
 
@@ -558,17 +654,17 @@ mod tests {
         let tc = |st: Style| cell_in(ColorMode::TrueColor, true, st);
         // Every text color token reads on a white terminal, the popups and the selection
         for t in [ACCENT, OK, WARN, DANGER, NUMBER, JSON_KEY, JSON_STRING, JSON_KEYWORD, JSON_PUNCT, C_DB, C_VIEW, C_SEQUENCE, C_ROUTINE, C_KEYWORD] {
-            for bg in [white, to_light(POPUP_BG, true), to_light(SURFACE, true), to_light(SEL, true)] {
-                assert!(contrast(to_light(t, false), bg) >= 3.0, "{t:?} on {bg:?}: {}", contrast(to_light(t, false), bg));
+            for bg in [white, lt(POPUP_BG, true), lt(SURFACE, true), lt(SEL, true)] {
+                assert!(contrast(lt(t, false), bg) >= 3.0, "{t:?} on {bg:?}: {}", contrast(lt(t, false), bg));
             }
         }
         // Light surfaces and selections, each one apart from the others
-        let bgs = [SEL, SEL_BLUR, SURFACE, POPUP_BG, CELL_EDITED, CELL_RANGE, DROP].map(|c| to_light(c, true));
+        let bgs = [SEL, SEL_BLUR, SURFACE, POPUP_BG, CELL_EDITED, CELL_RANGE, DROP].map(|c| lt(c, true));
         for (i, a) in bgs.iter().enumerate() {
             assert!(contrast(*a, white) < 1.8, "{a:?} is a light background");
             assert!(!bgs[i + 1..].contains(a), "{a:?} twice");
         }
-        assert_eq!(tc(Style::default().fg(ACCENT).bg(SEL)).bg, to_light(SEL, true));
+        assert_eq!(tc(Style::default().fg(ACCENT).bg(SEL)).bg, lt(SEL, true));
         // Bright text meant for a dark background turns dark: titles, the edited marker, the focused grid
         assert_eq!(tc(Style::default().fg(Color::White)).fg, Color::Black);
         for c in [Color::Gray, Color::Yellow, Color::Cyan] {
@@ -624,12 +720,12 @@ mod tests {
 
     #[test]
     fn light_palette_in_256_and_16_colors_and_no_color() {
-        let i = |c: Color| ColorMode::Ansi256.color(to_light(c, true), true);
+        let i = |c: Color| ColorMode::Ansi256.color(lt(c, true), true);
         assert_ne!(i(SEL), i(SEL_BLUR));
         assert_ne!(i(SEL_BLUR), i(POPUP_BG));
         assert_ne!(i(SEL), i(CELL_EDITED), "the grid's cursor inside its range");
         assert_ne!(i(SEL_BLUR), i(CELL_EDITED));
-        assert_ne!(i(SURFACE), Color::Indexed(231), "the status line is not the white of the terminal");
+        assert_ne!(cell_in(ColorMode::Ansi256, true, Style::default().bg(SURFACE)).bg, Color::Indexed(231), "the status line is not the white of the terminal");
         let c = cell_in(ColorMode::Ansi256, true, Style::default().fg(Color::White).bg(CELL_EDITED));
         assert_eq!((c.fg, c.bg), (Color::Black, i(CELL_EDITED)), "edited cell: dark text on a light blue");
         // 16 colors: light surfaces, text in the normal (darker) colors and kept on the surfaces
