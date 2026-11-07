@@ -144,6 +144,9 @@ export const KEYMAP: KeySection[] = [
       [null, "grid.cancel"],
       [null, "grid.ddl"],
       ["click header · ⌥ click", "Sort · add to multi-column sort"],
+      [null, "grid.colNarrow"],
+      [null, "grid.colWiden"],
+      ["drag · double-click a header's right edge", "Resize the column · fit it to its content (right-click a header: Fit All Columns, Reset Widths)"],
     ],
   },
   {

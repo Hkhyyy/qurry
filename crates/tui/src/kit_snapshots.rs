@@ -389,6 +389,25 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Left).unwrap();
     }
     h.app.close_tab_now(h.app.active);
+    // Column widths (#109): < > = on the current column, saved per table in settings.json "columnWidths" (shared with the GUI)
+    let memo = "first order after the promotion; call before delivery";
+    h.table_tab("orders", &["idx", "order_no", "memo", "created_at"], &[&["486", "O-20261101", memo, "2026-11-01"], &["487", "O-20261102", "gift wrap", "2026-11-02"], &["488", "O-20261103", "refund requested", "2026-11-03"]], &["idx"]);
+    h.app.focus = crate::app::Focus::Grid;
+    if let Some(g) = h.app.grid_mut() {
+        g.col = 2;
+        g.set_width(2, 16);
+    }
+    scenes.push(app_scene(h, "Column widths", "memo (the cursor's column) 16 cells wide and cut; the key bar shows < > = width", 120, 12));
+    for _ in 0..3 {
+        h.key(">");
+    }
+    scenes.push(app_scene(h, "Column widths: wider", "> three times: each widens the current column by 4 cells (< narrows it); saved for this table, the GUI shows it too", 120, 12));
+    h.key("=");
+    scenes.push(app_scene(h, "Column widths: fit", "=: the column fits its longest loaded value; ⌃k › Fit All Columns / Reset Column Widths do every column", 120, 12));
+    h.app.run_action(crate::app::Action::ColumnReset);
+    h.app.status.clear();
+    h.app.close_tab_now(h.app.active);
+    h.app.focus = crate::app::Focus::Editor;
     // JSON colors (the GUI's tokenizer, qurry_shared::format::json_spans): one line per cell, only what fits is read
     let id = h.console_with("select id, payload from webhook_event;", 1, 10);
     let big = format!("{{\"items\":[{}]}}", (0..3000).map(|i| format!("{{\"sku\":\"A-{i}\",\"qty\":{i}}}")).collect::<Vec<_>>().join(","));

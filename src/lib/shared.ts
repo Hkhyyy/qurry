@@ -178,6 +178,7 @@ const api = {
   isTimeType: (typeName: string): boolean => wasm.isTimeType(typeName),
   fracWidth: (values: string[]): number => wasm.fracWidth(values),
   padFrac: (s: string, width: number): string => wasm.padFrac(s, width),
+  columnWidth: (width: number, steps: number): number => wasm.columnWidth(width, steps),
   valueClass: (typeName: string, value: Cell): ValueClass => wasm.valueClass(typeName, value),
   /** The Value Editor panel's text for a cell: JSON (json / jsonb, or a JSON object or array) pretty-printed (qurry_shared::value) */
   panelText: (typeName: string, value: string): { json: boolean; text: string } => wasm.panelText(typeName, value),

@@ -1,6 +1,26 @@
 use super::*;
 use qurry_core::editable::{EditTarget, Editable};
+use qurry_core::format::{column_width, ColumnWidths};
+use qurry_core::store::TableRef;
 use qurry_shared::errors;
+
+/// What < > = and the palette's Fit All Columns / Reset Column Widths do to the grid's columns
+#[derive(Clone, Copy)]
+pub enum Resize {
+    /// Narrow (-1) / widen (+1) the current column by one step
+    Step(i64),
+    Fit,
+    FitAll,
+    Reset,
+}
+
+/// The table a table tab shows, which its column widths are kept for (settings.json "columnWidths", shared with the GUI)
+fn table_ref(t: &Tab) -> Option<TableRef> {
+    match &t.kind {
+        TabKind::Table(tt) => Some(TableRef { source: t.conn.clone(), database: t.db.clone(), schema: tt.schema.clone(), table: tt.table.clone() }),
+        _ => None,
+    }
+}
 
 impl App {
     pub fn open_table(&mut self, conn: &str, db: String, schema: String, table: String, kind: String) {
@@ -68,6 +88,7 @@ impl App {
                 if fresh {
                     a.reload_conns();
                 }
+                let saved = a.tab_mut(id).and_then(|t| table_ref(t)).map(|r| a.state.store.column_widths(&r)).unwrap_or_default();
                 let Some(t) = a.tab_mut(id) else { return };
                 let TabKind::Table(tt) = &mut t.kind else { return };
                 tt.running = false;
@@ -78,6 +99,7 @@ impl App {
                         let more = res.truncated;
                         let (row, col) = tt.grid.as_ref().map(|g| (g.row, g.col)).unwrap_or((0, 0));
                         let mut g = Grid::new(res);
+                        g.set_user_widths(saved);
                         g.more_session = Some(tt.session.clone());
                         g.row = row.min(n.saturating_sub(1));
                         g.col = col.min(g.cols().saturating_sub(1));
@@ -97,7 +119,9 @@ impl App {
                                 None => cols.into_iter().map(|(name, type_name)| qurry_core::db::ColumnInfo { name, type_name }).collect(),
                             };
                             let empty = qurry_core::db::QueryResult { columns, rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None };
-                            tt.grid = Some(Grid::new(empty));
+                            let mut g = Grid::new(empty);
+                            g.set_user_widths(saved);
+                            tt.grid = Some(g);
                         }
                         tt.error = Some(e.clone());
                         a.status = e;
@@ -267,6 +291,41 @@ impl App {
                 }
                 None
             }
+        }
+    }
+
+    /// < > =, Fit All Columns, Reset Column Widths on a table tab or a result (the GUI's header menu and ⌃⌥← / ⌃⌥→). A table tab's
+    /// widths are saved for its table, so the GUI shows them too; a console result keeps them until it runs again
+    pub fn resize_columns(&mut self, how: Resize) {
+        let Some(t) = self.tabs.get(self.active).filter(|t| matches!(t.kind, TabKind::Table(_) | TabKind::Console(_) | TabKind::Dba(_))) else {
+            self.status = "Open a result or table to resize its columns".into();
+            return;
+        };
+        let table = table_ref(t);
+        let Some(g) = self.grid_mut().filter(|g| g.cols() > 0) else { return };
+        let c = g.col;
+        let changed: ColumnWidths = match how {
+            Resize::Step(s) => [g.set_width(c, column_width(g.widths[c].into(), s))].into(),
+            Resize::Fit => [g.set_width(c, g.fit_width(c))].into(),
+            Resize::FitAll => (0..g.cols()).map(|c| g.set_width(c, g.fit_width(c))).collect(),
+            Resize::Reset => {
+                g.set_user_widths(ColumnWidths::new());
+                ColumnWidths::new()
+            }
+        };
+        self.status = match (how, changed.iter().next()) {
+            (Resize::Reset, _) => "Column widths are the computed ones again".into(),
+            (Resize::FitAll, _) => "Every column fits its content".into(),
+            (_, Some((name, w))) => format!("{name}: {w} cells wide"),
+            _ => String::new(),
+        };
+        let Some(table) = table else { return };
+        let saved = match how {
+            Resize::Reset => self.state.store.reset_column_widths(&table),
+            _ => self.state.store.set_column_widths(&table, &changed).map(|_| ()),
+        };
+        if let Err(e) = saved {
+            self.status = format!("Couldn't save the column widths ({e}). They apply until the tab closes; Reset Column Widths in the actions palette ({}) goes back to the computed widths.", self.keys.label(Action::Palette));
         }
     }
 

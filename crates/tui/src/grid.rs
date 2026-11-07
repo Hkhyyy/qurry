@@ -24,7 +24,10 @@ pub struct Grid {
     pub deleted: BTreeSet<usize>,
     /// Number of newly added rows (appended to the end of result.rows)
     pub added: usize,
+    /// Each column's width as drawn: the user's (`user_widths`), else the one computed from the header and the first rows
     pub widths: Vec<u16>,
+    /// Widths the user set (< > =, or the GUI for a table tab) by column name, in cells (qurry_shared::format::ColumnWidths)
+    pub user_widths: ColumnWidths,
     /// Fractional-second digits of time columns (aligned within a column, 0 = no alignment)
     pub(crate) frac: Vec<usize>,
     /// Last rendered height (PgUp/PgDn)
@@ -106,7 +109,7 @@ pub fn cell_text(v: &Value) -> String {
     }
 }
 pub(crate) use qurry_core::format::{is_time_type, pad_frac};
-use qurry_core::format::{cell_align, cell_class, column_class, is_json_type, json_spans, type_class, Align, Alignments, JsonKind, ValueClass};
+use qurry_core::format::{cell_align, cell_class, column_class, column_width, is_json_type, json_spans, type_class, Align, Alignments, ColumnWidths, JsonKind, ValueClass};
 use qurry_core::extract::{self, Format, Rows};
 use qurry_core::store::DbKind;
 
@@ -139,7 +142,7 @@ static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), orig: vec![] };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), orig: vec![] };
         g.compute_widths();
         g
     }
@@ -153,10 +156,32 @@ impl Grid {
             .map(|(i, c)| {
                 let body = r.rows.iter().take(300).map(|row| row.get(i).map(cell_text).unwrap_or_default().width()).max().unwrap_or(0);
                 // +2: room for the sort indicator (▲▼)
-                ((c.name.width() + 2).max(body).clamp(4, 40) + 1) as u16
+                self.user_widths.get(&c.name).copied().unwrap_or(((c.name.width() + 2).max(body).clamp(4, 40) + 1) as u16)
             })
             .collect();
         self.compute_frac();
+    }
+
+    /// Widths the user set (a table tab's saved ones, or none for Reset Widths) replace the computed ones by column name
+    pub fn set_user_widths(&mut self, w: ColumnWidths) {
+        self.user_widths = w;
+        self.compute_widths();
+    }
+
+    /// Fit: the cells column `c` needs for its header (with the sort mark) and its longest value, over the rows loaded so far
+    pub fn fit_width(&self, c: usize) -> u16 {
+        let name = self.result.columns[c].name.width() + 2;
+        let body = (0..self.rows()).map(|r| self.shown(r, c, usize::MAX).map_or(6, |s| s.width())).max().unwrap_or(0);
+        column_width(name.max(body) as i64, 0)
+    }
+
+    /// Give column `c` the width `w` (in range); returns the width and its column's name, for saving
+    pub fn set_width(&mut self, c: usize, w: u16) -> (String, u16) {
+        let name = self.result.columns[c].name.clone();
+        let w = column_width(w.into(), 0);
+        self.user_widths.insert(name.clone(), w);
+        self.compute_widths();
+        (name, w)
     }
 
     /// Time columns: longest fractional-second digits among loaded values

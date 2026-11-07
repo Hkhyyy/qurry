@@ -1,7 +1,7 @@
 import { setStatusWidget } from "../lib/statusbar";
 import { fracWidth, isTimeType, padFrac } from "../lib/timeFrac";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
@@ -10,6 +10,7 @@ import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, raw
 import { sharedReady, useSharedReady } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
+import { CELL_PAD, CHAR_PX, fitChars, stepWidth, toChars, toPx, useColumnWidths, type WidthsOf } from "../lib/columnWidths";
 import { isJsonType, jsonCell } from "../lib/jsonSpans";
 import { contains, copyTable, extend, forEachCell, isSingle, type Pos, selCols, selRows as rowsOf, type Selection, single, toggle } from "../lib/gridSelection";
 
@@ -74,6 +75,8 @@ interface Props {
   rowActions?: { label: string; danger?: boolean; run: (row: Record<string, Cell>) => void }[];
   /** Table data (pgvector): find rows close to this row. row = column name → value */
   onFindSimilar?: (column: string, row: Record<string, Cell>) => void;
+  /** Whose column widths these are: a table tab's table (saved, shared with the TUI) or a console result's id; absent: this grid's own */
+  widthsOf?: WidthsOf;
 }
 
 /** pgvector columns (vector · halfvec · sparsevec) */
@@ -212,16 +215,24 @@ export function ResultGrid(p: Props) {
   // Character widths below are for the default grid font size (12px)
   const em = useFonts().grid.size / DEFAULTS.grid.size;
   const rownumW = Math.max(ROWNUM_W, Math.round(ROWNUM_W * em));
-  const widths = useMemo(
+  const headPx = useMemo(() => cols.map((col, ci) => col.name.length * 7.6 * em + col.typeName.length * 6.2 + 48 + (pkIdx.includes(ci) ? 16 : 0)), [cols, pkIdx, em]);
+  const computed = useMemo(
     () =>
-      cols.map((col, ci) => {
-        const head = col.name.length * 7.6 * em + col.typeName.length * 6.2 + 48 + (pkIdx.includes(ci) ? 16 : 0);
+      cols.map((_, ci) => {
         let len = 0;
         for (const row of result.rows.slice(0, 200)) len = Math.max(len, display(row[ci]).length);
-        return Math.min(Math.max(head, len * 7.3 * em + 20, 64), 420 * em);
+        return Math.min(Math.max(headPx[ci], len * CHAR_PX * em + CELL_PAD, 64), 420 * em);
       }),
-    [cols, firstRow, pkIdx, em],
+    [cols, firstRow, headPx, em],
   );
+  // Widths a user set (drag, fit, the header menu, ⌃⌥← / ⌃⌥→) by column name, in characters (lib/columnWidths.ts)
+  const ownWidths = useId();
+  const userWidths = useColumnWidths(p.widthsOf ?? ownWidths, (msg) => setStatusWidget("aggregate", msg));
+  const setW = userWidths.widths;
+  /** Column i's set width (characters), or undefined while it has none */
+  const setOf = (i: number): number | undefined => (Object.prototype.hasOwnProperty.call(setW, cols[i].name) ? setW[cols[i].name] : undefined);
+  /** The one place a column's width comes from (layout, virtualization, scrolling): the user's, else the computed one */
+  const widths = useMemo(() => computed.map((w, i) => { const s = setOf(i); return s === undefined ? w : toPx(s, em); }), [computed, setW, em]);
   const total = rownumW + widths.reduce((a, b) => a + b, 0);
   // Time columns: align fractional-second digits within the column (values unchanged)
   const wasmReady = useSharedReady();
@@ -233,6 +244,43 @@ export function ResultGrid(p: Props) {
   const aligns = useMemo(() => cols.map((c, ci) => alignTable(alignOverrides, c.typeName, result.rows, ci)), [cols, result.rows, alignOverrides, wasmReady]);
   // JSON columns color their text cells (lib/jsonSpans.ts, the TUI grid's tokenizer)
   const jsonCol = useMemo(() => cols.map((c) => isJsonType(c.typeName)), [cols, wasmReady]);
+
+  // ─── Column widths ───
+  /** Characters column i needs for its header and its longest cell as shown, over the rows loaded so far (DataGrip: Fit Column) */
+  const fitOf = (i: number) => fitChars(headPx[i], Array.from({ length: rowCount }, (_, r) => shown(valueAt(r, i), i)), em);
+  const fitColumn = (i: number) => userWidths.set({ [cols[i].name]: fitOf(i) });
+  const fitAll = () => userWidths.set(Object.fromEntries(cols.map((c, i) => [c.name, fitOf(i)])));
+  /** Narrow (-1) / widen (+1) column i by one step of the shared rule (the TUI's < >), from the width it has now */
+  const stepColumn = (i: number, steps: number) => userWidths.set({ [cols[i].name]: stepWidth(setOf(i) ?? toChars(widths[i], em), steps) });
+  /** Dragging a header's right edge: the width follows the pointer (in whole characters), saved once on release */
+  const startResize = (e: React.MouseEvent, i: number) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const [x0, w0, name] = [e.clientX, widths[i], cols[i].name];
+    let last: number | null = null;
+    const move = (ev: MouseEvent) => {
+      const w = toChars(w0 + ev.clientX - x0, em);
+      if (w !== last) userWidths.set({ [name]: (last = w) }, false);
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      document.body.classList.remove("col-resizing");
+      if (last !== null) userWidths.set({ [name]: last });
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    document.body.classList.add("col-resizing");
+  };
+  /** The column header's menu: widths of this column or all of them */
+  const headerItems = (i: number): MenuItem[] => [
+    { label: "Fit Column", ...cmd("grid.colFit"), shortcut: cmd("grid.colFit").shortcut ?? "double-click the edge", action: () => fitColumn(i) },
+    { label: "Fit All Columns", ...cmd("grid.colFitAll"), action: fitAll },
+    { label: "Reset Widths", ...cmd("grid.colReset"), shortcut: cmd("grid.colReset").shortcut ?? "computed widths", action: userWidths.reset, disabled: !Object.keys(setW).length },
+    { separator: true },
+    { label: "Narrow Column", ...cmd("grid.colNarrow"), action: () => stepColumn(i, -1) },
+    { label: "Widen Column", ...cmd("grid.colWiden"), action: () => stepColumn(i, 1) },
+  ];
 
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => scrollRef.current, estimateSize: () => ROW_H, overscan: 20 });
   // Horizontally, render only visible columns too (tables with many columns). Blank cells fill the width on both sides
@@ -698,6 +746,8 @@ export function ResultGrid(p: Props) {
     { label: "Export Data…", ...cmd("grid.export"), action: p.onExport },
     ...viewItems(),
     ...optionItems(),
+    // The header menu's commands on the current column (the focused cell's, or the clicked header's); not in Transpose or Chart
+    ...(cur && !chart && !transposed ? headerItems(cur.c) : headerItems(0).map((x) => ({ ...x, disabled: true }))),
   ];
 
   /** An edit button's tooltip and description: the command, and why it's greyed out when the grid says so */
@@ -828,6 +878,12 @@ export function ResultGrid(p: Props) {
                         // Header click = select the whole column (DataGrip)
                         onMouseDown={(e) => clickSel(e, { r: 0, c: i }, { r: rowCount - 1, c: i })}
                         onSortClick={(e) => clickSort(i, e.altKey)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setMenu({ x: e.clientX, y: e.clientY, items: headerItems(i) });
+                        }}
+                        onResize={(e) => startResize(e, i)}
+                        onFit={() => fitColumn(i)}
                       />
                     );
                   })}

@@ -38,6 +38,11 @@
 .sort-btn.on { color: var(--c-548af7) !important; font-weight: 700; }
 .sort-btn sub { font-size: 9px; }
 .cell.head.sorted .col-name { color: var(--c-9fbfff); }
+/* The header's right edge resizes the column (drag) or fits it (double-click); the accent line shows on hover */
+.cell.head { position: relative; }
+.col-resize { position: absolute; top: 0; right: 0; bottom: 0; width: 6px; cursor: col-resize; }
+.col-resize:hover { box-shadow: inset -2px 0 var(--accent); }
+body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-select: none; }
 .cell-edit { flex: none; position: relative; display: flex; height: 24px; }
 .cell-edit .cell-input { flex: 1; min-width: 0; width: auto; }
 .cell-more { flex: none; height: 24px; padding: 0 6px; border-radius: 0 3px 3px 0; border: 1px solid var(--accent); border-left: none; background: var(--c-393b40); font-size: 12px; line-height: 1; }

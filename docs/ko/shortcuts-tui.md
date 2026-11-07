@@ -96,6 +96,11 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | — | Refresh |
 | — | Query History… (shared with the GUI) |
 | — | Value Panel (the current cell's whole value, beside the grid) |
+| — | Narrow Column (the current one) |
+| — | Widen Column (the current one) |
+| — | Fit Column to its content (the rows loaded so far) |
+| — | Fit All Columns |
+| — | Reset Column Widths (back to the computed widths) |
 | — | Explain Analyze (runs the statement: real times and row counts) |
 | — | Query Execution Settings (what ⌃Enter runs) |
 | — | Clear Console (delete all text) |
@@ -173,6 +178,9 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | Key | Action |
 |---|---|
 | `v` | Value Panel (the current cell's whole value, beside the grid) |
+| `<` | Narrow Column (the current one) |
+| `>` | Widen Column (the current one) |
+| `=` | Fit Column to its content (the rows loaded so far) |
 | `⌃z` | Revert Changes |
 | `a / Insert` | Add Row |
 | `d / Delete` | Delete Row |

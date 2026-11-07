@@ -558,6 +558,7 @@ export function useEditorGroups({
                   readOnly={!!conns.find((x) => x.id === t.connId)?.readOnly}
                   dialect={dialectOf(conns.find((x) => x.id === t.connId)?.kind)}
                   loadingMore={t.loadingMore}
+                  table={t.edit && { source: t.connId, database: t.database ?? "", schema: t.edit.schema, table: t.edit.table }}
                   completion={t.edit && { target: t.target, schema: t.edit.schema, table: t.edit.table, db: tabDatabase(t, conns.find((x) => x.id === t.connId)), mysql: conns.find((x) => x.id === t.connId)?.kind === "mysql" }}
                   onApply={(w, o) => applyTableFilter(t, w, o)}
                   onCancel={() => cancel(t)}

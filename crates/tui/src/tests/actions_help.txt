@@ -69,6 +69,9 @@ Database Explorer keys (change them with F1)
 
 Data grid keys (change them with F1)
   v                              Value Panel (the current cell's whole value, beside the grid)
+  <                              Narrow Column (the current one)
+  >                              Widen Column (the current one)
+  =                              Fit Column to its content (the rows loaded so far)
   ⌃z                             Revert Changes
   a / Insert                     Add Row
   d / Delete                     Delete Row

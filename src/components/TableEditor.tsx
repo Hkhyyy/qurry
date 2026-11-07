@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Cell, Dialect, QueryResult } from "../lib/api";
+import { Cell, Dialect, QueryResult, TableRef } from "../lib/api";
 import { filterSuggestions } from "../lib/completion";
 import type { CompletionItem } from "../lib/shared";
 import { EditTarget, ResultGrid } from "./ResultGrid";
@@ -39,6 +39,8 @@ interface Props {
   onFindSimilar?: (column: string, row: Record<string, Cell>) => void;
   /** Absent: the fields are plain text */
   completion?: FilterCompletion;
+  /** The table its column widths are kept for (shared with the TUI) */
+  table?: TableRef;
 }
 
 export function TableEditor(p: Props) {
@@ -95,6 +97,7 @@ export function TableEditor(p: Props) {
           onCopyQueryToConsole={p.onCopyQueryToConsole}
           onFindSimilar={p.onFindSimilar}
           filterBar={filterBar}
+          widthsOf={p.table}
         />
         {p.error && (
           <Notice tone="danger" className="grid-overlay">

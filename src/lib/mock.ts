@@ -92,6 +92,10 @@ let updateChannel = "stable";
 let customFonts: { name: string; file: string }[] = [];
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
 let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
+/** settings.json "columnWidths": table (source · database · schema · table) → its set widths (kept across a reload, as the file is) */
+const columnWidths: Record<string, Record<string, number>> = JSON.parse(localStorage.getItem("mock-columnWidths") ?? "{}");
+const widthsKey = (t: any) => JSON.stringify([t.source, t.database, t.schema, t.table]);
+const saveWidths = () => localStorage.setItem("mock-columnWidths", JSON.stringify(columnWidths));
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
 let updateChecked = false;
 /** Test Connections waiting for cancel_test, by test id */
@@ -621,6 +625,20 @@ const handlers: Record<string, (a: any) => unknown> = {
     gridAlign = next;
     localStorage.setItem("mock-gridAlign", JSON.stringify(next));
     return next;
+  },
+  column_widths: (a: any) => columnWidths[widthsKey(a.table)] ?? {},
+  // As the core: merged into what is saved, kept between 3 and 200 characters. window.__mockChannelSaveFails: the file can't be written
+  set_column_widths: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    const k = widthsKey(a.table);
+    columnWidths[k] = { ...columnWidths[k], ...Object.fromEntries(Object.entries(a.widths as Record<string, number>).map(([c, w]) => [c, Math.min(Math.max(Math.round(w), 3), 200)])) };
+    saveWidths();
+    return columnWidths[k];
+  },
+  reset_column_widths: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    delete columnWidths[widthsKey(a.table)];
+    saveWidths();
   },
   // window.__mockChannelSaveFails: the settings file can't be written
   set_update_channel: (a: any) => {
