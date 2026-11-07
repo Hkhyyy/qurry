@@ -92,6 +92,12 @@ Completion also suggests what is actually in the table: after `status = '`, `sta
 
 A table tab's **WHERE** and **ORDER BY** fields (TUI: `w` or `/` · `o`) complete like the console: the field reads as `SELECT * FROM schema.table WHERE …` (or `ORDER BY …`), so it lists the table's columns, then keywords and functions (`ASC` / `DESC` after a column in ORDER BY) — never other tables or schemas. The list opens while you type a word or after a `.`, not inside a string or a number, and closes once the word is a whole keyword or column, so `↩` after `is null` applies the filter. With the list open: `↑` `↓` `PgUp` `PgDn` move, `↩` / `⇥` insert, `⎋` closes the list. With it closed, `⌃Space` (TUI also `⇥`) asks for the list at the caret, even after a space or a whole word: at an empty spot the table's columns come first, then keywords. `↩` applies the filter and `⎋` puts the field back as it was. Column values are not suggested here.
 
+## Quotes and brackets
+
+Typing `'`, `"`, `(` or `[` adds the closing one after the caret, in the GUI console, a table tab's **WHERE** and **ORDER BY** fields, and the TUI console and its `w` / `o` inputs. It does so before a space, the end of the line or `;:.,=}])>`, and a quote not right after a letter or digit (`it's` stays as typed). Typing the closing character when it is already next to the caret steps over it, `⌫` between an empty pair removes both, and typing an opening one over a selection wraps the selection (it stays selected). Outside the GUI console nothing closes itself inside a string or a comment; the GUI console follows Monaco there and also pairs `{`.
+
+A quote, parenthesis or bracket left open — or a closing one without an opener — is marked in the console as you type: in the GUI with a red underline from it to the end of its line (hover it for what is open, e.g. "Unclosed '('"), in the TUI underlined in red with its line number in red, and while the caret is on that line the editor's bottom border says what is open. Strings, comments and PostgreSQL dollar quotes (`$$ … $$`, `$tag$ … $tag$`) are read the way Qurry splits statements, so a `(` inside them counts for nothing, and brackets pair up within one statement.
+
 ## Query history & snippets
 
 Query history and snippets are kept in the config folder and shared by the GUI and the TUI (passwords in `PASSWORD '…'` / `IDENTIFIED BY '…'` are masked). GUI: `⌥⌘e` (History / Snippets tabs, Save as Snippet) · TUI: `⌃k` › Query History…, Snippets…, Save Query as Snippet….
