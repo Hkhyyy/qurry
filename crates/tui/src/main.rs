@@ -170,6 +170,11 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
                 })).is_err() {
                     break;
                 }
+                // A Production console's transaction left open (#106): in its output and on the status line
+                let reminders = st.tx_reminders().await;
+                if !reminders.is_empty() && tx.send(Box::new(move |a: &mut app::App| a.tx_reminded(reminders))).is_err() {
+                    break;
+                }
                 let dropped = qurry_core::app::housekeeping(&st).await;
                 if !dropped.is_empty() && tx.send(Box::new(move |a: &mut app::App| {
                     for (id, _) in &dropped {

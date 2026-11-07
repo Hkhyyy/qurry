@@ -1063,6 +1063,23 @@ mod tests {
         }
     }
 
+    /// A Production Redis console starts in Auto (ConnectionConfig::starts_manual), and asking it for Manual is refused without
+    /// breaking the console: its commands still run
+    #[tokio::test]
+    #[ignore]
+    async fn production_redis_console_refuses_manual_and_still_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut c = cfg("0");
+        c.options.confirm_changes = true;
+        assert!(!c.starts_manual());
+        st.save_connection(c, None, None).await.unwrap();
+        let err = st.set_tx_mode("rd".into(), "redis-tab".into(), true).await.unwrap_err().to_string();
+        assert!(err.contains("not supported for Redis"), "{err}");
+        assert!(st.run_query("rd".into(), "PING".into(), None, Some("redis-tab".into())).await.is_ok(), "the console still runs");
+        st.close_session("redis-tab".into()).await.unwrap();
+    }
+
     /// Argument splitting is tested in qurry_shared::redis_cmd; here only that errors keep their message
     #[test]
     fn parse_args() {

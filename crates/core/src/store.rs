@@ -121,6 +121,10 @@ pub struct ConnOptions {
     /// Production: statements that change data show the affected row count and ask for confirmation
     #[serde(default)]
     pub confirm_changes: bool,
+    /// Production: consoles start in Manual transaction mode (#106). None = on: sources saved before this, and by older apps that
+    /// drop the field, get it too
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub production_manual: Option<bool>,
     /// A remote MySQL with no SSL setting may connect in plain text if it can't do TLS (old servers · trusted networks).
     /// This and mcp are also saved in connection-access.json, which wins over connections.json (Store::list)
     #[serde(default)]
@@ -210,6 +214,24 @@ fn default_ssh_port() -> u16 {
 }
 
 impl ConnectionConfig {
+    /// Whether its consoles can be in Manual transaction mode (Session::set_manual): PostgreSQL and MySQL. Redis and the driver
+    /// plugins refuse it, so their consoles always start in Auto
+    pub fn supports_manual(&self) -> bool {
+        matches!(self.kind, DbKind::Postgres | DbKind::Mysql)
+    }
+
+    /// Whether a new console starts in Manual transaction mode: the source's Transaction control, or Production with
+    /// production_manual on (the default). The GUI has the same rule (src/features/tabs/ops.ts startsManual)
+    pub fn starts_manual(&self) -> bool {
+        (self.supports_manual() && self.options.tx_manual) || self.production_starts_manual()
+    }
+
+    /// Manual only because it is Production (#106): the console says so the first time (errors::PRODUCTION_MANUAL)
+    pub fn production_starts_manual(&self) -> bool {
+        let o = &self.options;
+        self.supports_manual() && !o.tx_manual && o.confirm_changes && o.production_manual != Some(false)
+    }
+
     pub fn active_ssl(&self) -> Option<&SslConfig> {
         self.ssl.as_ref().filter(|s| s.enabled)
     }
@@ -1233,6 +1255,30 @@ mod tests {
             ssh_secret_saved: false,
             scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         }
+    }
+
+    /// Production consoles start in Manual by default (#106), but only where a session can be in Manual: a Redis or driver plugin
+    /// console that asked for it would refuse every statement
+    #[test]
+    fn production_starts_manual_where_manual_works() {
+        let mut c = conn("p", "prod");
+        c.options.confirm_changes = true;
+        for kind in [DbKind::Postgres, DbKind::Mysql] {
+            c.kind = kind;
+            assert!(c.starts_manual() && c.production_starts_manual(), "{kind:?}");
+        }
+        for kind in [DbKind::Redis, DbKind::Sqlite, DbKind::Mssql, DbKind::Oracle, DbKind::Clickhouse, DbKind::Duckdb] {
+            c.kind = kind;
+            c.options.tx_manual = false;
+            assert!(!c.starts_manual() && !c.production_starts_manual(), "{kind:?}");
+            c.options.tx_manual = true;
+            assert!(!c.starts_manual(), "{kind:?}");
+        }
+        c.kind = DbKind::Postgres;
+        assert!(c.starts_manual() && !c.production_starts_manual(), "the source's own Transaction control");
+        c.options.tx_manual = false;
+        c.options.production_manual = Some(false);
+        assert!(!c.starts_manual());
     }
 
     /// Import a whole file, as the confirm with every row checked

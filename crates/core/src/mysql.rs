@@ -224,6 +224,8 @@ pub struct MySession {
     /// A change ran in the open transaction (audit::is_change, as the Production log has it): a transaction opened by BEGIN or
     /// guessed after a SELECT in Manual mode has none, so ending it saves nothing
     pub changed: bool,
+    /// Production (Session::set_reads_outside_tx): in Manual mode a plain read before the transaction is open runs as in Auto
+    pub(crate) reads_outside_tx: bool,
     /// How the last statement ended the open transaction, when it did by itself (audit::IMPLICIT_COMMIT or audit::ENDED_UNKNOWN):
     /// not a COMMIT / ROLLBACK, a deadlock in a row change or a lost connection
     pub ended: Option<&'static str>,
@@ -237,7 +239,7 @@ impl MySession {
     pub async fn open(p: &MySqlPool) -> AppResult<Self> {
         let mut conn = p.acquire().await?;
         let id: u64 = sqlx::query_scalar("select connection_id()").fetch_one(&mut *conn).await?;
-        let mut s = Self { conn, id: id as i64, manual: false, in_tx: false, changed: false, ended: None, probe: true, more: None };
+        let mut s = Self { conn, id: id as i64, manual: false, in_tx: false, changed: false, reads_outside_tx: false, ended: None, probe: true, more: None };
         // Best effort: a MySQL-protocol server without transactions (ClickHouse, older StarRocks / Doris) still opens, without the probe
         let began = s.conn.execute("START TRANSACTION").await.is_ok();
         s.probe = began && s.tx_open().await != Some(false);
@@ -372,6 +374,39 @@ impl MySession {
     }
 
     pub async fn run(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
+        // Production: autocommit=0 opens a transaction for a plain read too; it runs in a read-only one of its own instead, ended
+        // with it, as in Auto (Session::set_reads_outside_tx). Read-only: a function in it that writes is refused, not committed
+        let read_first = self.reading_first() && crate::session::plain_read(sql, crate::store::DbKind::Mysql) && self.begin_read().await;
+        let mut r = self.run_inner(sql, limit).await;
+        if !read_first {
+            return r;
+        }
+        self.end_read().await;
+        if let Ok(q) = &mut r {
+            q.in_transaction = self.in_tx;
+        }
+        r.map_err(crate::session::read_first_refused)
+    }
+
+    /// Manual mode on Production with no transaction open yet (Session::set_reads_outside_tx)
+    fn reading_first(&self) -> bool {
+        self.manual && !self.in_tx && self.reads_outside_tx
+    }
+
+    /// The read-only transaction of a read outside the user's (reading_first). false: the server has none (the read then opens the
+    /// user's, as autocommit=0 does)
+    async fn begin_read(&mut self) -> bool {
+        self.conn.execute("START TRANSACTION READ ONLY").await.is_ok()
+    }
+
+    /// End the transaction of a read outside the user's (begin_read), with its snapshot and metadata locks
+    async fn end_read(&mut self) {
+        if self.conn.execute("COMMIT").await.is_ok() {
+            (self.in_tx, self.changed) = (false, false);
+        }
+    }
+
+    async fn run_inner(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         self.more = None;
         self.ended = None;
         if !self.in_tx {
@@ -519,7 +554,16 @@ impl MySession {
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
         let Some((sql, offset)) = self.more.clone() else { return Err(AppError::Msg("No more rows".into())) };
         let paged = format!("SELECT * FROM ({sql}) AS dbtool_page LIMIT {limit} OFFSET {offset}");
-        let mut r = run_on(&mut self.conn, &paged, limit).await?;
+        // The page of a read outside the user's transaction (reading_first) runs as the read did
+        let read_first = self.reading_first() && self.begin_read().await;
+        let r = run_on(&mut self.conn, &paged, limit).await;
+        let mut r = match read_first {
+            true => {
+                self.end_read().await;
+                r.map_err(crate::session::read_first_refused)?
+            }
+            false => r?,
+        };
         r.truncated = r.rows.len() >= limit;
         self.more = if r.truncated { Some((sql, offset + limit)) } else { None };
         r.in_transaction = self.in_tx;

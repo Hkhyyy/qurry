@@ -344,12 +344,48 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.focus = crate::app::Focus::Grid;
     h.app.status = "3 row(s) retrieved in 3 ms".into();
     scenes.push(app_scene(h, "Console result: editable", "A console result from one table with its primary key edits like a table tab: ↩ edit, a add, d delete, ⌃s submit (Production asks first), ⌃z revert", 120, 22));
+    // A join (#102): each table's cells by its own key; the outer side where no row matched says why
+    {
+        use qurry_core::editable::{ColumnEdit, Editable, JoinEdit, JoinTable};
+        let jt = |s: &str, t: &str, at: usize| JoinTable { schema: s.into(), table: t.into(), pk: vec!["idx".into()], pk_at: vec![at] };
+        let to = |t: usize, c: &str| ColumnEdit::To { table: t, column: c.into() };
+        let j = JoinEdit { tables: vec![jt("crm", "voc", 0), jt("public", "users", 2)], columns: vec![to(0, "idx"), to(0, "status"), to(1, "idx"), to(1, "role")] };
+        let joined = qurry_core::db::QueryResult {
+            columns: [("idx", "INT8"), ("status", "VARCHAR"), ("idx", "INT8"), ("role", "VARCHAR")].iter().map(|(n, t)| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+            rows: vec![vec![json!(1), json!("open"), json!(10), json!("member")], vec![json!(2), json!("new"), json!(null), json!(null)], vec![json!(3), json!("closed"), json!(11), json!("admin")]],
+            editable: Some(Editable::Join(j)),
+            ..users(Editable::ReadOnly(String::new()))
+        };
+        if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+            c.result_title = "Result 1: select vo.idx, vo.status, pu.idx, pu.role from".into();
+            let mut g = crate::grid::Grid::new(joined);
+            g.set_value(0, 3, "admin".into());
+            (g.row, g.col) = (1, 3);
+            c.grid = Some(g);
+        }
+    }
+    h.key("Enter");
+    scenes.push(app_scene(h, "Console result: join", "A join edits per table, each by its own primary key (users.role of voc 1 edited); a cell where no row of its table matched (outer join) is read-only, and the status line says why", 120, 22));
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.result_title = "Result 1: select u.id, u.name, o.email from".into();
-        c.grid = Some(crate::grid::Grid::new(users(qurry_core::editable::Editable::ReadOnly("Read-only: the columns come from more than one table.".into()))));
+        c.result_title = "Result 1: select name, email from users".into();
+        c.grid = Some(crate::grid::Grid::new(users(qurry_core::editable::Editable::ReadOnly(qurry_shared::errors::edit_missing_pk("public.users", &["id".into()])))));
     }
     h.key("a");
-    scenes.push(app_scene(h, "Console result: read-only", "An edit key on a result Qurry can't tie to one table row: the status line says why (here a join)", 120, 22));
+    scenes.push(app_scene(h, "Console result: read-only", "An edit key on a result Qurry can't tie to table rows: the status line says why (here the key isn't in the result)", 120, 22));
+    // A Production console starts in Manual (#106): its change is pending, and the reminder about a transaction left open
+    let reminder = qurry_shared::errors::tx_idle_reminder("[PROD] rentalpay", 5, true, Some((false, 600)));
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        (c.tx_manual, c.in_tx, c.show_output) = (true, true, true);
+        for (e, l) in [(false, qurry_shared::errors::PRODUCTION_MANUAL.to_string()), (false, "> update users set role = 'admin' where idx = 10".into()), (false, "1 row(s) affected in 4 ms".into()), (false, reminder.clone())] {
+            c.log(e, l);
+        }
+    }
+    h.app.focus = crate::app::Focus::Editor;
+    h.app.status = reminder;
+    scenes.push(app_scene(h, "Console: Production transaction open", "A Production console starts in Tx: Manual and says so once: a change stays pending (the title says how to commit or roll back) and a transaction left unused for 5 minutes is reminded about, with the server's own limit", 120, 22));
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        (c.tx_manual, c.in_tx) = (false, false);
+    }
     h.app.focus = crate::app::Focus::Editor;
     // Gutter marks: ✓ done, ✗ failed, … running (all three in one run here, as in the GUI story)
     let id = h.console_with("select 1;\nupdate payment\n   set status = 'paid'\n where id = 42;\nselect pg_sleep(5);", 4, 0);

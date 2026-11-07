@@ -416,6 +416,8 @@ export function useEditorGroups({
                     output={t.output}
                     txManual={t.txManual}
                     inTx={t.inTx}
+                    production={!!c?.options?.confirmChanges}
+                    txIdle={t.txIdle}
                     onChange={(sql) => liveSql.set(t.id, sql)}
                     onExecute={(stmts, explain, mark) => executeConsole(t.id, stmts, explain, mark)}
                     onCancel={() => cancel(t)}

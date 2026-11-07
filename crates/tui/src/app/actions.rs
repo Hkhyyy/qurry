@@ -249,15 +249,15 @@ fn revert(app: &mut App) {
     }
 }
 
-// Table data and console results from one table with its key (App::edit_grid; otherwise the status line says why)
+// Table data and console results from one table with its key, not a join's (App::edit_rows; otherwise the status line says why)
 fn add_row(app: &mut App) {
-    if let Some(g) = app.edit_grid() {
+    if let Some(g) = app.edit_rows() {
         g.add_row();
     }
 }
 
 fn delete_row(app: &mut App) {
-    if let Some(g) = app.edit_grid() {
+    if let Some(g) = app.edit_rows() {
         g.delete_rows();
     }
 }
@@ -267,7 +267,7 @@ fn mark_row(app: &mut App) {
     if !matches!(app.tabs.get(app.active).map(|t| &t.kind), Some(TabKind::Table(_) | TabKind::Console(_))) {
         return;
     }
-    let table = app.edit_to().is_ok();
+    let table = matches!(app.edit_to(), Ok(crate::app::tables::EditTo::Table(_)));
     let Some(g) = app.grid_mut() else { return };
     g.toggle_mark();
     let n = g.marked.len();

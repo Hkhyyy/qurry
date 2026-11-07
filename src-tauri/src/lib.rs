@@ -78,6 +78,10 @@ pub fn run() {
                         eprintln!("[qurry] {message} ({id})");
                         let _ = handle.emit("conn-disconnected", serde_json::json!({ "id": id, "message": message }));
                     }
+                    // A Production console's transaction left open (#106)
+                    for (tab_id, message) in state.tx_reminders().await {
+                        let _ = handle.emit("tx-idle", serde_json::json!({ "tabId": tab_id, "message": message }));
+                    }
                 }
             });
             Ok(())
@@ -170,7 +174,7 @@ pub fn run() {
             commands::set_tx_mode,
             commands::commit_tx,
             commands::rollback_tx,
-            commands::execute_batch,
+            commands::submit_edits,
             commands::object_index,
             commands::cached_index,
             commands::warm_search_cache,

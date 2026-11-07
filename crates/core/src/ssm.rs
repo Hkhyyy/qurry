@@ -1195,7 +1195,7 @@ pub(crate) mod tests {
         // The 5s check, then 5s for the tunnel (a transaction is open: a slow session through a working tunnel would be kept)
         println!("transaction-open console answered in {:?}", t.elapsed());
         assert!(t.elapsed() < Duration::from_secs(12), "{:?}", t.elapsed());
-        assert!(e.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && e.contains("The transaction open in it is lost") && e.contains("nor did a new connection through the tunnel"), "{e}");
+        assert!(e.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && e.contains("The transaction is lost") && e.contains("nor did a new connection through the tunnel"), "{e}");
         assert!(!st.tx_state("c1".into()).await);
         run("select 1", "c1").await.unwrap().expect("a new session");
         assert_eq!(starts(), 3);

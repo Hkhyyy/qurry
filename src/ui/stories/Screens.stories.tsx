@@ -795,19 +795,67 @@ export const ConsoleEditableResult: S = {
     await userEvent.type(input, "Lee{Enter}");
   },
 };
-/** A join: read-only, the greyed-out edit buttons say why (QueryResult.readOnlyReason) */
+/** Read-only: the greyed-out edit buttons say why (QueryResult.readOnlyReason; here the key isn't in the result) */
 export const ConsoleReadOnlyResult: S = {
   name: "Console — read-only result (reason)",
   render: () => {
-    const { edit: _, ...joined } = consoleUsers;
-    const sql = "select u.id, u.name, o.total from users u join orders o on o.user_id = u.id";
+    const { edit: _, ...rest } = consoleUsers;
+    const sql = "select name, email from users";
     return (
       <Frame h={420}>
         <ConsolePane {...consoleProps} initialSql={sql + ";"} activeResult="r1"
-          results={[{ id: "r1", title: "Result 1", sql, kind: "result", result: { ...joined, readOnlyReason: "Read-only: the columns come from more than one table." }, pinned: false }]} />
+          results={[{ id: "r1", title: "Result 1", sql, kind: "result", result: { ...rest, readOnlyReason: "Read-only: the result doesn't include the primary key of public.users (id)." }, pinned: false }]} />
       </Frame>
     );
   },
+};
+/** #102's join (QueryResult.editJoin): each table's cells by its own key, one users edit pending. idx and status come twice, each
+ *  from its table; the computed column is dimmed with 🔒 and says why on hover; voc 2 has no user, so that side's cells say why on
+ *  hover; Add / Delete Row are greyed out (rows aren't one table's) */
+const vocJoin: QueryResult = {
+  columns: ["idx", "user_idx", "status", "idx", "role", "status", "shout"].map((name, i) => ({ name, typeName: [0, 1, 3].includes(i) ? "INT8" : "VARCHAR" })),
+  rows: [[1, 10, "open", 10, "member", "active", "MEMBER"], [2, 99, "new", null, null, null, null], [3, 11, "closed", 11, "admin", "active", "ADMIN"]],
+  rowsAffected: 0, truncated: false, elapsedMs: 6, hasResultSet: true,
+  editJoin: {
+    tables: [{ schema: "crm", table: "voc", pk: ["idx"], pkAt: [0] }, { schema: "public", table: "users", pk: ["idx"], pkAt: [3] }],
+    columns: [{ table: 0, column: "idx" }, { table: 0, column: "user_idx" }, { table: 0, column: "status" }, { table: 1, column: "idx" }, { table: 1, column: "role" }, { table: 1, column: "status" }, { readOnly: "Read-only: shout is computed, not a column of the table." }],
+  },
+};
+const vocSql = "select vo.*, pu.idx, pu.role, pu.status, upper(pu.role) as shout from crm.voc vo left join users pu on vo.user_idx = pu.idx";
+export const ConsoleJoinResult: S = {
+  name: "Console — join result, edited per table",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane {...consoleProps} initialSql={vocSql + ";"} activeResult="r1" results={[{ id: "r1", title: "Result 1", sql: vocSql, kind: "result", result: vocJoin, pinned: false }]} />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await waitFor(() => {
+      if (!canvasElement.querySelector(".monaco-editor .view-lines")) throw new Error("editor not mounted yet");
+    });
+    await userEvent.dblClick(await c.findByText("member"));
+    const input = await c.findByDisplayValue("member");
+    await userEvent.clear(input);
+    await userEvent.type(input, "admin{Enter}");
+  },
+};
+/** A Production console (#106): it starts in Tx: Manual and says so once in Output; a change ran, so the transaction is pending (the
+ *  red badge beside Commit / Roll back); left unused, the backend's reminder came (Output, the badge's "idle" and its hover) */
+const prodReminder = 'A transaction on Production "[PROD] shop_app" has been open for 5 min without a statement: its changes aren\'t saved and the rows it changed stay locked. Commit or Roll back. The server ends it after 10 min idle (idle_in_transaction_session_timeout), and rolls it back.';
+export const ConsoleProductionTransaction: S = {
+  name: "Console — Production transaction pending, idle reminder",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane {...consoleProps} connName="[PROD] shop_app" production txManual inTx txIdle={prodReminder} initialSql="update users set role = 'admin' where idx = 10;" activeResult="output" results={[]}
+        output={[
+          { ts: "2026-11-07 10:00:00", level: "info", text: "Production: this console starts in Tx: Manual, so changes stay pending until you Commit or Roll back. To start them in Auto, turn off \"Production: start consoles in Manual transaction mode\" for this data source (GUI: Data Source Properties › Options · TUI: the data source form, \"Production Manual\")." },
+          { ts: "2026-11-07 10:00:12", level: "sql", text: "[PROD] shop_app> update users set role = 'admin' where idx = 10;" },
+          { ts: "2026-11-07 10:00:12", level: "info", text: "1 row affected in 4 ms" },
+          { ts: "2026-11-07 10:05:15", level: "warn", text: prodReminder },
+        ]} />
+    </Frame>
+  ),
 };
 /** A console after its runs: each executed statement is marked on its first line (✓ done, ✗ failed, spinning while it runs; all three
  * shown together here). Hover a mark for when it ran and its result or error; click it for its line in Output */

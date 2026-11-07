@@ -190,6 +190,8 @@ impl App {
                 f("Database", c.database.clone(), FieldKind::Text),
                 f("Read-only", if c.read_only { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("Production", if c.options.confirm_changes { "on" } else { "off" }.into(), FieldKind::Toggle),
+                // Production: new consoles start in Manual transaction mode (#106; unset = on)
+                f("Production Manual", if c.options.production_manual != Some(false) { "on" } else { "off" }.into(), FieldKind::Toggle),
                 // MySQL: whether plaintext is allowed for old remote servers that can't do TLS
                 f("Allow unencrypted", if c.options.allow_plaintext { "on" } else { "off" }.into(), FieldKind::Toggle),
                 // Whether it's visible to qurry-mcp (AI tools). New sources start off
@@ -249,6 +251,8 @@ impl App {
         c.name = if v("Name").trim().is_empty() { format!("{}@{}", c.user, c.host) } else { v("Name").trim().into() };
         c.read_only = v("Read-only") == "on";
         c.options.confirm_changes = v("Production") == "on";
+        // On is the default: kept unset, as older apps that drop the field read it
+        c.options.production_manual = if v("Production Manual") == "on" { None } else { Some(false) };
         c.options.allow_plaintext = v("Allow unencrypted") == "on";
         // Save the shown value as is (leaving it unset would reopen it automatically after turning Production off)
         c.options.mcp = Some(v("MCP"));

@@ -66,9 +66,61 @@ pub struct AppState {
     pub mcp: bool,
     /// Secrets key → password of a temporary data source (Store::temporary): kept in memory only, never in the secrets file
     temporary: std::sync::Mutex<HashMap<String, String>>,
+    /// Tab id → the last use of its session that tx_reminders reminded about (once per stretch of the transaction sitting unused)
+    reminded: std::sync::Mutex<HashMap<String, std::time::SystemTime>>,
 }
 
+/// How long a Production console's transaction may sit open and unused before the console reminds about it (#106)
+pub const TX_IDLE_REMIND: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 impl AppState {
+    /// The consoles of Production data sources whose transaction has been open and unused for TX_IDLE_REMIND: (tab id, what to
+    /// tell them, qurry_shared::errors::tx_idle_reminder). Once per stretch: a statement, Commit or Roll back starts a new one.
+    /// GUI and TUI ask on their housekeeping beat
+    pub async fn tx_reminders(&self) -> Vec<(String, String)> {
+        self.tx_reminders_after(TX_IDLE_REMIND).await
+    }
+
+    pub(crate) async fn tx_reminders_after(&self, after: std::time::Duration) -> Vec<(String, String)> {
+        let open: Vec<(String, String, std::time::SystemTime, std::sync::Arc<tokio::sync::Mutex<Session>>)> =
+            self.sessions.read().await.iter().map(|(t, e)| (t.clone(), e.conn_id.clone(), *e.used.lock().unwrap(), e.session.clone())).collect();
+        let mut out = Vec::new();
+        for (tab, conn, used, sess) in open {
+            let Ok(cfg) = self.source(&conn) else { continue };
+            // Busy (a statement runs in it): not idle
+            let Some(changed) = sess.try_lock().ok().filter(|s| s.in_tx()).map(|s| s.tx_changed()) else { continue };
+            // UNIX_EPOCH: a slow session marked to be checked again on its next use (tab_session), not one unused since 1970
+            let checking = used == std::time::SystemTime::UNIX_EPOCH;
+            if !cfg.options.confirm_changes || checking || !idle_for(used, after) || self.reminded.lock().unwrap().get(&tab) == Some(&used) {
+                continue;
+            }
+            self.reminded.lock().unwrap().insert(tab.clone(), used);
+            let minutes = used.elapsed().map_or(after.as_secs(), |d| d.as_secs()) / 60;
+            // Keep-alive pings the console's session too, which restarts the server's clock: then the server doesn't end it
+            let keep_alive = cfg.options.keep_alive_secs.filter(|k| *k > 0).map(|k| k as u64);
+            let timeout = self.idle_tx_timeout(&conn).await.filter(|t| keep_alive.is_none_or(|k| k >= *t)).map(|s| (cfg.kind == store::DbKind::Mysql, s));
+            out.push((tab, qurry_shared::errors::tx_idle_reminder(&cfg.name, minutes, changed, timeout)));
+        }
+        let live = self.sessions.read().await.keys().cloned().collect::<std::collections::HashSet<_>>();
+        self.reminded.lock().unwrap().retain(|t, _| live.contains(t));
+        out
+    }
+
+    /// The server's limit for a session sitting idle in a transaction, in seconds (None: none, or it couldn't be read): read on the
+    /// pool, whose connections run the same startup script as the console's (a statement in the console's session would count as a
+    /// use and restart PostgreSQL's clock)
+    async fn idle_tx_timeout(&self, conn: &str) -> Option<u64> {
+        let pool = self.pools.read().await.get(conn).cloned()?;
+        let read = async {
+            match &pool {
+                Pool::Pg(p) => sqlx::query_scalar::<_, i64>("select setting::int8 / 1000 from pg_catalog.pg_settings where name = 'idle_in_transaction_session_timeout'").persistent(false).fetch_one(p).await.ok(),
+                Pool::My(p) => sqlx::query_scalar::<_, i64>("select cast(@@session.wait_timeout as signed)").fetch_one(p).await.ok(),
+                _ => None,
+            }
+        };
+        let s = tokio::time::timeout(std::time::Duration::from_secs(3), read).await.ok().flatten()?;
+        u64::try_from(s).ok().filter(|s| *s > 0)
+    }
     /// Opens a temporary data source (`qurry-tui postgres://…`) for this process: it is never saved, so no other app (MCP included) sees it
     pub fn open_temporary(&self, t: crate::dsn::Temporary) -> ConnectionConfig {
         let mut config = t.config;
@@ -151,7 +203,7 @@ impl AppState {
     pub fn new(store: Store, secret_file: crate::secrets::SecretFile) -> Self {
         let history = crate::history::History::new(&store.dir());
         let audit = crate::audit::Audit::new(&store.dir());
-        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), connecting: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), lost_tx: Default::default(), running: Default::default(), tab_manual: Default::default(), more: Default::default(), runs: Default::default(), jobs: Default::default(), mcp: false, temporary: Default::default() }
+        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), connecting: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), lost_tx: Default::default(), running: Default::default(), tab_manual: Default::default(), more: Default::default(), runs: Default::default(), jobs: Default::default(), mcp: false, temporary: Default::default(), reminded: Default::default() }
     }
 }
 
@@ -213,6 +265,16 @@ pub fn is_conn_lost(e: &AppError) -> bool {
             ["connection reset", "connection refused", "connection closed", "broken pipe", "timed out", "unexpected end of file", "not connected"].iter().any(|k| m.contains(k))
         }
         _ => false,
+    }
+}
+
+/// The server ended the session because it sat idle in a transaction: PostgreSQL's idle_in_transaction_session_timeout (25P03),
+/// MySQL's wait_timeout (4031, 8.0.24 and later). Some(true) = MySQL. A statement sent then never ran (a COMMIT committed nothing)
+pub(crate) fn idle_ended(e: &AppError) -> Option<bool> {
+    match e {
+        AppError::Db(sqlx::Error::Database(d)) if d.code().as_deref() == Some("25P03") => Some(false),
+        _ if crate::mysql::error_number(e) == Some(4031) => Some(true),
+        _ => None,
     }
 }
 
@@ -286,6 +348,7 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, tx: Option<&str>
         }
     }
     crate::log!("[qurry] connection lost on {id}: {e}");
+    let idle = idle_ended(&e);
     // Which way it went: a connect's timeout says so itself (timeout_error)
     let cfg = state.source(id).ok();
     let through = cfg.as_ref().filter(|_| !timed_out(&e)).and_then(way);
@@ -300,9 +363,12 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, tx: Option<&str>
             w.map(|w| format!(" through {w}")).unwrap_or_default(),
         ),
     };
+    use qurry_shared::errors::{COMMIT_UNKNOWN_ERR, TX_ROLLED_BACK, idle_tx_ended};
     AppError::Msg(match tx {
-        Some(crate::audit::COMMIT_UNKNOWN) => format!("{e} — {}", qurry_shared::errors::COMMIT_UNKNOWN_ERR),
-        Some(_) => format!("{e} — connection lost{through}; the open transaction was rolled back by the server. Run it again to reconnect."),
+        // Before the COMMIT's own words: the server had ended the session before the COMMIT came, so nothing was committed
+        Some(_) if idle.is_some() => format!("{e} — {}", idle_tx_ended(idle == Some(true))),
+        Some(crate::audit::COMMIT_UNKNOWN) => format!("{e} — {COMMIT_UNKNOWN_ERR}"),
+        Some(_) => format!("{e} — connection lost{through}; {TX_ROLLED_BACK}. Run it again to reconnect."),
         None => format!("{e} — connection lost{through}. Run it again to reconnect."),
     })
 }
@@ -351,7 +417,7 @@ fn tx_lost_error(cfg: &ConnectionConfig, word: &str) -> String {
             way(cfg).map(|w| format!(" through {w}")).unwrap_or_default()
         ),
     };
-    format!("{what}. The transaction is lost (the server rolls it back), and nothing was sent. Run it again in a new session.")
+    format!("{what}. {}", qurry_shared::errors::TX_LOST_NOTHING_SENT)
 }
 
 /// The run, load-more, Commit or Roll back that had the tab's session while a disconnect closed it (LostTx::busy) ended: only now
@@ -707,9 +773,7 @@ fn way(cfg: &ConnectionConfig) -> Option<String> {
 fn lost_session_error(cfg: &ConnectionConfig, closed: bool) -> AppError {
     let w = way(cfg).unwrap_or_else(|| "the tunnel".into());
     let what = if closed { "nor did a new connection through the tunnel, so Qurry closed both (the next run opens a new tunnel)" } else { "so Qurry closed it" };
-    AppError::Msg(format!(
-        "The console's connection through {w} sat unused and didn't answer when Qurry checked it before this ran, {what}. The transaction open in it is lost (the server rolls it back), and nothing was sent. Run it again in a new session."
-    ))
+    AppError::Msg(format!("The console's connection through {w} sat unused and didn't answer when Qurry checked it before this ran, {what}. {}", qurry_shared::errors::TX_LOST_NOTHING_SENT))
 }
 
 /// A console's session through a tunnel didn't answer its check in time with a transaction open, while the tunnel carries a new
@@ -975,6 +1039,8 @@ async fn new_session(state: &AppState, id: &str, tab_id: &str, stale: Option<u64
     }
     // Opening one runs nothing of the user's: through a tunnel that stopped forwarding, it opens again on a new one
     let mut s = with_pool_after(state, id, stale, |p| async move { Session::open(&p).await }).await?;
+    // Production: a read in Manual mode doesn't open the transaction (Session::set_reads_outside_tx)
+    s.set_reads_outside_tx(state.source(id).is_ok_and(|c| c.options.confirm_changes));
     // If the tab is Manual, the new session is Manual too (silently becoming Auto after a reconnect would commit the next change right away)
     if state.tab_manual.lock().unwrap().get(tab_id).copied().unwrap_or(false) {
         s.set_manual(true).await?;
@@ -1554,6 +1620,13 @@ impl AppState {
 
     /// Tx: Auto / Manual
     pub async fn set_tx_mode(&self, id: String, tab_id: String, manual: bool) -> AppResult<()> {
+        // Manual is kept first: when the session can't be opened now (a Production console opened while its source doesn't
+        // answer), the one its next run opens starts in Manual too, as the tab shows, never in Auto committing at once. Not for a
+        // source whose sessions refuse Manual (Redis, driver plugins): every session the tab opens would refuse it again, and no
+        // statement would run
+        if manual && self.source(&id)?.supports_manual() {
+            self.tab_manual.lock().unwrap().insert(tab_id.clone(), true);
+        }
         let sess = ensure_session(self, &id, &tab_id).await?;
         let mut s = sess.lock().await;
         s.set_manual(manual).await?;
@@ -1704,9 +1777,9 @@ impl AppState {
             false => vec![],
         };
         let mut undos = Vec::new();
-        let r = self.run_batch(&id, cfg.kind, &statements, exact_one, prepared, watch, &mut undos).await;
+        let r = self.run_batch(&id, cfg.kind, &statements, exact_one, prepared, watch, None, &mut undos).await;
         let logged = match watch {
-            true => self.audit.after_batch(started, r.as_ref().err().map(|e| e.to_string()), exact_one, undos),
+            true => self.audit.after_batch(started, r.as_ref().err().map(|e| e.to_string()), exact_one, undos, None),
             false => Ok(()),
         };
         match r {
@@ -1716,9 +1789,60 @@ impl AppState {
         }
     }
 
-    /// undo = also keep undo SQL for each statement (into `undos`): the snapshots run in the batch's transaction, right before their statements
+    /// A result grid's edits, of a table tab and a console result alike: each UPDATE / DELETE must change exactly one row, or none
+    /// of them is saved. tab = the console the result is in: in Manual mode or with a transaction open, they run in its transaction
+    /// and stay pending until Commit / Roll back (#106; Session::submit); otherwise, and for a table tab, in a transaction of
+    /// their own (execute_batch). The read-only check and the Production log are the same either way
+    pub async fn submit_edits(&self, id: String, tab_id: Option<String>, statements: Vec<String>) -> AppResult<BatchResult> {
+        let manual = tab_id.as_ref().is_some_and(|t| self.tab_manual.lock().unwrap().get(t).copied().unwrap_or(false));
+        let tab = match tab_id {
+            Some(t) if manual || self.tx_state(t.clone()).await => t,
+            _ => return self.execute_batch(id, statements, true).await,
+        };
+        for st in &statements {
+            self.check_read_only(&id, st)?;
+        }
+        let cfg = self.source(&id)?;
+        let watch = cfg.options.confirm_changes;
+        let started = match watch {
+            true => self.audit.before_batch(&id, &cfg.name, cfg.kind, &statements)?,
+            false => vec![],
+        };
+        let mut undos = Vec::new();
+        let r = self.run_batch(&id, cfg.kind, &statements, true, false, watch, Some(&tab), &mut undos).await;
+        // In the transaction: the log has them as not committed yet, and logs its Commit / Roll back
+        let logged = match watch {
+            true => self.audit.after_batch(started, r.as_ref().err().map(|e| e.to_string()), true, undos, Some(&tab)),
+            false => Ok(()),
+        };
+        match r {
+            Err(e) => {
+                // The transaction may have ended with the failure: a lost connection, a deadlock (MySQL rolls the whole one back)
+                let open = self.tx_state(tab.clone()).await;
+                let ended = crate::audit::ended_by("", &e, open);
+                if let Some(w) = ended.filter(|_| watch)
+                    && let Err(le) = self.audit.tx_closed(&id, &cfg.name, &tab, w)
+                {
+                    crate::log!("[qurry] {le}");
+                }
+                if ended.is_some() && !is_conn_lost(&e) {
+                    return Err(AppError::Msg(format!("{e} — {} (the changes made in it before are gone too)", qurry_shared::errors::TX_ROLLED_BACK)));
+                }
+                Err(recover(self, &id, Some(&tab), ended, e).await)
+            }
+            Ok(rows) => Ok(BatchResult { rows, warning: logged.err().map(|e| e.to_string()) }),
+        }
+    }
+
+    /// undo = also keep undo SQL for each statement (into `undos`): the snapshots run in the batch's transaction, right before their
+    /// statements. tab = run them in that console's transaction (submit_edits)
     #[allow(clippy::too_many_arguments)]
-    async fn run_batch(&self, id: &str, kind: store::DbKind, statements: &[String], exact_one: bool, prepared: bool, undo: bool, undos: &mut Vec<Option<Result<String, String>>>) -> AppResult<u64> {
+    async fn run_batch(&self, id: &str, kind: store::DbKind, statements: &[String], exact_one: bool, prepared: bool, undo: bool, tab: Option<&str>, undos: &mut Vec<Option<Result<String, String>>>) -> AppResult<u64> {
+        // The session first: checking one that sat unused (tab_session) replaces a tunnel that stopped forwarding
+        let sess = match tab {
+            Some(t) => Some(ensure_session(self, id, t).await?),
+            None => None,
+        };
         let pool = checked_pool(self, id).await?;
         let mut plans = Vec::new();
         for st in statements {
@@ -1728,7 +1852,18 @@ impl AppState {
             });
         }
         let snaps: Vec<Option<&str>> = plans.iter().map(|p| p.as_ref().and_then(|p| p.as_ref().ok()).map(|p| p.snapshot.as_str())).collect();
-        let (n, mut shots) = dispatch!(pool, b => b.execute_batch(statements, exact_one, prepared, &snaps).await)?;
+        let (n, mut shots) = match (&sess, tab) {
+            (Some(sess), Some(t)) => {
+                let mut s = sess.lock().await;
+                let (r, shots) = s.submit(statements, &snaps).await;
+                // Its statements closed the result's cursor: there are no more rows to load
+                self.more.lock().unwrap().remove(t);
+                used_now(self, t).await;
+                settle_lost(self, t, s.in_tx());
+                (r?, shots)
+            }
+            _ => dispatch!(pool, b => b.execute_batch(statements, exact_one, prepared, &snaps).await)?,
+        };
         shots.resize_with(plans.len(), || None);
         *undos = plans
             .into_iter()
@@ -2028,6 +2163,17 @@ pub(crate) mod tests {
         assert!(start.elapsed() < std::time::Duration::from_secs(15), "{:?}", start.elapsed());
     }
 
+    /// A console set to Manual while its source can't be reached (a Production console opened then, #106): the session its next
+    /// run opens starts in Manual, never in Auto committing at once
+    #[tokio::test]
+    async fn manual_mode_is_kept_when_the_session_cant_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        st.store.save(&silent_source("x", 1, None)).unwrap();
+        assert!(st.set_tx_mode("x".into(), "t".into(), true).await.is_err());
+        assert_eq!(st.tab_manual.lock().unwrap().get("t"), Some(&true));
+    }
+
     /// A connect's timeout says which way it went: through the AWS SSM tunnel (instance), the SSH tunnel (server) or direct
     #[test]
     fn a_timeout_says_which_way_it_went() {
@@ -2047,7 +2193,7 @@ pub(crate) mod tests {
         for closed in [true, false] {
             let e = lost_session_error(&ssm, closed);
             let m = e.to_string();
-            assert!(m.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && m.contains("The transaction open in it is lost") && m.contains("nothing was sent"), "{m}");
+            assert!(m.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && m.contains("The transaction is lost") && m.contains("nothing was sent"), "{m}");
             assert_eq!(m.contains("closed both"), closed, "{m}");
             assert!(!is_conn_lost(&e), "{m}");
         }
@@ -2977,6 +3123,64 @@ pub(crate) mod tests {
             let next = st.fetch_more("t".into(), Some(500)).await.unwrap();
             assert_eq!(first(&next), Some(10501), "run first: {run_first}: the new result goes on with its own rows");
             assert_eq!(st.sessions.read().await.len(), 1);
+        }
+    }
+
+    /// A Production console's transaction left open and unused is reminded about once per stretch, with the server's limit for
+    /// it (#106); a source that isn't Production, a console without a transaction and one that ended it aren't
+    #[tokio::test]
+    #[ignore]
+    async fn idle_production_transaction_is_reminded_once() {
+        let Some(crate::testenv::Server { cfg, password }) = crate::testenv::pg() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut prod = ConnectionConfig { id: "p".into(), name: "prod".into(), ..cfg.clone() };
+        prod.options.confirm_changes = true;
+        prod.options.startup_script = "set idle_in_transaction_session_timeout = '10min'".into();
+        // The same with keep-alive, whose ping restarts the server's clock: the server doesn't end it then
+        let mut kept = ConnectionConfig { id: "k".into(), name: "kept".into(), ..prod.clone() };
+        kept.options.keep_alive_secs = Some(60);
+        st.save_connection(prod, password.clone(), None).await.unwrap();
+        st.save_connection(kept, password.clone(), None).await.unwrap();
+        st.save_connection(ConnectionConfig { id: "d".into(), name: "dev".into(), ..cfg }, password, None).await.unwrap();
+        let now = std::time::Duration::ZERO;
+        let change = "create temp table qurry_reminded (a int)";
+        // A read in a Production console's Manual mode opens no transaction: nothing to remind about
+        st.set_tx_mode("p".into(), "tx".into(), true).await.unwrap();
+        let r = st.run_query("p".into(), "select 1".into(), None, Some("tx".into())).await.unwrap();
+        assert!(!r.in_transaction && !st.tx_state("tx".into()).await);
+        assert!(st.tx_reminders_after(now).await.is_empty());
+        // A change opens it; a typed BEGIN in Auto with only a read in it, and keep-alive's source, too; a Dev source's isn't reminded
+        for (src, tab, sql) in [("p", "tx", change), ("d", "dev", change), ("k", "kept", change), ("p", "auto", "begin")] {
+            if tab != "auto" {
+                st.set_tx_mode(src.into(), tab.into(), true).await.unwrap();
+            }
+            st.run_query(src.into(), sql.into(), None, Some(tab.into())).await.unwrap();
+        }
+        st.run_query("p".into(), "select 1".into(), None, Some("auto".into())).await.unwrap();
+        let mut r = st.tx_reminders_after(now).await;
+        r.sort();
+        assert_eq!(r.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["auto", "kept", "tx"], "{r:?}");
+        let says = |tab: &str| r.iter().find(|(t, _)| t == tab).unwrap().1.clone();
+        let m = says("tx");
+        assert!(m.contains("\"prod\"") && m.contains("rows it changed stay locked") && m.contains("10 min idle (idle_in_transaction_session_timeout)"), "{m}");
+        let read = says("auto");
+        assert!(read.contains("nothing was changed") && !read.contains("rows it changed"), "{read}");
+        assert!(says("kept").contains("\"kept\"") && !says("kept").contains("The server ends it"), "{}", says("kept"));
+        assert!(st.tx_reminders_after(now).await.is_empty(), "once");
+        // A statement starts a new stretch; Roll back ends it
+        st.run_query("p".into(), "select 2".into(), None, Some("tx".into())).await.unwrap();
+        assert_eq!(st.tx_reminders_after(now).await.len(), 1);
+        st.rollback_tx("tx".into()).await.unwrap();
+        assert!(st.tx_reminders_after(now).await.is_empty());
+        // Not before the time is up
+        st.run_query("p".into(), change.into(), None, Some("tx".into())).await.unwrap();
+        assert!(st.tx_reminders().await.is_empty());
+        // A slow session marked to be checked again on its next use (tab_session) isn't one unused since 1970
+        *st.sessions.read().await.get("tx").unwrap().used.lock().unwrap() = std::time::SystemTime::UNIX_EPOCH;
+        assert!(st.tx_reminders_after(now).await.is_empty());
+        for t in ["tx", "dev", "kept", "auto"] {
+            st.close_session(t.into()).await.unwrap();
         }
     }
 }
