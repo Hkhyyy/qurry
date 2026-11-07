@@ -154,6 +154,81 @@ fn dash_comment(b: &[u8], i: usize, e: usize, kind: DbKind) -> bool {
     b[i] == b'-' && i + 1 < e && b[i + 1] == b'-' && (kind != DbKind::Mysql || i + 2 >= e || b[i + 2].is_ascii_whitespace() || b[i + 2].is_ascii_control())
 }
 
+/// Where the scan goes on when b[i] starts what isn't code — a comment, a string, a quoted name, a dollar quote — past its end
+/// (the text's end if unclosed). MySQL `/*!` · `/*M!` give the position after the marker: their inside is code. None: b[i] is code
+fn skip_non_code(text: &str, i: usize, kind: DbKind, opts: SplitOptions) -> Option<usize> {
+    let b = text.as_bytes();
+    let n = b.len();
+    let c = b[i];
+    let d = if i + 1 < n { b[i + 1] } else { 0 };
+    if dash_comment(b, i, n, kind) || (c == b'#' && hash_comment(kind, d)) {
+        return Some(text[i..].find('\n').map(|j| i + j + 1).unwrap_or(n));
+    }
+    if c == b'/' && d == b'*' {
+        // MySQL /*! … */ is executed code, not a comment: read its inside as normal
+        if kind == DbKind::Mysql && i + 2 < n && b[i + 2] == b'!' {
+            return Some(i + 3);
+        }
+        // MariaDB /*M! … */ is executed code too
+        if kind == DbKind::Mysql && i + 3 < n && b[i + 2] == b'M' && b[i + 3] == b'!' {
+            return Some(i + 4);
+        }
+        // PG comments nest
+        let (mut depth, mut j) = (1, i + 2);
+        while j < n && depth > 0 {
+            if b[j] == b'/' && j + 1 < n && b[j + 1] == b'*' && kind == DbKind::Postgres {
+                depth += 1;
+                j += 2;
+            } else if b[j] == b'*' && j + 1 < n && b[j + 1] == b'/' {
+                depth -= 1;
+                j += 2;
+            } else {
+                j += 1;
+            }
+        }
+        return Some(j);
+    }
+    if c == b'\'' || c == b'"' || c == b'`' {
+        // In PG E'…' strings \ is an escape
+        let e_string = e_strings(kind) && c == b'\'' && is_e_string(b, i);
+        let mut j = i + 1;
+        while j < n {
+            // \ inside MySQL backtick names is not an escape
+            if ((backslash_escapes(kind) && escapes_in(kind, c)) || e_string) && b[j] == b'\\' {
+                j += 2;
+                continue;
+            }
+            if b[j] == c {
+                if j + 1 < n && b[j + 1] == c {
+                    j += 2;
+                    continue;
+                }
+                break;
+            }
+            j += 1;
+        }
+        return Some((j + 1).min(n));
+    }
+    // [name] (]] is one ])
+    if c == b'[' && bracket_names(kind) {
+        let mut j = i + 1;
+        while j < n && !(b[j] == b']' && !(j + 1 < n && b[j + 1] == b']')) {
+            j += if b[j] == b']' { 2 } else { 1 };
+        }
+        return Some((j + 1).min(n));
+    }
+    if c == b'$' && dollar_quotes(kind) && (dollar_opens(b, i) || opts.dollar_after_name) {
+        let rest = &text[i..];
+        if let Some(te) = rest[1..].find('$').map(|j| j + 2) {
+            let tag = &rest[..te];
+            if is_dollar_tag(tag) {
+                return Some(text[i + te..].find(tag).map(|j| i + te + j + te).unwrap_or(n));
+            }
+        }
+    }
+    None
+}
+
 /// split_statements with the given editor rules
 pub fn split_statements_with(text: &str, kind: DbKind, opts: SplitOptions) -> Vec<(usize, usize)> {
     if kind == DbKind::Redis {
@@ -171,90 +246,14 @@ pub fn split_statements_with(text: &str, kind: DbKind, opts: SplitOptions) -> Ve
     if kind.is_vector() {
         return split_rest(text);
     }
-    let b = text.as_bytes();
-    let n = b.len();
-    let backslash = backslash_escapes(kind);
+    let n = text.len();
     let (mut out, mut start, mut i) = (Vec::new(), 0usize, 0usize);
     while i < n {
-        let c = b[i];
-        let d = if i + 1 < n { b[i + 1] } else { 0 };
-        if dash_comment(b, i, n, kind) {
-            i = text[i..].find('\n').map(|j| i + j + 1).unwrap_or(n);
-            continue;
-        }
-        if c == b'#' && hash_comment(kind, d) {
-            i = text[i..].find('\n').map(|j| i + j + 1).unwrap_or(n);
-            continue;
-        }
-        if c == b'/' && d == b'*' {
-            // MySQL /*! … */ is executed code, not a comment: read its inside as normal
-            if kind == DbKind::Mysql && i + 2 < n && b[i + 2] == b'!' {
-                i += 3;
-                continue;
-            }
-            // MariaDB /*M! … */ is executed code too
-            if kind == DbKind::Mysql && i + 3 < n && b[i + 2] == b'M' && b[i + 3] == b'!' {
-                i += 4;
-                continue;
-            }
-            // PG comments nest
-            let (mut depth, mut j) = (1, i + 2);
-            while j < n && depth > 0 {
-                if b[j] == b'/' && j + 1 < n && b[j + 1] == b'*' && kind == DbKind::Postgres {
-                    depth += 1;
-                    j += 2;
-                } else if b[j] == b'*' && j + 1 < n && b[j + 1] == b'/' {
-                    depth -= 1;
-                    j += 2;
-                } else {
-                    j += 1;
-                }
-            }
+        if let Some(j) = skip_non_code(text, i, kind, opts) {
             i = j;
             continue;
         }
-        if c == b'\'' || c == b'"' || c == b'`' {
-            // In PG E'…' strings \ is an escape
-            let e_string = e_strings(kind) && c == b'\'' && is_e_string(b, i);
-            let mut j = i + 1;
-            while j < n {
-                // \ inside MySQL backtick names is not an escape
-                if ((backslash && escapes_in(kind, c)) || e_string) && b[j] == b'\\' {
-                    j += 2;
-                    continue;
-                }
-                if b[j] == c {
-                    if j + 1 < n && b[j + 1] == c {
-                        j += 2;
-                        continue;
-                    }
-                    break;
-                }
-                j += 1;
-            }
-            i = (j + 1).min(n);
-            continue;
-        }
-        // [name] (]] is one ])
-        if c == b'[' && bracket_names(kind) {
-            let mut j = i + 1;
-            while j < n && !(b[j] == b']' && !(j + 1 < n && b[j + 1] == b']')) {
-                j += if b[j] == b']' { 2 } else { 1 };
-            }
-            i = (j + 1).min(n);
-            continue;
-        }
-        if c == b'$' && dollar_quotes(kind) && (dollar_opens(b, i) || opts.dollar_after_name) {
-            let rest = &text[i..];
-            let tag_end = rest[1..].find('$').map(|j| j + 2);
-            if let Some(te) = tag_end {
-                let tag = &rest[..te];
-                if is_dollar_tag(tag) {
-                    i = text[i + te..].find(tag).map(|j| i + te + j + te).unwrap_or(n);
-                    continue;
-                }
-            }
-        }
+        let c = text.as_bytes()[i];
         if c == b';' {
             out.push((start, i));
             start = i + 1;
@@ -474,9 +473,95 @@ fn statement_span(text: &str, offset: usize, kind: DbKind) -> Option<(usize, usi
     segs.iter().find(|(s, e)| offset >= *s && offset <= e + 1).or_else(|| segs.iter().rev().find(|(_, e)| *e < offset)).or(segs.first()).copied()
 }
 
+/// Words a parenthesised query starts with (after any further `(`): what the Execute chooser offers to run on its own
+const QUERY_HEADS: &[&str] = &["SELECT", "WITH", "VALUES", "TABLE"];
+
+/// The parenthesised queries in [start, end) of `text` that enclose the caret (`offset`, bytes), innermost first, as trimmed byte
+/// ranges of their inside: `(select …)` subqueries, CTE bodies, `IN (select …)`. Parentheses that hold no query (`IN (1, 2)`,
+/// `count(*)`) and those in strings or comments are not offered. Like DataGrip's Execute chooser, after the whole statement
+pub fn enclosing_subqueries(text: &str, start: usize, end: usize, offset: usize, kind: DbKind) -> Vec<(usize, usize)> {
+    if kind == DbKind::Redis || kind.is_vector() {
+        return vec![];
+    }
+    let b = text.as_bytes();
+    let (mut open, mut out, mut i) = (Vec::new(), Vec::new(), start);
+    while i < end {
+        if let Some(j) = skip_non_code(text, i, kind, SplitOptions::default()) {
+            i = j;
+            continue;
+        }
+        match b[i] {
+            b'(' => open.push(i),
+            b')' => {
+                if let Some(o) = open.pop()
+                    && o < offset
+                    && offset <= i
+                {
+                    let (s, e) = trimmed(text, o + 1, i);
+                    let head: String = text[s..e].trim_start_matches(|c: char| c == '(' || c.is_whitespace()).chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+                    // `((select 1))` runs the same as the inner one: offered once
+                    let same = e - s >= 2 && out.last() == Some(&trimmed(text, s + 1, e - 1));
+                    if QUERY_HEADS.contains(&head.to_ascii_uppercase().as_str()) && !same {
+                        out.push((s, e));
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    // Closed in order: inner ones close first
+    out
+}
+
+/// [s, e) without the whitespace at its ends
+fn trimmed(text: &str, s: usize, e: usize) -> (usize, usize) {
+    let raw = &text[s..e];
+    (s + (raw.len() - raw.trim_start().len()), s + raw.trim_end().len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subqueries_around_the_caret() {
+        let subs = |t: &str, at: &str, kind| {
+            let off = t.find(at).unwrap();
+            enclosing_subqueries(t, 0, t.len(), off, kind).into_iter().map(|(a, b)| t[a..b].to_string()).collect::<Vec<_>>()
+        };
+        let pg = DbKind::Postgres;
+        // Nested: innermost first
+        let t = "select * from a where id in (select a_id from b where x = (select max(x) from c))";
+        assert_eq!(subs(t, "max", pg), ["select max(x) from c", "select a_id from b where x = (select max(x) from c)"]);
+        assert_eq!(subs(t, "a_id", pg), ["select a_id from b where x = (select max(x) from c)"]);
+        assert!(subs(t, "from a", pg).is_empty());
+        // A list or a call is not a query (unless it holds one)
+        assert!(subs("select * from a where id in (1, 2, 3)", "2", pg).is_empty());
+        assert!(subs("select count(*) from a", "*", pg).is_empty());
+        assert_eq!(subs("select * from a where id in ((select 1))", "1", pg), ["select 1"]);
+        // CTE bodies
+        let t = "with x as (\n  select 1 as n\n), y as (values (2)) select * from x, y";
+        assert_eq!(subs(t, "as n", pg), ["select 1 as n"]);
+        assert_eq!(subs(t, "(2)", pg), ["values (2)"]);
+        // Parentheses in strings and comments are not counted
+        let t = "select * from (select ')' as p, 1 /* ( */ -- (\n from t) s";
+        assert_eq!(subs(t, "as p", pg), ["select ')' as p, 1 /* ( */ -- (\n from t"]);
+        assert_eq!(subs("select '(select 1)'", "1", pg), Vec::<String>::new());
+        assert_eq!(subs("select $$(select 1)$$", "1", pg), Vec::<String>::new());
+        // MySQL: # comments, backslash escapes
+        assert_eq!(subs("select * from (select 'a\\')' x # )\n from t) s", "x #", DbKind::Mysql), ["select 'a\\')' x # )\n from t"]);
+        // Caret right after `(` or right before `)` is inside
+        let t = "select (select 1)";
+        assert_eq!(enclosing_subqueries(t, 0, t.len(), t.find('(').unwrap() + 1, pg).len(), 1);
+        assert_eq!(enclosing_subqueries(t, 0, t.len(), t.len() - 1, pg).len(), 1);
+        assert!(enclosing_subqueries(t, 0, t.len(), t.len(), pg).is_empty());
+        // Only within the statement's range
+        let t = "select 1; select (select 2)";
+        assert!(enclosing_subqueries(t, 0, 8, t.find('2').unwrap(), pg).is_empty());
+        assert!(subs("GET (select 1)", "1", DbKind::Redis).is_empty());
+    }
+
     #[test]
     fn split_and_quote() {
         let t = "select ';' as a; -- x;\nselect $$a;b$$; select \"x;y\"";

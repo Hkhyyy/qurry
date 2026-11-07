@@ -130,6 +130,37 @@ pub fn edit_not_table(table: &str, what: &str) -> String {
     format!("Read-only: {table} is a {what}, not a table.")
 }
 
+/// A server error with the spot in the statement it points at (PostgreSQL's 1-based character position), as the core words it:
+/// the console finds it again with [`error_position`] to mark that spot
+pub fn with_position(msg: &str, pos: usize) -> String {
+    format!("{msg} (position {pos})")
+}
+
+/// Where a failed statement's error points, as a byte offset into `sql` (the text that was sent): PostgreSQL's position
+/// ([`with_position`]), MySQL's "near '…' at line N" (where the quoted rest of the statement starts on that line; its end for
+/// `near ''`). None when the error doesn't say (the console then marks the whole statement)
+pub fn error_position(msg: &str, sql: &str) -> Option<usize> {
+    let msg = msg.trim_end();
+    if let Some(rest) = msg.strip_suffix(')')
+        && let Some(i) = rest.rfind(" (position ")
+        && let Ok(n) = rest[i + 11..].parse::<usize>()
+    {
+        return sql.char_indices().map(|(b, _)| b).chain([sql.len()]).nth(n.checked_sub(1)?);
+    }
+    let at = msg.rfind("' at line ")?;
+    let line: usize = msg[at + 10..].parse().ok()?;
+    let near = &msg[msg[..at].rfind(" near '")? + 7..at];
+    let start = sql.split_inclusive('\n').take(line.checked_sub(1)?).map(str::len).sum::<usize>();
+    if start > sql.len() {
+        return None;
+    }
+    if near.is_empty() {
+        return Some(sql.trim_end().len());
+    }
+    let head = near.lines().next().unwrap_or(near);
+    Some(sql[start..].find(head).map_or(start, |j| start + j))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +171,25 @@ mod tests {
         for t in [CONSOLE_READ_ONLY, CONSOLE_IN_TX] {
             assert!(gui.contains(&format!("\"{t}\"")), "ResultGrid.tsx lacks: {t}");
         }
+    }
+
+    #[test]
+    fn error_position_finds_the_spot() {
+        // PostgreSQL: characters, 1-based (a multi-byte one before it counts once)
+        let sql = "select '한' fro t";
+        assert_eq!(error_position(&with_position("syntax error at or near \"t\"", 16), sql), Some(sql.find(" t").unwrap() + 1));
+        assert_eq!(error_position(&with_position("x", 1), sql), Some(0));
+        assert_eq!(error_position(&with_position("x", 99), sql), None);
+        // MySQL: the line, then the quoted rest of the statement on it
+        let sql = "select a,\n  b fro t\nwhere x";
+        let my = |near: &str, line| format!("1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '{near}' at line {line}");
+        assert_eq!(error_position(&my("fro t\nwhere x", 2), sql), Some(sql.find("fro").unwrap()));
+        // The same text earlier in the statement is not the spot
+        assert_eq!(error_position(&my("x", 3), "select x\nfrom t\nwhere x"), Some("select x\nfrom t\nwhere ".len()));
+        assert_eq!(error_position(&my("", 1), "select 1 +  "), Some("select 1 +".len()));
+        // Errors that don't say
+        assert_eq!(error_position("ERROR: relation \"t\" does not exist", "select * from t"), None);
+        assert_eq!(error_position("Unknown column 'x' in 'field list'", "select x"), None);
     }
 
     #[test]

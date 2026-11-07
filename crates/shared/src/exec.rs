@@ -209,8 +209,12 @@ pub fn plan_in(text: &str, offset: usize, segs: &[(usize, usize)], kind: DbKind,
         Inside::Whole => Plan::Run(all),
         Inside::FromCaret => Plan::Run(all[idx..].to_vec()),
         Inside::Ask => {
-            let label: String = all[idx].sql.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
-            let mut opts = vec![(label, vec![all[idx].clone()])];
+            let label = |sql: &str| -> String { sql.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect() };
+            let mut opts = vec![(label(&all[idx].sql), vec![all[idx].clone()])];
+            // The subqueries around the caret, innermost first (DataGrip): each runs exactly as highlighted
+            for (start, end) in sql::enclosing_subqueries(text, all[idx].start, all[idx].end, offset, kind) {
+                opts.push((label(&text[start..end]), vec![Stmt { start, end, sql: text[start..end].to_string() }]));
+            }
             if let Some((b, e)) = tx_around(&all, idx).filter(|(b, e)| e - b + 1 < all.len()) {
                 let w = |x: &Stmt| first_word(&x.sql).to_uppercase();
                 opts.push((format!("Transaction ({} … {}, {} statements)", w(&all[b]), w(&all[e]), e - b + 1), all[b..=e].to_vec()));
@@ -362,6 +366,27 @@ mod tests {
         assert_eq!(texts(&opts[1].1), ["BEGIN", "GRANT a TO x", "GRANT b TO x", "COMMIT"]);
         let Plan::Ask(opts) = plan(sql, sql.find("SELECT 1").unwrap() + 1, DbKind::Postgres, ExecSettings::default()) else { panic!("should ask") };
         assert_eq!(opts.iter().map(|o| o.0.as_str()).collect::<Vec<_>>(), ["SELECT 1", "All statements (5)"]);
+    }
+
+    /// Inside a subquery the chooser offers it after the whole statement, innermost first, before the other choices; each runs
+    /// exactly its own text (its range is where that text is). A single statement asks too, as DataGrip does
+    #[test]
+    fn offers_subqueries_around_caret() {
+        let sql = "select 1;\nselect * from a\nwhere id in (\n  select a_id from b where n > (select avg(n) from b)\n);";
+        let Plan::Ask(opts) = plan(sql, sql.find("avg").unwrap(), DbKind::Postgres, ExecSettings::default()) else { panic!("should ask") };
+        let labels: Vec<_> = opts.iter().map(|o| o.0.as_str()).collect();
+        assert_eq!(labels[1..], ["select avg(n) from b", "select a_id from b where n > (select avg(n) from b)", "All statements (2)"]);
+        assert_eq!(texts(&opts[0].1), ["select * from a\nwhere id in (\n  select a_id from b where n > (select avg(n) from b)\n)"]);
+        for (_, v) in &opts[1..3] {
+            assert_eq!(&sql[v[0].start..v[0].end], v[0].sql);
+        }
+        let one = "select * from a where id in (select a_id from b)";
+        let Plan::Ask(opts) = plan(one, one.find("a_id").unwrap(), DbKind::Postgres, ExecSettings::default()) else { panic!("should ask") };
+        assert_eq!(opts.iter().map(|o| o.0.as_str()).collect::<Vec<_>>(), [one, "select a_id from b"]);
+        // Outside the parentheses, or another setting: as before
+        assert_eq!(sqls(plan(one, 3, DbKind::Postgres, ExecSettings::default())), run(&[one]));
+        let smallest = ExecSettings { inside: Inside::Smallest, ..Default::default() };
+        assert_eq!(sqls(plan(one, one.find("a_id").unwrap(), DbKind::Postgres, smallest)), run(&[one]));
     }
 
     /// Each statement's range is where its text is (the GUI highlights the range), title lines and blanks outside it
