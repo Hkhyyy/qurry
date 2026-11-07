@@ -106,6 +106,8 @@ const saveThemeSettings = (s: unknown) => localStorage.setItem("mock-themeSettin
 const checkTheme = (t: any) => {
   shared().parseThemeFile(shared().themeFileText({ ...t, id: "" }));
 };
+/** settings.json "keywordCase" (kept across a reload, as the file is) */
+let keywordCase = localStorage.getItem("mock-keywordCase") ?? "off";
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
 let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
 /** settings.json "columnWidths": table (source · database · schema · table) → its set widths (kept across a reload, as the file is;
@@ -723,6 +725,12 @@ const handlers: Record<string, (a: any) => unknown> = {
     checkTheme(a.theme);
     (window as any).__mockThemeExported = shared().themeFileText(a.theme);
     return `/Users/me/Downloads/${a.theme.name}.qurry-theme.json`;
+  },
+  keyword_case: () => keywordCase,
+  set_keyword_case: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    keywordCase = a.case;
+    localStorage.setItem("mock-keywordCase", a.case);
   },
   grid_align: () => gridAlign,
   set_grid_align: (a: any) => {

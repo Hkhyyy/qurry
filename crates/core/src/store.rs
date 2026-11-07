@@ -781,6 +781,15 @@ impl Store {
         self.set_setting("updateChannel", serde_json::to_value(channel)?)
     }
 
+    /// Keyword case as you type and in Reformat Code, for the GUI console and the TUI editor (Off unless picked; an unknown value is Off too)
+    pub fn keyword_case(&self) -> crate::format::KeywordCase {
+        self.settings().remove("keywordCase").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+    }
+
+    pub fn set_keyword_case(&self, case: crate::format::KeywordCase) -> AppResult<()> {
+        self.set_setting("keywordCase", serde_json::to_value(case)?)
+    }
+
     /// Grid alignment per value class: only the classes the user changed (GUI Settings › Appearance › Alignment; the TUI reads it)
     pub fn grid_align(&self) -> crate::format::Alignments {
         self.settings().get("gridAlign").map(crate::format::alignments).unwrap_or_default()
@@ -1023,6 +1032,27 @@ mod tests {
         assert!(store.read_theme_file(&file).unwrap_err().to_string().contains("at most 16 KB"));
         fs::write(&file, r##"{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"bg": "#12"}}"##).unwrap();
         assert!(store.read_theme_file(&file).unwrap_err().to_string().contains("#rrggbb"));
+    }
+
+    /// Keyword case: Off until picked, saved as "keywordCase" next to the other settings, read back by another app (GUI ↔ TUI);
+    /// a value this version doesn't know is Off
+    #[test]
+    fn keyword_case_setting() {
+        use crate::format::KeywordCase;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        assert_eq!(store.keyword_case(), KeywordCase::Off);
+        store.set_update_channel(crate::update::Channel::Beta).unwrap();
+        store.set_keyword_case(KeywordCase::Lower).unwrap();
+        let other = Store::new(dir.path().join("cfg"));
+        assert_eq!(other.keyword_case(), KeywordCase::Lower);
+        assert_eq!(other.update_channel(), crate::update::Channel::Beta);
+        other.set_keyword_case(KeywordCase::Upper).unwrap();
+        assert_eq!(store.keyword_case(), KeywordCase::Upper);
+        let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(dir.path().join("cfg/settings.json")).unwrap()).unwrap();
+        assert_eq!(saved["keywordCase"], "upper");
+        fs::write(dir.path().join("cfg/settings.json"), r#"{"keywordCase": "title"}"#).unwrap();
+        assert_eq!(store.keyword_case(), KeywordCase::Off);
     }
 
     /// Grid alignment: defaults until a class is changed, other settings kept, a value this version doesn't know skipped; a change

@@ -135,6 +135,8 @@ export type Align = "left" | "right" | "center" | "column";
 export type CellAlign = Exclude<Align, "column">;
 /** qurry_shared::format::Alignments: only the classes the user changed */
 export type Alignments = Partial<Record<ValueClass, Align>>;
+/** qurry_shared::format::KeywordCase: SQL keywords' letter case as you type and in Reformat Code (off: typing left alone, Reformat Code upper case) */
+export type KeywordCase = "off" | "upper" | "lower";
 
 /** qurry_shared::keytree::Options */
 export interface KeyTreeOptions {
@@ -215,6 +217,11 @@ const api = {
   planExecution: (text: string, offset: number, segs: Segment[], kind: DbKind, settings: ExecSettings): ExecPlan | undefined => wasm.planExecution(text, offset, segs, kind, settings),
   planSelection: (sel: string, segs: Segment[], settings: ExecSettings): Stmt[] => wasm.planSelection(sel, segs, settings),
   statementAt: (text: string, offset: number, kind: DbKind): string | undefined => wasm.statementAt(text, offset, kind),
+  /** Reformat Code: the selection (selStart < selEnd) or the statement at the caret; text[start, end) becomes `text`, undefined when nothing changes */
+  reformat: (text: string, selStart: number, selEnd: number, caret: number, kind: DbKind, keywordCase: KeywordCase): { start: number; end: number; text: string } | undefined =>
+    wasm.reformat(text, selStart, selEnd, caret, kind, keywordCase),
+  /** Keyword case as you type: the keyword the character typed at `end` ends, re-cased (text[start, end) becomes `text`), or undefined */
+  keywordCaseAt: (text: string, end: number, kind: DbKind, keywordCase: KeywordCase): { start: number; text: string } | undefined => wasm.keywordCaseAt(text, end, kind, keywordCase),
   completionIndex: (tables: CompletionTable[]): Completion => {
     let idx: wasm.CompletionIndex | undefined = new wasm.CompletionIndex(JSON.stringify(tables));
     // A request can still hold this index after free() (it awaited the backend for hints)

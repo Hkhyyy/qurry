@@ -404,6 +404,7 @@ mod tests {
             ("split.down", "SplitDown"),
             ("unsplit", "Unsplit"),
             ("editor.explain", "Explain"),
+            ("editor.reformat", "Reformat"),
             ("editor.explainAnalyze", "ExplainAnalyze"),
             ("tx.commit", "Commit"),
             ("tx.rollback", "Rollback"),

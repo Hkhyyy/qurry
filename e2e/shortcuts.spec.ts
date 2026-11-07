@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { Locator, Page } from "@playwright/test";
-import { dialog, editor, expect, menuItem, openApp, openConsole, resultTabs, spyCancels, status, tabStrips, test, treeItem, typeSql, work } from "./app";
+import { dialog, editor, editorText, expect, menuItem, openApp, openConsole, resultTabs, spyCancels, status, tabStrips, test, treeItem, typeSql, work } from "./app";
 
 // Every default GUI shortcut of the command table (crates/shared/src/keymap-table.json), pressed in its scope in the running app with
 // its effect checked, so a handler of its own (useGlobalShortcuts, a Monaco action, a tree / grid / console menu entry by id) that
@@ -33,17 +33,6 @@ const popoverTitle = (page: Page) => page.locator(".ui-popover-title");
 const seTab = (page: Page) => page.locator(".search-everywhere [role=tab][aria-selected=true]");
 const selectedTab = (page: Page) => page.locator(".editor-group [role=tab].tab[aria-selected=true]");
 const focusedTabs = (page: Page) => page.locator(".editor-group.focused [role=tab] .tab-label");
-/** The console's text: its rendered lines in order (Monaco keeps them in any DOM order; WebKit's innerText drops the breaks) */
-const editorText = (page: Page) =>
-  editor(page)
-    .locator(".view-line")
-    .evaluateAll((els) =>
-      els
-        .map((e) => [parseFloat((e as HTMLElement).style.top), e.textContent ?? ""] as const)
-        .sort((x, y) => x[0] - y[0])
-        .map(([, t]) => t.replace(/ /g, " "))
-        .join("\n"),
-    );
 const users = (page: Page) => treeItem(page, "users").first();
 const conn = (page: Page) => treeItem(page, "[DEV] shop_app 3");
 async function twoTabs(page: Page) {

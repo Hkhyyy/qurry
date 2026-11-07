@@ -254,6 +254,7 @@ impl App {
                 }
             }
             PAction::Channel(c) => self.set_update_channel(c),
+            PAction::KeywordCase(c) => self.set_keyword_case(c),
             PAction::AlignClass(c) => self.palette_align_of(c),
             PAction::Align(c, a) => {
                 self.set_grid_align(c, a);
@@ -381,6 +382,26 @@ impl App {
             }
             Err(e) => format!("Couldn't save the update channel: {e}"),
         };
+    }
+
+    /// ⌃K › Keyword Case…: Off, UPPER or lower for SQL keywords as you type and in Reformat Code (the GUI's Settings › Appearance ›
+    /// Keyword case, shared through settings.json). Reads the file again, so a pick made in the GUI since the TUI started shows here
+    pub fn palette_keyword_case(&mut self) {
+        use qurry_core::format::KeywordCase;
+        self.keyword_case = self.state.store.keyword_case();
+        let on = self.keyword_case;
+        let reformat = self.keys.label(Action::Reformat);
+        let hint = |c| match c {
+            KeywordCase::Off => format!("typing left as it is; Reformat Code ({reformat}) writes UPPER (default)"),
+            _ => "as you type and in Reformat Code".to_string(),
+        };
+        let items = KeywordCase::ALL
+            .iter()
+            .map(|&c| PItem { label: format!("{} {}", if c == on { "●" } else { " " }, super::reformat::keyword_case_name(c)), hint: hint(c), action: PAction::KeywordCase(c) })
+            .collect();
+        // Opens on the saved case, so Enter keeps it
+        let sel = KeywordCase::ALL.iter().position(|&c| c == on).unwrap_or(0);
+        self.popup = Some(Popup::Palette(Palette { title: "Keyword Case".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
     /// ⌃K › Grid Alignment…: one row per value class with where it sits (the GUI's Settings › Appearance › Alignment, shared through

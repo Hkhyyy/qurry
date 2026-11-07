@@ -615,6 +615,7 @@ export function useEditorGroups({
                   database={tabDatabase(t, conns.find((x) => x.id === t.connId))}
                   initialSql={t.sql}
                   language={dialectOf(conns.find((x) => x.id === t.connId)?.kind).monaco}
+                  kind={dialectOf(conns.find((x) => x.id === t.connId)?.kind).quoting}
                   readOnly
                   onChange={() => {}}
                   onRun={() => {}}

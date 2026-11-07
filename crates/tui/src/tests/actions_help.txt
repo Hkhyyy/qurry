@@ -40,6 +40,7 @@ Commands (change them with F1)
   ⌥Enter                         Quick Fixes (an underlined unknown name's closest names; elsewhere Execute)
   ⌥e                             Explain Plan
   ⌃Space                         Code Completion
+  ⌥⇧F                            Reformat Code (the selection or the statement at the cursor)
   ⌃c                             Cancel Running Statement
   ⌥t                             Toggle Transaction Mode (Auto/Manual)
   ⌥c                             Commit

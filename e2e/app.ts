@@ -57,6 +57,18 @@ export async function openConsole(page: Page, conn = "[DEV] shop_app") {
 /** The visible console editor */
 export const editor = (page: Page) => page.locator(".work-layer:visible .monaco-editor").first();
 
+/** The console's text: its rendered lines in order (Monaco keeps them in any DOM order; WebKit's innerText drops the breaks) */
+export const editorText = (page: Page) =>
+  editor(page)
+    .locator(".view-line")
+    .evaluateAll((els) =>
+      els
+        .map((e) => [parseFloat((e as HTMLElement).style.top), e.textContent ?? ""] as const)
+        .sort((x, y) => x[0] - y[0])
+        .map(([, t]) => t.replace(/\u00a0/g, " "))
+        .join("\n"),
+    );
+
 /** Replace the console text (typed, so completion and auto-closing quotes behave as for a user) */
 export async function typeSql(page: Page, sql: string) {
   await page.keyboard.press("Meta+A");

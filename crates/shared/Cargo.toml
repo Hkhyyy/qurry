@@ -16,3 +16,5 @@ regex = { version = "1", default-features = false, features = ["std", "unicode-p
 unicode-width = "0.2"
 # reads MongoDB shell arguments the way the driver does (guard)
 json5 = "1"
+# Reformat Code (GUI ⌘⌥l, TUI): a Rust port of the sql-formatter the GUI used before (format::reformat)
+sqlformat = "0.5"
