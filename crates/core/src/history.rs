@@ -35,6 +35,8 @@ pub fn redact(sql: &str) -> String {
             (r#"(?i)(\bpassword\s*(?:=\s*)?)('(?:[^']|'')*'|"[^"]*")"#, "${1}'***'"),
             (r#"(?i)(\bidentified\s+(?:with\s+\S+\s+)?by\s+)('(?:[^'\\]|\\.|'')*'|"[^"]*")"#, "${1}'***'"),
             (r"(?im)^(\s*auth\s+)(?:\S+\s+)?\S+\s*$", "${1}***"),
+            // Redis HELLO protover AUTH username password
+            (r"(?im)^(\s*hello\b.*?\bauth\s+)\S+\s+\S+", "${1}***"),
             (r"(?i)(\b(?:requirepass|masterauth)\s+)\S+", "${1}***"),
         ]
         .into_iter()
@@ -225,6 +227,12 @@ mod tests {
         assert_eq!(redact("alter role a with password = 'x'"), "alter role a with password = '***'");
         assert_eq!(redact("CREATE USER 'a'@'%' IDENTIFIED BY 'p@ss'"), "CREATE USER 'a'@'%' IDENTIFIED BY '***'");
         assert_eq!(redact("AUTH default s3cret"), "AUTH ***");
+        // The Redis Terminal's history (per data source, ↑↓) goes through the same rules
+        assert_eq!(redact("auth s3cret"), "auth ***");
+        assert_eq!(redact("HELLO 3 AUTH default s3cret SETNAME me"), "HELLO 3 AUTH *** SETNAME me");
+        assert_eq!(redact("CONFIG SET requirepass s3cret"), "CONFIG SET requirepass ***");
+        assert_eq!(redact("config set masterauth s3cret"), "config set masterauth ***");
+        assert_eq!(redact("HGET auth field"), "HGET auth field");
         assert_eq!(redact("select 1"), "select 1");
     }
 

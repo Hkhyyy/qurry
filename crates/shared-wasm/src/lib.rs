@@ -520,6 +520,25 @@ pub fn key_tree(keys: JsValue, opts: JsValue) -> Result<JsValue, JsError> {
     Ok(serde_wasm_bindgen::to_value(&qurry_shared::keytree::key_tree(&keys, serde_wasm_bindgen::from_value(opts)?))?)
 }
 
+/// Redis Terminal: for the text before the caret, the commands the word can become (with arguments, summary, read/write), whether
+/// it is a key name (completed from a bounded SCAN) and the arguments still to type (qurry_shared::redis_cmd::assist)
+#[wasm_bindgen(js_name = redisAssist)]
+pub fn redis_assist(before: &str) -> Result<JsValue, JsError> {
+    to(&qurry_shared::redis_cmd::assist(before))
+}
+
+/// Redis Terminal: what `HELP <command>` prints (from the bundled command table), or undefined when the line isn't a HELP
+#[wasm_bindgen(js_name = redisHelp)]
+pub fn redis_help(line: &str) -> Option<String> {
+    qurry_shared::redis_cmd::help(line)
+}
+
+/// Redis Terminal: how to show the line's reply ("pairs", "scored", "members", "list" or "plain")
+#[wasm_bindgen(js_name = redisReplyShape)]
+pub fn redis_reply_shape(line: &str) -> Result<JsValue, JsError> {
+    to(&qurry_shared::redis_cmd::reply_shape(line))
+}
+
 /// Table column for each file column ("" = skip); `table` null is a new table (the file's names)
 #[wasm_bindgen(js_name = autoMap)]
 pub fn auto_map(file: JsValue, table: JsValue) -> Result<JsValue, JsError> {
