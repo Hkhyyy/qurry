@@ -379,7 +379,8 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .console-toolbar .cb-ds { color: var(--muted); font-size: 12px; margin-right: 4px; }
 .console-toolbar .cb-sel { height: 22px; padding: 0 6px; font-size: 12px; max-width: 200px; margin-left: 4px; text-overflow: ellipsis; }
 .editor-area { position: relative; }
-.stmt-chooser { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 30; min-width: 420px; max-width: 80%; background: var(--c-2b2d30); border: 1px solid var(--c-4e5157); border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,.5); padding: 4px; outline: none; }
+/* At the bottom (as the TUI's): the text an option runs, highlighted in the editor, is usually near the top and stays in view */
+.stmt-chooser { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: 30; min-width: 420px; max-width: 80%; background: var(--c-2b2d30); border: 1px solid var(--c-4e5157); border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,.5); padding: 4px; outline: none; }
 .sc-title { padding: 4px 10px 6px; color: var(--muted); font-size: 12px; }
 .sc-item { padding: 4px 10px; border-radius: 4px; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
 .sc-item.on { background: var(--accent); color: var(--c-fff); }

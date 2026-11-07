@@ -376,7 +376,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.key("F5");
     h.key("Down");
     h.key("Down");
-    scenes.push(app_scene(h, "Console: Execute chooser", "F5 inside one of several statements asks what to run; the editor highlights the rows the selected option runs (↑↓ · Enter · Esc closes without running)", 120, 22));
+    scenes.push(app_scene(h, "Console: Execute chooser", "F5 inside one of several statements asks what to run; the editor highlights the text the selected option runs (↑↓ · Enter · Esc closes without running)", 120, 22));
     h.key("Esc");
     h.app.close_tab_now(h.app.active);
     // Completion from the shared engine: FK joins, the signature hint line, unknown names underlined with their fixes (⌥↩)
@@ -408,6 +408,30 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     // Quotes and brackets: typed pairs close themselves; one left open is marked with its line number, the border says what
     h.console_with("select user_id, count(*\n  from payment\n where card_brand in ('VISA', 'MASTER')\n group by 1;", 0, 23);
     scenes.push(app_scene(h, "Console: unclosed bracket", "' \" ( [ close themselves as you type (a closing one types over, ⌫ in an empty pair removes both, around a selection they wrap it); one left open is underlined in red with its line number, and on its line the bottom border says what is open", 120, 22));
+    h.app.close_tab_now(h.app.active);
+    // F5 inside a subquery: offered after the whole statement, innermost first; the editor highlights exactly its text
+    h.console_with("select 1;\nselect * from orders\nwhere user_id in (select id from users where n > (select avg(n) from users));", 2, 58);
+    h.key("F5");
+    h.key("Down");
+    scenes.push(app_scene(h, "Console: run a subquery", "F5 inside a subquery offers it after the whole statement, innermost first (DataGrip); the editor highlights exactly what it runs", 120, 22));
+    h.key("Esc");
+    h.app.close_tab_now(h.app.active);
+    // A failed run's error underlined where the server points (the status line says where; an edit or the next run clears it)
+    let id = h.console_with("select 1;\nselect id, n\n  from no_such_table\n where n > 1;", 2, 0);
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        use crate::app::MarkState;
+        let lines = c.editor.lines().to_vec();
+        c.marks.start(&lines, &[(0, 0), (1, 3)]);
+        c.marks.set(&lines, 0, MarkState::Ok);
+        c.marks.set(&lines, 1, MarkState::Err);
+        c.run_error = Some(crate::app::RunError { span: ((2, 7), (2, 20)), lines });
+        for (e, l) in [(false, "> select 1"), (false, "1 row(s) retrieved in 3 ms"), (false, "> select id, n from no_such_table where n > 1"), (true, "ERROR: relation \"no_such_table\" does not exist (position 21)")] {
+            c.log(e, l.into());
+        }
+    }
+    h.app.status = "Error at line 3, col 8: ERROR: relation \"no_such_table\" does not exist — fix it and run again".into();
+    scenes.push(app_scene(h, "Console: run error", "A failed statement's error is underlined where the server points (else the whole statement); the status line says where, Output keeps it, an edit or the next run clears it", 120, 22));
+    h.app.status.clear();
     h.app.close_tab_now(h.app.active);
     // Grid alignment (GUI Settings › Appearance › Alignment, read from settings.json)
     let id = h.console_with("select * from payment_check;", 1, 10);

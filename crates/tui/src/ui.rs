@@ -454,10 +454,10 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     // A run or a load-more in flight: the console's [▶ Run] is [■ Cancel] (the status line says what and for how long). The TUI has no
     // grid toolbar (the GUI's ↻ / ■), so a console result's load-more is this button's too
     let busy = app.tabs[idx].busy().is_some();
-    // The Execute chooser's highlighted option: the console rows it would run
+    // The Execute chooser's highlighted option: the console text it would run
     let preview = match &app.popup {
         Some(Popup::Palette(p)) if focused => match App::palette_matches(p).get(p.sel).map(|i| &i.action) {
-            Some(crate::app::PAction::Run { rows, .. }) => rows.clone(),
+            Some(crate::app::PAction::Run { spans, .. }) => spans.clone(),
             _ => vec![],
         },
         _ => vec![],
@@ -517,6 +517,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             draw_names(f, c, ed, drawn);
             draw_unbalanced(f, c, ed, drawn, &text, &open);
             draw_preview(f, c, ed, drawn, &preview);
+            draw_run_error(f, c, ed, drawn);
             let caret = if editing && c.complete.is_some() { drawn } else { None };
             if focused {
                 app.hits.caret = drawn.map(|(x, y)| (x, y, c.editor.cursor().0, c.editor.cursor().1));
@@ -858,18 +859,51 @@ fn draw_hint(f: &mut Frame, c: &crate::app::Console, ed: Rect, x: u16, y: u16, f
     f.render_widget(Paragraph::new(line).style(Style::default().bg(POPUP_BG)), r);
 }
 
-/// The rows an Execute chooser option would run, on the selection background (text columns, past the line numbers).
-/// Rows on screen are counted from the cursor cell just drawn, as for the gutter marks
-fn draw_preview(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>, rows: &[(usize, usize)]) {
-    let Some((_, cy)) = caret.filter(|_| !rows.is_empty()) else { return };
-    let top = c.editor.cursor().0 as i64 - (cy as i64 - ed.y as i64 - 1);
-    let x0 = ed.x + 1 + c.editor.lines().len().to_string().len() as u16 + 2;
+/// The text an Execute chooser option would run, on the selection background (exactly its range, as the GUI highlights it)
+fn draw_preview(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>, spans: &[crate::app::Span]) {
+    for &span in spans {
+        paint_span(f, c, ed, caret, span, |cell| {
+            cell.set_bg(SEL);
+        });
+    }
+}
+
+/// The last run's error, underlined in the danger colour where the server points (else over the statement). An edit clears it
+fn draw_run_error(f: &mut Frame, c: &mut crate::app::Console, ed: Rect, caret: Option<(u16, u16)>) {
+    if c.run_error.as_ref().is_some_and(|e| e.lines != c.editor.lines()) {
+        c.run_error = None;
+    }
+    if let Some(e) = &c.run_error {
+        paint_span(f, c, ed, caret, e.span, |cell| {
+            cell.set_style(Style::default().fg(DANGER).add_modifier(Modifier::UNDERLINED));
+        });
+    }
+}
+
+/// Restyle the cells of an editor span (text columns, past the line numbers). Rows and columns on screen are counted from the
+/// cursor cell just drawn (tui-textarea scrolls both ways and doesn't say how far), as for the gutter marks
+fn paint_span(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>, ((r0, c0), (r1, c1)): crate::app::Span, style: impl Fn(&mut ratatui::buffer::Cell)) {
+    use unicode_width::UnicodeWidthChar;
+    let Some((cx, cy)) = caret else { return };
+    let lines = c.editor.lines();
+    let (crow, ccol) = c.editor.cursor();
+    let width = |l: &str, n: usize| l.chars().take(n).map(|ch| ch.width().unwrap_or(0) as i64).sum::<i64>();
+    let top = crow as i64 - (cy as i64 - ed.y as i64 - 1);
+    let x0 = ed.x + 1 + lines.len().to_string().len() as u16 + 2;
+    let left = width(lines.get(crow).map_or("", |l| l.as_str()), ccol) - (cx as i64 - x0 as i64);
+    let right = ed.right().saturating_sub(1) as i64;
     let buf = f.buffer_mut();
     for y in ed.y + 1..ed.bottom().saturating_sub(1) {
         let row = top + (y - ed.y - 1) as i64;
-        if row >= 0 && rows.iter().any(|&(a, b)| (a as i64..=b as i64).contains(&row)) {
-            for x in x0..ed.right().saturating_sub(1) {
-                buf[(x, y)].set_bg(SEL);
+        let Some(line) = (row >= r0 as i64 && row <= r1 as i64).then(|| lines.get(row as usize)).flatten() else { continue };
+        let from = if row as usize == r0 { c0 } else { 0 };
+        let to = if row as usize == r1 { c1 } else { line.chars().count() };
+        for (k, ch) in line.chars().enumerate().take(to).skip(from) {
+            let x = x0 as i64 + width(line, k) - left;
+            for dx in 0..ch.width().unwrap_or(0).max(1) as i64 {
+                if (x0 as i64..right).contains(&(x + dx)) {
+                    style(&mut buf[((x + dx) as u16, y)]);
+                }
             }
         }
     }

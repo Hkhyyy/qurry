@@ -1,9 +1,23 @@
 use super::*;
 
-/// Each planned statement's editor rows (first, last): `text` is what was planned, its first line on editor row `row0`
-fn stmt_rows(stmts: &[qurry_core::exec::Stmt], text: &str, row0: usize) -> Vec<(usize, usize)> {
-    let row = |at: usize| row0 + text[..at.min(text.len())].matches('\n').count();
-    stmts.iter().map(|s| (row(s.start), row(s.end))).collect()
+/// Where each planned statement is in the editor: `text` is what was planned, starting at editor position `origin` (row, char column)
+fn stmt_spans(stmts: &[qurry_core::exec::Stmt], text: &str, origin: (usize, usize)) -> Vec<Span> {
+    stmts.iter().map(|s| (editor_pos(text, s.start, origin), editor_pos(text, s.end, origin))).collect()
+}
+
+/// A failed statement's error in the editor: the word at the server's spot (`at`, a byte offset into the statement's text `sql`;
+/// one character if it isn't on a word), else the whole statement (`span`)
+fn error_span(sql: &str, at: Option<usize>, span: Span) -> Span {
+    let Some(at) = at else { return span };
+    let end = sql.trim_end();
+    // Past the statement's end (MySQL's near ''): its last character
+    let at = match end.char_indices().last() {
+        Some((last, _)) if at > last => last,
+        _ => at,
+    };
+    let from = editor_pos(sql, at, span.0);
+    let word = sql[at..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
+    (from, (from.0, from.1 + word.max(1)))
 }
 
 /// Runs a console query on the session, or asks the test stand-in when there is one
@@ -83,8 +97,8 @@ impl App {
             let sel = selected_text(c.editor.lines(), r0, c0, r1, c1);
             let stmts = qurry_core::exec::plan_selection(&sel, kind, self.exec);
             if !stmts.is_empty() {
-                let rows = stmt_rows(&stmts, &sel, r0.min(r1));
-                self.run_marked(sqls(stmts), rows, explain, confirmed);
+                let spans = stmt_spans(&stmts, &sel, (r0, c0).min((r1, c1)));
+                self.run_marked(sqls(stmts), spans, explain, confirmed);
             }
             return;
         }
@@ -94,11 +108,11 @@ impl App {
         match plan {
             qurry_core::exec::Plan::Nothing => {}
             qurry_core::exec::Plan::Run(stmts) => {
-                let rows = stmt_rows(&stmts, &text, 0);
-                self.run_marked(sqls(stmts), rows, explain, confirmed)
+                let spans = stmt_spans(&stmts, &text, (0, 0));
+                self.run_marked(sqls(stmts), spans, explain, confirmed)
             }
             qurry_core::exec::Plan::Ask(opts) => {
-                let items = opts.into_iter().map(|(label, stmts)| PItem { label, hint: String::new(), action: PAction::Run { rows: stmt_rows(&stmts, &text, 0), stmts: sqls(stmts), explain } }).collect();
+                let items = opts.into_iter().map(|(label, stmts)| PItem { label, hint: String::new(), action: PAction::Run { spans: stmt_spans(&stmts, &text, (0, 0)), stmts: sqls(stmts), explain } }).collect();
                 self.popup = Some(Popup::Palette(Palette { title: "Execute".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
             }
         }
@@ -130,18 +144,26 @@ impl App {
         None
     }
 
-    /// Runs statements planned over the console's text, each on its editor rows (first, last): they get gutter marks as they run
-    pub fn run_marked(&mut self, stmts: Vec<String>, rows: Vec<(usize, usize)>, explain: bool, confirmed: bool) {
+    /// Runs statements planned over the console's text, each where it is in the editor: they get gutter marks as they run, and
+    /// the one that fails its error mark
+    pub fn run_marked(&mut self, stmts: Vec<String>, spans: Vec<Span>, explain: bool, confirmed: bool) {
         if let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind)
             && !c.running
         {
-            c.marks.start(c.editor.lines(), &rows);
+            c.marks.start(c.editor.lines(), &spans.iter().map(|&((r0, _), (r1, _))| (r0, r1)).collect::<Vec<_>>());
+            c.run_spans = (spans, c.editor.lines().to_vec());
         }
-        self.run_stmts(stmts, explain, confirmed)
+        self.run_stmts_checked(stmts, explain, confirmed, confirmed)
     }
 
-    /// confirmed = whether a dangerous statement (UPDATE/DELETE without WHERE, DROP, TRUNCATE) was confirmed
+    /// Statements that aren't in the editor (a table's statement run in a console). confirmed = whether a dangerous statement
+    /// (UPDATE/DELETE without WHERE, DROP, TRUNCATE) was confirmed
     pub fn run_stmts(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool) {
+        if let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind)
+            && !c.running
+        {
+            c.run_spans = Default::default();
+        }
         self.run_stmts_checked(stmts, explain, confirmed, confirmed)
     }
 
@@ -249,7 +271,7 @@ impl App {
                 text: explain_analyze_ask_text(&asks),
                 on_yes: Self::in_console(id, move |a| {
                     a.analyze_next = true;
-                    a.run_stmts(stmts, explain, true);
+                    a.run_stmts_checked(stmts, explain, true, true);
                     a.analyze_next = false;
                 }),
             });
@@ -258,6 +280,9 @@ impl App {
         c.running = true;
         // While running, show Output (the SQL being run instead of the previous results)
         c.show_output = true;
+        // The last run's error mark goes; this run's statements are where run_marked found them, on the lines it saw
+        c.run_error = None;
+        let (spans, lines0) = std::mem::take(&mut c.run_spans);
         let session = c.session.clone();
         let in_tx0 = c.in_tx;
         let st = self.state.clone();
@@ -317,11 +342,11 @@ impl App {
                         };
                         if let Err(e) = begun {
                             mark(i, MarkState::Err);
-                            out.push((s, Err(e), false));
+                            out.push((s, Err(e), false, None));
                             break;
                         }
                     }
-                    let r = console_query(&st, fake, &target, q, Some(500), &session).await;
+                    let r = console_query(&st, fake, &target, q.clone(), Some(500), &session).await;
                     let r = if dry {
                         match console_query(&st, fake, &target, wrap[1].into(), None, &session).await {
                             Ok(back) => r.map(|res| qurry_core::db::QueryResult { in_transaction: back.in_transaction, ..res }),
@@ -332,7 +357,10 @@ impl App {
                     };
                     let stop = r.is_err();
                     mark(i, if stop { MarkState::Err } else { MarkState::Ok });
-                    out.push((s, r, dry));
+                    // The server's spot, in the statement's own text (Explain sent it after its EXPLAIN …)
+                    let pre = if explain { q.len().saturating_sub(s.trim_end_matches(';').len()) } else { 0 };
+                    let at = r.as_ref().err().and_then(|e| qurry_shared::errors::error_position(e, &q)).and_then(|p| p.checked_sub(pre));
+                    out.push((s, r, dry, at));
                     if stop {
                         break;
                     }
@@ -350,8 +378,8 @@ impl App {
                 let mut warned = 0;
                 let mut failed = false;
                 let mut tls_err = None;
-                let ddl = out.iter().any(|(s, r, dry)| r.is_ok() && !dry && !explain && qurry_core::guard::is_ddl(s, kind));
-                for (i, (s, r, dry)) in out.into_iter().enumerate() {
+                let ddl = out.iter().any(|(s, r, dry, _)| r.is_ok() && !dry && !explain && qurry_core::guard::is_ddl(s, kind));
+                for (i, (s, r, dry, at)) in out.into_iter().enumerate() {
                     if r.is_ok() && keep_history {
                         let _ = hist.history.add(&hist_conn, Some(&hist_db), &s);
                     }
@@ -414,7 +442,20 @@ impl App {
                             }
                             c.show_output = true;
                             failed = true;
-                            status = format!("Error: {}", e.lines().next().unwrap_or(""));
+                            let first = qurry_shared::errors::without_position(e.lines().next().unwrap_or(""));
+                            // Marked in the editor where it ran from (not if the text changed meanwhile); the status line says where
+                            match spans.get(i).filter(|_| c.editor.lines() == lines0) {
+                                Some(&span) => {
+                                    let span = error_span(&s, at, span);
+                                    c.run_error = Some(RunError { span, lines: lines0.clone() });
+                                    let ((row, col), _) = span;
+                                    status = match at {
+                                        Some(_) => format!("Error at line {}, col {}: {first} — fix it and run again", row + 1, col + 1),
+                                        None => format!("Error: {first} — fix the statement and run it again"),
+                                    };
+                                }
+                                None => status = format!("Error: {first}"),
+                            }
                         }
                     }
                 }

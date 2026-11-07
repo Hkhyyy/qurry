@@ -12,6 +12,15 @@ describe("shared wasm", () => {
     expect(shared().commitFailedTitle("Session closed")).toBe("Commit failed");
   });
 
+  it("finds a failed statement's error spot as a UTF-16 offset (PostgreSQL counts characters; an emoji is two units here)", () => {
+    const sql = "select '😀', x fro t";
+    expect(shared().errorPosition('syntax error at or near "t" (position 19)', sql)).toBe(sql.lastIndexOf("t"));
+    const my = "1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'fro t' at line 2";
+    expect(shared().errorPosition(my, "select 1,\n  x fro t")).toBe("select 1,\n  x ".length);
+    expect(shared().errorPosition('relation "t" does not exist', "select * from t")).toBeUndefined();
+    expect(shared().withoutPosition('relation "t" does not exist (position 15)')).toBe('relation "t" does not exist');
+  });
+
   it("Redis Terminal key names: the typed key first, quoted when it has spaces or quotes; unknown key counts show the name only", () => {
     expect(shared().redisKeyChoices("user:1", ["user:10", "user:1"]).map((c) => c.label)).toEqual(["user:1", "user:10"]);
     expect(shared().redisKeyChoices("user:1", ["user:1"])).toEqual([]);

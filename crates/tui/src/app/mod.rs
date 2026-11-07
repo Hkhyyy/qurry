@@ -58,6 +58,11 @@ pub struct Console {
     pub marks: Marks,
     /// The call around the caret and the unknown names near it (refreshed after each key)
     pub assist: Assist,
+    /// Where the statements about to run are in the editor, and its lines then (run_marked; empty for a run of statements typed
+    /// nowhere): the run's error is marked through them unless the text changed since (e.g. typed on while Production rows counted)
+    pub run_spans: (Vec<Span>, Vec<String>),
+    /// The last run's error, underlined in the editor until its text changes or the next run starts
+    pub run_error: Option<RunError>,
 }
 
 /// What the console shows about the text near the caret: the signature of the call it's in (the hint line) and the tables and
@@ -82,6 +87,25 @@ impl Assist {
     /// The mark the caret (row, col) is on or right after
     pub fn at(&self, row: usize, col: usize) -> Option<&NameMark> {
         self.names.iter().find(|m| m.row == row && m.from <= col && col <= m.to)
+    }
+}
+
+/// A stretch of the editor: (row, char column) of its start and its end (exclusive)
+pub type Span = ((usize, usize), (usize, usize));
+
+/// A failed statement's error in the editor: where the server points (else the whole statement), on the lines it ran from
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunError {
+    pub span: Span,
+    pub lines: Vec<String>,
+}
+
+/// Where byte `at` of `text` is in the editor, when `text` starts at `origin` (row, char column)
+pub fn editor_pos(text: &str, at: usize, origin: (usize, usize)) -> (usize, usize) {
+    let head = &text[..at.min(text.len())];
+    match head.rfind('\n') {
+        Some(nl) => (origin.0 + head.matches('\n').count(), head[nl + 1..].chars().count()),
+        None => (origin.0, origin.1 + head.chars().count()),
     }
 }
 
@@ -448,7 +472,7 @@ pub enum PAction {
     Object { conn: String, db: String, e: IndexEntryLite },
     Tab(u64),
     /// Statements picked in the execution picker popup
-    Run { stmts: Vec<String>, rows: Vec<(usize, usize)>, explain: bool },
+    Run { stmts: Vec<String>, spans: Vec<Span>, explain: bool },
     /// Change execution settings
     Exec(qurry_core::exec::ExecSettings),
     /// Update channel picked

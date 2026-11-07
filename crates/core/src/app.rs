@@ -2855,6 +2855,38 @@ pub(crate) mod tests {
         q(if my { "drop database fetch_more_reconnect" } else { "drop schema fetch_more_reconnect cascade" }, "setup").await.unwrap();
     }
 
+    /// A failed statement that isn't the first in the console: the server's spot (PostgreSQL's character position, MySQL's line and
+    /// near '…') lands on the right text of the console through the statement's offset. Real servers:
+    /// QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres QURRY_TEST_MY=127.0.0.1:13306:root:dbtool:shop cargo test -p qurry-core error_position_maps -- --ignored
+    async fn error_position_maps_into_the_console(kind: crate::store::DbKind) {
+        let Some(crate::testenv::Server { mut cfg, password }) = crate::testenv::server(kind) else { return };
+        (cfg.id, cfg.name) = ("d".into(), "subquery-run-errors".into());
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        st.save_connection(cfg, password, None).await.unwrap();
+        let text = "select 1;\n\n-- 한글 before it: PostgreSQL counts characters\nselect n, '한글' as k\nfrom (select 1 as n) t\nwhere n = 1 and n = = 1;";
+        let smallest = crate::exec::ExecSettings { inside: crate::exec::Inside::Smallest, ..Default::default() };
+        let crate::exec::Plan::Run(v) = crate::exec::plan(text, text.find("where").unwrap(), kind, smallest) else { panic!("one statement") };
+        let e = st.run_query("d".into(), v[0].sql.clone(), None, Some("t".into())).await.unwrap_err().to_string();
+        let at = qurry_shared::errors::error_position(&e, &v[0].sql).unwrap_or_else(|| panic!("no position in {e:?}"));
+        assert_eq!(v[0].start + at, text.rfind("= 1").unwrap(), "{e}");
+        // A short spot that also comes earlier on the line (MySQL: near 't')
+        let e = st.run_query("d".into(), "select 1 fro t".into(), None, Some("t".into())).await.unwrap_err().to_string();
+        assert_eq!(qurry_shared::errors::error_position(&e, "select 1 fro t"), Some("select 1 fro ".len()), "{e}");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn error_position_maps_pg() {
+        error_position_maps_into_the_console(crate::store::DbKind::Postgres).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn error_position_maps_mysql() {
+        error_position_maps_into_the_console(crate::store::DbKind::Mysql).await;
+    }
+
     #[tokio::test]
     #[ignore]
     async fn fetch_more_after_reconnect_pg() {

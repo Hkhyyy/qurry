@@ -236,7 +236,7 @@ impl App {
                     self.activate(i)
                 }
             }
-            PAction::Run { stmts, rows, explain } => self.run_marked(stmts, rows, explain, false),
+            PAction::Run { stmts, spans, explain } => self.run_marked(stmts, spans, explain, false),
             PAction::ExportFormat(f) => self.export_dest(f),
             PAction::Dba(r) => self.dba_open(r),
             PAction::InsertSql(q) => self.insert_sql(q),

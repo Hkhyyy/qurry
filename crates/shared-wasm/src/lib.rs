@@ -80,6 +80,18 @@ pub fn more_rows_failed(msg: &str) -> String {
     qurry_shared::errors::more_rows_failed(msg)
 }
 
+/// Where a failed statement's error points in `sql` (the text sent), as a UTF-16 offset, or undefined when the error doesn't say
+#[wasm_bindgen(js_name = errorPosition)]
+pub fn error_position(msg: &str, sql: &str) -> Option<usize> {
+    qurry_shared::errors::error_position(msg, sql).map(|b| sql[..b].encode_utf16().count())
+}
+
+/// A failed statement's error without the position the core adds to it, for its mark's hover (the mark shows the spot)
+#[wasm_bindgen(js_name = withoutPosition)]
+pub fn without_position(msg: &str) -> String {
+    qurry_shared::errors::without_position(msg).to_string()
+}
+
 /// The result grid's shown columns ("cols 3–8 of 14"), or undefined when every column fits (the TUI's words)
 #[wasm_bindgen(js_name = shownCols)]
 pub fn shown_cols(first: usize, last: usize, total: usize) -> Option<String> {

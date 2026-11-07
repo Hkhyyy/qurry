@@ -1,7 +1,7 @@
 import Editor from "@monaco-editor/react";
 import { useEffect, useRef } from "react";
 import { format as formatSql } from "sql-formatter";
-import { markUnbalanced, monaco } from "../lib/monaco";
+import { markUnbalanced, monaco, setRunError } from "../lib/monaco";
 import type { DbKind } from "../lib/api";
 import { bindModel, unbindModel } from "../lib/completion";
 import { MONACO_THEME } from "../lib/theme";
@@ -161,6 +161,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
           const m = ed.getModel();
           if (!m) return;
           highlight(ranges);
+          // The next run: the last one's error mark goes
+          setRunError(m, null);
           // Statements of an earlier press that never started (cancelled, or after an error) aren't kept
           drop(marks.filter((x) => !x.m));
           const ids = m.deltaDecorations(
@@ -180,10 +182,20 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
             drop(marks.filter((o) => !run.includes(o)));
             x.m = s;
             drawMarks();
+            // A failed statement: its error in the editor too, where the server points (else over the statement)
+            const r = rangeOf(x);
+            const model = ed.getModel()!;
+            if (s.state === "error" && r) {
+              const start = model.getOffsetAt(r.getStartPosition());
+              const message = `${s.text ?? "Failed"}\n\nFix the statement and run it again (Output keeps the error).`;
+              setRunError(model, { start, end: model.getOffsetAt(r.getEndPosition()), at: s.at === undefined ? undefined : start + s.at, message });
+            }
           };
         };
         ed.onDidChangeModelContent(() => {
           const m = ed.getModel();
+          // An edit clears the run's error mark (a gutter mark stays until its own statement is edited)
+          if (m) setRunError(m, null);
           if (!m || !marks.length) return;
           drop(
             marks.filter((x) => {
