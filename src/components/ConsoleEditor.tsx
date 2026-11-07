@@ -1,6 +1,5 @@
 import Editor from "@monaco-editor/react";
 import { useEffect, useRef } from "react";
-import { format as formatSql } from "sql-formatter";
 import { monaco } from "../lib/monaco";
 import { bindModel, unbindModel } from "../lib/completion";
 import { MONACO_THEME } from "../lib/theme";
@@ -8,6 +7,9 @@ import { font, fontStack } from "../lib/prefs";
 import { caretText, setFocusWidgets } from "../lib/statusbar";
 import { bindings, onKeymapChange } from "../lib/shortcuts";
 import { markHover, shownMark, type MarkStmt, type StmtMark } from "../lib/stmtMark";
+import { shared, sharedReady } from "../lib/shared";
+import { keywordCase } from "../lib/keywordCase";
+import type { DbKind } from "../lib/api";
 
 /** Run request: passes editor content·caret·selection; the console decides what actually runs (DataGrip run rules) */
 export interface RunRequest {
@@ -37,6 +39,8 @@ interface Props {
   database: string;
   initialSql: string;
   language: string;
+  /** The data source's kind: how Reformat Code and the keyword case read strings, comments and quoted names (Redis, MongoDB and vector consoles: neither runs) */
+  kind: DbKind;
   onChange: (sql: string) => void;
   onRun: (req: RunRequest) => void;
   /** A statement's gutter mark was clicked: its Output line */
@@ -64,7 +68,10 @@ function monacoKey(spec: string): number | null {
 }
 const keysOf = (id: string) => bindings(id).map(monacoKey).filter((n): n is number => n !== null);
 
-export function ConsoleEditor({ tabId, connId, database, initialSql, language, onChange, onRun, onMarkClick, registerApi, readOnly }: Props) {
+/** One character typed (or an auto-closed pair, or a newline with its indent) that can end a keyword: not a letter, digit, _ or $ */
+const TYPED_END = /^(?:[^\p{L}\p{N}_$]|[([{'"`][)\]}'"`]|\r?\n[ \t]*)$/u;
+
+export function ConsoleEditor({ tabId, connId, database, initialSql, language, kind, onChange, onRun, onMarkClick, registerApi, readOnly }: Props) {
   const modelUri = useRef<string | null>(null);
   useEffect(() => {
     if (modelUri.current) bindModel(modelUri.current, connId, database);
@@ -73,6 +80,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
   onRunRef.current = onRun;
   const onMarkRef = useRef(onMarkClick);
   onMarkRef.current = onMarkClick;
+  const kindRef = useRef(kind);
+  kindRef.current = kind;
 
   return (
     <Editor
@@ -176,6 +185,21 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
             drawMarks();
           };
         };
+        // Keyword case as you type (Settings › Appearance › Keyword case): a space, newline or punctuation typed after a keyword
+        // re-cases it, outside strings, comments and quoted names; in the keystroke's undo step
+        ed.onDidChangeModelContent((e) => {
+          const m = ed.getModel();
+          const c = e.changes[0];
+          if (!m || e.isUndoing || e.isRedoing || e.isFlush || e.changes.length !== 1 || c.rangeLength !== 0 || !TYPED_END.test(c.text)) return;
+          if (keywordCase() === "off" || !sharedReady()) return;
+          // Not while Monaco dispatches the change: right after it, if nothing changed meanwhile
+          const version = m.getVersionId();
+          queueMicrotask(() => {
+            if (ed.getModel() !== m || m.getVersionId() !== version) return;
+            const r = shared().keywordCaseAt(m.getValue(), c.rangeOffset, kindRef.current, keywordCase());
+            if (r) ed.executeEdits("keywordCase", [{ range: monaco.Range.fromPositions(m.getPositionAt(r.start), m.getPositionAt(c.rangeOffset)), text: r.text }]);
+          });
+        });
         ed.onDidChangeModelContent(() => {
           const m = ed.getModel();
           if (!m || !marks.length) return;
@@ -214,18 +238,17 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
           registered.push(ed.addAction({ id: "dbtool.run", label: "Execute", keybindings: keysOf("editor.run"), contextMenuGroupId: "navigation", contextMenuOrder: 0, run: () => run() }));
           registered.push(ed.addAction({ id: "dbtool.explain", label: "Explain Plan", keybindings: keysOf("editor.explain"), contextMenuGroupId: "navigation", contextMenuOrder: 1, run: () => run("plan") }));
           registered.push(ed.addAction({ id: "dbtool.explainAnalyse", label: "Explain Analyse", keybindings: keysOf("editor.explainAnalyze"), contextMenuGroupId: "navigation", contextMenuOrder: 2, run: () => run("analyze") }));
+          // The selection, or the statement at the caret (qurry_shared::format::reformat, as the TUI's ⌥⇧F): one undo step
           act("dbtool.reformat", "Reformat Code", "editor.reformat", () => {
             const m = ed.getModel();
-            if (!m) return;
             const sel = ed.getSelection();
-            const whole = !sel || sel.isEmpty();
-            const range = whole ? m.getFullModelRange() : sel!;
-            try {
-              const out = formatSql(m.getValueInRange(range), { language: language === "mysql" ? "mysql" : "postgresql", keywordCase: "upper", tabWidth: 4 });
-              ed.executeEdits("reformat", [{ range, text: out }]);
-            } catch {
-              /* leave unparsable SQL as is */
-            }
+            if (!m || !sel || !sharedReady()) return;
+            const at = (p: monaco.IPosition) => m.getOffsetAt(p);
+            const r = shared().reformat(m.getValue(), at(sel.getStartPosition()), at(sel.getEndPosition()), at(sel.getPosition()), kindRef.current, keywordCase());
+            if (!r) return;
+            ed.pushUndoStop();
+            ed.executeEdits("reformat", [{ range: monaco.Range.fromPositions(m.getPositionAt(r.start), m.getPositionAt(r.end)), text: r.text }]);
+            ed.pushUndoStop();
           });
           act("dbtool.duplicate", "Duplicate Line or Selection", "editor.duplicate", () => ed.trigger("k", "editor.action.copyLinesDownAction", null));
           act("dbtool.deleteLine", "Delete Line", "editor.deleteLine", () => ed.trigger("k", "editor.action.deleteLines", null));

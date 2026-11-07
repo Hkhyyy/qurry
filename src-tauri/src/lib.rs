@@ -193,6 +193,8 @@ pub fn run() {
             commands::set_update_channel,
             commands::grid_align,
             commands::set_grid_align,
+            commands::keyword_case,
+            commands::set_keyword_case,
             commands::theme_settings,
             commands::set_theme,
             commands::set_theme_sync,

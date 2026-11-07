@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { sharedOr, type Align, type Alignments, type ValueClass } from "./shared";
+import { sharedOr, type Align, type Alignments, type KeywordCase, type ValueClass } from "./shared";
 import type { DataFormat } from "./transfer";
 import type { CustomTheme, ThemeSettings, ThemeSync } from "./theme";
 
@@ -209,6 +209,9 @@ export const api = {
   /** Grid alignment per value class: only the classes the user changed. Kept in the config folder, shared with the TUI */
   gridAlign: () => invoke<Alignments>("grid_align"),
   setGridAlign: (cls: ValueClass, align: Align) => invoke<Alignments>("set_grid_align", { class: cls, align }),
+  /** Keyword case as you type and in Reformat Code (settings.json, shared with the TUI) */
+  keywordCase: () => invoke<KeywordCase>("keyword_case"),
+  setKeywordCase: (keywordCase: KeywordCase) => invoke<void>("set_keyword_case", { case: keywordCase }),
   /** Theme pick, Sync with OS and custom themes, shared with the TUI (settings.json) */
   themeSettings: () => invoke<ThemeSettings>("theme_settings"),
   setTheme: (id: string) => invoke<void>("set_theme", { id }),

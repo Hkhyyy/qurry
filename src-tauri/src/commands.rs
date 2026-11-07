@@ -775,6 +775,17 @@ pub fn set_grid_align(state: State<'_, AppState>, class: qurry_core::format::Val
     state.store.set_grid_align(class, align)
 }
 
+/// Keyword case as you type and in Reformat Code (Settings › Appearance › Keyword case; the TUI shares it)
+#[tauri::command]
+pub fn keyword_case(state: State<'_, AppState>) -> qurry_core::format::KeywordCase {
+    state.store.keyword_case()
+}
+
+#[tauri::command]
+pub fn set_keyword_case(state: State<'_, AppState>, case: qurry_core::format::KeywordCase) -> AppResult<()> {
+    state.store.set_keyword_case(case)
+}
+
 /// Theme, Sync with OS and custom themes (Settings › Appearance › Theme; settings.json, shared with the TUI)
 #[tauri::command]
 pub fn theme_settings(state: State<'_, AppState>) -> qurry_core::theme::ThemeSettings {

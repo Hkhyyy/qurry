@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { alignOf, setGridAlign, useGridAlign, VALUE_CLASSES } from "../../lib/gridAlign";
-import { useSharedReady, type Align } from "../../lib/shared";
+import { useSharedReady, type Align, type KeywordCase } from "../../lib/shared";
+import { setKeywordCase, useKeywordCase } from "../../lib/keywordCase";
 import { api, secretKey, setUpdateCheckEnabled, UpdateInfo, updateCheckEnabled } from "../../lib/api";
 import type { FontFamily, UpdateChannel } from "../../lib/api";
 import { KeymapEditor } from "../../components/KeymapEditor";
@@ -73,6 +74,35 @@ export function GridAlignField() {
             </Select>
           </Fragment>
         ))}
+      </div>
+    </Field>
+  );
+}
+
+/** Settings › Appearance › Keyword case: SQL keywords' letter case as you type in a console and in Reformat Code (shared with the TUI) */
+export function KeywordCaseField() {
+  const kc = useKeywordCase();
+  const [err, setErr] = useState<string | null>(null);
+  const reformat = sk("editor.reformat");
+  return (
+    <Field
+      label="Keyword case"
+      error={err ?? undefined}
+      hint={`Upper or lower case for SQL keywords as you type in a console (after a space, a new line or punctuation; not in strings, comments or quoted names) and in Reformat Code${reformat ? ` (${reformat})` : ""}. Off: typing is left as it is, and Reformat Code writes keywords in upper case. The TUI uses the same setting.`}
+    >
+      <div className="ui-row">
+        <Select
+          aria-label="Keyword case"
+          value={kc}
+          onChange={(e) => {
+            setErr(null);
+            setKeywordCase(e.target.value as KeywordCase).catch((x) => setErr(`Couldn't save the keyword case (${x}). It is back to what it was.`));
+          }}
+        >
+          <option value="off">Off</option>
+          <option value="upper">UPPER</option>
+          <option value="lower">lower</option>
+        </Select>
       </div>
     </Field>
   );
@@ -255,6 +285,7 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
             <ThemeField onEdit={() => setPage("theme")} />
             <FontField target="editor" label="Editor font" hint={fontKeys && `Size also with ${fontKeys} in the editor.`} installed={fonts} onOpen={loadFonts} />
             <FontField target="grid" label="Grid font" installed={fonts} onOpen={loadFonts} />
+            <KeywordCaseField />
             <GridAlignField />
             <Field label="Updates" hint={updMsg ?? undefined}>
               <div className="ui-row">

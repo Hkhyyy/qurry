@@ -444,6 +444,45 @@ pub fn column_keys(names: JsValue) -> Result<JsValue, JsError> {
     to(&qurry_shared::format::column_keys(v.iter().map(String::as_str)))
 }
 
+#[derive(Serialize)]
+struct Reformatted {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+/// Reformat Code (⌘⌥l): the selection (`sel_start` < `sel_end`, UTF-16) or the statement at `caret`, keywords in `case`
+/// ("off" | "upper" | "lower"); { start, end, text } with UTF-16 offsets, or undefined when it changes nothing
+#[wasm_bindgen]
+pub fn reformat(text: &str, sel_start: usize, sel_end: usize, caret: usize, kind: JsValue, case: JsValue) -> Result<JsValue, JsError> {
+    let sel = (sel_start < sel_end).then(|| (byte_offset(text, sel_start), byte_offset(text, sel_end)));
+    let r = qurry_shared::format::reformat(text, sel, byte_offset(text, caret), parse_kind(kind)?, from(case)?);
+    match r {
+        Some(r) => {
+            let [[start, end]] = utf16_ranges(text, &[(r.start, r.end)])[..] else { unreachable!() };
+            to(&Reformatted { start, end, text: r.text })
+        }
+        None => Ok(JsValue::UNDEFINED),
+    }
+}
+
+#[derive(Serialize)]
+struct Cased {
+    start: usize,
+    text: String,
+}
+
+/// Keyword case as you type: `end` (UTF-16) is where the character just typed sits; { start, text } replaces the keyword it ends
+/// (`text[start..end]`), or undefined when there is none to change
+#[wasm_bindgen(js_name = keywordCaseAt)]
+pub fn keyword_case_at(text: &str, end: usize, kind: JsValue, case: JsValue) -> Result<JsValue, JsError> {
+    match qurry_shared::format::keyword_case_at(text, byte_offset(text, end), parse_kind(kind)?, from(case)?) {
+        // Keywords are ASCII: as many UTF-16 units as bytes
+        Some((_, cased)) => to(&Cased { start: end - cased.len(), text: cased }),
+        None => Ok(JsValue::UNDEFINED),
+    }
+}
+
 /// 03:19:15 → 03:19:15.000000 (`width` fractional digits)
 #[wasm_bindgen(js_name = padFrac)]
 pub fn pad_frac(s: &str, width: usize) -> String {

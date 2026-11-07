@@ -387,6 +387,7 @@ export function ConsolePane(p: Props) {
               database={p.database}
               initialSql={p.initialSql}
               language={p.dialect?.monaco ?? "pgsql"}
+              kind={p.dialect?.quoting ?? "postgres"}
               onChange={p.onChange}
               onRun={onRun}
               onMarkClick={(out) => {
