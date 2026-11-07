@@ -53,10 +53,14 @@ export function unbindModel(uri: string) {
   modelConn.delete(uri);
   clearTimeout(markTimers.get(uri));
   markTimers.delete(uri);
+  markFixes.delete(uri);
 }
 
 const MARKER_OWNER = "qurry-names";
 const markTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** Each model's quick fixes by marker (kept here, not in the marker's `code`, which Monaco shows in the hover) */
+const markFixes = new Map<string, Map<string, string[]>>();
+const fixKey = (m: { startLineNumber: number; startColumn: number; message: string }) => `${m.startLineNumber}:${m.startColumn}:${m.message}`;
 
 /** Underline the console's unknown tables and columns (qurry_shared::complete::marks: the same scope as completion; none for CTEs,
  * aliases, functions, databases not loaded) after a pause in typing. Quick fixes (⌥↩) offer the closest names */
@@ -74,6 +78,8 @@ function scheduleMarks(uri: string, delay = 300) {
       const idx = await indexFor(bound.connId);
       if (!idx || model.isDisposed() || model.getVersionId() !== version) return;
       const marks = idx.marks(model.getValue(), bound.db, lang === "mysql");
+      const fixes = new Map<string, string[]>();
+      markFixes.set(uri, fixes);
       monaco.editor.setModelMarkers(
         model,
         MARKER_OWNER,
@@ -81,7 +87,7 @@ function scheduleMarks(uri: string, delay = 300) {
           const a = model.getPositionAt(m.start);
           const b = model.getPositionAt(m.end);
           const fix = m.fixes.length ? ` — ⌥↩ for the closest names (${m.fixes.join(", ")})` : "";
-          return {
+          const marker = {
             severity: monaco.MarkerSeverity.Warning,
             message: `${m.message}${fix}. If it was just created, refresh the data source: completion knows the names from when it loaded`,
             startLineNumber: a.lineNumber,
@@ -89,8 +95,9 @@ function scheduleMarks(uri: string, delay = 300) {
             endLineNumber: b.lineNumber,
             endColumn: b.column,
             source: "Qurry",
-            code: JSON.stringify(m.fixes),
           };
+          fixes.set(fixKey(marker), m.fixes);
+          return marker;
         }),
       );
     }, delay),
@@ -225,7 +232,7 @@ for (const lang of ["pgsql", "mysql"]) {
       const actions = context.markers
         .filter((m) => m.source === "Qurry")
         .flatMap((m) =>
-          (JSON.parse(typeof m.code === "string" ? m.code : "[]") as string[]).map((name, i) => ({
+          (markFixes.get(model.uri.toString())?.get(fixKey(m)) ?? []).map((name, i) => ({
             title: `Change to ${name}`,
             kind: "quickfix",
             diagnostics: [m],

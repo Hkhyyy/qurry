@@ -173,7 +173,8 @@ describe("console assist (GUI)", () => {
     bindModel(uri, "assist", "");
     await vi.waitFor(() => expect(markers.get(uri)?.length).toBe(1));
     const [mk] = markers.get(uri)!;
-    expect(mk).toMatchObject({ startLineNumber: 1, startColumn: 8, endLineNumber: 1, endColumn: 11, source: "Qurry", code: '["user_name"]' });
+    expect(mk).toMatchObject({ startLineNumber: 1, startColumn: 8, endLineNumber: 1, endColumn: 11, source: "Qurry" });
+    expect(mk.code).toBeUndefined();
     expect(mk.message).toMatch(/^Unknown column "nme" — ⌥↩ for the closest names \(user_name\)\. If it was just created, refresh the data source/);
     const r = actionProviders.get("pgsql").provideCodeActions(m, null, { markers: [mk] });
     expect(r.actions.map((a: any) => [a.title, a.edit.edits[0].textEdit.text])).toEqual([["Change to user_name", "user_name"]]);
