@@ -66,7 +66,8 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `⌥⇧Right` | Move Split Divider Right / Down |
 | `⌥[` | Database Explorer Narrower |
 | `⌥]` | Database Explorer Wider |
-| `F5 / ⌃Enter / ⌥Enter` | Execute (asks what to run — see Query Execution Settings) |
+| `F5 / ⌃Enter` | Execute (asks what to run — see Query Execution Settings) |
+| `⌥Enter` | Quick Fixes (an underlined unknown name's closest names; elsewhere Execute) |
 | `⌥e` | Explain Plan |
 | `⌃Space` | Code Completion |
 | `⌃c` | Cancel Running Statement |

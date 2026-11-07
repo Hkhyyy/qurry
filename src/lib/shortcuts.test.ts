@@ -48,7 +48,7 @@ const DEFAULT_KEYS: Record<Scope, Record<string, string>> = {
   editor: {
     "editor.run": "Mod+Enter", "editor.cancel": "Mod+F2", "editor.history": "Mod+Alt+E", "console.rename": "Shift+F6", "editor.reformat": "Mod+Alt+L",
     "editor.blockComment": "Mod+Alt+/", "editor.duplicate": "Mod+D", "editor.deleteLine": "Mod+Backspace", "editor.moveUp": "Alt+Shift+Up",
-    "editor.moveDown": "Alt+Shift+Down", "editor.extend": "Alt+Up", "editor.shrink": "Alt+Down", "editor.nextOcc": "Ctrl+G",
+    "editor.moveDown": "Alt+Shift+Down", "editor.extend": "Alt+Up", "editor.shrink": "Alt+Down", "editor.nextOcc": "Ctrl+G", "editor.quickFix": "Alt+Enter",
     "editor.allOcc": "Mod+Ctrl+G", "editor.toggleCase": "Mod+Shift+U", "editor.gotoLine": "Mod+L", "editor.replace": "Mod+R",
   },
   grid: {

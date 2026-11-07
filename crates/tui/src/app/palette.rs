@@ -308,7 +308,7 @@ impl App {
         let init = if order_by { tt.order.clone() } else { tt.where_.clone() };
         let meta = self.completion.get(&target).cloned().unwrap_or_else(|| {
             let columns = tt.grid.as_ref().map(|g| g.result.columns.iter().map(|c| (c.name.clone(), c.type_name.clone())).collect()).unwrap_or_default();
-            Arc::new(complete::Meta::new(vec![complete::CompletionTable { schema: tt.schema.clone(), name: tt.table.clone(), columns }]))
+            Arc::new(complete::Meta::new(vec![complete::CompletionTable { schema: tt.schema.clone(), name: tt.table.clone(), columns, ..Default::default() }]))
         });
         let (schema, table) = (tt.schema.clone(), tt.table.clone());
         if !self.completion.contains_key(&target) {

@@ -300,7 +300,7 @@ async fn completion_popup_lists_and_inserts() {
     let mut h = Harness::new().await;
     let sql = "select u. from users u";
     h.console_with(sql, 0, 9);
-    let t = |n: &str, cols: &[&str]| CompletionTable { schema: "public".into(), name: n.into(), columns: cols.iter().map(|c| (c.to_string(), "text".to_string())).collect() };
+    let t = |n: &str, cols: &[&str]| CompletionTable { schema: "public".into(), name: n.into(), columns: cols.iter().map(|c| (c.to_string(), "text".to_string())).collect(), ..Default::default() };
     let target = h.app.tabs[h.app.active].target.clone();
     h.app.completion.insert(target, std::sync::Arc::new(qurry_core::complete::Meta::new(vec![t("users", &["id", "user_name", "email"]), t("orders", &["id", "total"])])));
     h.key("Ctrl+Space");
@@ -458,4 +458,138 @@ async fn console_rerun_with_pending_edits_asks_first() {
     h.settle().await;
     assert!(h.console_output().len() > before, "it ran");
     assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 0);
+}
+
+/// Metadata with a foreign key (orders.user_id → users.id) and a user function, for the console's target
+fn assist_meta(h: &mut Harness) {
+    use qurry_core::complete::{ForeignKey, Routine};
+    use qurry_core::meta::CompletionTable;
+    let t = |n: &str, cols: &[&str]| CompletionTable { schema: "public".into(), name: n.into(), columns: cols.iter().map(|c| (c.to_string(), "text".to_string())).collect(), ..Default::default() };
+    let mut orders = t("orders", &["id", "user_id", "status"]);
+    orders.fks = vec![ForeignKey { columns: vec!["user_id".into()], ref_schema: "public".into(), ref_table: "users".into(), ref_columns: vec!["id".into()] }];
+    let f = CompletionTable { schema: "public".into(), name: "order_total".into(), routine: Some(Routine { args: "order_id bigint, with_tax boolean".into(), returns: "numeric".into() }), ..Default::default() };
+    let target = h.app.tabs[h.app.active].target.clone();
+    h.app.completion.insert(target, std::sync::Arc::new(qurry_core::complete::Meta::new(vec![t("users", &["id", "user_name", "email"]), orders, f])));
+}
+
+fn items(h: &Harness) -> Vec<String> {
+    console(h).complete.as_ref().map(|c| c.items.iter().map(|i| i.label.clone()).collect()).unwrap_or_default()
+}
+
+/// After `join <table>`, ⌃Space offers the whole ON condition from the foreign key; after `join`, the related table comes first
+#[tokio::test]
+async fn completion_offers_fk_join_conditions() {
+    let mut h = Harness::new().await;
+    h.console_with("select * from orders o join users u ", 0, 36);
+    assist_meta(&mut h);
+    h.key("Ctrl+Space");
+    assert_eq!(items(&h), ["on o.user_id = u.id"]);
+    let s = h.screen(120, 30);
+    assert!(s.contains("⋈ on o.user_id = u.id") && s.contains("fk orders → users"), "{s}");
+    h.key("Enter");
+    assert_eq!(h.console_text(), "select * from orders o join users u on o.user_id = u.id");
+    h.console_with("select * from orders o join ", 0, 28);
+    assist_meta(&mut h);
+    h.key("Ctrl+Space");
+    assert_eq!(items(&h)[0], "users", "the table with a foreign key to orders first");
+}
+
+/// Templates at a statement start: `sel` writes `select * from ` with the caret at its end; `upd` selects its first placeholder,
+/// so typing replaces it. Statement keywords come first at a statement start, not the previous statement's columns
+#[tokio::test]
+async fn templates_expand_and_select_their_placeholder() {
+    let mut h = Harness::new().await;
+    h.console_with("select * from orders", 0, 20);
+    assist_meta(&mut h);
+    h.key("Enter");
+    h.type_str("se");
+    assert_eq!(items(&h), ["select", "set", "sel"], "statement keywords first, no columns of orders");
+    h.key("Down");
+    h.key("Down");
+    h.key("Enter");
+    assert_eq!(h.console_text(), "select * from orders\nselect * from ");
+    assert_eq!(console(&h).editor.cursor(), (1, 14));
+    h.console_with("", 0, 0);
+    assist_meta(&mut h);
+    h.type_str("upd");
+    assert_eq!(items(&h), ["update", "upd"]);
+    h.key("Down");
+    h.key("Enter");
+    h.type_str("users");
+    assert_eq!(h.console_text(), "update users set column = value where condition");
+}
+
+/// ⌃Space right after `*` lists the column list it stands for; picking it writes the columns
+#[tokio::test]
+async fn star_expands_into_columns_on_request() {
+    let mut h = Harness::new().await;
+    h.console_with("select * from users", 0, 8);
+    assist_meta(&mut h);
+    h.key("Ctrl+Space");
+    assert_eq!(items(&h), ["expand *"]);
+    h.key("Enter");
+    assert_eq!(h.console_text(), "select id, user_name, email from users");
+}
+
+/// Inside a call's parentheses the hint line above the caret shows its signature, the current parameter highlighted
+#[tokio::test]
+async fn hint_line_shows_the_signature_inside_a_call() {
+    let mut h = Harness::new().await;
+    h.console_with("\nselect order_total(", 1, 19);
+    assist_meta(&mut h);
+    h.app.focus = crate::app::Focus::Editor;
+    h.type_str("1, ");
+    let sig = console(&h).assist.sig.clone().expect("a signature");
+    assert_eq!(sig.active, 1);
+    let buf = h.buffer(120, 30);
+    let row = |y: u16| (0..120).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    let y = (0..30).find(|&y| row(y).contains("order_total(order_id bigint, with_tax boolean) → numeric")).expect("hint line");
+    let x = row(y).find("with_tax").map(|b| row(y)[..b].chars().count() as u16).unwrap();
+    assert_eq!(buf[(x, y)].fg, crate::kit::ACCENT, "the parameter at the caret is highlighted");
+    h.type_str("true)");
+    assert!(console(&h).assist.sig.is_none(), "past the closing parenthesis");
+}
+
+/// An unknown column is underlined; ⌥↩ on it lists the closest names and picking one replaces it. ⌥↩ anywhere else still runs
+#[tokio::test]
+async fn unknown_names_are_underlined_and_alt_enter_fixes_them() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(fake);
+    h.console_with("select nme from users", 0, 21);
+    assist_meta(&mut h);
+    h.app.focus = crate::app::Focus::Editor;
+    h.key("Left");
+    assert_eq!(console(&h).assist.names.iter().map(|m| (m.row, m.from, m.to, m.fixes.clone())).collect::<Vec<_>>(), [(0, 7, 10, vec!["user_name".to_string()])]);
+    let buf = h.buffer(120, 30);
+    let row = |y: u16| (0..120).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    let y = (0..30).find(|&y| row(y).contains("select nme from users")).unwrap();
+    let x = row(y).find("nme").map(|b| row(y)[..b].chars().count() as u16).unwrap();
+    let under = |x: u16| buf[(x, y)].modifier.contains(ratatui::style::Modifier::UNDERLINED);
+    assert!(under(x) && under(x + 2) && !under(x + 3) && !under(x - 1));
+    // The caret on it: the hint line says why and how to fix it
+    h.console_with("select nme from users", 0, 9);
+    assist_meta(&mut h);
+    h.key("Right");
+    let s = h.screen(120, 30);
+    assert!(s.contains("Unknown column \"nme\" · ⌥Enter user_name"), "{s}");
+    h.key("Alt+Enter");
+    assert_eq!(items(&h), ["user_name"]);
+    h.key("Enter");
+    assert_eq!(h.console_text(), "select user_name from users");
+    assert!(console(&h).assist.names.is_empty());
+    h.key("Alt+Enter");
+    h.settle().await;
+    assert!(h.console_output().iter().any(|l| l.ends_with("> select user_name from users")), "{:?}", h.console_output());
+}
+
+/// No marks for what the metadata can't tell: a CTE, an alias, a function, another database's table, or before the metadata loads
+#[tokio::test]
+async fn no_marks_when_unsure() {
+    let mut h = Harness::new().await;
+    h.console_with("with r as (select id k from users) select r.k, lower(x.anything), n from r, otherdb.t x, (select 1 n) s", 0, 0);
+    h.key("Right");
+    assert!(console(&h).assist.names.is_empty(), "no metadata yet");
+    assist_meta(&mut h);
+    h.key("Right");
+    assert!(console(&h).assist.names.is_empty(), "{:?}", console(&h).assist.names);
 }

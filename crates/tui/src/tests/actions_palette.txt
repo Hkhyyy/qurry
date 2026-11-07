@@ -1,5 +1,6 @@
 NewConsole	New Query Console	⌃l
-Execute	Execute (asks what to run — see Query Execution Settings)	F5 / ⌃Enter / ⌥Enter
+Execute	Execute (asks what to run — see Query Execution Settings)	F5 / ⌃Enter
+QuickFix	Quick Fixes (an underlined unknown name's closest names; elsewhere Execute)	⌥Enter
 Explain	Explain Plan	⌥e
 ExplainAnalyze	Explain Analyze (runs the statement: real times and row counts)	—
 Cancel	Cancel Running Statement	⌃c

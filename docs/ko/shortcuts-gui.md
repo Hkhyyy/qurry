@@ -118,6 +118,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌘F2` | Cancel running statement |
 | `⌥⌘e` | Query history |
 | `⌃Space` | Code completion |
+| `⌥↩` | Quick fixes for an underlined unknown name (the closest names) |
 | `⌥⌘l` | Reformat code |
 | `⌘/` | Line comment |
 | `⌥⌘/` | Block comment |

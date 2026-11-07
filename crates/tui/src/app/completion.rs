@@ -19,6 +19,7 @@ impl App {
             match r {
                 Ok(v) => {
                     a.completion.insert(target, Arc::new(complete::Meta::new(v)));
+                    a.update_assist();
                 }
                 Err(e) => a.status = format!("Completion metadata: {e}"),
             }
@@ -112,7 +113,7 @@ impl App {
         let window = &lines[from..to];
         let text = window.join("\n");
         let at = byte_offset(window, row - from, col);
-        let stmt = sql::statement_at(&text, at, kind).unwrap_or_default();
+        let (stmt, caret) = complete::at_caret(&text, at, kind);
         let empty = complete::Meta::new(vec![]);
         // Value · json key spot: use already-read values if any, otherwise fetch and reopen
         if let Some(h) = meta.as_deref().and_then(|m| complete::hint_at(m, &stmt, sql::statement_head(&text, at, kind), &db, kind == DbKind::Mysql)) {
@@ -154,16 +155,17 @@ impl App {
             }
             return;
         }
-        let (prefix, items) = complete::suggest(meta.as_deref().unwrap_or(&empty), &stmt, &before, &db, kind == DbKind::Mysql, Options::TUI);
-        // Auto-open only after '.' or while typing a word
-        let keep = explicit || prefix > 0 || before.ends_with('.');
+        let (prefix, items) = complete::suggest(meta.as_deref().unwrap_or(&empty), &stmt, caret, &db, kind == DbKind::Mysql, Options::TUI);
+        // Auto-open only after '.' or while typing a word (`*` expands into its columns only when asked for)
+        let keep = explicit || prefix > 0 && !before.ends_with('*') || before.ends_with('.');
         c.complete = if items.is_empty() || !keep { None } else { Some(Completion { items, sel: 0, prefix }) };
         if explicit && c.complete.is_none() {
             self.status = if meta.is_none() { "Loading completion metadata… try again in a moment".into() } else { "No suggestions".into() };
         }
     }
 
-    /// Replace the word before the cursor with the picked candidate
+    /// Replace the word before the cursor with the picked candidate. A snippet (a template, a function, an INSERT's column list)
+    /// is written without its markers, its first placeholder selected (typing replaces it) or the caret at its stop
     pub fn accept_completion(&mut self) {
         let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind) else { return };
         let Some(cmp) = c.complete.take() else { return };
@@ -171,6 +173,80 @@ impl App {
         for _ in 0..cmp.prefix {
             c.editor.delete_char();
         }
-        c.editor.insert_str(&item.insert);
+        if !matches!(item.kind, complete::ItemKind::Snippet | complete::ItemKind::Function) {
+            c.editor.insert_str(&item.insert);
+            return self.update_assist();
+        }
+        let (text, stops) = complete::snippet_text(&item.insert);
+        let (row, col) = c.editor.cursor();
+        c.editor.insert_str(&text);
+        if let Some(&(a, b)) = stops.first() {
+            // A stop's (row, col) from its char offset in the inserted text
+            let at = |n: usize| {
+                let head: Vec<&str> = text.chars().take(n).collect::<String>().split('\n').map(|_| "").collect();
+                let last = text.chars().take(n).collect::<String>().rsplit('\n').next().map_or(0, |l| l.chars().count());
+                let r = row + head.len() - 1;
+                (r as u16, (if r == row { col + last } else { last }) as u16)
+            };
+            c.editor.cancel_selection();
+            c.editor.move_cursor(tui_textarea::CursorMove::Jump(at(a).0, at(a).1));
+            if b > a {
+                c.editor.start_selection();
+                c.editor.move_cursor(tui_textarea::CursorMove::Jump(at(b).0, at(b).1));
+            }
+        }
+        self.update_assist();
+    }
+
+    /// Refresh the console's signature hint and unknown-name marks for the text around the caret (as update_completion, the lines
+    /// around it: a long script isn't read on every key). Without loaded metadata, no marks
+    pub fn update_assist(&mut self) {
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let kind = self.kind_of(&t.conn);
+        let (target, db) = (t.target.clone(), t.db.clone());
+        let meta = self.completion.get(&target).cloned();
+        let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind) else { return };
+        let Some(meta) = meta.filter(|_| matches!(kind, DbKind::Postgres | DbKind::Mysql)) else {
+            c.assist = Default::default();
+            return;
+        };
+        let (row, col) = c.editor.cursor();
+        let lines = c.editor.lines();
+        let (from, to) = (row.saturating_sub(200), (row + 50).min(lines.len()));
+        let window = &lines[from..to];
+        let text = window.join("\n");
+        let at = byte_offset(window, row - from, col);
+        let mysql = kind == DbKind::Mysql;
+        let (stmt, caret) = complete::at_caret(&text, at, kind);
+        let sig = complete::signature(&meta, &stmt, caret, mysql);
+        // Byte offsets in the window → (row, char columns)
+        let starts: Vec<usize> = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
+        let names = complete::script_marks(&meta, &text, kind, &db)
+            .into_iter()
+            .map(|m| {
+                let r = starts.partition_point(|&s| s <= m.start) - 1;
+                let line = &text[starts[r]..];
+                let chars = |b: usize| line[..b - starts[r]].chars().count();
+                NameMark { row: from + r, from: chars(m.start), to: chars(m.end), message: m.message, fixes: m.fixes }
+            })
+            .collect();
+        c.assist = Assist { sig, names };
+    }
+
+    /// ⌥↩: on an underlined unknown name, its closest names as a list (picking one replaces it); anywhere else Execute, so the
+    /// key keeps running statements
+    pub fn quick_fix(&mut self) {
+        let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind) else { return self.execute(false) };
+        let (row, col) = c.editor.cursor();
+        let Some(m) = c.assist.at(row, col).cloned() else { return self.execute(false) };
+        if m.fixes.is_empty() {
+            self.status = format!("{} — no close names. If it was just created, refresh the data source (its metadata is from when it loaded)", m.message);
+            return;
+        }
+        c.editor.cancel_selection();
+        c.editor.move_cursor(tui_textarea::CursorMove::Jump(row as u16, m.to as u16));
+        let items = m.fixes.iter().map(|f| Item { label: f.clone(), detail: "fix".into(), insert: f.clone(), kind: complete::ItemKind::Column }).collect();
+        c.complete = Some(Completion { items, sel: 0, prefix: m.to - m.from });
+        self.focus = Focus::Editor;
     }
 }

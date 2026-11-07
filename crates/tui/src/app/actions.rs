@@ -22,6 +22,7 @@ pub fn def(a: Action) -> &'static ActionDef {
 pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::NewConsole, hint: "", run: new_console },
     ActionDef { action: Action::Execute, hint: "", run: |app| app.execute(false) },
+    ActionDef { action: Action::QuickFix, hint: "", run: |app| app.quick_fix() },
     ActionDef { action: Action::Explain, hint: "", run: |app| app.execute(true) },
     ActionDef { action: Action::ExplainAnalyze, hint: "", run: explain_analyze },
     ActionDef { action: Action::Cancel, hint: "", run: |app| app.cancel() },

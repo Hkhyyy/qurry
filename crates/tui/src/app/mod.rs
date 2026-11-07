@@ -56,6 +56,33 @@ pub struct Console {
     pub complete: Option<Completion>,
     /// Gutter marks of the statements runs executed
     pub marks: Marks,
+    /// The call around the caret and the unknown names near it (refreshed after each key)
+    pub assist: Assist,
+}
+
+/// What the console shows about the text near the caret: the signature of the call it's in (the hint line) and the tables and
+/// columns its statements' scope lacks (underlined; ⌥↩ lists their fixes)
+#[derive(Default)]
+pub struct Assist {
+    pub sig: Option<complete::Signature>,
+    pub names: Vec<NameMark>,
+}
+
+/// An unknown name on an editor row: its chars [from, to), why, and the closest names
+#[derive(Clone, Debug, PartialEq)]
+pub struct NameMark {
+    pub row: usize,
+    pub from: usize,
+    pub to: usize,
+    pub message: String,
+    pub fixes: Vec<String>,
+}
+
+impl Assist {
+    /// The mark the caret (row, col) is on or right after
+    pub fn at(&self, row: usize, col: usize) -> Option<&NameMark> {
+        self.names.iter().find(|m| m.row == row && m.from <= col && col <= m.to)
+    }
 }
 
 /// How a run statement's gutter mark shows it (DataGrip): … running, ✓ done, ✗ failed (symbols, so NO_COLOR reads them too)
@@ -561,6 +588,7 @@ pub enum Action {
     MarkNode,
     DropObject,
     Execute,
+    QuickFix,
     Explain,
     ExplainAnalyze,
     Cancel,
