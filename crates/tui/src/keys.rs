@@ -317,8 +317,12 @@ impl Keymap {
         if fixed.is_empty() { "—".into() } else { fixed.into() }
     }
 
+    /// Whether the line differs from its defaults, not counting a default key keymap.json gives another command (`shadowed`): saving
+    /// that as the user's own keys would keep the default away after the other command lets the key go
     pub fn is_custom(&self, s: Slot) -> bool {
-        self.slot_keys(s) != defaults(s).as_slice()
+        let mut base = defaults(s);
+        base.retain(|k| !self.shadowed.iter().any(|(o, key, _)| *o == s && key == k));
+        self.slot_keys(s) != base.as_slice()
     }
 
     /// The Keymap window's or the palette's command whose key this is, when a pane key may not take it: a pane key with a modifier or an
@@ -333,6 +337,7 @@ impl Keymap {
     /// Assign a key (add = add to existing keys). Removed from any other line using the same key where both work (a key anywhere
     /// overlaps every pane) → the line it was removed from
     pub fn bind(&mut self, s: Slot, key: String, add: bool) -> Option<Slot> {
+        self.shadowed.retain(|(o, ..)| *o != s);
         let taken = table::conflicts(&s, s.pane, &key, self.map.iter().map(|(o, v)| (*o, o.pane, v.as_slice())));
         for o in &taken {
             if let Some(v) = self.map.get_mut(o) {
@@ -351,6 +356,7 @@ impl Keymap {
     }
 
     pub fn reset(&mut self, s: Slot) {
+        self.shadowed.retain(|(o, ..)| *o != s);
         self.map.insert(s, defaults(s));
         self.index();
     }
@@ -395,6 +401,28 @@ mod tests {
         assert_eq!(spec(&ev(KeyCode::Char('?'), KeyModifiers::SHIFT)).unwrap(), "?");
         assert_eq!(spec(&ev(KeyCode::BackTab, KeyModifiers::SHIFT)).unwrap(), "Shift+Tab");
         assert_eq!(spec(&ev(KeyCode::PageDown, KeyModifiers::CONTROL)).unwrap(), "Ctrl+PgDn");
+    }
+
+    /// A default key keymap.json gives another command isn't saved as the user's own empty line: once that command lets the key go,
+    /// the default comes back
+    #[test]
+    fn shadowed_defaults_are_not_saved() {
+        let user = qurry_core::store::Keymap::from([("Find".into(), vec!["Alt+Shift+F".into()])]);
+        let mut km = Keymap::new(&user);
+        assert!(km.keys(Action::Reformat).is_empty());
+        assert!(!km.is_custom(Slot::global(Action::Reformat)));
+        // Another change in the Keymap window saves everything custom
+        km.bind(Slot::global(Action::NewConsole), "Ctrl+Alt+N".into(), false);
+        let saved = km.overrides();
+        assert!(!saved.contains_key("Reformat"), "{saved:?}");
+        // Find lets ⌥⇧F go: Reformat Code has it again on the next start
+        let mut next = Keymap::new(&saved);
+        next.bind(Slot::global(Action::Find), "Ctrl+Alt+F".into(), false);
+        assert_eq!(Keymap::new(&next.overrides()).keys(Action::Reformat), ["Alt+Shift+F"]);
+        // A key the user gives Reformat Code itself is saved
+        let mut km = Keymap::new(&user);
+        km.bind(Slot::global(Action::Reformat), "Ctrl+Alt+R".into(), false);
+        assert_eq!(km.overrides().get("Reformat").unwrap(), &vec!["Ctrl+Alt+R".to_string()]);
     }
 
     #[test]
