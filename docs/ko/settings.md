@@ -46,6 +46,18 @@ JSON 칸 (`json`, `jsonb` 와 다른 드라이버의 JSON 타입) 은 DataGrip �
 
 TUI 결과 표도 같은 종류와 같은 설정을 씁니다. TUI 에서는 **⌃k › Grid Alignment…** 에서 바꿉니다 (종류를 고른 뒤 Left, Center, Right. NULL 은 Column type 도). TUI 는 켤 때와 **⌃k › Grid Alignment…** 를 열 때 `settings.json` 을 읽으므로, GUI 에서 정렬을 바꾼 뒤에는 그 명령을 열거나 TUI 를 다시 켜면 반영됩니다. `settings.json` 에는 바꾼 종류만 저장됩니다 (예: `"gridAlign": { "null": "right" }`). 기본값으로 되돌린 종류는 지워집니다. 0.3.0 이 저장한 `"null": "left"` (또는 `"center"`) 는 그대로 적용됩니다. Right 는 0.3.0 의 기본값이라 저장되지 않았으므로, Right 를 쓰던 분은 **Right** 를 다시 고르세요.
 
+### 결과 표의 컬럼 너비
+
+컬럼은 처음에 이름과 앞쪽 값들이 들어갈 만큼 (상한까지) 넓어서, 긴 값은 `…` 로 잘립니다. 너비를 바꾸려면:
+
+- 컬럼 헤더의 오른쪽 가장자리를 **드래그** 합니다. 가장자리를 **더블클릭** 하면 내용에 맞춥니다: 컬럼 이름과 지금까지 불러온 행 중 가장 긴 값.
+- 컬럼 헤더를 **오른쪽 클릭**: **Fit Column**, **Fit All Columns**, **Reset Widths** (모든 컬럼을 계산된 너비로), **Narrow Column**, **Widen Column**.
+- 셀이나 컬럼 헤더를 고른 상태에서 `⌃⌥←` / `⌃⌥→` 는 현재 컬럼을 4 글자씩 좁히고 / 넓힙니다 (**Settings › Keymap** 의 *Data grid* 에서 키를 바꿀 수 있습니다).
+
+TUI 에서는 `<` / `>` 가 현재 컬럼을 좁히고 / 넓히고 `=` 가 내용에 맞춥니다 (키 안내 줄에 나오고, `F1` 창의 *Data grid keys* 에서 바꿀 수 있습니다). **⌃k › Fit All Columns** 와 **⌃k › Reset Column Widths** 는 모든 컬럼에 적용됩니다.
+
+테이블 탭은 너비를 테이블마다 (데이터 소스 · 데이터베이스 · 스키마 · 테이블) `settings.json` 의 `"columnWidths"` 에 기억하므로, GUI 와 TUI 가 같은 너비를 보여 줍니다. 단위는 글자 수이고, GUI 는 그리드 글꼴로, TUI 는 그만큼의 칸으로 그립니다. 너비를 바꾸지 않은 컬럼은 계산된 너비 그대로이고, **Reset Widths** 는 그 테이블의 너비를 지웁니다. 콘솔 결과는 다시 실행할 때까지 너비를 유지합니다. 전치 보기 (**View as › Transpose**) 는 자기 레이아웃을 그대로 씁니다.
+
 ## Keymap
 
 GUI 단축키 전체와 바꾼 키: [GUI 단축키](shortcuts-gui.md). 바꾼 단축키는 `keymap.json` 에 저장됩니다. TUI 키는 TUI 의 `F1` 창에서 바꿉니다.

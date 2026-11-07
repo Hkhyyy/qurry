@@ -46,6 +46,18 @@ JSON cells (`json`, `jsonb` and the other drivers' JSON types) are colored like 
 
 The TUI result grid uses the same kinds and the same setting: change it there with **⌃k › Grid Alignment…** (pick a kind, then Left, Center or Right; NULL also offers Column type). The TUI reads `settings.json` when it starts and again when you open **⌃k › Grid Alignment…**, so after changing the alignment in the GUI, open that command (or restart the TUI) to see it. In `settings.json` only the kinds you changed are written, for example `"gridAlign": { "null": "right" }`; a kind you set back to its default is removed. A `"null": "left"` (or `"center"`) saved by 0.3.0 keeps working. Right was the 0.3.0 default, so it was never saved: if you had Right, pick **Right** again.
 
+### Column widths in result grids
+
+A column starts as wide as its name and its first values need (up to a limit), so a long value ends in `…`. To change that:
+
+- **Drag** the right edge of a column header. **Double-click** the edge to fit the column to its content: its name and the longest value among the rows loaded so far.
+- **Right-click** a column header: **Fit Column**, **Fit All Columns**, **Reset Widths** (every column back to its computed width), **Narrow Column**, **Widen Column**.
+- With a cell or a column header selected, `⌃⌥←` / `⌃⌥→` narrow / widen the current column by 4 characters (change the keys in **Settings › Keymap**, *Data grid*).
+
+In the TUI, `<` / `>` narrow / widen the current column and `=` fits it (the key bar shows them; change them in the `F1` window, *Data grid keys*); **⌃k › Fit All Columns** and **⌃k › Reset Column Widths** do every column.
+
+A table tab remembers its widths per table (data source · database · schema · table), in `settings.json` under `"columnWidths"`, so the GUI and the TUI show the same widths: in characters, which the GUI draws in its grid font and the TUI as that many cells. A column you never resized keeps its computed width, and **Reset Widths** forgets the table's widths. A console result keeps its widths until it runs again. The transposed view (**View as › Transpose**) keeps its own layout.
+
 ## Keymap
 
 Every GUI shortcut, and the keys you changed: [GUI keyboard shortcuts](shortcuts-gui.md). Changed shortcuts are kept in `keymap.json`. The TUI's keys are changed in its `F1` window.
