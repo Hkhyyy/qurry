@@ -2864,12 +2864,15 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
         st.save_connection(cfg, password, None).await.unwrap();
-        let text = "select 1;\n\n-- 한글 before it: PostgreSQL counts characters\nselect n, '한글' as k\nfrom (select 1 as n) t\nwhere n = = 1;";
+        let text = "select 1;\n\n-- 한글 before it: PostgreSQL counts characters\nselect n, '한글' as k\nfrom (select 1 as n) t\nwhere n = 1 and n = = 1;";
         let smallest = crate::exec::ExecSettings { inside: crate::exec::Inside::Smallest, ..Default::default() };
         let crate::exec::Plan::Run(v) = crate::exec::plan(text, text.find("where").unwrap(), kind, smallest) else { panic!("one statement") };
         let e = st.run_query("d".into(), v[0].sql.clone(), None, Some("t".into())).await.unwrap_err().to_string();
         let at = qurry_shared::errors::error_position(&e, &v[0].sql).unwrap_or_else(|| panic!("no position in {e:?}"));
         assert_eq!(v[0].start + at, text.rfind("= 1").unwrap(), "{e}");
+        // A short spot that also comes earlier on the line (MySQL: near 't')
+        let e = st.run_query("d".into(), "select 1 fro t".into(), None, Some("t".into())).await.unwrap_err().to_string();
+        assert_eq!(qurry_shared::errors::error_position(&e, "select 1 fro t"), Some("select 1 fro ".len()), "{e}");
     }
 
     #[tokio::test]

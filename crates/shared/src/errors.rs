@@ -136,9 +136,15 @@ pub fn with_position(msg: &str, pos: usize) -> String {
     format!("{msg} (position {pos})")
 }
 
+/// `msg` without the position [`with_position`] added: for where the error is shown next to its mark (the mark is the spot)
+pub fn without_position(msg: &str) -> &str {
+    let t = msg.trim_end();
+    t.strip_suffix(')').and_then(|r| r.rfind(" (position ").filter(|&i| r[i + 11..].parse::<usize>().is_ok()).map(|i| &t[..i])).unwrap_or(msg)
+}
+
 /// Where a failed statement's error points, as a byte offset into `sql` (the text that was sent): PostgreSQL's position
-/// ([`with_position`]), MySQL's "near '…' at line N" (where the quoted rest of the statement starts on that line; its end for
-/// `near ''`). None when the error doesn't say (the console then marks the whole statement)
+/// ([`with_position`]), MySQL's "near '…' at line N" (the quoted text is the rest of the statement from the spot, cut short after
+/// 80 characters; `near ''` is its end). None when the error doesn't say (the console then marks the whole statement)
 pub fn error_position(msg: &str, sql: &str) -> Option<usize> {
     let msg = msg.trim_end();
     if let Some(rest) = msg.strip_suffix(')')
@@ -147,18 +153,21 @@ pub fn error_position(msg: &str, sql: &str) -> Option<usize> {
     {
         return sql.char_indices().map(|(b, _)| b).chain([sql.len()]).nth(n.checked_sub(1)?);
     }
+    // The first "near '" is MySQL's own (the quoted text may hold another); " at line N" ends the message
+    let from = msg.find("to use near '")? + 13;
     let at = msg.rfind("' at line ")?;
     let line: usize = msg[at + 10..].parse().ok()?;
-    let near = &msg[msg[..at].rfind(" near '")? + 7..at];
+    let near = msg.get(from..at)?;
     let start = sql.split_inclusive('\n').take(line.checked_sub(1)?).map(str::len).sum::<usize>();
     if start > sql.len() {
         return None;
     }
-    if near.is_empty() {
-        return Some(sql.trim_end().len());
+    let body = sql.trim_end();
+    if body.ends_with(near) && body.len() - near.len() >= start {
+        return Some(body.len() - near.len());
     }
-    let head = near.lines().next().unwrap_or(near);
-    Some(sql[start..].find(head).map_or(start, |j| start + j))
+    // Cut short: where the whole quoted text starts, from that line on
+    Some(sql[start..].find(near).map_or(start, |j| start + j))
 }
 
 #[cfg(test)]
@@ -187,6 +196,19 @@ mod tests {
         // The same text earlier in the statement is not the spot
         assert_eq!(error_position(&my("x", 3), "select x\nfrom t\nwhere x"), Some("select x\nfrom t\nwhere ".len()));
         assert_eq!(error_position(&my("", 1), "select 1 +  "), Some("select 1 +".len()));
+        // A short near text that also comes earlier on its line: the rest of the statement says where
+        assert_eq!(error_position(&my("t", 1), "select 1 fro t"), Some("select 1 fro ".len()));
+        let sql = "select 1 as a from dual where 1 = 1 and 2 = 1 1";
+        assert_eq!(error_position(&my("1", 1), sql), Some(sql.len() - 1));
+        // The quoted text holding " near '" itself
+        let sql = "select 1 fro t where x = ' near ' and y = 2";
+        assert_eq!(error_position(&my("t where x = ' near ' and y = 2", 1), sql), Some("select 1 fro ".len()));
+        // Cut short after 80 characters: the whole quoted text is found from its line on
+        let sql = format!("select a from\nt where b = 1 fro {} and c = 1", "x".repeat(90));
+        let cut: String = sql[sql.find("fro x").unwrap()..].chars().take(80).collect();
+        assert_eq!(error_position(&my(&cut, 2), &sql), sql.find("fro x"));
+        assert_eq!(without_position(&with_position("ERROR: relation \"t\" does not exist", 15)), "ERROR: relation \"t\" does not exist");
+        assert_eq!(without_position("f(x) (position y)"), "f(x) (position y)");
         // Errors that don't say
         assert_eq!(error_position("ERROR: relation \"t\" does not exist", "select * from t"), None);
         assert_eq!(error_position("Unknown column 'x' in 'field list'", "select x"), None);

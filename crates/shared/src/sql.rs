@@ -498,7 +498,7 @@ pub fn enclosing_subqueries(text: &str, start: usize, end: usize, offset: usize,
                     && offset <= i
                 {
                     let (s, e) = trimmed(text, o + 1, i);
-                    let head: String = text[s..e].trim_start_matches(|c: char| c == '(' || c.is_whitespace()).chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+                    let head: String = text[s..e].trim_start_matches(|c: char| c == '(' || c.is_whitespace()).chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$').collect();
                     // `((select 1))` runs the same as the inner one: offered once
                     let same = e - s >= 2 && out.last() == Some(&trimmed(text, s + 1, e - 1));
                     if QUERY_HEADS.contains(&head.to_ascii_uppercase().as_str()) && !same {
@@ -540,6 +540,12 @@ mod tests {
         assert!(subs("select * from a where id in (1, 2, 3)", "2", pg).is_empty());
         assert!(subs("select count(*) from a", "*", pg).is_empty());
         assert_eq!(subs("select * from a where id in ((select 1))", "1", pg), ["select 1"]);
+        // A word only starts a query when it is the whole identifier: `table_name`, `with_tax`, `select_count` are columns
+        assert!(subs("select * from information_schema.columns where (table_name = 'x')", "name", pg).is_empty());
+        assert!(subs("select count(table_name) from information_schema.tables", "name", pg).is_empty());
+        assert!(subs("select coalesce(with_tax, 0) from t", "tax", pg).is_empty());
+        assert!(subs("insert into t (select_count, b) values (1, 2)", "count", pg).is_empty());
+        assert!(subs("select (values_json) from t", "json", pg).is_empty());
         // CTE bodies
         let t = "with x as (\n  select 1 as n\n), y as (values (2)) select * from x, y";
         assert_eq!(subs(t, "as n", pg), ["select 1 as n"]);
