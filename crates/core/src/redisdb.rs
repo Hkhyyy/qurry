@@ -1118,7 +1118,9 @@ mod tests {
         assert!(o.config_allowed, "a plain Redis allows CONFIG");
         let db12 = o.databases.iter().find(|d| d.name == "db12").expect("db12 listed");
         assert!(db12.keys >= 3, "{o:?}");
-        assert_eq!(st.redis_overview("rd".into()).await.unwrap().databases, o.databases, "same list from either database");
+        // (other tests change the other databases' counts meanwhile: compare db12's, which only this test writes)
+        let from_db0 = st.redis_overview("rd".into()).await.unwrap().databases;
+        assert_eq!(from_db0.iter().find(|d| d.name == "db12"), Some(db12), "same db12 from either database: {from_db0:?}");
         assert_eq!(st.redis_key_names("rd::db12".into(), "redis-browser:a".into(), 50).await.unwrap(), ["redis-browser:a:1", "redis-browser:a:2"]);
         assert!(st.redis_key_names("rd".into(), "redis-browser:".into(), 50).await.unwrap().iter().all(|k| !k.starts_with("redis-browser:a:")), "db0 doesn't have db12's keys");
         assert_eq!(st.redis_key_names("rd::db12".into(), "redis-browser:".into(), 1).await.unwrap().len(), 1, "at most max");
@@ -1312,13 +1314,22 @@ mod tests {
             let info: String = redis::cmd("INFO").arg("commandstats").query_async(c).await.unwrap();
             info.lines().find_map(|l| l.strip_prefix("cmdstat_memory|usage:calls=")).and_then(|r| r.split(',').next()).map_or(0, |n| n.parse().unwrap())
         }
-        let before = memory_calls(&mut c).await;
-        let e = st.run_read_only("rd::db8".into(), format!("GET {h}"), 10).await.unwrap_err().to_string();
-        assert!(e.contains("WRONGTYPE"), "{e}");
-        assert!(st.run_read_only("rd::db8".into(), format!("MGET qurry:str:s {h}"), 10).await.is_ok());
-        assert!(st.run_read_only("rd::db8".into(), format!("GETRANGE {h} 0 -1"), 10).await.is_err());
-        assert!(st.run_read_only("rd::db8".into(), "GET qurry:str:s".into(), 10).await.is_ok());
-        assert_eq!(memory_calls(&mut c).await, before, "string size checks ran MEMORY USAGE");
+        // The counter is the server's: another test running at the same time (as in CI) can add to it, so a round counts only
+        // when no call came in during it. A check that runs MEMORY USAGE adds to every round
+        let mut added = vec![];
+        for _ in 0..5 {
+            let before = memory_calls(&mut c).await;
+            let e = st.run_read_only("rd::db8".into(), format!("GET {h}"), 10).await.unwrap_err().to_string();
+            assert!(e.contains("WRONGTYPE"), "{e}");
+            assert!(st.run_read_only("rd::db8".into(), format!("MGET qurry:str:s {h}"), 10).await.is_ok());
+            assert!(st.run_read_only("rd::db8".into(), format!("GETRANGE {h} 0 -1"), 10).await.is_err());
+            assert!(st.run_read_only("rd::db8".into(), "GET qurry:str:s".into(), 10).await.is_ok());
+            added.push(memory_calls(&mut c).await - before);
+            if added.last() == Some(&0) {
+                break;
+            }
+        }
+        assert_eq!(added.last(), Some(&0), "string size checks ran MEMORY USAGE: {added:?} calls per round");
         let _: () = redis::cmd("DEL").arg(h).arg("qurry:str:s").query_async(&mut c).await.unwrap();
     }
 

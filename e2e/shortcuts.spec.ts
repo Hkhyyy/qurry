@@ -315,8 +315,12 @@ const SCOPES: { name: string; setup?: (page: Page) => Promise<void>; steps: Step
         await expect(editor(page).locator(".squiggly-warning")).toHaveCount(1);
         await page.keyboard.press("Home");
         for (let i = 0; i < 8; i++) await page.keyboard.press("ArrowRight");
-        await page.keyboard.press(key);
-        await expect(page.getByText("Change to user_name")).toBeVisible();
+        // Monaco's own code-action request for the moving caret can supersede the key's on a slow runner (Linux WebKit in CI:
+        // "No code actions available"); the key is pressed again then, as a user would
+        await expect(async () => {
+          await page.keyboard.press(key);
+          await expect(page.getByText("Change to user_name")).toBeVisible({ timeout: 1_500 });
+        }).toPass({ timeout: 10_000 });
         await page.keyboard.press("Escape");
       }],
       ["editor.duplicate", edits("select 1", "select 1\nselect 1")],
