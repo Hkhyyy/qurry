@@ -7,8 +7,11 @@ pub fn parse_command(line: &str) -> Result<Vec<Vec<u8>>, String> {
     Ok(parse_words(line)?.into_iter().map(|(_, w)| w).collect())
 }
 
+/// An argument and where it is written in the line
+type Word = (std::ops::Range<usize>, Vec<u8>);
+
 /// parse_command's arguments with where each is written in the line
-fn parse_words(line: &str) -> Result<Vec<(std::ops::Range<usize>, Vec<u8>)>, String> {
+fn parse_words(line: &str) -> Result<Vec<Word>, String> {
     let mut out = Vec::new();
     let b = line.as_bytes();
     let mut i = 0;
