@@ -56,7 +56,7 @@ A column starts as wide as its name and its first values need (up to a limit), s
 
 In the TUI, `<` / `>` narrow / widen the current column and `=` fits it (the key bar shows them; change them in the `F1` window, *Data grid keys*); **⌃k › Fit All Columns** and **⌃k › Reset Column Widths** do every column.
 
-A table tab remembers its widths per table (data source · database · schema · table), in `settings.json` under `"columnWidths"`, so the GUI and the TUI show the same widths: in characters, which the GUI draws in its grid font and the TUI as that many cells. A column you never resized keeps its computed width, and **Reset Widths** forgets the table's widths. A console result keeps its widths until it runs again. The transposed view (**View as › Transpose**) keeps its own layout.
+A table tab remembers its widths per table (data source · database · schema · table), in `settings.json` under `"columnWidths"`, so the GUI and the TUI show the same widths: in characters, which the GUI draws in its grid font and the TUI as that many cells. A wide character (Hangul, Chinese, Japanese, emoji) counts as 2, as a terminal draws it, so a fitted column shows the whole value in both apps. A table tab reads the saved widths each time it opens, so a change made in the other app shows when you open the table again. A column you never resized keeps its computed width, and **Reset Widths** forgets the table's widths. If the settings file can't be written, the new widths still apply until the tab closes. A console result keeps its widths until it runs again; columns with the same name (a join's two `id` columns) resize on their own. The transposed view (**View as › Transpose**) keeps its own layout.
 
 ## Keymap
 

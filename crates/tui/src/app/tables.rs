@@ -93,13 +93,16 @@ impl App {
                 let TabKind::Table(tt) = &mut t.kind else { return };
                 tt.running = false;
                 tt.pk = pk;
+                // The widths the tab has (also ones a failed save kept, until it closes) with the saved ones on top (the GUI's changes)
+                let mut widths = tt.grid.as_ref().map(|g| g.user_widths.clone()).unwrap_or_default();
+                widths.extend(saved);
                 match r {
                     Ok(res) => {
                         let n = res.rows.len();
                         let more = res.truncated;
                         let (row, col) = tt.grid.as_ref().map(|g| (g.row, g.col)).unwrap_or((0, 0));
                         let mut g = Grid::new(res);
-                        g.set_user_widths(saved);
+                        g.set_user_widths(widths);
                         g.more_session = Some(tt.session.clone());
                         g.row = row.min(n.saturating_sub(1));
                         g.col = col.min(g.cols().saturating_sub(1));
@@ -120,7 +123,7 @@ impl App {
                             };
                             let empty = qurry_core::db::QueryResult { columns, rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None };
                             let mut g = Grid::new(empty);
-                            g.set_user_widths(saved);
+                            g.set_user_widths(widths);
                             tt.grid = Some(g);
                         }
                         tt.error = Some(e.clone());
@@ -304,6 +307,7 @@ impl App {
         let table = table_ref(t);
         let Some(g) = self.grid_mut().filter(|g| g.cols() > 0) else { return };
         let c = g.col;
+        let name = g.result.columns[c].name.clone();
         let changed: ColumnWidths = match how {
             Resize::Step(s) => [g.set_width(c, column_width(g.widths[c].into(), s))].into(),
             Resize::Fit => [g.set_width(c, g.fit_width(c))].into(),
@@ -316,7 +320,7 @@ impl App {
         self.status = match (how, changed.iter().next()) {
             (Resize::Reset, _) => "Column widths are the computed ones again".into(),
             (Resize::FitAll, _) => "Every column fits its content".into(),
-            (_, Some((name, w))) => format!("{name}: {w} cells wide"),
+            (_, Some((_, w))) => format!("{name}: {w} cells wide"),
             _ => String::new(),
         };
         let Some(table) = table else { return };

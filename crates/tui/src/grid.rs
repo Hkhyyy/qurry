@@ -26,7 +26,7 @@ pub struct Grid {
     pub added: usize,
     /// Each column's width as drawn: the user's (`user_widths`), else the one computed from the header and the first rows
     pub widths: Vec<u16>,
-    /// Widths the user set (< > =, or the GUI for a table tab) by column name, in cells (qurry_shared::format::ColumnWidths)
+    /// Widths the user set (< > =, or the GUI for a table tab) by column name (`id#2` for a name the result repeats), in cells (qurry_shared::format::ColumnWidths)
     pub user_widths: ColumnWidths,
     /// Fractional-second digits of time columns (aligned within a column, 0 = no alignment)
     pub(crate) frac: Vec<usize>,
@@ -109,7 +109,7 @@ pub fn cell_text(v: &Value) -> String {
     }
 }
 pub(crate) use qurry_core::format::{is_time_type, pad_frac};
-use qurry_core::format::{cell_align, cell_class, column_class, column_width, is_json_type, json_spans, type_class, Align, Alignments, ColumnWidths, JsonKind, ValueClass};
+use qurry_core::format::{cell_align, cell_class, column_class, column_keys, column_width, is_json_type, json_spans, text_width, type_class, Align, Alignments, ColumnWidths, JsonKind, ValueClass};
 use qurry_core::extract::{self, Format, Rows};
 use qurry_core::store::DbKind;
 
@@ -149,6 +149,7 @@ impl Grid {
 
     pub fn compute_widths(&mut self) {
         let r = &self.result;
+        let keys = self.width_keys();
         self.widths = r
             .columns
             .iter()
@@ -156,13 +157,18 @@ impl Grid {
             .map(|(i, c)| {
                 let body = r.rows.iter().take(300).map(|row| row.get(i).map(cell_text).unwrap_or_default().width()).max().unwrap_or(0);
                 // +2: room for the sort indicator (▲▼)
-                self.user_widths.get(&c.name).copied().unwrap_or(((c.name.width() + 2).max(body).clamp(4, 40) + 1) as u16)
+                self.user_widths.get(&keys[i]).copied().unwrap_or(((c.name.width() + 2).max(body).clamp(4, 40) + 1) as u16)
             })
             .collect();
         self.compute_frac();
     }
 
-    /// Widths the user set (a table tab's saved ones, or none for Reset Widths) replace the computed ones by column name
+    /// The keys of `user_widths`: each column's name, `id#2` for a name the result repeats (qurry_shared::format::column_keys)
+    fn width_keys(&self) -> Vec<String> {
+        column_keys(self.result.columns.iter().map(|c| c.name.as_str()))
+    }
+
+    /// Widths the user set (a table tab's saved ones, or none for Reset Widths) replace the computed ones by column key
     pub fn set_user_widths(&mut self, w: ColumnWidths) {
         self.user_widths = w;
         self.compute_widths();
@@ -171,17 +177,17 @@ impl Grid {
     /// Fit: the cells column `c` needs for its header (with the sort mark) and its longest value, over the rows loaded so far
     pub fn fit_width(&self, c: usize) -> u16 {
         let name = self.result.columns[c].name.width() + 2;
-        let body = (0..self.rows()).map(|r| self.shown(r, c, usize::MAX).map_or(6, |s| s.width())).max().unwrap_or(0);
+        let body = (0..self.rows()).map(|r| self.shown(r, c, usize::MAX).map_or(6, |s| text_width(&s))).max().unwrap_or(0);
         column_width(name.max(body) as i64, 0)
     }
 
-    /// Give column `c` the width `w` (in range); returns the width and its column's name, for saving
+    /// Give column `c` the width `w` (in range); returns the width and its column's key, for saving
     pub fn set_width(&mut self, c: usize, w: u16) -> (String, u16) {
-        let name = self.result.columns[c].name.clone();
+        let key = self.width_keys().swap_remove(c);
         let w = column_width(w.into(), 0);
-        self.user_widths.insert(name.clone(), w);
+        self.user_widths.insert(key.clone(), w);
         self.compute_widths();
-        (name, w)
+        (key, w)
     }
 
     /// Time columns: longest fractional-second digits among loaded values

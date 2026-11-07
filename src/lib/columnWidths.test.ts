@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CELL_PAD, CHAR_PX, fitChars, saveError, stepWidth, toChars, toPx } from "./columnWidths";
+import { CELL_PAD, CHAR_PX, fitChars, saveError, stepWidth, toChars, toPx, widthKeys } from "./columnWidths";
 
 describe("column widths (characters ↔ pixels, the shared step and range)", () => {
   it("turns characters into pixels and back at any grid font size", () => {
@@ -26,9 +26,21 @@ describe("column widths (characters ↔ pixels, the shared step and range)", () 
     expect(fitChars(60, ["x".repeat(5000)], 1)).toBe(200);
   });
 
+  it("counts a wide character (Hangul, CJK, emoji) as 2, as the TUI draws it", () => {
+    // 20 Hangul characters draw at about 10.4 px each at 12px: 40 characters (312 px of text) hold them, 20 (146 px) don't
+    expect(fitChars(60, ["가".repeat(20)], 1)).toBe(40);
+    expect(fitChars(60, ["고객 요청 🙏", "memo"], 1)).toBe(12);
+    expect(toPx(fitChars(60, ["가".repeat(20)], 1), 1)).toBeGreaterThanOrEqual(Math.ceil(20 * 10.4) + CELL_PAD);
+  });
+
+  it("a name the result repeats (a join's two id columns) gets its own key, so each column resizes on its own", () => {
+    expect(widthKeys(["id", "name", "id", "id"])).toEqual(["id", "name", "id#2", "id#3"]);
+    expect(widthKeys(["id", "memo"])).toEqual(["id", "memo"]);
+  });
+
   it("a failed save says the widths still apply and how to go back", () => {
     expect(saveError("permission denied")).toBe(
-      "Couldn't save the column widths (permission denied). They apply until the app closes; the column header's menu › Reset Widths goes back to the computed widths.",
+      "Couldn't save the column widths (permission denied). They apply until the tab closes; the column header's menu › Reset Widths goes back to the computed widths.",
     );
   });
 });

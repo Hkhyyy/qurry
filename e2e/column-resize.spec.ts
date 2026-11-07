@@ -182,6 +182,67 @@ test("console result: widths kept in memory, horizontal scrolling and the virtua
   // A table tab's settings can't be written: the width still applies, and the status bar says so and how to go back
   await openUsers(page);
   await page.evaluate(() => ((window as any).__mockChannelSaveFails = true));
+  const saved = await width(header(page, "user_name"));
   await drag(page, "user_name", 50);
-  await expect(page.locator(".statusbar")).toContainText("Couldn't save the column widths (Couldn't save the settings: permission denied). They apply until the app closes; the column header's menu › Reset Widths goes back to the computed widths.");
+  await expect(page.locator(".statusbar")).toContainText("Couldn't save the column widths (Couldn't save the settings: permission denied). They apply until the tab closes; the column header's menu › Reset Widths goes back to the computed widths.");
+  const unsaved = await width(header(page, "user_name"));
+  expect(unsaved).toBeGreaterThan(saved);
+  // Kept while the tab reloads (⌘R), gone with the tab
+  await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();
+  await page.keyboard.press("Meta+r");
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  expect(await width(header(page, "user_name"))).toBe(unsaved);
+  await page.keyboard.press("Meta+w");
+  await openUsers(page);
+  expect(await width(header(page, "user_name"))).toBe(saved);
+});
+
+test("Fit counts a wide character (Hangul) as 2, as the TUI does; a join's two id columns resize on their own", async ({ page }) => {
+  await openApp(page);
+  await openConsole(page);
+  await typeSql(page, "select * from cjk_demo");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Meta+Enter");
+  const memo = header(page, "memo");
+  await expect(memo).toBeVisible();
+  const long = work(page).getByRole("gridcell", { name: "배송 전에 꼭 전화 주세요 고객 요청 사항", exact: true });
+  expect(await cut(long)).toBe(true);
+  await memo.locator(".col-resize").dblclick();
+  // 16 Hangul characters and 7 spaces: 39 characters, as the TUI's fit
+  expect(await width(memo)).toBe(px(39));
+  expect(await cut(long)).toBe(false);
+
+  const ids = header(page, "id");
+  await expect(ids).toHaveCount(2);
+  const [a0, b0] = [await width(ids.nth(0)), await width(ids.nth(1))];
+  const b = (await ids.nth(1).locator(".col-resize").boundingBox())!;
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2 + 80, b.y + b.height / 2, { steps: 6 });
+  await page.mouse.up();
+  expect(await width(ids.nth(1))).toBeGreaterThan(b0 + 70);
+  expect(await width(ids.nth(0))).toBe(a0);
+  await ids.nth(0).click({ button: "right" });
+  await menuItem(page, /^Widen Column/).click();
+  expect(await width(ids.nth(0))).toBe(px(chars(a0) + 4));
+  expect(await width(ids.nth(1))).toBeGreaterThan(b0 + 70);
+});
+
+test("a table tab reads the saved widths each time it opens: a change the TUI made meanwhile shows", async ({ page }) => {
+  await openApp(page);
+  await openUsers(page);
+  await drag(page, "user_name", 60);
+  const w = await width(header(page, "user_name"));
+  // The TUI widens memo to 40 characters in the same settings file
+  await page.evaluate(() => {
+    const all = JSON.parse(localStorage.getItem("mock-columnWidths")!);
+    const k = Object.keys(all)[0];
+    all[k] = { ...all[k], memo: 40 };
+    localStorage.setItem("mock-columnWidths", JSON.stringify(all));
+  });
+  await work(page).locator(".grid-scroll").focus();
+  await page.keyboard.press("Meta+w");
+  await openUsers(page);
+  expect(await width(header(page, "memo"))).toBe(px(40));
+  expect(await width(header(page, "user_name"))).toBe(w);
 });

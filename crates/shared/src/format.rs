@@ -273,6 +273,26 @@ pub fn column_width(width: i64, steps: i64) -> u16 {
     width.saturating_add(steps.saturating_mul(COLUMN_WIDTH_STEP)).clamp(COLUMN_WIDTH_MIN as i64, COLUMN_WIDTH_MAX as i64) as u16
 }
 
+/// The characters `s` takes in a grid, as a terminal draws it (East Asian wide characters and emoji count 2): what Fit sizes a column
+/// to, so a width means the same in both apps (the GUI draws a wide character in about 1.4 grid characters, within 2)
+pub fn text_width(s: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(s)
+}
+
+/// The keys the set widths of a result's columns are kept under: the name, and for a name the result repeats (a join's two `id`
+/// columns, `select 1 a, 2 a`) the name and its occurrence, `id#2`, so each column resizes on its own
+pub fn column_keys<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+    names
+        .into_iter()
+        .map(|n| {
+            let k = seen.entry(n).or_default();
+            *k += 1;
+            if *k == 1 { n.to_string() } else { format!("{n}#{k}") }
+        })
+        .collect()
+}
+
 /// Reads saved widths (settings.json "columnWidths" › "widths"), skipping what isn't a whole number and keeping the rest in range
 pub fn column_widths(v: &Value) -> ColumnWidths {
     let Some(m) = v.as_object() else { return ColumnWidths::new() };
@@ -291,6 +311,14 @@ mod tests {
         let saved = serde_json::json!({ "memo": 53, "tiny": 1, "wide": 5000, "odd": "12", "half": 1.5 });
         assert_eq!(column_widths(&saved), ColumnWidths::from([("memo".into(), 53), ("tiny".into(), COLUMN_WIDTH_MIN), ("wide".into(), COLUMN_WIDTH_MAX)]));
         assert!(column_widths(&serde_json::json!([1])).is_empty());
+    }
+
+    #[test]
+    fn column_widths_count_display_columns_and_repeated_names() {
+        assert_eq!(text_width("memo"), 4);
+        assert_eq!(text_width("고객 요청"), 9);
+        assert_eq!(text_width("🙏"), 2);
+        assert_eq!(column_keys(["id", "name", "id", "id"]), ["id", "name", "id#2", "id#3"]);
     }
 
     #[test]

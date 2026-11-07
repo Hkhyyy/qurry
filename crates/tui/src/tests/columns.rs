@@ -116,3 +116,59 @@ async fn pg_table_tab_widths_are_shared_with_the_gui() {
     assert_eq!(amname(&h), Some(34), "the reopened tab keeps it");
     let _ = h.app.state.disconnect("test".into()).await;
 }
+
+/// Wide characters take 2 cells, so Fit sizes a Hangul column to them (as the GUI does); a name the result repeats (a join's two
+/// `id` columns) resizes each column on its own
+#[tokio::test]
+async fn fit_counts_wide_characters_and_repeated_names_resize_on_their_own() {
+    const HANGUL: &str = "배송전에전화주세요";
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(|_| {
+        let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: "text".into() };
+        Ok(qurry_core::db::QueryResult { columns: vec![col("id"), col("memo"), col("id")], rows: vec![vec!["1".into(), HANGUL.into(), "2".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None })
+    });
+    h.console_with("select o.id, memo, u.id from o join u on true", 0, 0);
+    h.key("F5");
+    h.settle().await;
+    h.app.focus = Focus::Grid;
+    assert_eq!(widths(&h), [5, 19, 5]);
+    h.key("Right");
+    h.key("Right");
+    h.key(">");
+    assert_eq!(widths(&h), [5, 19, 9], "the first id keeps its width");
+    assert_eq!(h.app.status, "id: 9 cells wide");
+    h.key("Left");
+    h.key("Left");
+    h.key(">");
+    assert_eq!(widths(&h), [9, 19, 9]);
+    h.key("Right");
+    h.key("<");
+    h.key("<");
+    // The screen text has a blank after each wide character (its second cell)
+    let drawn: String = HANGUL.chars().map(|c| format!("{c} ")).collect();
+    assert!(!h.screen(80, 14).contains(drawn.trim_end()), "cut while narrow");
+    h.key("=");
+    assert_eq!(widths(&h)[1], 18, "9 Hangul characters are 18 cells ({})", h.app.status);
+    let s = h.screen(80, 14);
+    assert!(s.contains(&format!("│{drawn}│")), "fits its content:\n{s}");
+}
+
+/// A settings file that can't be written: the widths still apply, also after the table reloads (until the tab closes, as the status says)
+#[tokio::test]
+async fn unsaved_widths_last_until_the_tab_closes() {
+    let mut h = Harness::new().await;
+    let id = h.table_tab("orders", &["idx", "memo"], &[&["486", MEMO]], &["idx"]);
+    h.app.focus = Focus::Grid;
+    h.key("Right");
+    // A folder where the file should be: saving it fails
+    std::fs::create_dir_all(h.app.state.store.dir().join("settings.json")).unwrap();
+    h.key(">");
+    assert_eq!(widths(&h)[1], 45);
+    assert!(h.app.status.starts_with("Couldn't save the column widths"), "{}", h.app.status);
+    assert!(h.app.status.contains("They apply until the tab closes"), "{}", h.app.status);
+    // Reload (⌃r, a WHERE, ORDER BY): no server here, so the reload fails and keeps the columns; the width stays
+    h.app.reload_table(id);
+    h.settle().await;
+    assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Table(tt) if tt.error.is_some()), "the reload ran");
+    assert_eq!(widths(&h)[1], 45);
+}

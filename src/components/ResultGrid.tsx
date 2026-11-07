@@ -10,7 +10,7 @@ import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, raw
 import { sharedReady, useSharedReady } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
-import { CELL_PAD, CHAR_PX, fitChars, stepWidth, toChars, toPx, useColumnWidths, type WidthsOf } from "../lib/columnWidths";
+import { CELL_PAD, CHAR_PX, fitChars, stepWidth, toChars, toPx, useColumnWidths, widthKeys, type WidthsOf } from "../lib/columnWidths";
 import { isJsonType, jsonCell } from "../lib/jsonSpans";
 import { contains, copyTable, extend, forEachCell, isSingle, type Pos, selCols, selRows as rowsOf, type Selection, single, toggle } from "../lib/gridSelection";
 
@@ -225,17 +225,18 @@ export function ResultGrid(p: Props) {
       }),
     [cols, firstRow, headPx, em],
   );
-  // Widths a user set (drag, fit, the header menu, ⌃⌥← / ⌃⌥→) by column name, in characters (lib/columnWidths.ts)
+  const wasmReady = useSharedReady();
+  // Widths a user set (drag, fit, the header menu, ⌃⌥← / ⌃⌥→) by column name (`id#2` for a repeated one), in characters (lib/columnWidths.ts)
   const ownWidths = useId();
   const userWidths = useColumnWidths(p.widthsOf ?? ownWidths, (msg) => setStatusWidget("aggregate", msg));
   const setW = userWidths.widths;
+  const wkey = useMemo(() => widthKeys(cols.map((c) => c.name)), [cols, wasmReady]);
   /** Column i's set width (characters), or undefined while it has none */
-  const setOf = (i: number): number | undefined => (Object.prototype.hasOwnProperty.call(setW, cols[i].name) ? setW[cols[i].name] : undefined);
+  const setOf = (i: number): number | undefined => (Object.prototype.hasOwnProperty.call(setW, wkey[i]) ? setW[wkey[i]] : undefined);
   /** The one place a column's width comes from (layout, virtualization, scrolling): the user's, else the computed one */
-  const widths = useMemo(() => computed.map((w, i) => { const s = setOf(i); return s === undefined ? w : toPx(s, em); }), [computed, setW, em]);
+  const widths = useMemo(() => computed.map((w, i) => { const s = setOf(i); return s === undefined ? w : toPx(s, em); }), [computed, setW, wkey, em]);
   const total = rownumW + widths.reduce((a, b) => a + b, 0);
   // Time columns: align fractional-second digits within the column (values unchanged)
-  const wasmReady = useSharedReady();
   const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows, wasmReady]);
   const shown = (v: Cell, ci: number) => (fracW[ci] && typeof v === "string" ? padFrac(v, fracW[ci]) : display(v));
   // Value class of each cell and where it sits (Settings › Appearance › Alignment; the TUI grid's rule)
@@ -248,15 +249,15 @@ export function ResultGrid(p: Props) {
   // ─── Column widths ───
   /** Characters column i needs for its header and its longest cell as shown, over the rows loaded so far (DataGrip: Fit Column) */
   const fitOf = (i: number) => fitChars(headPx[i], Array.from({ length: rowCount }, (_, r) => shown(valueAt(r, i), i)), em);
-  const fitColumn = (i: number) => userWidths.set({ [cols[i].name]: fitOf(i) });
-  const fitAll = () => userWidths.set(Object.fromEntries(cols.map((c, i) => [c.name, fitOf(i)])));
+  const fitColumn = (i: number) => userWidths.set({ [wkey[i]]: fitOf(i) });
+  const fitAll = () => userWidths.set(Object.fromEntries(wkey.map((k, i) => [k, fitOf(i)])));
   /** Narrow (-1) / widen (+1) column i by one step of the shared rule (the TUI's < >), from the width it has now */
-  const stepColumn = (i: number, steps: number) => userWidths.set({ [cols[i].name]: stepWidth(setOf(i) ?? toChars(widths[i], em), steps) });
+  const stepColumn = (i: number, steps: number) => userWidths.set({ [wkey[i]]: stepWidth(setOf(i) ?? toChars(widths[i], em), steps) });
   /** Dragging a header's right edge: the width follows the pointer (in whole characters), saved once on release */
   const startResize = (e: React.MouseEvent, i: number) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    const [x0, w0, name] = [e.clientX, widths[i], cols[i].name];
+    const [x0, w0, name] = [e.clientX, widths[i], wkey[i]];
     let last: number | null = null;
     const move = (ev: MouseEvent) => {
       const w = toChars(w0 + ev.clientX - x0, em);

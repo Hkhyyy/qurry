@@ -390,8 +390,10 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     }
     h.app.close_tab_now(h.app.active);
     // Column widths (#109): < > = on the current column, saved per table in settings.json "columnWidths" (shared with the GUI)
+    // The Hangul memo is the widest (2 cells a character), though the English one has more characters
     let memo = "first order after the promotion; call before delivery";
-    h.table_tab("orders", &["idx", "order_no", "memo", "created_at"], &[&["486", "O-20261101", memo, "2026-11-01"], &["487", "O-20261102", "gift wrap", "2026-11-02"], &["488", "O-20261103", "refund requested", "2026-11-03"]], &["idx"]);
+    let wide = "배송 전에 꼭 전화 주세요. 부재 시 경비실에 맡겨 주세요";
+    h.table_tab("orders", &["idx", "order_no", "memo", "created_at"], &[&["486", "O-20261101", memo, "2026-11-01"], &["487", "O-20261102", "gift wrap", "2026-11-02"], &["488", "O-20261103", wide, "2026-11-03"]], &["idx"]);
     h.app.focus = crate::app::Focus::Grid;
     if let Some(g) = h.app.grid_mut() {
         g.col = 2;
@@ -403,7 +405,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     }
     scenes.push(app_scene(h, "Column widths: wider", "> three times: each widens the current column by 4 cells (< narrows it); saved for this table, the GUI shows it too", 120, 12));
     h.key("=");
-    scenes.push(app_scene(h, "Column widths: fit", "=: the column fits its longest loaded value; ⌃k › Fit All Columns / Reset Column Widths do every column", 120, 12));
+    scenes.push(app_scene(h, "Column widths: fit", "=: the column fits its widest loaded value (a Hangul character takes 2 cells, as the GUI counts it); ⌃k › Fit All Columns / Reset Column Widths do every column", 120, 12));
     h.app.run_action(crate::app::Action::ColumnReset);
     h.app.status.clear();
     h.app.close_tab_now(h.app.active);
