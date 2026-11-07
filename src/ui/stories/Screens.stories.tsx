@@ -7,6 +7,7 @@ import { monaco } from "../../lib/monaco";
 import App from "../../App";
 import { SettingsDialog } from "../../features/settings/SettingsDialog";
 import { setFont } from "../../lib/prefs";
+import { saveCustomTheme, setThemeSync } from "../../lib/theme";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
 import { ConsolePane, SPLITTER_FAILED, type OutputLine } from "../../components/ConsolePane";
@@ -114,6 +115,46 @@ export const SettingsFontsCustom: S = {
     await userEvent.click(await body.findByRole("button", { name: "Add Font File…" }));
     await waitFor(() => expect(field.textContent).toMatch(/Fira Code/));
     await userEvent.click(field);
+  },
+};
+
+/** Settings › Appearance › Theme with Sync with OS on: a dark and a light theme of the user's choice (here One Dark and Solarized Light),
+ *  shared with the TUI, which picks between them by its terminal's background */
+export const SettingsThemeSync: S = {
+  name: "Settings — Theme: Sync with OS",
+  render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await setThemeSync({ dark: "one-dark", light: "solarized-light" });
+    await userEvent.click(await body.findByRole("checkbox", { name: "Sync with OS" }));
+  },
+};
+/** Settings › Appearance › Theme › Edit Colors…: a custom theme from any built-in (or custom) one. Basic colors, the rest under "Advanced
+ *  colors"; a picker and the hex per color, ↺ back to the base's. The whole window draws the colors being edited, the preview shows every
+ *  state, and pointing at a color's name outlines what draws it (here Comment, set too dark: its contrast warning shows next to it and in
+ *  the header, and it is saved with the warning if asked, never changed). Import… / Export… read and write a small JSON file */
+export const SettingsThemeEditor: S = {
+  name: "Settings — Theme editor",
+  render: () => <SettingsDialog initialPage="theme" onClose={noop} onUpdate={noop} onChannel={noop} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.selectOptions(await body.findByRole("combobox", { name: "Based on" }), "dracula");
+    const hex = await body.findByRole("textbox", { name: "Comment hex" });
+    await userEvent.clear(hex);
+    await userEvent.type(hex, "#3d4053");
+    await userEvent.type(await body.findByRole("textbox", { name: "Theme name" }), "Dracula (mine)");
+    await userEvent.hover(canvasElement.ownerDocument.querySelector('[data-token="comment"] .theme-token-label')!);
+  },
+};
+/** Quick Switch Theme (⌃`, as DataGrip's): the built-in themes, custom ones (marked), Sync with OS with its pair, and Edit Colors… */
+export const QuickSwitchTheme: S = {
+  name: "Quick Switch Theme",
+  render: () => <App />,
+  play: async ({ canvasElement }) => {
+    await saveCustomTheme({ id: "", name: "Night shift", base: "dracula", colors: { bg: "#1d1e26", accent: "#9580ff" } }).catch(() => {});
+    const body = within(canvasElement.ownerDocument.body);
+    await body.findAllByText("[DEV] shop_app");
+    fireEvent.keyDown(canvasElement.ownerDocument.body, { key: "`", code: "Backquote", ctrlKey: true });
   },
 };
 
