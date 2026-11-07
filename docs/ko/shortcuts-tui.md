@@ -233,7 +233,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `arrows  (h j k l)` | Move |
 | `PgUp / PgDn · g / G` | Page · first / last row (more rows load automatically) |
 | `Home / End` | First / last column |
-| `⇧↑↓←→ / drag` | Select a range of cells (Esc clears) · scroll sideways: wheel over the header row, ⌥+wheel, or click / drag the bar on the bottom border (its heavier part is the columns shown; `◀ cols 3–8 of 14 ▶` at its right end) |
+| `⇧↑↓←→ / drag` | Select a range of cells (Esc clears) · scroll sideways: wheel over the header row, ⌥+wheel, or click / drag the bar on the bottom border (its heavier part is the columns shown; ◀ cols 3–8 of 14 ▶ at its right end) |
 | `Enter / F2` | Edit cell (table data) |
 | `s` | Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows) |
 | `w or / · o` | Edit WHERE · ORDER BY (table data) |
