@@ -103,7 +103,7 @@ impl App {
     pub fn restore_console(&mut self, conn: &str, db: String, title: String, sql: &str) -> Option<u64> {
         let mut editor = TextArea::new(sql.lines().map(String::from).collect());
         editor.set_cursor_line_style(ratatui::style::Style::default());
-        let manual = self.conn(conn).is_some_and(|c| c.config.options.starts_manual());
+        let manual = self.conn(conn).is_some_and(|c| c.config.starts_manual());
         let c = Console { editor, session: uuid::Uuid::new_v4().to_string(), grid: None, result_title: String::new(), result_sql: String::new(), output: vec![], show_output: true, running: false, tx_manual: manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![] };
         self.restored_tab(conn, db, title, TabKind::Console(c))
     }
@@ -326,8 +326,8 @@ impl App {
         let mut editor = TextArea::default();
         editor.set_cursor_line_style(ratatui::style::Style::default());
         // Production starts in Manual (#106): the first such console of a source says so, and where to turn it off
-        let manual = self.conn(conn).is_some_and(|c| c.config.options.starts_manual());
-        let tell = self.conn(conn).is_some_and(|c| c.config.options.production_starts_manual()) && self.told_manual.insert(conn.to_string());
+        let manual = self.conn(conn).is_some_and(|c| c.config.starts_manual());
+        let tell = self.conn(conn).is_some_and(|c| c.config.production_starts_manual()) && self.told_manual.insert(conn.to_string());
         if tell {
             self.status = qurry_shared::errors::PRODUCTION_MANUAL.into();
         }

@@ -1775,7 +1775,9 @@ mod tests {
         let log = |n: usize| st.audit_log(None, String::new(), n).into_iter().map(|e| e.sql).collect::<Vec<_>>();
         run("o", format!("create table {s}.u (a int)")).await.unwrap();
         st.set_tx_mode("d".into(), "o".into(), true).await.unwrap();
-        run("o", format!("select * from {s}.u")).await.unwrap();
+        // A locking read: on Production a plain one ends its transaction (and metadata lock) with it (Session::set_reads_outside_tx)
+        run("o", format!("select * from {s}.u lock in share mode")).await.unwrap();
+        assert!(st.tx_state("o".into()).await);
         st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
         run("m", "set lock_wait_timeout = 1".into()).await.unwrap();
         run("m", format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
@@ -1898,8 +1900,9 @@ mod tests {
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 
-    /// MySQL Manual: after a SELECT (or a failed change) the console counts a transaction as open without knowing the server has one.
-    /// A failing SET or DDL after it doesn't claim that changes were committed: there were none
+    /// MySQL Manual: after a locking SELECT (or a failed change) the console counts a transaction as open without knowing the server
+    /// has one. A failing SET or DDL after it doesn't claim that changes were committed: there were none. (A plain SELECT on
+    /// Production ends the transaction autocommit=0 opened for it: Session::set_reads_outside_tx)
     #[tokio::test]
     #[ignore]
     async fn mysql_guessed_transaction_claims_no_commit() {
@@ -1908,11 +1911,13 @@ mod tests {
         followup_table(&st, DbKind::Mysql, s).await;
         let run = |sql: String| st.run_query("d".into(), sql, None, Some("m".into()));
         st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run(format!("select * from {s}.t")).await.unwrap();
+        assert!(!st.tx_state("m".into()).await, "a plain read on Production leaves none open");
         for (before, then, failing) in [
-            ("select 1".to_string(), None, "set sql_mod = ''".to_string()),
+            (format!("select * from {s}.t where id = 1 for update"), None, "set sql_mod = ''".to_string()),
             (format!("update {s}.missing set v = 1"), None, format!("alter table {s}.t add column v int")),
             // The SELECT's read view is an open transaction on the server, which the SET after it asks about: still nothing changed
-            (format!("select * from {s}.t"), Some("set @qurry_note = 1"), format!("alter table {s}.t add column v int")),
+            (format!("select * from {s}.t lock in share mode"), Some("set @qurry_note = 1"), format!("alter table {s}.t add column v int")),
         ] {
             run(before.clone()).await.ok();
             if let Some(t) = then {
@@ -1957,7 +1962,8 @@ mod tests {
         assert!(!st.tx_state("m".into()).await);
         let r = run("m", format!("select v from {s}.t where id = 1")).await.unwrap();
         assert_eq!(serde_json::to_string(&r.rows).unwrap(), "[[99]]");
-        assert!(st.tx_state("m".into()).await);
+        // Production: the read's transaction ended with it (Session::set_reads_outside_tx)
+        assert!(!st.tx_state("m".into()).await);
         st.rollback_tx("m".into()).await.unwrap();
         st.rollback_tx("o".into()).await.unwrap();
         followup_drop(&st, DbKind::Mysql, s).await;

@@ -373,7 +373,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.key("a");
     scenes.push(app_scene(h, "Console result: read-only", "An edit key on a result Qurry can't tie to table rows: the status line says why (here the key isn't in the result)", 120, 22));
     // A Production console starts in Manual (#106): its change is pending, and the reminder about a transaction left open
-    let reminder = qurry_shared::errors::tx_idle_reminder("[PROD] rentalpay", 5, Some((false, 600)));
+    let reminder = qurry_shared::errors::tx_idle_reminder("[PROD] rentalpay", 5, true, Some((false, 600)));
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         (c.tx_manual, c.in_tx, c.show_output) = (true, true, true);
         for (e, l) in [(false, qurry_shared::errors::PRODUCTION_MANUAL.to_string()), (false, "> update users set role = 'admin' where idx = 10".into()), (false, "1 row(s) affected in 4 ms".into()), (false, reminder.clone())] {

@@ -222,7 +222,8 @@ impl Grid {
             self.anchor = self.anchor.map(|(r, c)| (mv(r), c));
         }
         if !self.orig.is_empty() {
-            self.orig.extend(n..n + k);
+            // The loaded rows, in the order they came (orig covers them only: added rows stay last, unsorted)
+            self.orig.extend(at..at + k);
             self.apply_local_sort();
         }
     }
@@ -239,7 +240,7 @@ impl Grid {
             _ => Some((col, false)),
         };
         if self.orig.is_empty() {
-            self.orig = (0..self.rows()).collect();
+            self.orig = (0..self.rows() - self.added).collect();
         }
         self.apply_local_sort();
         if self.sort.is_none() {
@@ -247,18 +248,32 @@ impl Grid {
         }
     }
 
+    /// Sorts the loaded rows (orig: where each came in the result); the added rows stay last, where Submit and Revert find them.
+    /// Edits and deletes move with their rows
     fn apply_local_sort(&mut self) {
         // Marks are row positions: they would point at other rows once sorted
         self.marked.clear();
-        let mut rows: Vec<(usize, Vec<Value>)> = std::mem::take(&mut self.orig).into_iter().zip(std::mem::take(&mut self.result.rows)).collect();
+        let base = self.rows() - self.added;
+        let loaded: Vec<Vec<Value>> = self.result.rows.drain(..base).collect();
+        // (place in the result, row now, values)
+        let mut rows: Vec<(usize, usize, Vec<Value>)> = std::mem::take(&mut self.orig).into_iter().zip(loaded).enumerate().map(|(now, (o, v))| (o, now, v)).collect();
         match self.sort {
             Some((c, desc)) => rows.sort_by(|a, b| {
-                let o = cmp_cell(a.1.get(c), b.1.get(c), desc);
+                let o = cmp_cell(a.2.get(c), b.2.get(c), desc);
                 if desc { o.reverse() } else { o }
             }),
             None => rows.sort_by_key(|r| r.0),
         }
-        (self.orig, self.result.rows) = rows.into_iter().unzip();
+        let mut to = vec![0; base];
+        for (i, r) in rows.iter().enumerate() {
+            to[r.1] = i;
+        }
+        let mv = |r: usize| if r < base { to[r] } else { r };
+        self.edits = std::mem::take(&mut self.edits).into_iter().map(|((r, c), v)| ((mv(r), c), v)).collect();
+        self.deleted = std::mem::take(&mut self.deleted).into_iter().map(mv).collect();
+        let (orig, sorted): (Vec<usize>, Vec<Vec<Value>>) = rows.into_iter().map(|(o, _, v)| (o, v)).unzip();
+        self.orig = orig;
+        self.result.rows.splice(0..0, sorted);
     }
 
     pub fn rows(&self) -> usize {
@@ -942,6 +957,42 @@ mod tests {
         assert_eq!(g.edits.keys().copied().collect::<Vec<_>>(), [(4, 0)]);
         g.revert();
         assert_eq!(vals(&g), ["1", "2", "3", "4"]);
+    }
+
+    /// The same with the local sort on: the loaded rows are sorted, the added row stays last with its edit, and edits and deletes
+    /// of loaded rows move with them when the sort changes
+    #[test]
+    fn local_sort_keeps_added_rows_last_and_edits_on_their_rows() {
+        let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
+        let page = |v: &[i64], more| QueryResult { columns: vec![col("a")], rows: v.iter().map(|x| vec![json!(x)]).collect(), rows_affected: 0, truncated: more, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None };
+        let vals = |g: &Grid| g.result.rows.iter().map(|r| cell_text(&r[0])).collect::<Vec<_>>();
+        let mut g = Grid::new(page(&[3, 1], true));
+        g.toggle_local_sort();
+        assert_eq!(vals(&g), ["1", "3"]);
+        g.add_row();
+        g.set_value(2, 0, "9".into());
+        g.append(page(&[2], false));
+        assert_eq!(vals(&g), ["1", "2", "3", "<null>"]);
+        assert!(g.is_added(3) && !g.is_added(2) && g.added == 1);
+        assert_eq!(g.edits.iter().map(|(k, v)| (*k, v.as_deref())).collect::<Vec<_>>(), [((3, 0), Some("9"))]);
+        // Sorting again: an edit and a delete on loaded rows stay on them
+        g.set_value(2, 0, "30".into());
+        g.deleted.insert(0);
+        g.toggle_local_sort();
+        assert_eq!(vals(&g), ["3", "2", "1", "<null>"]);
+        assert_eq!(g.edits.iter().map(|(k, v)| (*k, v.as_deref())).collect::<Vec<_>>(), [((0, 0), Some("30")), ((3, 0), Some("9"))]);
+        assert_eq!(g.deleted.iter().copied().collect::<Vec<_>>(), [2]);
+        // Off: the result's order, the added row still last; Revert drops only it
+        g.toggle_local_sort();
+        assert_eq!(vals(&g), ["3", "1", "2", "<null>"]);
+        g.revert();
+        assert_eq!(vals(&g), ["3", "1", "2"]);
+        // Add Row while sorted, then sort the other way: it stays last
+        g.toggle_local_sort();
+        g.add_row();
+        g.toggle_local_sort();
+        assert_eq!(vals(&g), ["3", "2", "1", "<null>"]);
+        assert!(g.is_added(3));
     }
     /// Whole column as an IN list: ('a', 'b'). Numbers as is, duplicates·NULL dropped (same as GUI lib/inList.ts)
     #[test]

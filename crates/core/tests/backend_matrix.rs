@@ -813,6 +813,16 @@ async fn explain_analyze_keeps_pending_work(st: &AppState, tab_id: &str, setup: 
     st.close_session(tab_id.into()).await.unwrap();
 }
 
+/// Production, Manual mode, no transaction open yet: a SELECT whose function writes runs in a read-only transaction of its own
+/// (Session::set_reads_outside_tx), so the server refuses the write; the error says to run BEGIN first, and nothing is written or
+/// left open
+async fn read_first_that_writes_is_refused(st: &AppState, tab: &str, sql: &str, count: &str) {
+    let e = st.run_query(ID.into(), sql.into(), None, Some(tab.into())).await.unwrap_err().to_string();
+    assert!(e.contains(qurry_shared::errors::READ_FIRST_WROTE), "{e}");
+    assert!(!st.tx_state(tab.into()).await);
+    assert_eq!(q(st, count).await.rows[0][0].to_string().trim_matches('"'), "0");
+}
+
 #[tokio::test]
 #[ignore]
 async fn mysql_explain_analyze_never_commits_pending_work() {
@@ -832,7 +842,8 @@ async fn mysql_explain_analyze_never_commits_pending_work() {
     st.set_tx_mode(ID.into(), "manual".into(), true).await.unwrap();
     explain_analyze_keeps_pending_work(&st, "manual", &["insert into t values (1)"], explain, count, "ROLLBACK").await;
     st.set_tx_mode(ID.into(), "manual-f".into(), true).await.unwrap();
-    explain_analyze_keeps_pending_work(&st, "manual-f", &["select w()"], explain, count, "ROLLBACK").await;
+    read_first_that_writes_is_refused(&st, "manual-f", "select w()", count).await;
+    explain_analyze_keeps_pending_work(&st, "manual-f", &["BEGIN", "select w()"], explain, count, "ROLLBACK").await;
     // COMMIT / ROLLBACK AND CHAIN open the next transaction at once: its row shows as pending, and the user's COMMIT keeps it
     for (tab_id, chain) in [("chain-c", "COMMIT AND CHAIN"), ("chain-r", "rollback work and chain")] {
         for s in ["BEGIN", chain] {
@@ -866,6 +877,11 @@ async fn pg_explain_analyze_never_commits_pending_work() {
     explain_analyze_keeps_pending_work(&st, "chain-c", &["BEGIN", "COMMIT AND CHAIN", ins], explain, count, "COMMIT").await;
     q(&st, "delete from qm_explain_guard.t").await;
     explain_analyze_keeps_pending_work(&st, "manual", &["insert into qm_explain_guard.t values (1)"], explain, count, "ROLLBACK").await;
+    // A Manual-mode SELECT whose function writes
+    q(&st, "create function qm_explain_guard.w() returns int language sql as $$ insert into qm_explain_guard.t values (77); select 1 $$").await;
+    st.set_tx_mode(ID.into(), "manual-f".into(), true).await.unwrap();
+    read_first_that_writes_is_refused(&st, "manual-f", "select qm_explain_guard.w()", count).await;
+    explain_analyze_keeps_pending_work(&st, "manual-f", &["BEGIN", "select qm_explain_guard.w()"], explain, count, "ROLLBACK").await;
     assert_eq!(st.explain_wrap(ID.into(), "auto".into()).await.unwrap(), qurry_core::session::EXPLAIN_BEGIN);
     st.close_session("auto".into()).await.unwrap();
     q(&st, "drop schema qm_explain_guard cascade").await;
@@ -1223,11 +1239,24 @@ async fn production_submit_in_manual_tx(st: &AppState, s: &str, kind: DbKind, re
     let tab = "prod-tx";
     let role = |idx: i32| format!("select role from {s}.users where idx = {idx}");
     let src = st.store.get(ID).unwrap().unwrap();
-    assert!(src.options.confirm_changes && src.options.starts_manual(), "Production starts consoles in Manual by default");
-    let off = qurry_core::store::ConnOptions { production_manual: Some(false), ..src.options.clone() };
+    assert!(src.options.confirm_changes && src.starts_manual(), "Production starts consoles in Manual by default");
+    let mut off = src.clone();
+    off.options.production_manual = Some(false);
     assert!(!off.starts_manual());
     st.set_tx_mode(ID.into(), tab.into(), true).await.unwrap();
     let r = q_tab(st, tab, &format!("select vo.idx, pu.idx, pu.role from {s}.voc vo join {s}.users pu on pu.idx = vo.user_idx")).await;
+    // A read opens no transaction on Production: the server sees nothing open and no lock on the table (an ALTER TABLE doesn't wait)
+    assert!(!r.in_transaction && !st.tx_state(tab.into()).await, "a read leaves nothing pending");
+    let pid = st.sessions.read().await.get(tab).unwrap().pid;
+    let held = match kind {
+        DbKind::Postgres => format!(
+            "select (select count(*) from pg_stat_activity where pid = {pid} and state like 'idle in transaction%') + (select count(*) from pg_locks where pid = {pid} and relation = '{s}.users'::regclass)"
+        ),
+        _ => format!(
+            "select (select count(*) from information_schema.innodb_trx where trx_mysql_thread_id = {pid}) + (select count(*) from performance_schema.metadata_locks m join performance_schema.threads t on t.thread_id = m.owner_thread_id where t.processlist_id = {pid} and m.object_schema = '{s}' and m.object_name = 'users')"
+        ),
+    };
+    assert_eq!(one_value(st, &held).await.to_string(), "0", "the read holds nothing on the server");
     let up = join_update(&r, kind, 0, 2, "owner").unwrap();
     assert_eq!(st.submit_edits(ID.into(), Some(tab.into()), vec![up]).await.unwrap().rows, 1);
     assert!(st.tx_state(tab.into()).await, "still pending");

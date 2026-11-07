@@ -39,15 +39,23 @@ pub fn idle_tx_ended(mysql: bool) -> String {
     format!("the server ended the session because it sat idle in a transaction longer than its {} allows, so {TX_ROLLED_BACK}. Run it again to reconnect.", idle_tx_setting(mysql))
 }
 
-/// A Production console whose transaction has stayed open and unused (GUI Output and status bar, TUI status line). timeout = the
-/// server's limit for it, in seconds, when it has one
-pub fn tx_idle_reminder(source: &str, minutes: u64, timeout: Option<(bool, u64)>) -> String {
+/// A Production console whose transaction has stayed open and unused (GUI Output and status bar, TUI status line). changed = a
+/// change ran in it; timeout = the server's limit for it, in seconds, when it has one (and keep-alive doesn't restart its clock)
+pub fn tx_idle_reminder(source: &str, minutes: u64, changed: bool, timeout: Option<(bool, u64)>) -> String {
     let ends = match timeout {
         Some((mysql, s)) => format!(" The server ends it after {} idle ({}), and rolls it back.", duration(s), idle_tx_setting(mysql)),
         None => String::new(),
     };
-    format!("A transaction on Production \"{source}\" has been open for {minutes} min without a statement: its changes aren't saved and the rows it changed stay locked. Commit or Roll back.{ends}")
+    let what = match changed {
+        true => "its changes aren't saved and the rows it changed stay locked. Commit or Roll back.",
+        false => "nothing was changed in it, but it keeps the locks of what ran in it (an ALTER TABLE on those tables waits). Commit or Roll back to end it.",
+    };
+    format!("A transaction on Production \"{source}\" has been open for {minutes} min without a statement: {what}{ends}")
 }
+
+/// A read that ran outside a Production console's Manual transaction, in a read-only one of its own, tried to change data (a
+/// function that writes): the server refused it (after the server's error)
+pub const READ_FIRST_WROTE: &str = "Nothing was changed: on Production, a read run before the console's transaction is open runs in a read-only transaction of its own, so it can't hold locks or commit by itself, and this one tried to change data (a function that writes?). Run BEGIN first, then run it again: it then runs in the console's transaction and its changes stay pending until Commit or Roll back.";
 
 /// The first time a console of a Production data source starts in Manual mode (GUI Output, TUI status line)
 pub const PRODUCTION_MANUAL: &str = "Production: this console starts in Tx: Manual, so changes stay pending until you Commit or Roll back. To start them in Auto, turn off \"Production: start consoles in Manual transaction mode\" for this data source (GUI: Data Source Properties › Options · TUI: the data source form, \"Production Manual\").";
@@ -269,9 +277,12 @@ mod tests {
     fn transaction_texts_name_the_server_setting() {
         assert!(idle_tx_ended(false).contains("longer than its idle_in_transaction_session_timeout allows") && idle_tx_ended(false).contains(TX_ROLLED_BACK));
         assert!(idle_tx_ended(true).contains("wait_timeout"));
-        assert!(tx_idle_reminder("prod", 5, None).ends_with("Commit or Roll back."));
+        assert!(tx_idle_reminder("prod", 5, true, None).ends_with("the rows it changed stay locked. Commit or Roll back."));
+        // Only reads ran in it (a typed BEGIN): no changes or changed rows to speak of, but its locks
+        let read = tx_idle_reminder("prod", 5, false, None);
+        assert!(!read.contains("its changes") && !read.contains("rows it changed") && read.contains("nothing was changed") && read.contains("ALTER TABLE"), "{read}");
         for (s, says) in [(90, "90 s idle"), (600, "10 min idle"), (28800, "8 h idle"), (7500, "2 h 5 min idle")] {
-            assert!(tx_idle_reminder("prod", 5, Some((true, s))).contains(&format!("after {says} (wait_timeout)")), "{s}");
+            assert!(tx_idle_reminder("prod", 5, true, Some((true, s))).contains(&format!("after {says} (wait_timeout)")), "{s}");
         }
     }
 

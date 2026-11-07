@@ -88,14 +88,18 @@ impl AppState {
         for (tab, conn, used, sess) in open {
             let Ok(cfg) = self.source(&conn) else { continue };
             // Busy (a statement runs in it): not idle
-            let in_tx = sess.try_lock().is_ok_and(|s| s.in_tx());
-            if !cfg.options.confirm_changes || !in_tx || !idle_for(used, after) || self.reminded.lock().unwrap().get(&tab) == Some(&used) {
+            let Some(changed) = sess.try_lock().ok().filter(|s| s.in_tx()).map(|s| s.tx_changed()) else { continue };
+            // UNIX_EPOCH: a slow session marked to be checked again on its next use (tab_session), not one unused since 1970
+            let checking = used == std::time::SystemTime::UNIX_EPOCH;
+            if !cfg.options.confirm_changes || checking || !idle_for(used, after) || self.reminded.lock().unwrap().get(&tab) == Some(&used) {
                 continue;
             }
             self.reminded.lock().unwrap().insert(tab.clone(), used);
             let minutes = used.elapsed().map_or(after.as_secs(), |d| d.as_secs()) / 60;
-            let timeout = self.idle_tx_timeout(&conn).await.map(|s| (cfg.kind == store::DbKind::Mysql, s));
-            out.push((tab, qurry_shared::errors::tx_idle_reminder(&cfg.name, minutes, timeout)));
+            // Keep-alive pings the console's session too, which restarts the server's clock: then the server doesn't end it
+            let keep_alive = cfg.options.keep_alive_secs.filter(|k| *k > 0).map(|k| k as u64);
+            let timeout = self.idle_tx_timeout(&conn).await.filter(|t| keep_alive.is_none_or(|k| k >= *t)).map(|s| (cfg.kind == store::DbKind::Mysql, s));
+            out.push((tab, qurry_shared::errors::tx_idle_reminder(&cfg.name, minutes, changed, timeout)));
         }
         let live = self.sessions.read().await.keys().cloned().collect::<std::collections::HashSet<_>>();
         self.reminded.lock().unwrap().retain(|t, _| live.contains(t));
@@ -1035,6 +1039,8 @@ async fn new_session(state: &AppState, id: &str, tab_id: &str, stale: Option<u64
     }
     // Opening one runs nothing of the user's: through a tunnel that stopped forwarding, it opens again on a new one
     let mut s = with_pool_after(state, id, stale, |p| async move { Session::open(&p).await }).await?;
+    // Production: a read in Manual mode doesn't open the transaction (Session::set_reads_outside_tx)
+    s.set_reads_outside_tx(state.source(id).is_ok_and(|c| c.options.confirm_changes));
     // If the tab is Manual, the new session is Manual too (silently becoming Auto after a reconnect would commit the next change right away)
     if state.tab_manual.lock().unwrap().get(tab_id).copied().unwrap_or(false) {
         s.set_manual(true).await?;
@@ -1615,8 +1621,10 @@ impl AppState {
     /// Tx: Auto / Manual
     pub async fn set_tx_mode(&self, id: String, tab_id: String, manual: bool) -> AppResult<()> {
         // Manual is kept first: when the session can't be opened now (a Production console opened while its source doesn't
-        // answer), the one its next run opens starts in Manual too, as the tab shows, never in Auto committing at once
-        if manual {
+        // answer), the one its next run opens starts in Manual too, as the tab shows, never in Auto committing at once. Not for a
+        // source whose sessions refuse Manual (Redis, driver plugins): every session the tab opens would refuse it again, and no
+        // statement would run
+        if manual && self.source(&id)?.supports_manual() {
             self.tab_manual.lock().unwrap().insert(tab_id.clone(), true);
         }
         let sess = ensure_session(self, &id, &tab_id).await?;
@@ -3129,19 +3137,36 @@ pub(crate) mod tests {
         let mut prod = ConnectionConfig { id: "p".into(), name: "prod".into(), ..cfg.clone() };
         prod.options.confirm_changes = true;
         prod.options.startup_script = "set idle_in_transaction_session_timeout = '10min'".into();
+        // The same with keep-alive, whose ping restarts the server's clock: the server doesn't end it then
+        let mut kept = ConnectionConfig { id: "k".into(), name: "kept".into(), ..prod.clone() };
+        kept.options.keep_alive_secs = Some(60);
         st.save_connection(prod, password.clone(), None).await.unwrap();
+        st.save_connection(kept, password.clone(), None).await.unwrap();
         st.save_connection(ConnectionConfig { id: "d".into(), name: "dev".into(), ..cfg }, password, None).await.unwrap();
         let now = std::time::Duration::ZERO;
-        for (src, tab) in [("p", "tx"), ("d", "dev"), ("p", "auto")] {
+        let change = "create temp table qurry_reminded (a int)";
+        // A read in a Production console's Manual mode opens no transaction: nothing to remind about
+        st.set_tx_mode("p".into(), "tx".into(), true).await.unwrap();
+        let r = st.run_query("p".into(), "select 1".into(), None, Some("tx".into())).await.unwrap();
+        assert!(!r.in_transaction && !st.tx_state("tx".into()).await);
+        assert!(st.tx_reminders_after(now).await.is_empty());
+        // A change opens it; a typed BEGIN in Auto with only a read in it, and keep-alive's source, too; a Dev source's isn't reminded
+        for (src, tab, sql) in [("p", "tx", change), ("d", "dev", change), ("k", "kept", change), ("p", "auto", "begin")] {
             if tab != "auto" {
                 st.set_tx_mode(src.into(), tab.into(), true).await.unwrap();
             }
-            st.run_query(src.into(), "select 1".into(), None, Some(tab.into())).await.unwrap();
+            st.run_query(src.into(), sql.into(), None, Some(tab.into())).await.unwrap();
         }
-        let r = st.tx_reminders_after(now).await;
-        assert_eq!(r.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["tx"], "{r:?}");
-        let m = &r[0].1;
-        assert!(m.contains("\"prod\"") && m.contains("Commit or Roll back") && m.contains("10 min idle (idle_in_transaction_session_timeout)"), "{m}");
+        st.run_query("p".into(), "select 1".into(), None, Some("auto".into())).await.unwrap();
+        let mut r = st.tx_reminders_after(now).await;
+        r.sort();
+        assert_eq!(r.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["auto", "kept", "tx"], "{r:?}");
+        let says = |tab: &str| r.iter().find(|(t, _)| t == tab).unwrap().1.clone();
+        let m = says("tx");
+        assert!(m.contains("\"prod\"") && m.contains("rows it changed stay locked") && m.contains("10 min idle (idle_in_transaction_session_timeout)"), "{m}");
+        let read = says("auto");
+        assert!(read.contains("nothing was changed") && !read.contains("rows it changed"), "{read}");
+        assert!(says("kept").contains("\"kept\"") && !says("kept").contains("The server ends it"), "{}", says("kept"));
         assert!(st.tx_reminders_after(now).await.is_empty(), "once");
         // A statement starts a new stretch; Roll back ends it
         st.run_query("p".into(), "select 2".into(), None, Some("tx".into())).await.unwrap();
@@ -3149,9 +3174,12 @@ pub(crate) mod tests {
         st.rollback_tx("tx".into()).await.unwrap();
         assert!(st.tx_reminders_after(now).await.is_empty());
         // Not before the time is up
-        st.run_query("p".into(), "select 3".into(), None, Some("tx".into())).await.unwrap();
+        st.run_query("p".into(), change.into(), None, Some("tx".into())).await.unwrap();
         assert!(st.tx_reminders().await.is_empty());
-        for t in ["tx", "dev", "auto"] {
+        // A slow session marked to be checked again on its next use (tab_session) isn't one unused since 1970
+        *st.sessions.read().await.get("tx").unwrap().used.lock().unwrap() = std::time::SystemTime::UNIX_EPOCH;
+        assert!(st.tx_reminders_after(now).await.is_empty());
+        for t in ["tx", "dev", "kept", "auto"] {
             st.close_session(t.into()).await.unwrap();
         }
     }

@@ -1,4 +1,4 @@
-import { api, type ConnOptions, ConnectionView, targetId } from "../../lib/api";
+import { api, ConnectionView, targetId } from "../../lib/api";
 import { sharedOr } from "../../lib/shared";
 import type { OutputLine } from "../../components/ConsolePane";
 import { ask } from "../../lib/dialogs";
@@ -83,16 +83,18 @@ const buildTab = (
     ddlOf: opts.ddlOf,
     results: [],
     activeResult: "output",
-    output: kind === "console" && productionStartsManual(c.options) ? productionManualNote(c.id) : [],
-    txManual: kind === "console" && startsManual(c.options),
+    output: kind === "console" && productionStartsManual(c) ? productionManualNote(c.id) : [],
+    txManual: kind === "console" && startsManual(c),
     inTx: false,
   };
 };
 
 /** Whether a new console starts in Manual transaction mode: the source's Transaction control, or Production with "start consoles in
- *  Manual" on, its default (#106; core ConnOptions::starts_manual, the TUI's rule) */
-const productionStartsManual = (o?: ConnOptions) => !o?.txManual && !!o?.confirmChanges && o?.productionManual !== false;
-const startsManual = (o?: ConnOptions) => !!o?.txManual || productionStartsManual(o);
+ *  Manual" on, its default (#106). Only PostgreSQL and MySQL consoles can be in Manual (Redis and driver plugins refuse it). Core
+ *  ConnectionConfig::starts_manual, the TUI's rule */
+const supportsManual = (c: ConnectionView) => c.kind === "postgres" || c.kind === "mysql";
+const productionStartsManual = (c: ConnectionView) => supportsManual(c) && !c.options?.txManual && !!c.options?.confirmChanges && c.options?.productionManual !== false;
+const startsManual = (c: ConnectionView) => (supportsManual(c) && !!c.options?.txManual) || productionStartsManual(c);
 /** Data sources whose console said it starts in Manual because it is Production: once per source while the app runs */
 const toldManual = new Set<string>();
 const productionManualNote = (connId: string): OutputLine[] => {
