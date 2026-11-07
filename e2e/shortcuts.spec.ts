@@ -370,7 +370,7 @@ const SCOPES: { name: string; setup?: (page: Page) => Promise<void>; steps: Step
         await editor(page).click();
         await typeSql(page, "select pg_sleep(3);");
         await page.keyboard.press("Meta+Enter");
-        await expect(page.locator(".statusbar [title^='Cancel Running Statements']")).toBeEnabled();
+        await expect(page.locator(".statusbar .running-bar")).toBeVisible();
         const cancels = await spyCancels(page);
         await page.keyboard.press(key);
         await expect.poll(cancels).toBe(1);

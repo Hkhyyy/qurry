@@ -1,4 +1,4 @@
-import { setStatusWidget } from "../lib/statusbar";
+import { cellText, setFocusWidgets, setStatusWidget, shownColumns } from "../lib/statusbar";
 import { fracWidth, isTimeType, padFrac } from "../lib/timeFrac";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -7,7 +7,7 @@ import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, raw } from "../lib/extract";
-import { sharedReady, useSharedReady } from "../lib/shared";
+import { shared, sharedReady, useSharedReady } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
 import { isJsonType, jsonCell } from "../lib/jsonSpans";
@@ -263,6 +263,24 @@ export function ResultGrid(p: Props) {
   const selectCell = (pos: Pos, ext: boolean) => setSel((s) => (ext ? extend(s, pos) : single(pos)));
   /** A mouse click: ⇧ extends the last range to b, ⌘ adds a..b (a cell, a row, a column) or takes it out, a plain click starts over (DataGrip) */
   const clickSel = (e: React.MouseEvent, a: Pos, b: Pos = a) => setSel((s) => (e.shiftKey ? extend(s, b) : (isMac ? e.metaKey : e.ctrlKey) ? toggle(s, a, b) : single(a, b)));
+
+  // ─── Status bar: the current cell (Row, Col) and the shown columns, while focus is in this grid (lib/statusbar). The range follows
+  // sideways scrolling (the column virtualizer renders again on scroll); Chart and Transpose have neither ───
+  const offset = colVirt.scrollOffset ?? 0;
+  const range = scrollRef.current && !chart && !transposed ? shownColumns(colVirt.measurementsCache, offset + rownumW, offset + scrollRef.current.clientWidth) : null;
+  const shownText = range && wasmReady ? shared().shownCols(range[0] + 1, range[1] + 1, cols.length) : undefined;
+  const cellPos = cur && !chart && !transposed ? cellText(cur.r + 1, cur.c + 1) : undefined;
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    setFocusWidgets(el, { pos: cellPos, cols: shownText });
+  }, [cellPos, shownText]);
+  useEffect(() => {
+    const el = wrapRef.current;
+    return () => {
+      if (el) setFocusWidgets(el, undefined);
+    };
+  }, []);
 
   // ─── Find (Find on Current Page) ───
   const findLower = findText.toLowerCase();
@@ -712,7 +730,13 @@ export function ResultGrid(p: Props) {
     <div className="grid-wrap" ref={wrapRef} tabIndex={-1} onKeyDown={onKeyDown}>
       {/* ── DataGrip grid toolbar ── */}
       <Toolbar onMouseDown={(e) => e.stopPropagation()}>
-        <IconButton title={keyTitle("Reload Page", "grid.reload")} onClick={p.onReload} disabled={p.running}><IcReload /></IconButton>
+        {/* One button: ↻ reloads, and is ■ in the same spot during every load of this grid (a run, a load-more on scroll); ■ cancels only
+            the fetch in flight, the rows already here stay */}
+        {p.running || loadingMore ? (
+          <IconButton tone="danger" title={keyTitle("Cancel", "grid.cancel")} onClick={p.onCancel}><IcStop /></IconButton>
+        ) : (
+          <IconButton title={keyTitle("Reload Page", "grid.reload")} onClick={p.onReload}><IcReload /></IconButton>
+        )}
         <IconButton active={!!interval}
           title="Update Interval"
           onClick={(e) =>
@@ -723,7 +747,6 @@ export function ResultGrid(p: Props) {
         >
           <IcClock />
         </IconButton>
-        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "grid.cancel")} onClick={p.onCancel} disabled={!p.running && !loadingMore}><IcStop /></IconButton>
         <ToolbarSep />
         <IconButton {...editButton("Add Row", "grid.addRow")} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
         <IconButton {...editButton("Delete Row", "grid.deleteRows")} onClick={deleteRows} disabled={!canEdit || !hasSel}><IcMinus /></IconButton>

@@ -94,6 +94,8 @@ let customFonts: { name: string; file: string }[] = [];
 let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
 let updateChecked = false;
+/** A delayed load-more in flight (__mockFetchMoreDelay): cancel_query makes it fail as the server does */
+let cancelMore: (() => void) | null = null;
 /** Test Connections waiting for cancel_test, by test id */
 const testsRunning: Record<string, () => void> = {};
 // Import Data Sources (core import.rs): the locations found and a preview in the core's words
@@ -362,10 +364,14 @@ const handlers: Record<string, (a: any) => unknown> = {
     g.__mockFetchMoreCalls = (g.__mockFetchMoreCalls ?? 0) + 1;
     if (g.__mockFetchMoreError) throw g.__mockFetchMoreError;
     const more = { ...result, rows: result.rows.slice(0, 120).map((r) => [Number(r[0]) + 500, ...r.slice(1)]), truncated: false };
-    // __mockFetchMoreDelay (ms): an answer that arrives after the tab ran again
-    return g.__mockFetchMoreDelay ? new Promise((ok) => setTimeout(() => ok(more), g.__mockFetchMoreDelay)) : more;
+    // __mockFetchMoreDelay (ms): an answer that arrives after the tab ran again, or fails as the server's does when cancelled meanwhile
+    if (!g.__mockFetchMoreDelay) return more;
+    return new Promise((ok, fail) => {
+      const h = setTimeout(() => ((cancelMore = null), ok(more)), g.__mockFetchMoreDelay);
+      cancelMore = () => (clearTimeout(h), fail("ERROR: canceling statement due to user request"));
+    });
   },
-  cancel_query: () => true,
+  cancel_query: () => (cancelMore?.(), (cancelMore = null), true),
   close_session: () => null,
   execute_batch: (a: any) => ({ rows: a.statements.length }),
   load_keymap: () => ({}),

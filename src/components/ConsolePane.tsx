@@ -121,7 +121,7 @@ interface Props {
   errorAction?: ReactNode;
   /** The run couldn't start (the statement splitter failed): show why in Output */
   onError: (message: string) => void;
-  /** A ⌘↩ started or stopped waiting for the module (the status bar's Run · Cancel follow it) */
+  /** A ⌘↩ started or stopped waiting for the module (the status bar's running indicator follows it) */
   onLoadingChange: () => void;
 }
 
@@ -303,7 +303,13 @@ export function ConsolePane(p: Props) {
     >
       {/* ── Console toolbar (DataGrip) ── */}
       <Toolbar className="console-toolbar" onMouseDown={(e) => e.stopPropagation()}>
-        <IconButton tone="ok" title={keyTitle("Execute", "editor.run")} onClick={() => api?.run()} disabled={p.running || loading}>▶</IconButton>
+        {/* One button (DataGrip): ▶ runs, and is ■ in the same spot while this console runs a statement (or its ⌘↩ waits for the module); a
+            result's load-more is the grid's ■ */}
+        {p.running || loading ? (
+          <IconButton tone="danger" title={keyTitle("Cancel", "editor.cancel")} onClick={loading ? cancelPending : p.onCancel}><IcStop /></IconButton>
+        ) : (
+          <IconButton tone="ok" title={keyTitle("Execute", "editor.run")} onClick={() => api?.run()}>▶</IconButton>
+        )}
         <ToolButton
           title="Explain Plan"
           onClick={(e) =>
@@ -358,7 +364,6 @@ export function ConsolePane(p: Props) {
             <ToolButton title={keyTitle("Roll back", "tx.rollback")} onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</ToolButton>
           </>
         )}
-        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "editor.cancel")} onClick={loading ? cancelPending : p.onCancel} disabled={!p.running && !p.loadingMore && !loading}><IcStop /></IconButton>
         <Spacer />
         <span className="cb-ds">{p.connName}</span>
         <Select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">

@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, expect, menuItem, openApp, openConsole, runAll, spyCancels, test, treeItem, typeSql, work } from "./app";
+import { dialog, editor, expect, menuItem, openApp, openConsole, runAll, spyCancels, test, treeItem, typeSql, work } from "./app";
 
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
 /** The mock's created_at alternates no fraction / .5 / .125 */
@@ -123,16 +123,13 @@ test("rows that arrive after the table tab ran again are dropped, not appended t
   await expect(page.getByRole("progressbar", { name: "Loading more rows" })).toHaveCount(0);
 });
 
-test("loading more shows in the status bar as a run does, ■ cancels it; the grid gets nothing under its rows and stays put (#94)", async ({ page }) => {
+test("loading more shows in the status bar as a run does; the grid gets nothing under its rows and stays put (#94)", async ({ page }) => {
   await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 1000));
   const scroll = work(page).locator(".grid-scroll").first();
   const status = page.locator(".statusbar");
-  const stop = status.getByTitle("Cancel Running Statements");
   const at = () => scroll.evaluate((el) => ({ top: el.scrollTop, height: el.scrollHeight }));
   // No room kept under the 500 rows of 24 px
   expect((await at()).height).toBe(500 * 24);
-  await expect(stop).toBeDisabled();
-  const cancels = await spyCancels(page);
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
   const loading = await at();
   // The status bar's running indicator, in the status text's place: bar, words and elapsed time
@@ -140,18 +137,90 @@ test("loading more shows in the status bar as a run does, ■ cancels it; the gr
   await expect(status.getByRole("progressbar", { name: "Loading more rows" })).toBeVisible();
   await expect(work(page).getByRole("progressbar")).toHaveCount(0);
   expect(loading.height).toBe(500 * 24);
-  // ■ is the cancel (the load reads on the tab's session, so the running statement's cancel stops it)
-  await expect(stop).toBeEnabled();
-  await stop.click();
-  await expect.poll(cancels).toBe(1);
-  // The rows come in (the mock ignores the cancel): the indicator goes, the status text is back, the view stays where it was
+  // The rows come in: the indicator goes, the status text is back, the view stays where it was
   await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows");
   await expect(status.locator(".running-bar")).toHaveCount(0);
   await expect(status.locator(".sb-text")).toHaveText("620 rows retrieved");
-  await expect(stop).toBeDisabled();
   const after = await at();
   expect(after.top).toBe(loading.top);
   expect(after.height).toBe(620 * 24);
+});
+
+test("the grid toolbar's ↻ is ■ in the same spot while the table loads; ■ cancels the load (#107)", async ({ page }) => {
+  const toolbar = work(page).locator(".grid-wrap .ui-toolbar").first();
+  const reload = toolbar.getByRole("button", { name: "Reload Page (⌘r)" });
+  const stop = toolbar.getByRole("button", { name: "Cancel (⌘F2)" });
+  await expect(stop).toHaveCount(0);
+  const spot = (await reload.boundingBox())!;
+  await work(page).locator(".dg-filter-field input").first().fill("pg_sleep(2) is not null");
+  await page.keyboard.press("Enter");
+  await expect(stop).toBeVisible();
+  await expect(reload).toHaveCount(0);
+  const box = (await stop.boundingBox())!;
+  expect([box.x, box.y, box.width]).toEqual([spot.x, spot.y, spot.width]);
+  await expect(toolbar.locator(".ui-icon-btn.tone-danger")).toHaveCount(1);
+  const cancels = await spyCancels(page);
+  await stop.click();
+  await expect.poll(cancels).toBe(1);
+  // The mock lets the statement finish: ↻ again
+  await expect(reload).toBeVisible({ timeout: 5000 });
+});
+
+test("the grid's ↻ is ■ while it loads more on scroll; ■ or the status bar's ✕ cancels only that fetch, the rows stay (#107)", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 2000));
+  const grid = work(page).locator(".grid-wrap");
+  const scroll = grid.locator(".grid-scroll");
+  const stop = grid.getByRole("button", { name: "Cancel (⌘F2)" });
+  const bar = page.locator(".statusbar .running-bar");
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(bar).toContainText("Loading more rows");
+  await expect(stop).toBeVisible();
+  // The status bar has no ■; its indicator's ✕ shows on hover and cancels the same fetch
+  await expect(page.locator(".statusbar").getByRole("button", { name: /^Cancel Running/ })).toHaveCount(0);
+  await bar.hover();
+  await bar.getByRole("button", { name: "Cancel (⌘F2)" }).click();
+  await expect(grid.locator(".grid-more-error")).toHaveText("Couldn't load more rows: ERROR: canceling statement due to user request");
+  await expect(grid.locator(".tb-info")).toHaveText("500+ rows");
+  await expect(grid.getByRole("gridcell", { name: "user_500", exact: true })).toBeVisible();
+  await expect(grid.getByRole("button", { name: "Reload Page (⌘r)" })).toBeVisible();
+  await expect(bar).toHaveCount(0);
+  // Run again, scroll again, and the toolbar's ■ this time: the same
+  await grid.getByRole("button", { name: "Run again" }).click();
+  await expect(grid.locator(".grid-more-error")).toHaveCount(0);
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await stop.click();
+  await expect(grid.locator(".grid-more-error")).toHaveText("Couldn't load more rows: ERROR: canceling statement due to user request");
+  await expect(grid.locator(".tb-info")).toHaveText("500+ rows");
+});
+
+test("the status bar shows the focused grid's shown columns: follows sideways scrolling, gone when every column fits (#107)", async ({ page }) => {
+  const cols = page.locator(".statusbar .ui-status-item").filter({ hasText: /^cols / });
+  // users: every column fits
+  await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();
+  await expect(page.locator(".statusbar")).toContainText("Row 1, Col 2");
+  await expect(cols).toHaveCount(0);
+  await openConsole(page);
+  await typeSql(page, "select * from wide_demo");
+  await page.keyboard.press("Meta+Enter");
+  const scroll = work(page).locator(".grid-scroll").first();
+  await work(page).locator(".grid-wrap .cell:not(.rownum)").first().click();
+  await expect(cols).toHaveText(/^cols 1–\d+ of \d+$/);
+  const [, last, total] = (await cols.textContent())!.match(/(\d+) of (\d+)/)!.map(Number);
+  expect(last).toBeLessThan(total);
+  // Scrolled sideways (as the trackpad does): the range moves along, the count stays
+  await scroll.evaluate((el) => (el.scrollLeft = el.scrollWidth));
+  await expect(cols).toHaveText(new RegExp(`^cols \\d+–${total} of ${total}$`));
+  await scroll.evaluate((el) => (el.scrollLeft = 0));
+  await expect(cols).toHaveText(`cols 1–${last} of ${total}`);
+  // A wide window shows them all: gone
+  await page.setViewportSize({ width: 6000, height: 900 });
+  await expect(cols).toHaveCount(0);
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await expect(cols).toHaveText(`cols 1–${last} of ${total}`);
+  // The editor focused: no columns, its own position
+  await editor(page).click();
+  await expect(cols).toHaveCount(0);
+  await expect(page.locator(".statusbar")).toContainText(/Ln 1, Col \d+/);
 });
 
 test("loading more never covers the current cell when ↓ moves to the end of the view (#94)", async ({ page }) => {
@@ -247,7 +316,8 @@ test("a grid key whose command is disabled now still belongs to the grid (⌘r w
   await work(page).locator(".dg-filter-field input").first().fill("pg_sleep(3) is not null");
   await page.keyboard.press("Enter");
   await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();
-  await expect(work(page).getByRole("button", { name: /^Reload Page/ })).toBeDisabled();
+  // While it reloads the button is ■ (cancel), not ↻
+  await expect(work(page).getByRole("button", { name: /^Reload Page/ })).toHaveCount(0);
   // Read after the event has gone through the app's handlers (the grid stops it, so a bubbling listener never sees it)
   await page.evaluate(() => window.addEventListener("keydown", (e) => e.code === "KeyR" && setTimeout(() => ((window as any).__reloadKey = e.defaultPrevented)), true));
   await page.keyboard.press("Meta+KeyR");
