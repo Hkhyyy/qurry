@@ -35,15 +35,15 @@ test("WHERE: ' ( close themselves, the closing one types over, ⌫ removes an em
   await where.pressSequentially("'user_1')");
   await expect.poll(() => shown(page, "WHERE")).toBe("user_name in ('a', 'user_1')|");
   // Not inside a string
-  await page.keyboard.press("Meta+A");
+  await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("Backspace");
   await where.pressSequentially("user_name like '(");
   await expect.poll(() => shown(page, "WHERE")).toBe("user_name like '(|'");
   // Around a selection: wrapped, the selection kept
-  await page.keyboard.press("Meta+A");
+  await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("Backspace");
   await where.pressSequentially("user_1");
-  await page.keyboard.press("Meta+A");
+  await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("'");
   await expect.poll(() => shown(page, "WHERE")).toBe("'«user_1»'");
   // ← collapses the selection to its start, ← again goes before the quote

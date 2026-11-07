@@ -35,7 +35,7 @@ async function editUser2(page: Page, conn?: string) {
 /** Edit a grid cell: double-click it, type, Enter */
 async function editCell(page: Page, at: ReturnType<typeof cell>, text: string) {
   await at.dblclick();
-  await page.keyboard.press("Meta+A");
+  await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.type(text);
   await page.keyboard.press("Enter");
 }

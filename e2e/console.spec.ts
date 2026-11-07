@@ -153,7 +153,8 @@ test("MySQL: `--` greys out as a comment only where the server reads one (`selec
 test("a run shows in the status bar (bar · Executing… · elapsed) for the focused tab only; hovering it shows ✕, which cancels it (#107)", async ({ page }) => {
   const bar = page.locator(".statusbar .running-bar");
   const x = bar.getByRole("button", { name: "Cancel (⌘F2)" });
-  await typeSql(page, "select pg_sleep(3)");
+  // Long enough to outlast the tab switches below on a slow runner; the ✕ ends it
+  await typeSql(page, "select pg_sleep(30)");
   await page.keyboard.press("Meta+Enter");
   await expect(bar).toContainText(/^Executing… \d+\.\d s/);
   await expect(work(page).locator(".running-bar")).toHaveCount(0);
