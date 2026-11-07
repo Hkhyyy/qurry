@@ -371,9 +371,11 @@ impl Backend for PgPool {
         ))
         .fetch_all(self)
         .await?;
+        // Tables by (schema, name): thousands of tables and FK rows are matched without a scan per row
+        let at: std::collections::HashMap<(String, String), usize> = out.iter().enumerate().map(|(i, t)| ((t.schema.clone(), t.name.clone()), i)).collect();
         for (schema, name, columns, ref_schema, ref_table, ref_columns) in fks {
-            if let Some(t) = out.iter_mut().find(|t| t.schema == schema && t.name == name) {
-                t.fks.push(qurry_shared::complete::ForeignKey { columns, ref_schema, ref_table, ref_columns });
+            if let Some(&i) = at.get(&(schema, name)) {
+                out[i].fks.push(qurry_shared::complete::ForeignKey { columns, ref_schema, ref_table, ref_columns });
             }
         }
         // User functions (not an extension's) with their signatures, for completion and signature help

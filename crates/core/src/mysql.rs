@@ -754,9 +754,12 @@ pub async fn completion_meta(p: &MySqlPool) -> AppResult<Vec<CompletionTable>> {
     )
     .fetch_all(p)
     .await?;
+    // Tables by (schema, name): thousands of tables and FK rows are matched without a scan per row
+    let at: std::collections::HashMap<(String, String), usize> = out.iter().enumerate().map(|(i, t)| ((t.schema.clone(), t.name.clone()), i)).collect();
     let mut last: Option<(String, String, String)> = None;
     for (schema, name, constraint, col, ref_schema, ref_table, ref_col) in fks {
-        let Some(t) = out.iter_mut().find(|t| t.schema == schema && t.name == name) else { continue };
+        let Some(&i) = at.get(&(schema.clone(), name.clone())) else { continue };
+        let t = &mut out[i];
         let key = Some((schema, name, constraint));
         match t.fks.last_mut() {
             Some(fk) if last == key => {
