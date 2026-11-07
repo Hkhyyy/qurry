@@ -177,6 +177,8 @@ pub fn run() {
             commands::full_text_search,
             commands::redis_scan,
             commands::redis_key,
+            commands::redis_overview,
+            commands::redis_key_names,
             commands::redis_exec,
             commands::redis_exec_line,
             commands::load_keymap,

@@ -1795,6 +1795,19 @@ impl AppState {
         crate::redisdb::scan_page(&redis_pool(self, &id).await?, &cursor, &pattern, count, type_filter.as_deref()).await
     }
 
+    /// The Redis tab's database picker and the explorer's database rows (key counts), and whether CONFIG works (checked on connect)
+    pub async fn redis_overview(&self, id: String) -> AppResult<crate::redisdb::ServerOverview> {
+        match ensure_pool(self, &id).await? {
+            Pool::Redis(m, db) => crate::redisdb::overview(&m, db).await,
+            _ => Err(AppError::Msg("Not a Redis data source".into())),
+        }
+    }
+
+    /// Terminal: key names starting with `prefix`, from a bounded SCAN
+    pub async fn redis_key_names(&self, id: String, prefix: String, max: usize) -> AppResult<Vec<String>> {
+        crate::redisdb::key_names(&redis_pool(self, &id).await?, &prefix, max.min(200)).await
+    }
+
     pub async fn redis_key(&self, id: String, key: String, limit: Option<usize>) -> AppResult<crate::redisdb::KeyDetail> {
         crate::redisdb::key_detail(&redis_pool(self, &id).await?, &key, limit.unwrap_or(1000)).await
     }

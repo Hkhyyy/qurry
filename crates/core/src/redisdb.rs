@@ -28,43 +28,67 @@ pub fn db_index(name: &str) -> i64 {
     name.trim().trim_start_matches("db").parse().unwrap_or(0)
 }
 
+/// A connection, and whether the server answered CONFIG when it connected (managed services like ElastiCache, Azure Cache,
+/// Memorystore or Upstash rename or refuse it; the browser's Config tab is then greyed out)
+#[derive(Clone)]
+pub struct RedisConn {
+    link: Link,
+    config: bool,
+}
+
 /// Standalone·Sentinel use one ConnectionManager; Cluster uses the cluster connection + a connection per master (for SCAN)
 #[derive(Clone)]
-pub enum RedisConn {
+enum Link {
     Single(ConnectionManager),
     Cluster { conn: redis::cluster_async::ClusterConnection, masters: Vec<ConnectionManager> },
 }
 
-impl redis::aio::ConnectionLike for RedisConn {
+impl redis::aio::ConnectionLike for Link {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a redis::Cmd) -> redis::RedisFuture<'a, RV> {
         match self {
-            RedisConn::Single(m) => m.req_packed_command(cmd),
-            RedisConn::Cluster { conn, .. } => conn.req_packed_command(cmd),
+            Link::Single(m) => m.req_packed_command(cmd),
+            Link::Cluster { conn, .. } => conn.req_packed_command(cmd),
         }
     }
     fn req_packed_commands<'a>(&'a mut self, cmd: &'a redis::Pipeline, offset: usize, count: usize) -> redis::RedisFuture<'a, Vec<RV>> {
         match self {
-            RedisConn::Single(m) => m.req_packed_commands(cmd, offset, count),
-            RedisConn::Cluster { conn, .. } => conn.req_packed_commands(cmd, offset, count),
+            Link::Single(m) => m.req_packed_commands(cmd, offset, count),
+            Link::Cluster { conn, .. } => conn.req_packed_commands(cmd, offset, count),
         }
     }
     fn get_db(&self) -> i64 {
         match self {
-            RedisConn::Single(m) => m.get_db(),
-            RedisConn::Cluster { .. } => 0,
+            Link::Single(m) => m.get_db(),
+            Link::Cluster { .. } => 0,
         }
+    }
+}
+
+impl redis::aio::ConnectionLike for RedisConn {
+    fn req_packed_command<'a>(&'a mut self, cmd: &'a redis::Cmd) -> redis::RedisFuture<'a, RV> {
+        self.link.req_packed_command(cmd)
+    }
+    fn req_packed_commands<'a>(&'a mut self, cmd: &'a redis::Pipeline, offset: usize, count: usize) -> redis::RedisFuture<'a, Vec<RV>> {
+        self.link.req_packed_commands(cmd, offset, count)
+    }
+    fn get_db(&self) -> i64 {
+        self.link.get_db()
     }
 }
 
 impl RedisConn {
     pub fn is_cluster(&self) -> bool {
-        matches!(self, RedisConn::Cluster { .. })
+        matches!(self.link, Link::Cluster { .. })
+    }
+    /// The server answered CONFIG GET when this connection was made
+    pub fn config_allowed(&self) -> bool {
+        self.config
     }
     /// Nodes to run SCAN on (all masters for a cluster)
     fn scan_nodes(&self) -> Vec<ConnectionManager> {
-        match self {
-            RedisConn::Single(m) => vec![m.clone()],
-            RedisConn::Cluster { masters, .. } => masters.clone(),
+        match &self.link {
+            Link::Single(m) => vec![m.clone()],
+            Link::Cluster { masters, .. } => masters.clone(),
         }
     }
 }
@@ -226,13 +250,13 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
             if masters.is_empty() {
                 return Err(AppError::Msg("Redis cluster: no reachable master nodes".into()));
             }
-            RedisConn::Cluster { conn, masters }
+            Link::Cluster { conn, masters }
         }
         "sentinel" => {
             let (h, p) = sentinel_master(cfg, &ep, host, port).await?;
-            RedisConn::Single(ep.manager(&h, p, db).await?)
+            Link::Single(ep.manager(&h, p, db).await?)
         }
-        _ => RedisConn::Single(ep.manager(host, port, db).await?),
+        _ => Link::Single(ep.manager(host, port, db).await?),
     };
     let mut c = conn.clone();
     // Startup script (one line = one command)
@@ -245,7 +269,9 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
         }
         let _: RV = cmd.query_async(&mut c).await.map_err(err)?;
     }
-    Ok(conn)
+    // Checked once here: any refusal (unknown command, NOPERM, a renamed CONFIG) greys out the Config tab
+    let config = matches!(redis::cmd("CONFIG").arg("GET").arg("maxmemory").query_async::<RV>(&mut c).await, Ok(v) if !matches!(v, RV::ServerError(_)));
+    Ok(RedisConn { link: conn, config })
 }
 
 fn err(e: redis::RedisError) -> AppError {
@@ -506,18 +532,88 @@ pub async fn view_key(m: &RedisConn, key: &[u8], limit: usize) -> AppResult<Quer
 // ───────── Metadata ─────────
 
 pub async fn list_databases(m: &RedisConn, current: i64) -> AppResult<Vec<String>> {
+    Ok(keyspace(m, current).await?.into_iter().map(|d| d.name).collect())
+}
+
+/// A database of the server and its key count (the explorer's rows, the browser's database picker)
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct RedisDb {
+    pub name: String,
+    pub keys: i64,
+}
+
+/// DBs with keys + db0 + the configured DB (empty DBs are hidden, like DataGrip), with their key counts (INFO keyspace)
+pub async fn keyspace(m: &RedisConn, current: i64) -> AppResult<Vec<RedisDb>> {
     if m.is_cluster() {
-        return Ok(vec!["db0".into()]);
+        // A cluster has db0 only, spread over its masters
+        let mut keys = 0;
+        for mut node in m.scan_nodes() {
+            keys += redis::cmd("DBSIZE").query_async::<i64>(&mut node).await.map_err(err)?;
+        }
+        return Ok(vec![RedisDb { name: "db0".into(), keys }]);
     }
     let mut mgr = m.clone();
-    // DBs with keys + db0 + configured DBs (empty DBs are hidden, like DataGrip)
     let info: String = redis::cmd("INFO").arg("keyspace").query_async(&mut mgr).await.map_err(err)?;
-    let mut dbs: Vec<i64> = info.lines().filter_map(|l| l.strip_prefix("db")?.split(':').next()?.parse().ok()).collect();
-    dbs.push(0);
-    dbs.push(current);
+    Ok(parse_keyspace(&info, current))
+}
+
+/// INFO keyspace (`db3:keys=12,expires=0,avg_ttl=0`) → db0, the configured DB and every DB with keys, by number
+fn parse_keyspace(info: &str, current: i64) -> Vec<RedisDb> {
+    let mut dbs: Vec<(i64, i64)> = info
+        .lines()
+        .filter_map(|l| {
+            let (db, rest) = l.trim().strip_prefix("db")?.split_once(':')?;
+            let keys = rest.split(',').find_map(|kv| kv.strip_prefix("keys="))?.parse().ok()?;
+            Some((db.parse().ok()?, keys))
+        })
+        .collect();
+    for d in [0, current] {
+        if !dbs.iter().any(|x| x.0 == d) {
+            dbs.push((d, 0));
+        }
+    }
     dbs.sort();
-    dbs.dedup();
-    Ok(dbs.into_iter().map(|d| format!("db{d}")).collect())
+    dbs.into_iter().map(|(d, keys)| RedisDb { name: format!("db{d}"), keys }).collect()
+}
+
+/// What the Redis tab shows above its keys: whether CONFIG works (checked on connect) and the databases with their key counts
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerOverview {
+    pub config_allowed: bool,
+    pub databases: Vec<RedisDb>,
+}
+
+pub async fn overview(m: &RedisConn, current: i64) -> AppResult<ServerOverview> {
+    Ok(ServerOverview { config_allowed: m.config_allowed(), databases: keyspace(m, current).await? })
+}
+
+/// SCAN iterations key-name completion may take (COUNT 1000 each), so a prefix nothing matches can't walk a huge database
+const KEY_NAMES_SCANS: usize = 20;
+
+/// Key names starting with `prefix` for the Terminal's completion: at most `max`, from a bounded SCAN (glob characters in the
+/// prefix match themselves)
+pub async fn key_names(m: &RedisConn, prefix: &str, max: usize) -> AppResult<Vec<String>> {
+    let pattern = format!("{}*", prefix.chars().map(|c| if "*?[]\\".contains(c) { format!("\\{c}") } else { c.to_string() }).collect::<String>());
+    let mut out: Vec<String> = vec![];
+    'nodes: for mut node in m.scan_nodes() {
+        let mut cur = 0u64;
+        for _ in 0..KEY_NAMES_SCANS {
+            let (next, keys): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN").arg(cur).arg("MATCH").arg(&pattern).arg("COUNT").arg(1000).query_async(&mut node).await.map_err(err)?;
+            out.extend(keys.iter().map(|k| String::from_utf8_lossy(k).into_owned()));
+            cur = next;
+            if out.len() >= max {
+                break 'nodes;
+            }
+            if cur == 0 {
+                break;
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out.truncate(max);
+    Ok(out)
 }
 
 /// Schema row in the tree (hidden, like MySQL)
@@ -984,6 +1080,54 @@ mod tests {
         assert!(matches!(parse_command("GET \"x"), Err(AppError::Msg(m)) if m == "Unbalanced quotes"));
         assert_eq!(quote_arg("a b"), "\"a b\"");
         assert_eq!(quote_arg("user:1"), "user:1");
+    }
+
+    #[test]
+    fn keyspace_lists_db0_the_configured_db_and_dbs_with_keys() {
+        let info = "# Keyspace\r\ndb0:keys=500,expires=3,avg_ttl=0\r\ndb3:keys=12,expires=0,avg_ttl=0\r\n";
+        let names = |v: Vec<RedisDb>| v.into_iter().map(|d| format!("{}={}", d.name, d.keys)).collect::<Vec<_>>();
+        assert_eq!(names(parse_keyspace(info, 0)), ["db0=500", "db3=12"]);
+        assert_eq!(names(parse_keyspace(info, 5)), ["db0=500", "db3=12", "db5=0"]);
+        assert_eq!(names(parse_keyspace("# Keyspace\r\n", 0)), ["db0=0"]);
+    }
+
+    /// The Redis tab's database switch (one source, its databases by target) with key counts and key-name completion, and the
+    /// CONFIG check on connect: a plain server allows it, an ACL user without @config (as on a managed service) doesn't.
+    /// Own db12 and redis-browser:* keys and ACL user, removed at the end (no FLUSHDB)
+    #[tokio::test]
+    #[ignore]
+    async fn redis_browser_database_switch_and_config_check() {
+        let dir = std::env::temp_dir().join(format!("qurry-rbrowser-{}", uuid::Uuid::new_v4()));
+        let st = crate::open_state(Some(dir.clone())).unwrap();
+        st.save_connection(cfg("db0"), None, None).await.unwrap();
+        let pool = crate::db::connect(&cfg("db12"), None).await.expect("connect");
+        let Pool::Redis(m, _) = &pool else { panic!() };
+        let mut c = m.clone();
+        let keys = ["redis-browser:a:1", "redis-browser:a:2", "redis-browser:b"];
+        for k in keys {
+            let _: () = redis::cmd("SET").arg(k).arg("v").query_async(&mut c).await.unwrap();
+        }
+        // Switching the tab's database is switching its target: db12 lists and counts its own keys
+        let o = st.redis_overview("rd::db12".into()).await.unwrap();
+        assert!(o.config_allowed, "a plain Redis allows CONFIG");
+        let db12 = o.databases.iter().find(|d| d.name == "db12").expect("db12 listed");
+        assert!(db12.keys >= 3, "{o:?}");
+        assert_eq!(st.redis_overview("rd".into()).await.unwrap().databases, o.databases, "same list from either database");
+        assert_eq!(st.redis_key_names("rd::db12".into(), "redis-browser:a".into(), 50).await.unwrap(), ["redis-browser:a:1", "redis-browser:a:2"]);
+        assert!(st.redis_key_names("rd".into(), "redis-browser:".into(), 50).await.unwrap().iter().all(|k| !k.starts_with("redis-browser:a:")), "db0 doesn't have db12's keys");
+        assert_eq!(st.redis_key_names("rd::db12".into(), "redis-browser:".into(), 1).await.unwrap().len(), 1, "at most max");
+        // A user without CONFIG (ElastiCache, Memorystore … refuse or rename it): checked once on connect
+        let _: () = redis::cmd("ACL").arg("SETUSER").arg("qurry-redis-browser").arg("on").arg(">pw").arg("~*").arg("+@all").arg("-config").query_async(&mut c).await.unwrap();
+        let managed = ConnectionConfig { user: "qurry-redis-browser".into(), ..cfg("db12") };
+        let mp = crate::db::connect(&managed, Some("pw")).await.expect("connect as the limited user");
+        let Pool::Redis(mm, db) = &mp else { panic!() };
+        let o2 = overview(mm, *db).await;
+        let _: () = redis::cmd("ACL").arg("DELUSER").arg("qurry-redis-browser").query_async(&mut c).await.unwrap();
+        let _: () = redis::cmd("DEL").arg(&keys[..]).query_async(&mut c).await.unwrap();
+        let o2 = o2.unwrap();
+        assert!(!o2.config_allowed, "CONFIG refused: greyed out");
+        assert!(o2.databases.iter().any(|d| d.name == "db12"), "INFO still works");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// MCP read: large values are rejected before reading, and key details read only the beginning of large strings
