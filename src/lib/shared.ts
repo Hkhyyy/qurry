@@ -22,6 +22,22 @@ export interface SplitOptions {
   dollarAfterName?: boolean;
 }
 
+/** A quote / bracket edit (qurry_shared::pairs::Edit), UTF-16 offsets: selStart..selEnd are in the text after it */
+export interface PairEdit {
+  start: number;
+  end: number;
+  insert: string;
+  selStart: number;
+  selEnd: number;
+}
+
+/** An unclosed quote or bracket, or a closing bracket without an opener (qurry_shared::pairs::Unbalanced) */
+export interface Unbalanced {
+  start: number;
+  end: number;
+  message: string;
+}
+
 /** A completion candidate (qurry_shared::complete::Item) */
 export interface CompletionItem {
   label: string;
@@ -224,6 +240,11 @@ const api = {
   /** A label per tab, undefined where the table name is unique */
   tableTabLabels: (tabs: TableTabKey[]): (string | undefined)[] => wasm.tableTabLabels(tabs),
   isNumericType: (typeName: string): boolean => wasm.isNumericType(typeName),
+  /** What a key does to quotes and brackets in a field outside Monaco (qurry_shared::pairs): `key` the typed character or "Backspace",
+   *  start..end the selection. Replace start..end with `insert`, then select selStart..selEnd; undefined: the key edits as usual */
+  pairEdit: (text: string, start: number, end: number, key: string, kind: DbKind): PairEdit | undefined => wasm.pairEdit(text, start, end, key, kind),
+  /** The quotes and brackets `text` leaves open, and closing brackets without an opener, in text order */
+  unbalanced: (text: string, kind: DbKind): Unbalanced[] => wasm.unbalanced(text, kind),
   /** null → NULL */
   sqlLiteral: (kind: DbKind, value: string | null): string => wasm.sqlLiteral(kind, value),
   inList: (rows: Cell[][], types: string[], kind: DbKind, opts: ExtractOptions): string => wasm.inList(rows, types, kind, opts),

@@ -357,6 +357,51 @@ pub fn pairs_insert(value: &str, op: &str) -> String {
     complete::pairs_insert(value, op)
 }
 
+/// A quote / bracket edit (qurry_shared::pairs::Edit) in UTF-16 code units: replace start..end of the text with `insert`, then
+/// select selStart..selEnd of the new text
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairEdit {
+    start: usize,
+    end: usize,
+    insert: String,
+    sel_start: usize,
+    sel_end: usize,
+}
+
+/// What a key does to quotes and brackets in a field outside Monaco (the table tab's WHERE / ORDER BY): `key` is the typed
+/// character or "Backspace", start..end the selection (UTF-16). Undefined: the key edits as usual
+#[wasm_bindgen(js_name = pairEdit)]
+pub fn pair_edit(text: &str, start: usize, end: usize, key: &str, kind: JsValue) -> Result<JsValue, JsError> {
+    let kind = parse_kind(kind)?;
+    let (a, b) = (byte_offset(text, start), byte_offset(text, end));
+    let mut chars = key.chars();
+    let e = match (chars.next(), chars.next()) {
+        _ if key == "Backspace" && a == b => qurry_shared::pairs::backspace(text, a, kind),
+        (Some(ch), None) => qurry_shared::pairs::typed(text, (a, b), ch, kind),
+        _ => None,
+    };
+    let Some(e) = e else { return Ok(JsValue::UNDEFINED) };
+    let new = format!("{}{}{}", &text[..e.start], e.insert, &text[e.end..]);
+    let u16_at = |t: &str, b: usize| t[..b].encode_utf16().count();
+    to(&PairEdit { start: u16_at(text, e.start), end: u16_at(text, e.end), insert: e.insert, sel_start: u16_at(&new, e.sel.0), sel_end: u16_at(&new, e.sel.1) })
+}
+
+/// The quotes and brackets left open, and closing brackets without an opener (qurry_shared::pairs::unbalanced):
+/// [{start, end, message}] in UTF-16 code units, in text order
+#[wasm_bindgen]
+pub fn unbalanced(text: &str, kind: JsValue) -> Result<JsValue, JsError> {
+    #[derive(Serialize)]
+    struct Mark {
+        start: usize,
+        end: usize,
+        message: String,
+    }
+    let v = qurry_shared::pairs::unbalanced(text, parse_kind(kind)?);
+    let r = utf16_ranges(text, &v.iter().map(|u| (u.start, u.end)).collect::<Vec<_>>());
+    to(&v.into_iter().zip(r).map(|(u, [start, end])| Mark { start, end, message: u.message }).collect::<Vec<_>>())
+}
+
 /// The range and the leading candidates (the statement's columns), and what the rest comes from
 fn suggestions(m: &complete::Meta, text: &str, caret: usize, db: &str, mysql: bool) -> (Suggestions, Option<complete::Rest>) {
     let at = Caret::new(text, caret);

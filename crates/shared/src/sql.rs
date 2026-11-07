@@ -150,7 +150,7 @@ pub struct SplitOptions {
 }
 
 /// `--` at b[i] starts a line comment (MySQL needs a space or control char after it: `select 1--1` is arithmetic)
-fn dash_comment(b: &[u8], i: usize, e: usize, kind: DbKind) -> bool {
+pub(crate) fn dash_comment(b: &[u8], i: usize, e: usize, kind: DbKind) -> bool {
     b[i] == b'-' && i + 1 < e && b[i + 1] == b'-' && (kind != DbKind::Mysql || i + 2 >= e || b[i + 2].is_ascii_whitespace() || b[i + 2].is_ascii_control())
 }
 
