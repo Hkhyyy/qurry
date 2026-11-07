@@ -8,11 +8,11 @@ import { cmd, eventSpec, keyTitle, runKey } from "../lib/shortcuts";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import type { MarkStmt } from "../lib/stmtMark";
 import { ContextMenu, MenuItem } from "./Explorer";
-import { CONSOLE_IN_TX, CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
+import { CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
 import { ask } from "../lib/dialogs";
 import { planText } from "../lib/planText";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
-import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep, TxPending } from "../ui";
 
 const SETTINGS_KEY = "dbtool.execSettings";
 export function loadExecSettings(): ExecSettings {
@@ -92,6 +92,10 @@ interface Props {
   output: OutputLine[];
   txManual: boolean;
   inTx: boolean;
+  /** A Production data source: the pending-transaction badge is red */
+  production?: boolean;
+  /** The reminder the backend sent while the transaction sat open (tx_reminders), until it ends or the next statement */
+  txIdle?: string;
   /** Read-only data source: its results can't be edited */
   readOnly?: boolean;
   onChange: (sql: string) => void;
@@ -358,12 +362,14 @@ export function ConsolePane(p: Props) {
         >
           Tx: {p.txManual ? "Manual" : "Auto"} ▾
         </ToolButton>
-        {p.txManual && (
+        {/* Manual mode, or a BEGIN typed in Auto: Commit / Roll back end it */}
+        {(p.txManual || p.inTx) && (
           <>
             <ToolButton accent={p.inTx} title={keyTitle("Commit", "tx.commit")} onClick={p.onCommit} disabled={!p.inTx}>✓ Commit</ToolButton>
             <ToolButton title={keyTitle("Roll back", "tx.rollback")} onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</ToolButton>
           </>
         )}
+        {p.inTx && <TxPending production={p.production} idle={p.txIdle} />}
         <Spacer />
         <span className="cb-ds">{p.connName}</span>
         <Select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
@@ -480,10 +486,12 @@ export function ConsolePane(p: Props) {
               {active?.kind === "result" && active.result && (
                 <ResultGrid
                   result={active.result}
-                  // One table with its key (the backend says so); in a transaction the edits would save outside it
-                  edit={p.txManual || p.inTx ? undefined : active.result.edit}
+                  // One table with its key, or a join per table (the backend says so). In Manual mode or an open transaction Submit
+                  // runs in it, and the edits stay pending until Commit / Roll back (useConsole submitEdits)
+                  edit={active.result.edit}
+                  editJoin={active.result.editJoin}
                   readOnly={p.readOnly}
-                  readOnlyReason={!active.result.edit ? (active.result.readOnlyReason ?? CONSOLE_READ_ONLY) : p.readOnly ? "Data source is read-only" : CONSOLE_IN_TX}
+                  readOnlyReason={!active.result.edit && !active.result.editJoin ? (active.result.readOnlyReason ?? CONSOLE_READ_ONLY) : "Data source is read-only"}
                   onPendingChange={(n) => (edits.current = n)}
                   running={p.running}
                   loadingMore={p.loadingMore}

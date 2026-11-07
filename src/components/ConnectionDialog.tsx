@@ -422,6 +422,16 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           <Checkbox checked={!!opt.confirmChanges} onChange={(v) => setOpt("confirmChanges", v)} title="Before UPDATE / DELETE / INSERT … run, show how many rows will change and ask">
             Production: show affected rows and confirm changes
           </Checkbox>
+          {/* #106: on by default for Production (unset = on); off, consoles start in the Transaction control mode below */}
+          <span />
+          <Checkbox
+            checked={!!opt.confirmChanges && opt.productionManual !== false}
+            disabled={!opt.confirmChanges}
+            onChange={(v) => setOpt("productionManual", v ? null : false)}
+            title="New consoles start in Tx: Manual, so a change stays pending until you Commit or Roll back (closing the tab, switching the database or quitting asks first). Off: they start in the Transaction control mode below."
+          >
+            Production: start consoles in Manual transaction mode
+          </Checkbox>
           {(cfg.kind === "mysql" || cfg.kind === "postgres") && (
             <>
               <span />

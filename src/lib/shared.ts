@@ -191,6 +191,12 @@ const api = {
   ping: (text: string): PingResponse => wasm.ping({ text }),
   /** Title of the notice for a failed Commit's error: "Commit outcome unknown" when the connection was lost during it */
   commitFailedTitle: (msg: string): string => wasm.commitFailedTitle(msg),
+  /** A join result's cell where no row of `table` matched (outer join): why it is read-only (qurry_shared::errors::edit_no_row) */
+  editNoRow: (table: string): string => wasm.editNoRow(table),
+  /** Why Add / Delete / Clone Row are greyed out on a join result (qurry_shared::errors::EDIT_JOIN_ROWS) */
+  editJoinRows: (): string => wasm.editJoinRows(),
+  /** What a Production console that starts in Manual mode says the first time (qurry_shared::errors::PRODUCTION_MANUAL) */
+  productionManual: (): string => wasm.productionManual(),
   /** The result grid's line when loading more rows failed (qurry_shared::errors::more_rows_failed, the TUI's words) */
   moreRowsFailed: (msg: string): string => wasm.moreRowsFailed(msg),
   /** Where a failed statement's error points in `sql` (the text sent), or undefined when it doesn't say (qurry_shared::errors::error_position) */

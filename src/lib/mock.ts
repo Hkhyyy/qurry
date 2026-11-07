@@ -83,10 +83,23 @@ const payments = {
   rows: Array.from({ length: 40 }, (_, i) => [i + 1, i % 2 ? "paid" : "ready", i === 2 ? null : `{"kind": "card", "meta": {"src": "web", "ip": "10.0.0.${i + 1}"}, "items": [${i}, ${i + 1}]}`, i % 4 ? "plain note" : "[1, 2]"]),
   truncated: false,
 };
-/** A console result's edit target or why it has none, as the backend says (#86): `select * from users` is one table with its key, a join isn't */
+/** `select … from crm.voc vo left join users pu …` (#102): edited per table, each by its own key. voc 2 has no user (the outer side is
+ *  NULL there), `shout` is computed */
+const vocJoin = {
+  ...result,
+  columns: ["idx", "user_idx", "status", "idx", "role", "status", "shout"].map((name, i) => ({ name, typeName: i === 6 || i === 2 || i === 4 || i === 5 ? "VARCHAR" : "INT8" })),
+  rows: [[1, 10, "open", 10, "member", "active", "MEMBER"], [2, 99, "new", null, null, null, null], [3, 11, "closed", 11, "admin", "active", "ADMIN"]],
+  truncated: false,
+  editJoin: {
+    tables: [{ schema: "crm", table: "voc", pk: ["idx"], pkAt: [0] }, { schema: "public", table: "users", pk: ["idx"], pkAt: [3] }],
+    columns: [{ table: 0, column: "idx" }, { table: 0, column: "user_idx" }, { table: 0, column: "status" }, { table: 1, column: "idx" }, { table: 1, column: "role" }, { table: 1, column: "status" }, { readOnly: "Read-only: shout is computed, not a column of the table." }],
+  },
+};
+/** A console result's edit target or why it has none, as the backend says (#86): `select * from users` is one table with its key; a
+ *  join of voc and users edits per table (vocJoin), other joins lack a key */
 const consoleEdit = (sql: string) =>
   /\bjoin\b/i.test(sql)
-    ? { readOnlyReason: "Read-only: the columns come from more than one table." }
+    ? { readOnlyReason: "Read-only: the result doesn't include the primary key of public.orders (id)." }
     : /^\s*select\s+\*\s+from\s+(public\.)?users\s*;?\s*$/i.test(sql)
       ? { edit: { schema: "public", table: "users", pk: ["id"], columns: result.columns.map((c) => c.name) } }
       : {};
@@ -354,6 +367,8 @@ const handlers: Record<string, (a: any) => unknown> = {
           ? { ...jsonDemo, inTransaction: (globalThis as any).__mockManual === true }
           : /\bpayments\b/i.test(a.sql)
           ? { ...payments, inTransaction: (globalThis as any).__mockManual === true }
+          : /\bvoc\b[\s\S]*\bjoin\b/i.test(a.sql)
+          ? { ...vocJoin, inTransaction: (globalThis as any).__mockManual === true }
           : { ...(usersLimit(a.sql) ?? { ...result, ...consoleEdit(a.sql) }), inTransaction: (globalThis as any).__mockManual === true }),
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
@@ -438,7 +453,8 @@ const handlers: Record<string, (a: any) => unknown> = {
   },
   cancel_query: () => (cancelMore?.(), (cancelMore = null), true),
   close_session: () => null,
-  execute_batch: (a: any) => ({ rows: a.statements.length }),
+  // A console in Manual mode keeps them pending (tx_state)
+  submit_edits: (a: any) => ({ rows: a.statements.length }),
   load_keymap: () => ({}),
   load_workspace: () => JSON.parse(localStorage.getItem("mock-ws") ?? "null"),
   save_workspace: (a: any) => (localStorage.setItem("mock-ws", JSON.stringify(a.ws)), null),

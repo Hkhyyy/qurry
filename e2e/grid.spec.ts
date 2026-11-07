@@ -146,6 +146,23 @@ test("loading more shows in the status bar as a run does; the grid gets nothing 
   expect(after.height).toBe(620 * 24);
 });
 
+test("Add Row, then rows loaded below go before the new row: it stays selected, and Delete Row or Revert takes back only it", async ({ page }) => {
+  const info = work(page).locator(".tb-info").first();
+  const scroll = work(page).locator(".grid-scroll").first();
+  for (const undo of ["Delete Row", "Revert Selected"]) {
+    await work(page).getByRole("button", { name: /^Add Row/ }).click();
+    await expect(info).toContainText("1 pending");
+    // Scrolled to the end: the next rows load (once; the result then has all of them)
+    await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+    await expect(info).toHaveText("620 rows · 1 pending");
+    await expect(work(page).locator(".grid-row.added .cell.sel")).toHaveCount(1);
+    await work(page).getByRole("button", { name: new RegExp(`^${undo}`) }).click();
+    // A loaded row would be marked deleted (still 1 pending) if the selection had stayed where the new row was
+    await expect(info).toHaveText("620 rows");
+    await expect(work(page).locator(".grid-row.deleted")).toHaveCount(0);
+  }
+});
+
 test("the grid toolbar's ↻ is ■ in the same spot while the table loads; ■ cancels the load (#107)", async ({ page }) => {
   const toolbar = work(page).locator(".grid-wrap .ui-toolbar").first();
   const reload = toolbar.getByRole("button", { name: "Reload Page (⌘r)" });

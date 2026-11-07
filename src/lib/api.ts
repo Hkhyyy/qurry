@@ -64,6 +64,8 @@ export interface ConnOptions {
   singleDb?: boolean;
   /** Production: modifying statements show the affected row count and ask for confirmation */
   confirmChanges?: boolean;
+  /** Production: consoles start in Manual transaction mode (unset = on; core ConnOptions::starts_manual) */
+  productionManual?: boolean | null;
   /** Remote MySQL with SSL unset may connect in plain text if it can't do TLS */
   allowPlaintext?: boolean;
   /** Whether it is visible to the MCP server (missing on older sources: Production hidden, others read·write) */
@@ -119,8 +121,17 @@ export interface QueryResult {
   moreError?: string;
   /** A console SELECT's result whose rows can be edited like a table tab's: in this table (not sent on load more) */
   edit?: ResultEditTarget;
-  /** A console result whose rows can't be edited, and why (instead of `edit`). Neither: not checked */
+  /** A console SELECT's join result (#102): per column, the table it is edited in or why it can't be (instead of `edit`) */
+  editJoin?: JoinEdit;
+  /** A console result whose rows can't be edited, and why (instead of `edit`). None of the three: not checked */
   readOnlyReason?: string;
+}
+
+/** A join result's edits (qurry_shared::result_edit::JoinEdit): tables = the ones that can be edited, each found by its key (result
+ *  column pkAt[j] holds pk[j]); columns = one per result column. Rows can't be added or deleted */
+export interface JoinEdit {
+  tables: { schema: string; table: string; pk: string[]; pkAt: number[] }[];
+  columns: ({ table: number; column: string } | { readOnly: string })[];
 }
 
 /** Where a console result's edits go: result column i is the table's column `columns[i]`; `pk` is the table's primary key */
@@ -259,8 +270,9 @@ export const api = {
   commitTx: (tabId: string) => invoke<string | null>("commit_tx", { tabId }),
   rollbackTx: (tabId: string) => invoke<string | null>("rollback_tx", { tabId }),
   closeSession: (tabId: string) => invoke<void>("close_session", { tabId }),
-  /** exactOne = saving grid edits (roll back everything unless each UPDATE/DELETE hits exactly 1 row) */
-  executeBatch: (id: string, statements: string[], exactOne = false) => invoke<BatchResult>("execute_batch", { id, statements, exactOne }),
+  /** A grid's Submit: none is saved unless each UPDATE / DELETE changes exactly 1 row. tabId = the console the result is in: in Manual
+   *  mode or with a transaction open, the edits run in it and stay pending until Commit / Roll back */
+  submitEdits: (id: string, tabId: string | undefined, statements: string[]) => invoke<BatchResult>("submit_edits", { id, tabId, statements }),
   // For file writes the backend opens the save dialog itself (the webview doesn't pick the path). null if canceled
   exportConnections: () => invoke<[number, string] | null>("export_connections"),
   /** Import Data Sources ▸ the DataGrip / IntelliJ / DBeaver locations found on this computer */

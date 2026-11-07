@@ -3,7 +3,7 @@
  * Spec in README.md
  */
 import { HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useState } from "react";
-import { Avatar, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
+import { Avatar, Badge, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { Chevron } from "./icons";
 
@@ -144,6 +144,19 @@ export function Tabs<T extends string>({ items, value, onChange, size, label }: 
 export const SectionTitle = ({ children, className }: { children: ReactNode; className?: string }) => <div className={cx("ui-section-title", className)}>{children}</div>;
 
 // ───────── Hints ─────────
+/**
+ * A console's open transaction (#106), beside its Commit / Roll back: its changes aren't saved until one of them, and closing the
+ * tab, switching the database or quitting asks first. production = a Production data source (red); idle = the reminder fired
+ */
+export function TxPending({ production, idle }: { production?: boolean; idle?: string }) {
+  const title = `Uncommitted changes in this console: Commit to save them or Roll back to undo them. Closing the tab, switching the database or quitting asks first.${idle ? `\n${idle}` : ""}`;
+  return (
+    <span role="status" className="tx-pending" title={title}>
+      <Badge tone={production ? "danger" : "warn"}>● Transaction pending{idle ? " · idle" : ""}</Badge>
+    </span>
+  );
+}
+
 export function Notice({ tone, children, className }: { tone?: "warn" | "danger" | "ok"; children: ReactNode; className?: string }) {
   return <div className={cx("ui-notice", tone && `tone-${tone}`, className)}>{children}</div>;
 }

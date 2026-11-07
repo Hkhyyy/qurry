@@ -124,10 +124,11 @@ pub async fn close_session(state: State<'_, AppState>, tab_id: String) -> AppRes
     state.close_session(tab_id).await
 }
 
+/// A result grid's Submit (each UPDATE / DELETE exactly one row). tab_id = the console the result is in: in Manual mode or with a
+/// transaction open the edits join it and stay pending (AppState::submit_edits)
 #[tauri::command]
-/// exact_one = saving a table edit (roll everything back unless UPDATE/DELETE hits exactly 1 row)
-pub async fn execute_batch(state: State<'_, AppState>, id: String, statements: Vec<String>, exact_one: Option<bool>) -> AppResult<BatchResult> {
-    state.execute_batch(id, statements, exact_one.unwrap_or(false)).await
+pub async fn submit_edits(state: State<'_, AppState>, id: String, tab_id: Option<String>, statements: Vec<String>) -> AppResult<BatchResult> {
+    state.submit_edits(id, tab_id, statements).await
 }
 
 /// Fill the search cache after connecting (the frontend doesn't wait)

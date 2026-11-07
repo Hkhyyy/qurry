@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
-import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormSection, Hint, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow } from "..";
+import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormSection, Hint, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow, TxPending } from "..";
 import { connTabVars } from "../../lib/theme";
 import { ConsoleIcon, DatabaseIcon, FolderIcon, PgIcon, ReportIcon, SchemaIcon, TabIcon, TableIcon } from "../icons";
 
@@ -120,6 +120,19 @@ export const Feedback: S = {
           ["⇥", "Next tab"],
         ]}
       />
+    </div>
+  ),
+};
+
+/** A console's open transaction (#106), beside Commit / Roll back: amber, red on a Production data source, "idle" once the reminder
+ *  about a transaction left open came (its text is on hover) */
+export const TxPendingBadges: S = {
+  name: "TxPending",
+  render: () => (
+    <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+      <TxPending />
+      <TxPending production />
+      <TxPending production idle='A transaction on Production "[PROD] shop_app" has been open for 5 min without a statement: its changes aren&apos;t saved and the rows it changed stay locked. Commit or Roll back.' />
     </div>
   ),
 };

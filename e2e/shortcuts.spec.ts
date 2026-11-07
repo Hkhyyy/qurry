@@ -403,14 +403,15 @@ const SCOPES: { name: string; setup?: (page: Page) => Promise<void>; steps: Step
         await page.keyboard.press(key);
         await expect(gridInfo(page)).not.toContainText("pending");
       }],
-      // New rows go to the end, out of view (and moved further when scrolling loads more rows), so they aren't reverted: Submit sends them
-      ["grid.addRow", pending(1, false)],
-      ["grid.cloneRow", pending(2, false)],
+      // A new row goes to the end and is selected; rows loaded while scrolling to it go before it and the selection follows it, so
+      // Revert Selected takes it back. A clone isn't selected (the source row stays so): Submit sends it
+      ["grid.addRow", pending(1)],
+      ["grid.cloneRow", pending(1, false)],
       ["grid.submit", async (page, key) => {
         await firstRow(page);
         const calls = await spyCalls(page);
         await page.keyboard.press(key);
-        await expect.poll(calls).toContain("execute_batch");
+        await expect.poll(calls).toContain("submit_edits");
       }],
       ["grid.reload", async (page, key) => {
         await firstRow(page);

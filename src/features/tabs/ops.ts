@@ -1,4 +1,6 @@
-import { api, ConnectionView, targetId } from "../../lib/api";
+import { api, type ConnOptions, ConnectionView, targetId } from "../../lib/api";
+import { sharedOr } from "../../lib/shared";
+import type { OutputLine } from "../../components/ConsolePane";
 import { ask } from "../../lib/dialogs";
 import { forgetConsoleModel } from "../../lib/monaco";
 import { leaves, Pane, prunePanes } from "../../lib/panes";
@@ -81,10 +83,23 @@ const buildTab = (
     ddlOf: opts.ddlOf,
     results: [],
     activeResult: "output",
-    output: [],
-    txManual: kind === "console" && !!c.options?.txManual,
+    output: kind === "console" && productionStartsManual(c.options) ? productionManualNote(c.id) : [],
+    txManual: kind === "console" && startsManual(c.options),
     inTx: false,
   };
+};
+
+/** Whether a new console starts in Manual transaction mode: the source's Transaction control, or Production with "start consoles in
+ *  Manual" on, its default (#106; core ConnOptions::starts_manual, the TUI's rule) */
+const productionStartsManual = (o?: ConnOptions) => !o?.txManual && !!o?.confirmChanges && o?.productionManual !== false;
+const startsManual = (o?: ConnOptions) => !!o?.txManual || productionStartsManual(o);
+/** Data sources whose console said it starts in Manual because it is Production: once per source while the app runs */
+const toldManual = new Set<string>();
+const productionManualNote = (connId: string): OutputLine[] => {
+  if (toldManual.has(connId)) return [];
+  toldManual.add(connId);
+  const text = sharedOr("Production: this console starts in Tx: Manual, so changes stay pending until you Commit or Roll back.", (s) => s.productionManual());
+  return [{ ts: new Date().toLocaleString("sv").slice(0, 19), level: "info", text }];
 };
 
 // ───────── Closing tabs / splits ─────────

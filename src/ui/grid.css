@@ -32,6 +32,9 @@
 .cell.changed { background: var(--grid-changed); }
 .cell-input { flex: none; height: 24px; border-radius: 0; border: 1px solid var(--accent); padding: 0 7px; font: inherit; background: var(--c-1b2840); }
 .pk-mark { font-size: 10px; }
+/* A join's column that can't be edited (its table's key isn't in the result, computed …): the name dimmed, the reason on hover */
+.ro-mark { font-size: 9px; opacity: 0.7; }
+.cell.head.read-only .col-name { color: var(--muted); }
 .sort-btn { margin-left: auto; flex: none; color: transparent; cursor: pointer; padding: 0 2px; font-size: 12px; border-radius: 3px; }
 .cell.head:hover .sort-btn { color: var(--muted); }
 .sort-btn:hover { background: var(--c-43454a); color: var(--text) !important; }
