@@ -51,7 +51,8 @@ export const GridHeaderRow = ({ width, height, children }: { width: number; heig
 
 /**
  * Header cell: 🔑 name type ……… sort button (↑ ↓ · order number if several).
- * sort = current sort (if none, ⇅ only on hover)
+ * sort = current sort (if none, ⇅ only on hover). With onResize the right edge is a resize handle: drag it to resize,
+ * double-click it to fit (onFit)
  */
 export function GridHeaderCell({
   name,
@@ -62,6 +63,9 @@ export function GridHeaderCell({
   sort,
   onMouseDown,
   onSortClick,
+  onContextMenu,
+  onResize,
+  onFit,
 }: {
   name: string;
   type: string;
@@ -71,9 +75,12 @@ export function GridHeaderCell({
   sort?: { dir: "asc" | "desc"; order?: number };
   onMouseDown?: Mouse;
   onSortClick?: (e: MouseEvent) => void;
+  onContextMenu?: Mouse;
+  onResize?: Mouse;
+  onFit?: () => void;
 }) {
   return (
-    <div className={cx("cell head", sort && "sorted", colSelected && "col-sel")} style={{ width }} title={`${name} : ${type}`} role="columnheader" onMouseDown={onMouseDown}>
+    <div className={cx("cell head", sort && "sorted", colSelected && "col-sel")} style={{ width }} title={`${name} : ${type}`} role="columnheader" onMouseDown={onMouseDown} onContextMenu={onContextMenu}>
       {pk && <span className="pk-mark">🔑</span>}
       <span className="col-name">{name}</span>
       <span className="col-type">{type.toLowerCase()}</span>
@@ -82,6 +89,17 @@ export function GridHeaderCell({
           {sort ? (sort.dir === "asc" ? "↑" : "↓") : "⇅"}
           {sort?.order !== undefined && <sub>{sort.order}</sub>}
         </span>
+      )}
+      {onResize && (
+        <span
+          className="col-resize"
+          title="Drag to resize · double-click to fit the content"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            onResize(e);
+          }}
+          onDoubleClick={onFit}
+        />
       )}
     </div>
   );

@@ -27,6 +27,7 @@ mod tables;
 mod tabs;
 
 pub use actions::{title, ACTIONS};
+pub use tables::Resize;
 #[cfg(test)]
 pub(crate) use run::explain_analyze_ask_text;
 
@@ -563,6 +564,11 @@ pub enum Action {
     CopyInList,
     MarkRow,
     ValueEditor,
+    ColumnNarrower,
+    ColumnWider,
+    ColumnFit,
+    ColumnFitAll,
+    ColumnReset,
     FindSimilar,
     RagSearch,
     RagBuild,

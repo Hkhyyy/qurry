@@ -367,6 +367,24 @@ struct Access {
     allow_plaintext: bool,
 }
 
+/// The table a table tab shows, which its column widths are kept for (settings.json "columnWidths"): data source id, database
+/// (empty: the source's default, which the store names), schema, table
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TableRef {
+    pub source: String,
+    pub database: String,
+    pub schema: String,
+    pub table: String,
+}
+
+impl TableRef {
+    /// A saved "columnWidths" entry is this table's
+    fn is(&self, e: &serde_json::Value) -> bool {
+        let f = |k: &str| e.get(k).and_then(|v| v.as_str());
+        f("source") == Some(&self.source) && f("database") == Some(&self.database) && f("schema") == Some(&self.schema) && f("table") == Some(&self.table)
+    }
+}
+
 /// A source whose saved passwords an import deletes: (id, DB password, SSH secret)
 type Forget = (String, bool, bool);
 
@@ -780,6 +798,51 @@ impl Store {
         Ok(next)
     }
 
+    /// The settings.json "columnWidths" entries: one per table that has set widths
+    fn column_width_entries(&self) -> Vec<serde_json::Value> {
+        match self.settings().remove("columnWidths") {
+            Some(serde_json::Value::Array(v)) => v,
+            _ => vec![],
+        }
+    }
+
+    /// `t` with its database named: a tab on the source's default database may name none (the GUI's), or the default (the TUI's)
+    fn table_ref(&self, t: &TableRef) -> TableRef {
+        match self.get(&t.source) {
+            Ok(Some(c)) if t.database.trim().is_empty() => TableRef { database: crate::sql::default_db(&c), ..t.clone() },
+            _ => t.clone(),
+        }
+    }
+
+    /// The widths a user gave a table tab's columns (GUI and TUI), empty when none; the others keep their computed widths
+    pub fn column_widths(&self, t: &TableRef) -> crate::format::ColumnWidths {
+        let t = self.table_ref(t);
+        self.column_width_entries().iter().find(|e| t.is(e)).and_then(|e| e.get("widths")).map(crate::format::column_widths).unwrap_or_default()
+    }
+
+    /// Set some of a table's column widths, on what the file holds now (the GUI and the TUI may both have changed it); returns what is saved
+    pub fn set_column_widths(&self, t: &TableRef, widths: &crate::format::ColumnWidths) -> AppResult<crate::format::ColumnWidths> {
+        let mut next = self.column_widths(t);
+        next.extend(widths.iter().map(|(c, &w)| (c.clone(), crate::format::column_width(w.into(), 0))));
+        self.save_column_widths(t, &next)?;
+        Ok(next)
+    }
+
+    /// Reset Widths: the table's columns go back to their computed widths
+    pub fn reset_column_widths(&self, t: &TableRef) -> AppResult<()> {
+        self.save_column_widths(t, &Default::default())
+    }
+
+    fn save_column_widths(&self, t: &TableRef, widths: &crate::format::ColumnWidths) -> AppResult<()> {
+        let t = self.table_ref(t);
+        let mut all = self.column_width_entries();
+        all.retain(|e| !t.is(e));
+        if !widths.is_empty() {
+            all.push(serde_json::json!({ "source": t.source, "database": t.database, "schema": t.schema, "table": t.table, "widths": widths }));
+        }
+        self.set_setting("columnWidths", all.into())
+    }
+
     /// The TUI's color theme ("auto" · "dark" · "light"; the GUI keeps its own). None when unset or not text
     pub fn tui_theme(&self) -> Option<String> {
         self.settings().remove("tuiTheme").and_then(|v| v.as_str().map(String::from))
@@ -865,6 +928,43 @@ mod tests {
         let path = dir.path().join("cfg/settings.json");
         fs::write(&path, r#"{"gridAlign": {"null": "left", "number": "justify"}}"#).unwrap();
         assert_eq!(store.grid_align(), Alignments::from([(ValueClass::Null, Align::Left)]));
+    }
+
+    /// Column widths per table: none until set, merged with what another app saved meanwhile, kept in range, other tables and
+    /// settings untouched; Reset Widths removes the table's entry
+    #[test]
+    fn column_widths_setting() {
+        use crate::format::ColumnWidths;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let t = |table: &str| TableRef { source: "pg".into(), database: "shop".into(), schema: "public".into(), table: table.into() };
+        assert!(store.column_widths(&t("orders")).is_empty());
+        store.set_update_channel(crate::update::Channel::Beta).unwrap();
+        assert_eq!(store.set_column_widths(&t("orders"), &ColumnWidths::from([("memo".into(), 53)])).unwrap(), ColumnWidths::from([("memo".into(), 53)]));
+        store.set_column_widths(&t("users"), &ColumnWidths::from([("name".into(), 9000)])).unwrap();
+        // Another app (the TUI) widened order_no meanwhile: setting memo keeps it
+        Store::new(dir.path().join("cfg")).set_column_widths(&t("orders"), &ColumnWidths::from([("order_no".into(), 20)])).unwrap();
+        let both = ColumnWidths::from([("memo".into(), 28), ("order_no".into(), 20)]);
+        assert_eq!(store.set_column_widths(&t("orders"), &ColumnWidths::from([("memo".into(), 28)])).unwrap(), both);
+        assert_eq!(store.column_widths(&t("orders")), both);
+        assert_eq!(store.column_widths(&t("users")), ColumnWidths::from([("name".into(), crate::format::COLUMN_WIDTH_MAX)]));
+        let other_db = TableRef { database: "postgres".into(), ..t("orders") };
+        assert!(store.column_widths(&other_db).is_empty(), "another database's table of the same name keeps its own widths");
+        // A tab naming no database is on the source's default (the GUI's tab on the default keeps none)
+        let pg: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "pg", "name": "pg", "kind": "postgres", "host": "h", "port": 5432, "user": "u", "database": "shop" })).unwrap();
+        store.save(&pg).unwrap();
+        assert_eq!(store.column_widths(&TableRef { database: String::new(), ..t("orders") }), both);
+        store.reset_column_widths(&t("orders")).unwrap();
+        assert!(store.column_widths(&t("orders")).is_empty());
+        assert_eq!(store.column_widths(&t("users")).len(), 1);
+        assert_eq!(store.update_channel(), crate::update::Channel::Beta);
+        // A file an older or broken app wrote: what can't be read is skipped
+        fs::write(dir.path().join("cfg/settings.json"), r#"{"columnWidths": [{"source": "pg"}, 3, {"source": "pg", "database": "shop", "schema": "public", "table": "orders", "widths": {"memo": "x", "id": 6}}]}"#).unwrap();
+        assert_eq!(store.column_widths(&t("orders")), ColumnWidths::from([("id".into(), 6)]));
+        fs::write(dir.path().join("cfg/settings.json"), r#"{"columnWidths": {"not": "a list"}}"#).unwrap();
+        assert!(store.column_widths(&t("orders")).is_empty());
+        store.set_column_widths(&t("orders"), &ColumnWidths::from([("id".into(), 6)])).unwrap();
+        assert_eq!(store.column_widths(&t("orders")).len(), 1);
     }
 
     #[test]

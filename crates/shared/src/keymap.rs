@@ -433,6 +433,11 @@ mod tests {
             ("grid.copyInList", "CopyInList"),
             ("grid.valueEditor", "ValueEditor"),
             ("grid.submit", "Submit"),
+            ("grid.colNarrow", "ColumnNarrower"),
+            ("grid.colWiden", "ColumnWider"),
+            ("grid.colFit", "ColumnFit"),
+            ("grid.colFitAll", "ColumnFitAll"),
+            ("grid.colReset", "ColumnReset"),
         ];
         for (gui, tui) in pairs {
             assert_eq!(tui_command(tui).and_then(|c| c.gui.as_deref()), Some(gui), "{tui} should share a row with {gui}");

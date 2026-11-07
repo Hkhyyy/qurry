@@ -55,6 +55,13 @@ const wide = {
   rows: Array.from({ length: 500 }, (_, r) => Array.from({ length: 30 }, (_, c) => (c % 2 ? `value ${r + 1}.${c + 1}` : r * 30 + c))),
   truncated: false,
 };
+/** `select … from cjk_demo`: a join's two `id` columns and Hangul text (wide characters) */
+const cjkDemo = {
+  ...result,
+  columns: [{ name: "id", typeName: "INT8" }, { name: "memo", typeName: "TEXT" }, { name: "id", typeName: "INT8" }],
+  rows: Array.from({ length: 20 }, (_, i) => [i + 1, i === 3 ? "배송 전에 꼭 전화 주세요 고객 요청 사항" : "고객 요청", 100 + i]),
+  truncated: false,
+};
 /** `select … from json_demo`: a jsonb column (colored cells); row 3 holds a ~100 KB value */
 const jsonDemo = {
   ...result,
@@ -92,6 +99,11 @@ let updateChannel = "stable";
 let customFonts: { name: string; file: string }[] = [];
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
 let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
+/** settings.json "columnWidths": table (source · database · schema · table) → its set widths (kept across a reload, as the file is;
+ *  read on each call, as the core reads the file, so a test can change it as the TUI would) */
+const columnWidths = (): Record<string, Record<string, number>> => JSON.parse(localStorage.getItem("mock-columnWidths") ?? "{}");
+const widthsKey = (t: any) => JSON.stringify([t.source, t.database, t.schema, t.table]);
+const saveWidths = (all: Record<string, Record<string, number>>) => localStorage.setItem("mock-columnWidths", JSON.stringify(all));
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
 let updateChecked = false;
 /** A delayed load-more in flight (__mockFetchMoreDelay): cancel_query makes it fail as the server does */
@@ -285,6 +297,8 @@ const handlers: Record<string, (a: any) => unknown> = {
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
         : /\bwide_demo\b/i.test(a.sql)
           ? { ...wide, inTransaction: (globalThis as any).__mockManual === true }
+          : /\bcjk_demo\b/i.test(a.sql)
+          ? { ...cjkDemo, inTransaction: (globalThis as any).__mockManual === true }
           : /\bjson_demo\b/i.test(a.sql)
           ? { ...jsonDemo, inTransaction: (globalThis as any).__mockManual === true }
           : /\bpayments\b/i.test(a.sql)
@@ -627,6 +641,21 @@ const handlers: Record<string, (a: any) => unknown> = {
     gridAlign = next;
     localStorage.setItem("mock-gridAlign", JSON.stringify(next));
     return next;
+  },
+  column_widths: (a: any) => columnWidths()[widthsKey(a.table)] ?? {},
+  // As the core: merged into what is saved, kept between 3 and 200 characters. window.__mockChannelSaveFails: the file can't be written
+  set_column_widths: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    const [all, k] = [columnWidths(), widthsKey(a.table)];
+    all[k] = { ...all[k], ...Object.fromEntries(Object.entries(a.widths as Record<string, number>).map(([c, w]) => [c, Math.min(Math.max(Math.round(w), 3), 200)])) };
+    saveWidths(all);
+    return all[k];
+  },
+  reset_column_widths: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    const all = columnWidths();
+    delete all[widthsKey(a.table)];
+    saveWidths(all);
   },
   // window.__mockChannelSaveFails: the settings file can't be written
   set_update_channel: (a: any) => {

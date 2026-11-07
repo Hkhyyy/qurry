@@ -157,6 +157,9 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌘F2` | Cancel Running Statements |
 | `⌘b` | Go to DDL |
 | `click header · ⌥ click` | Sort · add to multi-column sort |
+| `⌃⌥←` | Narrow Column |
+| `⌃⌥→` | Widen Column |
+| `drag · double-click a header's right edge` | Resize the column · fit it to its content (right-click a header: Fit All Columns, Reset Widths) |
 
 ## Query history & Redis browser
 
@@ -239,6 +242,9 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `—` | View Query |
 | `—` | Copy Query to Console |
 | `—` | Copy Query to Clipboard |
+| `—` | Fit Column to its content (the rows loaded so far; also: double-click the header's right edge) |
+| `—` | Fit All Columns |
+| `—` | Reset Widths (back to the computed widths) |
 | `—` | Commit |
 | `—` | Roll Back |
 | `—` | Explain Analyse |

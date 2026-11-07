@@ -11,7 +11,7 @@ const TABLE: { gui?: string; scope?: string; guiKeys?: string[] }[] = JSON.parse
 const ROWS = TABLE.flatMap((r) => (r.gui ? [{ id: r.gui, scope: r.scope ?? "global", keys: r.guiKeys ?? [] }] : []));
 
 /** Table notation ("Mod+Shift+/") → a Playwright key press on the same physical keys (the app reads e.code) */
-const CODES: Record<string, string> = { "/": "Slash", ",": "Comma", ".": "Period", ";": "Semicolon", "`": "Backquote", "[": "BracketLeft", "]": "BracketRight", Up: "ArrowUp", Down: "ArrowDown" };
+const CODES: Record<string, string> = { "/": "Slash", ",": "Comma", ".": "Period", ";": "Semicolon", "`": "Backquote", "[": "BracketLeft", "]": "BracketRight", Up: "ArrowUp", Down: "ArrowDown", Left: "ArrowLeft", Right: "ArrowRight" };
 const press = (spec: string) =>
   spec
     .split("+")
@@ -424,6 +424,14 @@ const SCOPES: { name: string; setup?: (page: Page) => Promise<void>; steps: Step
         await expect.poll(() => tabStrips(page)).toEqual(["users | users [DDL]"]);
         await page.locator(".tab-label", { hasText: /^users$/ }).click();
       }],
+      // The current column (row 1's user_name cell) by one step of 4 characters
+      ...(["grid.colWiden", "grid.colNarrow"] as const).map((id): Step => [id, async (page, key) => {
+        await firstRow(page);
+        const head = work(page).getByRole("columnheader", { name: /^user_name / });
+        const w = await head.evaluate((e) => e.getBoundingClientRect().width);
+        await page.keyboard.press(key);
+        await expect.poll(() => head.evaluate((e) => e.getBoundingClientRect().width)).toBeCloseTo(w + (id === "grid.colWiden" ? 4 : -4) * 7.3, -1);
+      }]),
       ["grid.cancel", async (page, key) => {
         // A filtered reload that still runs (the mock sleeps on pg_sleep)
         await work(page).locator(".dg-filter-field input").first().fill("pg_sleep(3) is not null");

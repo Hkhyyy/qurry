@@ -42,7 +42,7 @@ export const States: StoryObj = {
           <GridHeaderCell name="id" type="int8" pk width={W[1]} sort={{ dir: "asc" }} onSortClick={() => {}} />
           <GridHeaderCell name="user_name" type="varchar" width={W[2]} colSelected onSortClick={() => {}} />
           <GridHeaderCell name="amount" type="numeric" width={W[3]} sort={{ dir: "desc", order: 2 }} onSortClick={() => {}} />
-          <GridHeaderCell name="memo" type="text" width={W[4]} onSortClick={() => {}} />
+          <GridHeaderCell name="memo" type="text" width={W[4]} onSortClick={() => {}} onResize={() => {}} />
         </GridHeaderRow>
       }
     >

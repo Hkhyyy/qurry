@@ -54,12 +54,12 @@ const DEFAULT_KEYS: Record<Scope, Record<string, string>> = {
   grid: {
     "grid.valueEditor": "Shift+Enter", "grid.setDefault": "Mod+Alt+D", "grid.cloneRow": "Mod+D", "grid.reload": "Mod+R", "grid.cancel": "Mod+F2",
     "grid.find": "Mod+F", "grid.ddl": "Mod+B", "grid.submit": "Mod+Enter", "grid.revert": "Mod+Alt+Z", "grid.addRow": "Mod+N",
-    "grid.deleteRows": "Mod+Backspace", "grid.setNull": "Mod+Alt+N",
+    "grid.deleteRows": "Mod+Backspace", "grid.setNull": "Mod+Alt+N", "grid.colNarrow": "Ctrl+Alt+Left", "grid.colWiden": "Ctrl+Alt+Right",
   },
 };
 
 /** Table notation → the key event of the same physical keys on macOS (the app reads e.code), as e2e/shortcuts.spec.ts presses them */
-const CODES: Record<string, string> = { "/": "Slash", ",": "Comma", ".": "Period", ";": "Semicolon", "`": "Backquote", "[": "BracketLeft", "]": "BracketRight", Up: "ArrowUp", Down: "ArrowDown" };
+const CODES: Record<string, string> = { "/": "Slash", ",": "Comma", ".": "Period", ";": "Semicolon", "`": "Backquote", "[": "BracketLeft", "]": "BracketRight", Up: "ArrowUp", Down: "ArrowDown", Left: "ArrowLeft", Right: "ArrowRight" };
 function macEvent(spec: string) {
   const parts = spec.split("+");
   const k = parts.pop()!;

@@ -180,6 +180,11 @@ const api = {
   isTimeType: (typeName: string): boolean => wasm.isTimeType(typeName),
   fracWidth: (values: string[]): number => wasm.fracWidth(values),
   padFrac: (s: string, width: number): string => wasm.padFrac(s, width),
+  columnWidth: (width: number, steps: number): number => wasm.columnWidth(width, steps),
+  /** The characters the widest of `values` takes, East Asian wide characters and emoji counting 2 (qurry_shared::format::text_width) */
+  textWidth: (values: string[]): number => wasm.textWidth(values),
+  /** The keys a result's columns keep their set widths under: the name, `id#2` for a repeated one (qurry_shared::format::column_keys) */
+  columnKeys: (names: string[]): string[] => wasm.columnKeys(names),
   valueClass: (typeName: string, value: Cell): ValueClass => wasm.valueClass(typeName, value),
   /** The Value Editor panel's text for a cell: JSON (json / jsonb, or a JSON object or array) pretty-printed (qurry_shared::value) */
   panelText: (typeName: string, value: string): { json: boolean; text: string } => wasm.panelText(typeName, value),

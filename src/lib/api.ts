@@ -144,6 +144,18 @@ export interface ReleaseInfo {
   notes: string;
   assets: { name: string; url: string }[];
 }
+/** The table a table tab shows, which its column widths are kept for (qurry_core::store::TableRef) */
+export interface TableRef {
+  source: string;
+  /** The tab's database; empty: the source's default (the core names it) */
+  database: string;
+  schema: string;
+  table: string;
+}
+
+/** Column widths a user set, by column name, in characters (qurry_shared::format::ColumnWidths) */
+export type ColumnWidths = Record<string, number>;
+
 export interface UpdateInfo {
   current: string;
   /** The update channel the check was for */
@@ -196,6 +208,10 @@ export const api = {
   /** Grid alignment per value class: only the classes the user changed. Kept in the config folder, shared with the TUI */
   gridAlign: () => invoke<Alignments>("grid_align"),
   setGridAlign: (cls: ValueClass, align: Align) => invoke<Alignments>("set_grid_align", { class: cls, align }),
+  /** Column widths a user gave a table tab's columns, shared with the TUI; setting merges into what is saved and returns it */
+  columnWidths: (table: TableRef) => invoke<ColumnWidths>("column_widths", { table }),
+  setColumnWidths: (table: TableRef, widths: ColumnWidths) => invoke<ColumnWidths>("set_column_widths", { table, widths }),
+  resetColumnWidths: (table: TableRef) => invoke<void>("reset_column_widths", { table }),
   /** Download the new version, swap it in, and restart the app (progress via the "update-progress" event) */
   installUpdate: () => invoke<void>("install_update"),
   /** Open tabs·splits (restored on restart) */

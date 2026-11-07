@@ -424,6 +424,26 @@ pub fn frac_width(values: JsValue) -> Result<usize, JsError> {
     Ok(qurry_shared::format::frac_width(v.iter().map(String::as_str)))
 }
 
+/// A set column width (characters) moved by `steps` narrow (-) / widen (+) steps, kept in range (the TUI's < > =)
+#[wasm_bindgen(js_name = columnWidth)]
+pub fn column_width(width: f64, steps: f64) -> u16 {
+    qurry_shared::format::column_width(width.round() as i64, steps as i64)
+}
+
+/// Fit: the characters the widest of `values` takes, East Asian wide characters and emoji counting 2 (the TUI's rule)
+#[wasm_bindgen(js_name = textWidth)]
+pub fn text_width(values: JsValue) -> Result<usize, JsError> {
+    let v: Vec<String> = serde_wasm_bindgen::from_value(values)?;
+    Ok(v.iter().map(|s| qurry_shared::format::text_width(s)).max().unwrap_or(0))
+}
+
+/// The keys a result's columns keep their set widths under (a repeated name gets its occurrence: `id#2`)
+#[wasm_bindgen(js_name = columnKeys)]
+pub fn column_keys(names: JsValue) -> Result<JsValue, JsError> {
+    let v: Vec<String> = serde_wasm_bindgen::from_value(names)?;
+    to(&qurry_shared::format::column_keys(v.iter().map(String::as_str)))
+}
+
 /// 03:19:15 → 03:19:15.000000 (`width` fractional digits)
 #[wasm_bindgen(js_name = padFrac)]
 pub fn pad_frac(s: &str, width: usize) -> String {

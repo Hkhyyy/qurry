@@ -493,6 +493,7 @@ export function ConsolePane(p: Props) {
                   onCancel={p.onCancel}
                   onExport={() => p.onExport(active.sql)}
                   dialect={p.dialect}
+                  widthsOf={active.id}
                 />
               )}
               {active?.kind === "plan" && active.plan && <PlanView plan={active.plan} json={active.planJson} />}

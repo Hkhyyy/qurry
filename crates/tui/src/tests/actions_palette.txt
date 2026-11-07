@@ -22,6 +22,11 @@ ExportCsv	Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)	x (grid)
 CopyInList	Copy Column as IN List  ('a', 'b', …)	Y (grid)
 MarkRow	Mark Row (add the row to the selection or take it out: y copies, d deletes the marked rows)	m (grid)
 ValueEditor	Value Panel (the current cell's whole value, beside the grid)	v (grid)
+ColumnNarrower	Narrow Column (the current one)	< (grid)
+ColumnWider	Widen Column (the current one)	> (grid)
+ColumnFit	Fit Column to its content (the rows loaded so far)	= (grid)
+ColumnFitAll	Fit All Columns	—
+ColumnReset	Reset Column Widths (back to the computed widths)	—
 FindSimilar	Find Similar Rows (pgvector, by the vector column)	—
 RagSearch	AI Search (RAG)… — ask a table in plain words	—
 RagBuild	Build RAG Index… (embed the rows)	—
