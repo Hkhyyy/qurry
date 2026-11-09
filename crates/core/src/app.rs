@@ -3295,7 +3295,11 @@ pub(crate) mod tests {
     #[tokio::test]
     #[ignore]
     async fn form_listing_never_creates_a_file_db() {
-        assert!(crate::plugin::driver_path("sqlite").is_some(), "build the driver first: cargo build -p qurry-driver-sqlite");
+        // As the plugin conformance tests: skipped where the driver isn't built (CI's compat job runs ignored tests without it)
+        if crate::plugin::driver_path("sqlite").is_none() {
+            eprintln!("skip: build qurry-driver-sqlite first");
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
         let path = dir.path().join("missing.db");
