@@ -36,10 +36,17 @@ pub(crate) fn value(row: &MySqlRow, i: usize, binary: bool) -> Value {
         Ok(r) => r,
         Err(_) => return Value::Null,
     };
+    let ty = raw.type_info().name().to_uppercase();
+    // A zero date (0000-00-00) in the binary protocol is a field of length 0, which sqlx's is_null takes for NULL: a NULL has no bytes
+    if binary
+        && matches!(ty.as_str(), "DATE" | "DATETIME" | "TIMESTAMP")
+        && let Ok(b @ [0]) = row.try_get_unchecked::<&[u8], _>(i)
+    {
+        return binary_value(&ty, b).unwrap_or(Value::Null);
+    }
     if raw.is_null() {
         return Value::Null;
     }
-    let ty = raw.type_info().name().to_uppercase();
     let bytes: &[u8] = match row.try_get_unchecked::<&[u8], _>(i) {
         Ok(b) => b,
         Err(_) => return Value::Null,
@@ -1224,12 +1231,19 @@ mod tests {
         )
         .await
         .unwrap();
+        // Zero dates (an older sql_mode allows them), which the binary protocol sends as an empty field
+        let mut s = crate::session::Session::open(&pool).await.unwrap();
+        s.run("set sql_mode = ''", 1).await.unwrap();
+        s.run("insert into qurry_bin (b, dt, ts, z) values (3, '0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00')", 1).await.unwrap();
+        s.discard().await;
         let q = "select * from qurry_bin order by b";
         let text = pool.run_query(q, 10).await.unwrap().rows;
         let prepared = crate::backend::Backend::run_read_only(p, q, 10).await.unwrap().rows;
         pool.run_query("drop table qurry_bin", 1).await.unwrap();
         assert_eq!(prepared, text);
         assert_eq!(text[0][16], Value::from("2026-11-09 04:00:00"));
+        assert_eq!([&text[2][13], &text[2][16], &text[2][18]], [&Value::from("0000-00-00"), &Value::from("0000-00-00 00:00:00"), &Value::from("0000-00-00 00:00:00")]);
+        assert_eq!(text[1][13], Value::Null, "a NULL date stays NULL");
     }
 
     #[tokio::test]
