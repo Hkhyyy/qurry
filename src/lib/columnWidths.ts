@@ -13,8 +13,8 @@ export const CELL_PAD = 20;
 /** Pixels of a column `chars` characters wide */
 export const toPx = (chars: number, em: number) => Math.round(chars * CHAR_PX * em + CELL_PAD);
 
-/** The width in characters closest to `px` pixels, kept between the narrowest and the widest (the shared rule) */
-export const toChars = (px: number, em: number) => stepWidth((px - CELL_PAD) / (CHAR_PX * em), 0);
+/** The width in characters closest to `px` pixels, kept between the narrowest and the widest (the shared rule); never 0, which forgets a width */
+export const toChars = (px: number, em: number) => stepWidth(Math.max((px - CELL_PAD) / (CHAR_PX * em), 1), 0);
 
 /** `chars` moved by `steps` narrow (-) / widen (+) steps, kept in range (qurry_shared::format::column_width); unchanged until the module loads */
 export const stepWidth = (chars: number, steps: number) => sharedOr(Math.round(chars), (s) => s.columnWidth(chars, steps));

@@ -1797,14 +1797,22 @@ impl AppState {
     pub async fn submit_edits(&self, id: String, tab_id: Option<String>, statements: Vec<String>) -> AppResult<BatchResult> {
         let r = self.submit_edits_now(id.clone(), tab_id, statements.clone()).await;
         if r.is_ok() {
-            let (conn, db) = split_target(&id);
-            for st in &statements {
-                if let Err(e) = self.history.add(conn, db, st) {
-                    crate::log!("[qurry] history: {e}");
-                }
-            }
+            self.record_edits(&id, &statements);
         }
         r
+    }
+
+    /// Submit's statements in the history, under the database they ran in (the source's default for a target without one, as a
+    /// console's runs are). Nothing of a temporary source (qurry-tui URL) is kept
+    fn record_edits(&self, id: &str, statements: &[String]) {
+        let (conn, db) = split_target(id);
+        if self.store.is_temporary(conn) {
+            return;
+        }
+        let db = db.map(String::from).or_else(|| self.store.get(conn).ok().flatten().map(|c| crate::sql::default_db(&c)).filter(|d| !d.is_empty()));
+        if let Err(e) = self.history.add_all(conn, db.as_deref(), statements) {
+            crate::log!("[qurry] history: {e}");
+        }
     }
 
     async fn submit_edits_now(&self, id: String, tab_id: Option<String>, statements: Vec<String>) -> AppResult<BatchResult> {
@@ -2161,6 +2169,23 @@ pub(crate) mod tests {
             c["ssh"] = ssh;
         }
         serde_json::from_value(c).unwrap()
+    }
+
+    /// Submit's statements go into the history under the database they ran in (a target without one: the source's default, as a
+    /// console's runs); a temporary source's are never kept
+    #[test]
+    fn submitted_edits_are_recorded_except_a_temporary_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        st.store.save(&silent_source("x", 1, None)).unwrap();
+        st.record_edits("x", &["update t set a = 1 where id = 1".into()]);
+        st.record_edits("x::other", &["delete from t where id = 2".into()]);
+        let v = st.history.list(Some("x"), "", 10);
+        assert_eq!(v.iter().map(|i| (i.sql.as_str(), i.database.as_deref())).collect::<Vec<_>>(), [("delete from t where id = 2", Some("other")), ("update t set a = 1 where id = 1", Some("d"))]);
+        let tmp = st.open_temporary(crate::dsn::Temporary { config: silent_source("t", 1, None), password: None, notes: vec![] });
+        st.record_edits(&tmp.id, &["update t set a = 1 where id = 1".into()]);
+        st.record_edits(&format!("{}::d", tmp.id), &["update t set a = 1 where id = 1".into()]);
+        assert_eq!(st.history.list(None, "", 10).len(), 2);
     }
 
     /// The tree, autocomplete and restored tabs open a source and its databases together. When the server doesn't answer they

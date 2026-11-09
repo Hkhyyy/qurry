@@ -125,19 +125,33 @@ impl History {
     }
 
     pub fn add(&self, conn_id: &str, database: Option<&str>, sql: &str) -> AppResult<()> {
-        let mut sql = redact(sql.trim());
-        if sql.is_empty() {
+        self.add_all(conn_id, database, &[sql.to_string()])
+    }
+
+    /// Several statements (a grid Submit's) in one append, each redacted and cut like [`History::add`]'s
+    pub fn add_all(&self, conn_id: &str, database: Option<&str>, sqls: &[String]) -> AppResult<()> {
+        let ts = now_ms();
+        let items: Vec<HistoryItem> = sqls
+            .iter()
+            .filter_map(|sql| {
+                let mut sql = redact(sql.trim());
+                if sql.is_empty() {
+                    return None;
+                }
+                if sql.len() > MAX_SQL {
+                    let mut cut = MAX_SQL;
+                    while !sql.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    sql.truncate(cut);
+                }
+                Some(HistoryItem { id: uuid::Uuid::new_v4().to_string(), conn_id: conn_id.into(), database: database.map(String::from), sql, ts })
+            })
+            .collect();
+        if items.is_empty() {
             return Ok(());
         }
-        if sql.len() > MAX_SQL {
-            let mut cut = MAX_SQL;
-            while !sql.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            sql.truncate(cut);
-        }
-        let item = HistoryItem { id: uuid::Uuid::new_v4().to_string(), conn_id: conn_id.into(), database: database.map(String::from), sql, ts: now_ms() };
-        self.append(&[item])
+        self.append(&items)
     }
 
     /// Most recent first. conn = only that Data Source, filter = entries containing the text (case-insensitive). Identical statements only once
@@ -247,6 +261,21 @@ mod tests {
         h.add("rd", Some("db0"), r#"AUTH default "my secret pw""#).unwrap();
         let raw = std::fs::read_to_string(d.join("history.jsonl")).unwrap();
         assert!(!raw.contains("secret") && h.list(Some("rd"), "", 10)[0].sql == "AUTH ***", "{raw}");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// A grid Submit's statements: one append, each masked, blanks left out, the last one listed first
+    #[test]
+    fn add_all_appends_each_masked() {
+        let (h, d) = tmp();
+        h.add("a", Some("shop"), "select 0").unwrap();
+        h.add_all("a", Some("shop"), &["update t set a = 1".into(), " ".into(), "alter role r password 'pw'".into()]).unwrap();
+        h.add_all("a", None, &[]).unwrap();
+        let raw = std::fs::read_to_string(d.join("history.jsonl")).unwrap();
+        assert_eq!(raw.lines().count(), 3, "{raw}");
+        let v = h.list(Some("a"), "", 10);
+        assert_eq!(v.iter().map(|i| i.sql.as_str()).collect::<Vec<_>>(), ["alter role r password '***'", "update t set a = 1", "select 0"]);
+        assert!(v.iter().all(|i| i.database.as_deref() == Some("shop")));
         let _ = std::fs::remove_dir_all(d);
     }
 

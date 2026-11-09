@@ -520,23 +520,45 @@ enum Spot {
 
 /// The words that can come after `prev` (and `prev2` before it), when there are only a few: nothing else is offered there.
 /// `in_sources`: in a FROM / JOIN clause, where `left` / `right` start a join rather than a call
-fn follows(prev: &str, prev2: &str, in_sources: bool, mysql: bool) -> Option<&'static [&'static str]> {
+fn follows(prev: &str, prev2: &str, at: At, in_sources: bool, mysql: bool) -> Option<&'static [&'static str]> {
+    // A statement's first word: at its start (a data-modifying CTE's too) or after a CTE's `)` (`with x as (…) delete`)
+    let starts = prev2.is_empty() || at.after_paren;
     Some(match prev {
         "left" | "right" if in_sources => &["join", "outer join"],
         "full" if in_sources && !mysql => &["join", "outer join"],
         "inner" | "cross" | "outer" if in_sources => &["join"],
         "natural" if in_sources => if mysql { &["join", "left join", "right join"] } else { &["join", "left join", "right join", "full join", "inner join"] },
-        "order" | "group" | "partition" => &["by"],
+        "order" | "group" => &["by"],
+        // `partition` is a common column name: `by` only at the start of `over (…)` / `window w as (…)` or after DDL's `)`
+        "partition" if prev2.is_empty() && at.window || at.after_paren => &["by"],
         "not" if prev2 == "is" => &["null", "true", "false", "distinct from"],
         "is" => &["null", "not null", "true", "false", "not", "distinct from"],
         "nulls" => &["first", "last"],
-        "insert" => &["into"],
-        "delete" => &["from"],
-        "union" | "intersect" | "except" => &["select", "all", "distinct"],
-        "create" if prev2.is_empty() => &["table", "view", "index", "unique index", "schema", "database", "function", "procedure", "trigger", "sequence", "or replace"],
-        "alter" | "drop" if prev2.is_empty() => &["table", "view", "index", "schema", "database", "function", "procedure", "trigger", "sequence"],
+        // Not `on delete` (a foreign key's action), `after insert` (a trigger), `grant insert`, MERGE's `then delete` …
+        "insert" if starts => if mysql { &["into", "ignore", "low_priority", "high_priority"] } else { &["into"] },
+        "delete" if starts => if mysql { &["from", "low_priority", "quick", "ignore"] } else { &["from"] },
+        "union" | "intersect" | "except" => if mysql { &["select", "all", "distinct", "values"] } else { &["select", "all", "distinct", "values", "table"] },
+        "create" if prev2.is_empty() => if mysql {
+            &["table", "view", "index", "unique index", "schema", "database", "function", "procedure", "trigger", "sequence", "temporary", "role", "user", "event", "or replace"]
+        } else {
+            &[
+                "table", "view", "index", "unique index", "schema", "database", "function", "procedure", "trigger", "sequence", "materialized view", "temporary", "type", "extension", "role", "user", "policy", "domain", "or replace",
+            ]
+        },
+        "alter" if prev2.is_empty() && mysql => &["table", "view", "index", "schema", "database", "function", "procedure", "trigger", "sequence", "user", "event"],
+        "drop" if prev2.is_empty() && mysql => &["table", "view", "index", "schema", "database", "function", "procedure", "trigger", "sequence", "temporary", "role", "user", "event"],
+        "alter" | "drop" if prev2.is_empty() => &["table", "view", "index", "schema", "database", "function", "procedure", "trigger", "sequence", "materialized view", "type", "extension", "role", "user", "policy", "domain"],
         _ => return None,
     })
+}
+
+/// Where the word before the caret's word is, for [`follows`]
+#[derive(Clone, Copy)]
+struct At {
+    /// The caret is inside `over (` or `window w as (`
+    window: bool,
+    /// The word comes right after a `)`
+    after_paren: bool,
 }
 
 /// Words a statement can't end with: a word after them continues the statement
@@ -584,6 +606,13 @@ impl Caret {
         let mut c = Caret { sc, block, back, open, spot: Spot::Expr, mysql };
         c.spot = c.spot(text, start);
         c
+    }
+
+    fn at(&self) -> At {
+        let sc = &self.sc;
+        let window = self.open.is_some_and(|o| o > 0 && (sc.is(o - 1, "over") || sc.is(o - 1, "as")));
+        let after_paren = self.back.first().is_some_and(|&i| i > 0 && sc.punct(i - 1, ")"));
+        At { window, after_paren }
     }
 
     fn word_at(&self, k: usize) -> String {
@@ -639,7 +668,7 @@ impl Caret {
         };
         let in_sources = clause.as_ref().is_some_and(|(_, w)| matches!(w.as_str(), "from" | "join" | "straight_join" | "update" | "into"));
         if prev_kind == Some(K::Word)
-            && let Some(words) = follows(&prev_word, &self.word_at(1), in_sources, self.mysql)
+            && let Some(words) = follows(&prev_word, &self.word_at(1), self.at(), in_sources, self.mysql)
         {
             return Spot::Follows(words);
         }
@@ -1763,8 +1792,8 @@ mod tests {
             ("select * from users where email is n", false, &["null", "not null", "not"]),
             ("select * from users where email is not ", false, &["null", "true", "false", "distinct from"]),
             ("insert ", false, &["into"]),
-            ("select 1 union ", false, &["select", "all", "distinct"]),
-            ("create t", false, &["table", "trigger"]),
+            ("select 1 union ", false, &["select", "all", "distinct", "values", "table"]),
+            ("create t", false, &["table", "trigger", "temporary", "type"]),
         ];
         for (text, mysql, want) in cases {
             let (_, v) = sg(&m, text, text, "app", mysql, TUI);
@@ -1777,12 +1806,71 @@ mod tests {
             // The GUI (Monaco filters) gets the same few, not every function and keyword
             let (_, g) = sg(&m, text, text, "app", mysql, Options::GUI);
             if !want.is_empty() {
-                assert!(g.len() <= 11 && g.iter().all(|i| i.kind == ItemKind::Keyword), "{text:?}: {:?}", labels(&g));
+                assert!(g.len() <= 20 && g.iter().all(|i| i.kind == ItemKind::Keyword), "{text:?}: {:?}", labels(&g));
             }
         }
         // `left(` in a select list is a call, not a join
         let (_, v) = sg(&m, "select left", "select left", "app", false, TUI);
         assert!(!labels(&v).contains(&"outer join"));
+    }
+
+    /// `partition`, `insert` and `delete` have a fixed next word only where they start a clause or a statement
+    #[test]
+    fn fixed_next_words_need_their_spot() {
+        let m = meta();
+        let only: [(&str, bool, &[&str]); 21] = [
+            ("select sum(total) over (partition ", false, &["by"]),
+            ("select sum(total) over w from orders window w as (partition ", false, &["by"]),
+            ("create table t (id int) partition ", false, &["by"]),
+            ("select * from users order by ", false, &[]),
+            ("delete ", false, &["from"]),
+            ("delete fr", false, &["from"]),
+            ("with x as (select 1) delete fr", false, &["from"]),
+            ("with x as (select 1) insert ", false, &["into"]),
+            ("with x as (delete ", false, &["from"]),
+            ("insert ", true, &["into", "ignore", "low_priority", "high_priority"]),
+            ("insert i", true, &["into", "ignore"]),
+            ("delete ", true, &["from", "low_priority", "quick", "ignore"]),
+            ("select 1 union ", false, &["select", "all", "distinct", "values", "table"]),
+            ("select 1 except v", false, &["values"]),
+            ("select 1 intersect t", false, &["table"]),
+            ("select 1 union ", true, &["select", "all", "distinct", "values"]),
+            ("create m", false, &["materialized view"]),
+            ("create e", true, &["event"]),
+            ("create e", false, &["extension"]),
+            ("drop t", true, &["table", "trigger", "temporary"]),
+            ("alter t", false, &["table", "trigger", "type"]),
+        ];
+        for (text, mysql, want) in only {
+            let (_, v) = sg(&m, text, text, "app", mysql, TUI);
+            if want.is_empty() {
+                assert!(!labels(&v).contains(&"by"), "{text:?}: {:?}", labels(&v));
+            } else {
+                assert_eq!(labels(&v), want, "{text:?}");
+            }
+        }
+        // A column named `partition`, a foreign key's action, a trigger's event, a grant, MERGE's actions: the usual candidates
+        let usual: [(&str, bool, &str); 6] = [
+            ("select topic, partition fr", false, "from"),
+            ("select * from t order by partition de", false, "desc"),
+            ("create trigger tr after insert o", false, "on"),
+            ("create trigger tr after delete o", false, "on"),
+            ("create trigger tr after insert o", false, "or"),
+            ("grant insert o", false, "on"),
+        ];
+        for (text, mysql, has) in usual {
+            let (_, v) = sg(&m, text, text, "app", mysql, TUI);
+            let l = labels(&v);
+            assert!(l.contains(&has), "{text:?}: {l:?}");
+        }
+        for text in ["create table o (u int references users(id) on delete ", "merge into t using s on t.id = s.id when not matched then insert ", "merge into t using s on t.id = s.id when matched then delete "] {
+            let l = labels(&sg(&m, text, text, "app", false, TUI).1).join(" ");
+            assert!(l != "from" && l != "into", "{text:?}: {l}");
+        }
+        let (_, v) = sg(&m, "select * from t order by partition de", "select * from t order by partition de", "app", false, TUI);
+        assert_eq!(labels(&v), ["desc", "delete"]);
+        let (_, v) = sg(&m, "select topic, partition fr", "select topic, partition fr", "app", false, TUI);
+        assert_eq!(labels(&v), ["from"]);
     }
 
     #[test]
