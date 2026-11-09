@@ -521,6 +521,8 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .statusbar .sb-text.sb-text-squeezed { min-width: 0; }
 /* One status bar item: a muted name, the value in the text color, a thin divider between items */
 .sb-seg { display: contents; }
+.sb-seg .ui-status-item { cursor: pointer; }
+.sb-seg .ui-status-item:hover { background: var(--ui-hover); }
 .sb-label { color: var(--ui-text-muted); }
 .sb-value { color: var(--ui-text); font-variant-numeric: tabular-nums; }
 .sb-sep { flex: none; width: 1px; height: 12px; background: var(--ui-border-strong); }

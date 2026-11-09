@@ -25,6 +25,7 @@ mod reformat;
 mod run;
 mod splits;
 mod status_items;
+pub use status_items::TableCols;
 mod tables;
 mod tabs;
 
@@ -873,6 +874,8 @@ pub struct App {
     pub status_items: Vec<qurry_core::statusbar::Item>,
     /// Tables' column types for the Size item, by (target, schema, table)
     pub table_cols: HashMap<(String, String, String), status_items::TableCols>,
+    /// The selection's Not null / Sum … of the last frame, and what they were worked out for (status_items::status_segments)
+    pub stats_cache: Option<(u64, qurry_core::statusbar::Stats)>,
     /// The last frame was the 'terminal too small' message: keys and clicks would act on a screen that isn't drawn
     pub too_small: bool,
     /// Tests only (testkit): answers console statements and the Production row counts instead of the database
@@ -914,6 +917,7 @@ impl App {
             keyword_case: state.store.keyword_case(),
             status_items: state.store.status_bar_items(),
             table_cols: HashMap::new(),
+            stats_cache: None,
             align,
             hits: Hits::default(),
             state,

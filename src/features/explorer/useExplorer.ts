@@ -4,6 +4,7 @@ import type { BackupOptions } from "../../lib/api";
 import { ask, askText, notice } from "../../lib/dialogs";
 import { invalidateCompletion } from "../../lib/completion";
 import { hasStructure } from "../../lib/structure";
+import { setTableColumns } from "../../lib/statusbar";
 import { bindings, cmd, formatSpec } from "../../lib/shortcuts";
 import type { MenuItem } from "../../components/Explorer";
 import { forSelection } from "./selection";
@@ -57,6 +58,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     try {
       const d = await meta.table(target, schema, table);
       edit = { schema, table, pk: d.columns.filter((x) => x.isPk).map((x) => x.name) };
+      setTableColumns(target, schema, table, d.columns);
     } catch {
       /* Read-only if the metadata lookup fails */
     }

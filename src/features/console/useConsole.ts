@@ -8,6 +8,7 @@ import type { MarkStmt } from "../../lib/stmtMark";
 import { schemaChanged } from "../../components/SchemaTree";
 import { commitNoticeTitle } from "../../lib/commitNotice";
 import { sharedOr } from "../../lib/shared";
+import { setTableColumns } from "../../lib/statusbar";
 import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "../../lib/stmtKind";
 import { patch, updTab } from "../tabs/ops";
 import { editorApis, setTabs, useTabsStore } from "../tabs/store";
@@ -44,7 +45,11 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     if (!edit || !tableSql) return;
     meta
       .table(t.target, edit.schema, edit.table)
-      .then((d) => updTab(t.id, (x) => (x.edit ? { ...x, edit: { ...x.edit, pk: d.columns.filter((c) => c.isPk).map((c) => c.name) } } : x)))
+      .then((d) => {
+        // The status bar's Size reads the columns' declared types from here, fresh on each load
+        setTableColumns(t.target, edit.schema, edit.table, d.columns);
+        updTab(t.id, (x) => (x.edit ? { ...x, edit: { ...x.edit, pk: d.columns.filter((c) => c.isPk).map((c) => c.name) } } : x));
+      })
       .catch(() => {
         /* Read-only if the metadata lookup fails */
       });

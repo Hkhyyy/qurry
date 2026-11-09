@@ -1,7 +1,7 @@
 //! The status line's items for a grid (#132): Position in the corner (the cursor's cell, a range, or the marked rows over the cursor's
 //! column), the selection's Not null / Sum / Avg / Min / Max, the cell's Size with its column's limit, ⌃k › Status Bar Items… (shared
 //! with the GUI through settings.json), and what goes first when the line is narrow
-use crate::app::{Focus, Popup, TabKind};
+use crate::app::{Focus, Popup, TabKind, TableCols};
 use crate::grid::Grid;
 use crate::testkit::Harness;
 use qurry_core::db::{ColumnInfo, QueryResult};
@@ -57,6 +57,9 @@ async fn marked_rows_over_the_cursors_column() {
     h.key("Down");
     h.key("m");
     assert!(status_line(&mut h, 220).ends_with("   Not null: 2 │ Sum: 1,329,000 │ Avg: 664,500 │ Min: 129,000 │ Max: 1,200,000 │ 2 rows · Col 3"), "{}", status_line(&mut h, 220));
+    // An edit of a marked cell counts at once (the sums are kept between frames only while nothing changed)
+    h.app.grid_mut().unwrap().set_value(0, 2, "1000".into());
+    assert!(status_line(&mut h, 220).contains("Sum: 1,201,000 │"), "{}", status_line(&mut h, 220));
     // card_brand: one empty value (not NULL), no numbers
     h.key("Right");
     h.key("Down");
@@ -116,7 +119,7 @@ async fn narrow_keeps_position() {
     h.app.status_items = vec![Item::Size, Item::ShownColumns, Item::Position];
     payment(&mut h);
     let target = h.app.tabs[h.app.active].target.clone();
-    h.app.table_cols.insert((target, "public".into(), "payment".into()), Some(vec![("id".into(), ColumnType { data_type: "character varying(8)".into(), charset: None })]));
+    h.app.table_cols.insert((target, "public".into(), "payment".into()), TableCols::Loaded(vec![("id".into(), ColumnType { data_type: "character varying(8)".into(), charset: None })]));
     let wide = status_line(&mut h, 200);
     assert!(wide.ends_with("⌃k actions   Size: 1 byte │ varchar(8): up to 8 chars (32 bytes in UTF-8) │ Row 1, Col 1"), "{wide}");
     assert!(wide.contains("Enter edit"), "{wide}");
@@ -134,6 +137,38 @@ async fn narrow_keeps_position() {
     h.app.status_items = vec![];
     let without = status_line(&mut h, 120);
     assert!(xs(&without) >= 58 && !without.contains("Row 1"), "{without}");
+}
+
+/// The status text keeps half the line (as without items) unless an item would otherwise go; a run's line is never cut for them
+#[tokio::test]
+async fn status_text_keeps_half_unless_an_item_would_go() {
+    let mut h = Harness::new().await;
+    payment(&mut h);
+    h.key("m");
+    let line = status_line(&mut h, 120);
+    assert!(line.contains("2 rows marked") || line.contains("1 row marked"), "{line}");
+    assert!(!line.contains('…') && line.ends_with("Row 1, Col 1"), "{line}");
+    // Every item on and a cell of 4 bytes: the text gives way to a third so they fit
+    h.app.status_items = vec![Item::NotNull, Item::Size, Item::ShownColumns, Item::Position];
+    h.app.status = "y".repeat(70);
+    let line = status_line(&mut h, 120);
+    assert!(line.contains("y… ") && line.ends_with("Size: 1 byte │ Row 1, Col 1"), "{line}");
+}
+
+/// Columns that couldn't be read are asked for again after a while
+#[tokio::test]
+async fn failed_column_types_are_asked_again() {
+    let mut h = Harness::new().await;
+    h.app.status_items = vec![Item::Size, Item::Position];
+    payment(&mut h);
+    let key = (h.app.tabs[h.app.active].target.clone(), "public".to_string(), "payment".to_string());
+    let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(31);
+    h.app.table_cols.insert(key.clone(), TableCols::Failed(std::time::Instant::now()));
+    status_line(&mut h, 160);
+    assert!(matches!(h.app.table_cols[&key], TableCols::Failed(_)), "not right away");
+    h.app.table_cols.insert(key.clone(), TableCols::Failed(long_ago));
+    status_line(&mut h, 160);
+    assert!(matches!(h.app.table_cols[&key], TableCols::Loading));
 }
 
 /// Size: a console result's column mapped to a table column (QueryResult.edit, aliases too) gets the limit; one that isn't, the bytes only
@@ -164,7 +199,7 @@ async fn size_in_a_console_result() {
     set(&mut h, res(None));
     assert!(status_line(&mut h, 200).ends_with("   Size: 11 bytes (7 chars) │ Row 1, Col 2"), "{}", status_line(&mut h, 200));
     let target = h.app.tabs[h.app.active].target.clone();
-    h.app.table_cols.insert((target, "public".into(), "users".into()), Some(vec![("user_name".into(), ColumnType { data_type: "character varying(8)".into(), charset: None })]));
+    h.app.table_cols.insert((target, "public".into(), "users".into()), TableCols::Loaded(vec![("user_name".into(), ColumnType { data_type: "character varying(8)".into(), charset: None })]));
     set(&mut h, res(Some(Editable::Table(EditTarget { schema: "public".into(), table: "users".into(), pk: vec!["id".into()], columns: vec!["id".into(), "user_name".into()] }))));
     assert!(status_line(&mut h, 200).ends_with("   Size: 11 bytes (7 chars) │ varchar(8): up to 8 chars (32 bytes in UTF-8) │ Row 1, Col 2"), "{}", status_line(&mut h, 200));
     // A number has no Size

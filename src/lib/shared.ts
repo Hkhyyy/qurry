@@ -83,6 +83,8 @@ export interface StatusBarInfo {
   items: { id: StatusItemId; label: string; hint: string; group: string }[];
   defaults: StatusItemId[];
   drop: StatusPart[];
+  /** The most selected cells Not null, Sum, Avg, Min and Max go over */
+  maxCells: number;
 }
 /** Rows or columns of a selection, 1-based (qurry_shared::statusbar::Span) */
 export interface StatusSpan {

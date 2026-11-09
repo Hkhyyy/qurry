@@ -90,9 +90,10 @@ impl App {
                 (pk, types, r)
             },
             move |a, (pk, types, r)| {
-                // The status line's Size reads the column types from here (none when the metadata couldn't be read: asked again then)
+                // The status line's Size reads the column types from here, fresh on each load; when they couldn't be read, Size asks
+                // for them itself (status_items::table_cols)
                 if !types.is_empty() {
-                    a.table_cols.insert((t_target, t_schema, t_table), Some(types.clone()));
+                    a.table_cols.insert((t_target, t_schema, t_table), super::TableCols::Loaded(types.clone()));
                 }
                 let cols: Vec<(String, String)> = types.into_iter().map(|(n, t)| (n, t.data_type)).collect();
                 // A table opened from the search cache was just connected: sync the explorer display

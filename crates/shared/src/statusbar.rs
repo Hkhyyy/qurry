@@ -91,6 +91,10 @@ pub enum Part {
     Position,
 }
 
+/// The most selected cells Not null / Sum / Avg / Min / Max go over (a whole column of a large result stays quick); past it they cover
+/// the first ones in grid order
+pub const MAX_CELLS: usize = 200_000;
+
 /// Which segment goes first when the bar is too narrow (the GUI's UTF-8 before them all); Position never goes
 pub const DROP: [Part; 8] = [Part::Limit, Part::Max, Part::Min, Part::Avg, Part::Sum, Part::NotNull, Part::Size, Part::ShownColumns];
 
@@ -196,7 +200,8 @@ fn number(s: &str) -> Option<f64> {
         }
         i += d;
     }
-    (i == b.len()).then(|| t.parse().ok()).flatten()
+    // 1e400 parses as infinity: not a number to add up
+    (i == b.len()).then(|| t.parse().ok()).flatten().filter(|n: &f64| n.is_finite())
 }
 
 /// A number as the status bar shows it: digits grouped with commas, up to 4 decimals ("1,284,930.5")
@@ -219,13 +224,13 @@ fn plural(n: usize, one: &str) -> String {
 }
 
 /// The Size item's value for a cell of a column of type `type_name`: "11 bytes (7 chars)" (UTF-8, as sent), a binary value's
-/// length ("2,048 bytes"; past the 64 bytes a grid receives, "over 64 bytes"), "NULL". None for numbers and dates / times (their
-/// text isn't what is stored)
+/// length ("2,048 bytes"; past the 64 bytes a grid receives, "over 64 bytes"), "NULL". None for numbers, dates / times and booleans
+/// (their text isn't what is stored)
 pub fn size(type_name: &str, value: &Value) -> Option<String> {
     let class = format::value_class(type_name, value);
     match (class, value) {
         (ValueClass::Null, _) => Some("NULL".into()),
-        (ValueClass::Number | ValueClass::DateTime, _) => None,
+        (ValueClass::Number | ValueClass::DateTime | ValueClass::Boolean, _) => None,
         (ValueClass::JsonBinary, Value::String(s)) if !format::is_json_type(type_name) && s.starts_with("0x") => {
             // The core sends binary as 0x and the hex of its first 64 bytes, then … when there is more
             let hex = s[2..].trim_end_matches('…');
@@ -408,7 +413,7 @@ mod tests {
         for (n, want) in [(1284930.5, "1,284,930.5"), (10707.754166, "10,707.7542"), (0.0, "0"), (-0.00001, "0"), (-1234.5, "-1,234.5"), (98400.0, "98,400"), (91867108876892.0, "91,867,108,876,892"), (0.1 + 0.2, "0.3")] {
             assert_eq!(num(n), want, "{n}");
         }
-        for (s, want) in [("12", Some(12.0)), (" -3.5 ", Some(-3.5)), ("1e3", Some(1000.0)), ("2E-2", Some(0.02)), ("1.", None), (".5", None), ("1e", None), ("0x10", None), ("12a", None), ("", None), ("-", None), ("NaN", None), ("inf", None)] {
+        for (s, want) in [("12", Some(12.0)), (" -3.5 ", Some(-3.5)), ("1e3", Some(1000.0)), ("2E-2", Some(0.02)), ("1.", None), (".5", None), ("1e", None), ("0x10", None), ("12a", None), ("", None), ("-", None), ("NaN", None), ("inf", None), ("1e400", None)] {
             assert_eq!(number(s), want, "{s:?}");
         }
     }
@@ -453,7 +458,8 @@ mod tests {
         for (t, v, want) in cases {
             assert_eq!(size(t, &v).as_deref(), want, "{t} {v}");
         }
-        assert_eq!(size("BOOL", &json!(true)).as_deref(), Some("4 bytes"));
+        assert_eq!(size("BOOL", &json!(true)), None);
+        assert_eq!(size("TEXT", &json!(true)), None, "a JSON boolean whatever the column says");
     }
 
     /// The limit wording per type and engine (the design's frame: the type, then what it allows)

@@ -92,17 +92,20 @@ pub fn without_position(msg: &str) -> String {
     qurry_shared::errors::without_position(msg).to_string()
 }
 
-/// The status bar's items: { items (id, label, hint, group, in order), defaults, drop (which segment goes first when narrow) }
+/// The status bar's items: { items (id, label, hint, group, in order), defaults, drop (which segment goes first when narrow), maxCells
+/// (the most selected cells the selection's items go over) }
 #[wasm_bindgen(js_name = statusBarInfo)]
 pub fn status_bar_info() -> Result<JsValue, JsError> {
-    use qurry_shared::statusbar::{DEFAULTS, DROP, ITEMS, Item, ItemInfo, Part};
+    use qurry_shared::statusbar::{DEFAULTS, DROP, ITEMS, Item, ItemInfo, MAX_CELLS, Part};
     #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct Info {
         items: [ItemInfo; 8],
         defaults: [Item; 2],
         drop: [Part; 8],
+        max_cells: usize,
     }
-    to(&Info { items: ITEMS, defaults: DEFAULTS, drop: DROP })
+    to(&Info { items: ITEMS, defaults: DEFAULTS, drop: DROP, max_cells: MAX_CELLS })
 }
 
 /// The status bar's segments for the items on and what the focused grid tells (statusbar::Status; the TUI's words)
@@ -115,7 +118,7 @@ pub fn status_segments(on: JsValue, status: JsValue) -> Result<JsValue, JsError>
 #[wasm_bindgen(js_name = selectionStats)]
 pub fn selection_stats(cells: JsValue) -> Result<JsValue, JsError> {
     let mut st = qurry_shared::statusbar::Stats::default();
-    for v in from::<Vec<Value>>(cells)? {
+    for v in from::<Vec<Value>>(cells)?.into_iter().take(qurry_shared::statusbar::MAX_CELLS) {
         st.add(&v);
     }
     to(&st)

@@ -3,10 +3,19 @@
 //! (m) with the cursor's column, or a ⇧-arrow range; with neither, the cursor's cell
 use super::*;
 use qurry_core::editable::{ColumnEdit, Editable};
-use qurry_core::statusbar::{self, ColumnType, Item, Segment, Span, Stats, Status, ITEMS};
+use qurry_core::statusbar::{self, ColumnType, Item, Segment, Span, Stats, Status, ITEMS, MAX_CELLS};
+use std::hash::{Hash, Hasher};
 
-/// A table's columns and their declared types (None while they load or when they can't be read: Size then shows the bytes only)
-pub type TableCols = Option<Vec<(String, ColumnType)>>;
+/// A table's columns and their declared types for Size (while they load or when they couldn't be read, Size shows the bytes only)
+pub enum TableCols {
+    Loading,
+    Loaded(Vec<(String, ColumnType)>),
+    /// Asked again once this long has passed (the connection may be back)
+    Failed(std::time::Instant),
+}
+
+/// How long a table whose columns couldn't be read waits before they are asked for again
+const RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl App {
     /// ⌃k › Status Bar Items…: a checklist of the items by group, then Restore defaults. Enter or Space toggles and it stays open on
@@ -58,21 +67,33 @@ impl App {
         };
         let Some(g) = grid else { return vec![] };
         let (target, kind) = (tab.target.clone(), self.kind_of(&tab.conn));
+        let mut cache = self.stats_cache;
         let mut s = Status { kind: Some(kind), shown: g.shown, ..Default::default() };
         if g.rows() > 0 && g.cols() > 0 {
             let (rows, cols) = selection(g);
             let (r, c) = (Span::of(rows.iter().copied()), Span::of(cols.iter().copied()));
             s.pos = r.zip(c);
             if rows.len() * cols.len() > 1 {
-                // Over the cells only while one of the selection's items is on
-                let mut st = Stats::default();
-                if ITEMS.iter().any(|i| i.group == "Selection" && self.status_items.contains(&i.id)) {
-                    for &r in &rows {
-                        for &c in &cols {
-                            st.add(&g.value(r, c).map_or(Value::Null, Value::String));
+                // Over the cells (at most MAX_CELLS, as the GUI) only while one of the selection's items is on, and again only when the
+                // grid, the selection or an edit changed (it is drawn on every key)
+                let on = ITEMS.iter().any(|i| i.group == "Selection" && self.status_items.contains(&i.id));
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (on, g.id, g.row, g.col, g.anchor, &g.marked, &g.edits, g.rows()).hash(&mut h);
+                let key = h.finish();
+                let st = match cache {
+                    Some((k, st)) if k == key => st,
+                    _ => {
+                        let mut st = Stats::default();
+                        if on {
+                            let cells = rows.iter().flat_map(|&r| cols.iter().map(move |&c| (r, c))).take(MAX_CELLS);
+                            for (r, c) in cells {
+                                st.add(&g.value(r, c).map_or(Value::Null, Value::String));
+                            }
                         }
+                        cache = Some((key, st));
+                        st
                     }
-                }
+                };
                 s.stats = Some(st);
             } else if self.status_items.contains(&Item::Size) {
                 let col = &g.result.columns[g.col];
@@ -92,22 +113,32 @@ impl App {
                 s.cell = Some(statusbar::Cell { type_name, value, column });
             }
         }
+        self.stats_cache = cache;
         statusbar::segments(&self.status_items, &s)
     }
 
-    /// A table's column types, loaded the first time they are asked for
+    /// A table's column types, loaded the first time they are asked for (a table tab's load fills them in again each time), and
+    /// asked again a while after they couldn't be read
     fn table_cols(&mut self, target: &str, schema: &str, table: &str) -> Option<&Vec<(String, ColumnType)>> {
         let key = (target.to_string(), schema.to_string(), table.to_string());
-        if !self.table_cols.contains_key(&key) {
-            self.table_cols.insert(key.clone(), None);
+        let ask = match self.table_cols.get(&key) {
+            None => true,
+            Some(TableCols::Failed(at)) => at.elapsed() >= RETRY,
+            Some(_) => false,
+        };
+        if ask {
+            self.table_cols.insert(key.clone(), TableCols::Loading);
             let st = self.state.clone();
             let (t, sc, tb) = key.clone();
             let k = key.clone();
             self.spawn(async move { st.table_detail(t, sc, tb).await.ok() }, move |a, d| {
-                a.table_cols.insert(k, d.map(|d| column_types(d.columns)));
+                a.table_cols.insert(k, d.map_or(TableCols::Failed(std::time::Instant::now()), |d| TableCols::Loaded(column_types(d.columns))));
             });
         }
-        self.table_cols.get(&key)?.as_ref()
+        match self.table_cols.get(&key)? {
+            TableCols::Loaded(c) => Some(c),
+            _ => None,
+        }
     }
 }
 

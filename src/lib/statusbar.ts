@@ -116,23 +116,37 @@ const NONE: StatusItemId[] = [];
 export const useStatusItems = (): StatusItemId[] => useSyncExternalStore((f) => (itemSubs.add(f), () => void itemSubs.delete(f)), currentItems);
 
 // ───────── Table columns' declared types, for Size (its column limit) ─────────
-// A grid asks only while Size is on and its current cell is in a table column; each table is read once per data source
-const tables = new Map<string, ColumnMeta[] | "loading" | "failed">();
+// A grid asks only while Size is on and its current cell is in a table column; each table is read once per data source, again each time
+// a table tab loads it (setTableColumns), and asked again a while after it couldn't be read
+const RETRY_MS = 30_000;
+const tables = new Map<string, ColumnMeta[] | "loading" | { failedAt: number }>();
 const tableSubs = new Set<() => void>();
+let tablesVersion = 0;
+const tableKey = (target: string, schema: string, table: string) => JSON.stringify([target, schema, table]);
+const tablesChanged = () => {
+  tablesVersion++;
+  tableSubs.forEach((f) => f());
+};
+
+/** A table's columns as just read (a table tab's load): Size uses them from now on */
+export function setTableColumns(target: string, schema: string, table: string, cols: ColumnMeta[]) {
+  tables.set(tableKey(target, schema, table), cols);
+  tablesChanged();
+}
 
 /** The table's columns, or undefined while they load (or when they can't be read: Size then shows the bytes only) */
 export function tableColumns(target: string, schema: string, table: string): ColumnMeta[] | undefined {
-  const k = JSON.stringify([target, schema, table]);
+  const k = tableKey(target, schema, table);
   const v = tables.get(k);
-  if (v === undefined) {
+  if (v === undefined || (typeof v === "object" && "failedAt" in v && Date.now() - v.failedAt >= RETRY_MS)) {
     tables.set(k, "loading");
     meta.table(target, schema, table).then(
       (d) => tables.set(k, d.columns),
-      () => tables.set(k, "failed"),
-    ).finally(() => tableSubs.forEach((f) => f()));
+      () => tables.set(k, { failedAt: Date.now() }),
+    ).finally(tablesChanged);
   }
   return Array.isArray(v) ? v : undefined;
 }
 
 /** Re-renders when a table's columns arrive */
-export const useTableColumnsLoaded = () => useSyncExternalStore((f) => (tableSubs.add(f), () => void tableSubs.delete(f)), () => tables.size + [...tables.values()].filter((v) => v !== "loading").length);
+export const useTableColumnsLoaded = () => useSyncExternalStore((f) => (tableSubs.add(f), () => void tableSubs.delete(f)), () => tablesVersion);

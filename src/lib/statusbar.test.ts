@@ -55,6 +55,7 @@ describe("status bar items (qurry_shared::statusbar through WebAssembly, the TUI
     ]);
     expect(cell("ab", "VARCHAR")).toEqual([{ id: "size", label: "Size", value: "2 bytes" }]);
     expect(cell(18, "INT")).toEqual([]);
+    expect(cell("true", "BOOL")).toEqual([]);
   });
 
   it("knows the items, their defaults and the order they go when narrow", () => {
@@ -62,5 +63,6 @@ describe("status bar items (qurry_shared::statusbar through WebAssembly, the TUI
     expect(info.items.map((i) => i.id)).toEqual(["notNull", "sum", "avg", "min", "max", "size", "shownColumns", "position"]);
     expect(info.defaults).toEqual(["shownColumns", "position"]);
     expect(info.drop).toEqual(["limit", "max", "min", "avg", "sum", "notNull", "size", "shownColumns"]);
+    expect(info.maxCells).toBe(200000);
   });
 });

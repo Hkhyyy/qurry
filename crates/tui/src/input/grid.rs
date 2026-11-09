@@ -696,9 +696,8 @@ mod tests {
         }
         h.key("Down");
         assert!(h.table(id).grid.as_ref().unwrap().loading_more);
-        // While it loads, the status line says so (words, so it reads without colors too); nothing on the grid. Wide enough for the
-        // whole text beside the status line's items (it keeps a third of the width before they go)
-        let screen = h.screen(160, 30);
+        // While it loads, the status line says so (words, so it reads without colors too); nothing on the grid
+        let screen = h.screen(120, 30);
         let status = screen.lines().last().unwrap();
         assert!(status.contains("▏ Loading more rows… 0.0 s · ⌃c cancel"), "{status}");
         assert!(!screen.lines().any(|l| l.contains("Loading more") && l.contains('┗')), "{screen}");

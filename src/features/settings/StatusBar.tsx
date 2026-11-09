@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cx, Spacer, StatusItem, Text } from "../../ui";
 import { cellText, holdFocusWidgets, loadStatusItems, resetStatusItems, setStatusItem, setStatusNote, useStatusItems, useStatusWidgets, type FocusWidgets } from "../../lib/statusbar";
@@ -9,14 +9,21 @@ import { RunningBar } from "../../components/RunningBar";
 /** What the bar holds that can go when it is too narrow: the status bar segments and the encoding label */
 type Droppable = StatusPart | "utf8";
 
-/** The focused grid's segments for the items on (qurry_shared::statusbar::segments). Without the WebAssembly module: its current cell */
+/** The focused grid's segments for the items on (qurry_shared::statusbar::segments). Without the WebAssembly module (or if it throws):
+ *  its current cell */
 function useSegments(w: FocusWidgets, items?: StatusItemId[]): StatusSegment[] {
   const saved = useStatusItems();
   const on = items ?? saved;
   const ready = useSharedReady();
   const g = w.grid;
   if (!g) return [];
-  if (ready) return shared().statusSegments(on, g);
+  if (ready) {
+    try {
+      return shared().statusSegments(on, g);
+    } catch (e) {
+      console.error(`The status bar items could not be worked out (${e})`);
+    }
+  }
   const [r, c] = g.pos ?? [];
   return r && c && r.count === 1 && c.count === 1 ? [{ id: "position", value: cellText(r.first, c.first) }] : [];
 }
@@ -32,7 +39,7 @@ function useSegments(w: FocusWidgets, items?: StatusItemId[]): StatusSegment[] {
 function StatusBar({ status, busy, readOnly, update, onUpdate, jobs, widgets, items }: { status: string; busy?: { label: string; since: number; onCancel: () => void }; readOnly: boolean; update?: string; onUpdate: () => void; jobs: TransferJob[]; widgets?: FocusWidgets; items?: StatusItemId[] }) {
   const live = useStatusWidgets();
   const w = widgets ? { ...live, ...widgets } : live;
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; barTop: number } | null>(null);
   const all = useSegments(w, items);
   const ready = useSharedReady();
   const order: Droppable[] = ["utf8", ...(ready ? shared().statusBarInfo().drop : [])];
@@ -48,7 +55,8 @@ function StatusBar({ status, busy, readOnly, update, onUpdate, jobs, widgets, it
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const key = [all.map((s) => s.id).join(), status, busy?.label, update, w.pos, readOnly, jobs.length].join("\u0001");
+  // A shorter value can bring back what went: the values count too
+  const key = [all.map((s) => `${s.id}:${s.value}`).join(), status, busy?.label, update, w.pos, readOnly, jobs.length].join("\u0001");
   useLayoutEffect(() => setDrop(0), [key]);
   useLayoutEffect(() => {
     const el = ref.current;
@@ -58,20 +66,15 @@ function StatusBar({ status, busy, readOnly, update, onUpdate, jobs, widgets, it
   const openMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     if (!ready) return;
-    // The checklist takes the focus: the bar keeps showing the grid's items meanwhile
-    holdFocusWidgets(true);
-    setMenu({ x: e.clientX, y: e.clientY });
-  };
-  const closeMenu = () => {
-    setMenu(null);
-    holdFocusWidgets(false);
+    setMenu({ x: e.clientX, barTop: ref.current?.getBoundingClientRect().top ?? window.innerHeight });
   };
   const right: { key: string; node: React.ReactNode }[] = [
     ...segs.map((s) => ({
       key: s.id,
       node: (
+        // Not a button: a click (or right-click) on the bar opens the checklist; Settings › Appearance is the keyboard's way there
         <span className="sb-seg" onClick={openMenu}>
-          <StatusItem onClick={() => undefined}>
+          <StatusItem>
             {s.label && <span className="sb-label">{s.label}:</span>}
             <span className="sb-value">{s.value}</span>
           </StatusItem>
@@ -106,17 +109,25 @@ function StatusBar({ status, busy, readOnly, update, onUpdate, jobs, widgets, it
           {r.node}
         </Fragment>
       ))}
-      {menu && <StatusItemsMenu at={menu} onClose={closeMenu} />}
+      {menu && <StatusItemsMenu at={menu} onClose={() => setMenu(null)} />}
     </div>
   );
 }
 
 /**
- * The status bar's checklist (DataGrip: right-click the status bar): the items by group, Restore Defaults. Opens upward from the
- * click and stays open while items are toggled; ↑↓ move, Space or ↩ toggles, Esc or a click outside closes and gives focus back
+ * The status bar's checklist (DataGrip: right-click the status bar): the items by group, Restore Defaults. Opens just above the bar
+ * from the click, inside the window, and stays open while items are toggled; ↑↓ Home End move, Space or ↩ toggles, Esc, ⇥ or a click
+ * outside closes and gives focus back
  */
-function StatusItemsMenu({ at, onClose }: { at: { x: number; y: number }; onClose: () => void }) {
+function StatusItemsMenu({ at, onClose }: { at: { x: number; barTop: number }; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  const id = useId();
+  // Placed once measured (before it is painted): its left edge at the click, kept inside the window, its bottom 2 px above the bar
+  const [place, setPlace] = useState<{ left: number; bottom: number } | null>(null);
+  useLayoutEffect(() => {
+    const w = ref.current?.getBoundingClientRect().width ?? 0;
+    setPlace({ left: Math.max(4, Math.min(at.x, window.innerWidth - w - 4)), bottom: window.innerHeight - at.barTop + 2 });
+  }, []);
   const on = useStatusItems();
   const items = shared().statusBarInfo().items;
   const [act, setAct] = useState(0);
@@ -126,6 +137,8 @@ function StatusItemsMenu({ at, onClose }: { at: { x: number; y: number }; onClos
     // The TUI may have changed them since
     loadStatusItems();
     const back = document.activeElement as HTMLElement | null;
+    // It takes the focus: the bar keeps showing the grid's items meanwhile, until the focus is back there
+    holdFocusWidgets(true);
     ref.current?.focus();
     const down = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && closeRef.current();
     // On the next tick, so the click that opened it isn't one outside
@@ -134,6 +147,7 @@ function StatusItemsMenu({ at, onClose }: { at: { x: number; y: number }; onClos
       clearTimeout(t);
       window.removeEventListener("mousedown", down, true);
       back?.focus?.();
+      holdFocusWidgets(false);
     };
   }, []);
   const rows = items.length + 1;
@@ -147,11 +161,15 @@ function StatusItemsMenu({ at, onClose }: { at: { x: number; y: number }; onClos
       role="menu"
       aria-label="Status bar items"
       tabIndex={-1}
-      style={{ left: Math.min(at.x, window.innerWidth - 280), bottom: Math.max(4, window.innerHeight - at.y + 4) }}
+      aria-activedescendant={`${id}-${act}`}
+      // Measured at the left edge first (its natural width), then placed before it is painted
+      style={place ?? { left: 0, bottom: window.innerHeight - at.barTop + 2 }}
       onMouseDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => (e.preventDefault(), e.stopPropagation())}
       onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
+        if (e.key === "Escape" || e.key === "Tab") onClose();
+        else if (e.key === "Home") setAct(0);
+        else if (e.key === "End") setAct(rows - 1);
         else if (e.key === "ArrowDown") setAct((a) => (a + 1) % rows);
         else if (e.key === "ArrowUp") setAct((a) => (a + rows - 1) % rows);
         else if (e.key === " " || e.key === "Enter") run(act);
@@ -165,10 +183,12 @@ function StatusItemsMenu({ at, onClose }: { at: { x: number; y: number }; onClos
           {it.group !== group && (group = it.group) && (
             <>
               {i > 0 && <div className="ui-menu-sep" role="separator" />}
-              <div className="ui-menu-label-row">{it.group}</div>
+              <div className="ui-menu-label-row" role="none">
+                {it.group}
+              </div>
             </>
           )}
-          <div className={cx("ui-menu-item", act === i && "active")} role="menuitemcheckbox" aria-checked={on.includes(it.id as StatusItemId)} onMouseEnter={() => setAct(i)} onClick={() => run(i)}>
+          <div id={`${id}-${i}`} className={cx("ui-menu-item", act === i && "active")} role="menuitemcheckbox" aria-checked={on.includes(it.id)} onMouseEnter={() => setAct(i)} onClick={() => run(i)}>
             <span className="ui-menu-label">
               <span className="sb-check">{on.includes(it.id) ? "✓" : ""}</span>
               {it.label}
@@ -178,13 +198,15 @@ function StatusItemsMenu({ at, onClose }: { at: { x: number; y: number }; onClos
         </Fragment>
       ))}
       <div className="ui-menu-sep" role="separator" />
-      <div className={cx("ui-menu-item", act === items.length && "active")} role="menuitem" onMouseEnter={() => setAct(items.length)} onClick={() => run(items.length)}>
+      <div id={`${id}-${items.length}`} className={cx("ui-menu-item", act === items.length && "active")} role="menuitem" onMouseEnter={() => setAct(items.length)} onClick={() => run(items.length)}>
         <span className="ui-menu-label">
           <span className="sb-check" />
           Restore Defaults
         </span>
       </div>
-      <div className="ui-menu-label-row">Space toggles · Esc closes</div>
+      <div className="ui-menu-label-row" role="none">
+        Space toggles · Esc closes
+      </div>
     </div>,
     document.body,
   );

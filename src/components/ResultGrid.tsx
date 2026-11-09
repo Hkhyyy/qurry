@@ -383,17 +383,25 @@ export function ResultGrid(p: Props) {
   const range = scrollRef.current && !chart && !transposed ? shownColumns(colVirt.measurementsCache, offset + rownumW, offset + scrollRef.current.clientWidth) : null;
   const multi = hasSel && !isSingle(sel);
   const posSpans = useMemo<GridStatus["pos"]>(() => (chart || transposed || !cur ? undefined : multi ? [spanOf(rowsOf(sel)), spanOf(selCols(sel))] : [spanOf([cur.r]), spanOf([cur.c])]), [sel, chart, transposed]);
-  // Only while one of them is on: every selected cell's value goes to the module (at most 200,000)
+  // Only while one of them is on: every selected cell's value goes to the module (at most qurry_shared::statusbar::MAX_CELLS)
   const wantStats = multi && wasmReady && statusItems.some((i) => SELECTION_ITEMS.includes(i));
   const stats = useMemo(() => {
     if (!wantStats) return undefined;
+    const max = shared().statusBarInfo().maxCells;
     const vals: Cell[] = [];
-    forSelected((r, c) => (vals.length < 200000 ? void vals.push(valueAt(r, c)) : false));
+    // A not-yet-written DEFAULT has no value to count
+    forSelected((r, c) => {
+      if (vals.length >= max) return false;
+      const v = valueAt(r, c);
+      if (v !== DEFAULT_TOKEN) vals.push(v);
+    });
     return shared().selectionStats(vals);
   }, [wantStats, sel, result, changes, added]);
   // Size: the current cell alone, and its table column's declared type when the grid's columns map to a table (a table tab, a console
   // result of one table or a join's columns of a table)
-  const sizeAt = !multi && cur && !chart && !transposed && statusItems.includes("size") ? { r: dataIndex(cur.r), c: cur.c } : null;
+  // (not a not-yet-written DEFAULT: it has no value yet)
+  const sizeCell = !multi && cur && !chart && !transposed && statusItems.includes("size") ? { r: dataIndex(cur.r), c: cur.c } : null;
+  const sizeAt = sizeCell && valueAt(sizeCell.r, sizeCell.c) !== DEFAULT_TOKEN ? sizeCell : null;
   const sizeValue = sizeAt ? valueAt(sizeAt.r, sizeAt.c) : null;
   const joinCol = sizeAt ? p.editJoin?.columns[sizeAt.c] : undefined;
   const colRef = !sizeAt ? undefined : edit ? { schema: edit.schema, table: edit.table, column: tcol(sizeAt.c) } : joinCol && "table" in joinCol ? { ...p.editJoin!.tables[joinCol.table], column: joinCol.column } : undefined;
@@ -406,7 +414,7 @@ export function ResultGrid(p: Props) {
       pos: posSpans,
       stats,
       shown: range ? [range[0] + 1, range[1] + 1, cols.length] : undefined,
-      cell: sizeAt ? { typeName: cols[sizeAt.c].typeName, value: sizeValue === DEFAULT_TOKEN ? null : sizeValue, column: colMeta && { dataType: colMeta.dataType, charset: colMeta.charset } } : undefined,
+      cell: sizeAt ? { typeName: cols[sizeAt.c].typeName, value: sizeValue, column: colMeta && { dataType: colMeta.dataType, charset: colMeta.charset } } : undefined,
     }),
     [kind, posSpans, stats, range?.[0], range?.[1], cols, sizeAt?.r, sizeAt?.c, sizeValue, colMeta],
   );

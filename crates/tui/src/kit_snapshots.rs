@@ -856,7 +856,7 @@ async fn all_scenes() -> Vec<Value> {
         h.key("Esc");
         h.key("Right");
         let target = h.app.tabs[h.app.active].target.clone();
-        h.app.table_cols.insert((target.clone(), "public".into(), "payment".into()), Some(vec![("card_brand".into(), ColumnType { data_type: "character varying(16)".into(), charset: None })]));
+        h.app.table_cols.insert((target.clone(), "public".into(), "payment".into()), crate::app::TableCols::Loaded(vec![("card_brand".into(), ColumnType { data_type: "character varying(16)".into(), charset: None })]));
         h.app.status_items = h.app.state.store.set_status_bar_item(Item::Size, true).unwrap();
         h.app.status = "4 rows".into();
         scenes.push(app_scene(&mut h, "Status line: Size", "Size turned on, nothing marked: Position is the cursor's cell, Size its bytes and the column's declared limit (from the table's metadata)", 120, 22));
