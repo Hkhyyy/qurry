@@ -103,8 +103,8 @@ jobs:
       matrix:
         include:
           # arch: architecture in the file names Tauri produces (also used in update bundle names)
-          - { os: macos-14, target: aarch64-apple-darwin, arch: aarch64, bundles: "app,dmg" }
-          - { os: macos-14, target: x86_64-apple-darwin, arch: x64, bundles: "app,dmg" }
+          - { os: macos-15, target: aarch64-apple-darwin, arch: aarch64, bundles: "app,dmg" }
+          - { os: macos-15, target: x86_64-apple-darwin, arch: x64, bundles: "app,dmg" }
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, arch: amd64, bundles: "appimage,deb" }
     runs-on: ${{ matrix.os }}
     env:
@@ -221,8 +221,8 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - { os: macos-14, target: aarch64-apple-darwin }
-          - { os: macos-14, target: x86_64-apple-darwin }
+          - { os: macos-15, target: aarch64-apple-darwin }
+          - { os: macos-15, target: x86_64-apple-darwin }
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
     runs-on: ${{ matrix.os }}
     env:
@@ -277,8 +277,8 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - { os: macos-14, target: aarch64-apple-darwin }
-          - { os: macos-14, target: x86_64-apple-darwin }
+          - { os: macos-15, target: aarch64-apple-darwin }
+          - { os: macos-15, target: x86_64-apple-darwin }
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
     runs-on: ${{ matrix.os }}
     env:
