@@ -116,6 +116,8 @@
 /* ── Form ── */
 .ui-field { display: grid; grid-template-columns: 120px 1fr; align-items: center; column-gap: var(--ui-sp-4); row-gap: var(--ui-sp-1); margin-bottom: var(--ui-sp-3); }
 .ui-field-label { color: var(--ui-text-muted); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A field's content is always beside its label: a second row of controls (Theme's Sync with OS pickers) doesn't drop into the label column */
+.ui-field > :not(.ui-field-label) { grid-column: 2; }
 .ui-field-hint { grid-column: 2; font-size: var(--ui-fs-sm); color: var(--ui-text-muted); }
 .ui-field-error { grid-column: 2; font-size: var(--ui-fs-sm); color: var(--ui-danger); }
 .ui-input, .ui-select {
