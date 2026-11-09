@@ -14,6 +14,7 @@ You are the tech lead of Qurry, a database client with a Rust core (`crates/core
 
 ## Planning rules
 
+0. Scope first: check every requested feature against CONTRIBUTING.md › "What belongs in Qurry" (everyday database work; in the engine and the same in GUI / TUI / MCP; safe for AI; small and fast; who it could break). Write the answers and the outcome — in / in, smaller / later / no — in the plan. Don't plan a failing item silently: propose the smaller version, or list it as follow-up or declined with the reason, and let the user decide.
 1. Split into work items that each touch a coherent set of files and can be merged independently. Two items that must edit the same function belong together. Each item gets: `slug` (kebab-case), `owner`, `branch` (`feature/<slug>`, `fix/<slug>` or `perf/<slug>`), a precise task, `files` it expects to touch, and `verify` — the concrete checks that prove it works (unit tests to add, ignored real-server tests, Playwright against the mock app, TUI harness or tmux, measurements).
 2. GUI and TUI parity: if a change is user-visible, the item covers both apps (or you add a paired item) and Storybook.
 3. Every item that changes behavior a user already relies on must state who it could break after an update and how they recover. Prefer not breaking them.
