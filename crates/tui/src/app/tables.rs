@@ -359,7 +359,7 @@ impl App {
         let name = g.result.columns[c].name.clone();
         let changed: ColumnWidths = match how {
             Resize::Step(s) => [g.set_width(c, column_width(g.widths[c].into(), s))].into(),
-            Resize::Fit => [g.set_width(c, g.fit_width(c))].into(),
+            Resize::Fit => [g.toggle_fit(c)].into(),
             Resize::FitAll => (0..g.cols()).map(|c| g.set_width(c, g.fit_width(c))).collect(),
             Resize::Reset => {
                 g.set_user_widths(ColumnWidths::new());

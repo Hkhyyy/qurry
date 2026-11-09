@@ -70,10 +70,11 @@ test("Copy as IN List: a range of cells, or a single cell's whole column", async
 });
 
 test("time fractions are padded to milliseconds in the grid", async ({ page }) => {
-  const rows = work(page).getByRole("row");
-  await expect(rows.nth(1).getByRole("gridcell").nth(3)).toHaveText("2026-10-15 12:00:00.000 +09:00");
-  await expect(rows.nth(2).getByRole("gridcell").nth(3)).toHaveText("2026-10-15 12:00:00.500 +09:00");
-  await expect(rows.nth(3).getByRole("gridcell").nth(3)).toHaveText("2026-10-15 12:00:00.125 +09:00");
+  // The body's rows (the header has two: the row-number corner and the column headers)
+  const rows = work(page).locator(".grid-scroll").getByRole("row");
+  await expect(rows.nth(0).getByRole("gridcell").nth(3)).toHaveText("2026-10-15 12:00:00.000 +09:00");
+  await expect(rows.nth(1).getByRole("gridcell").nth(3)).toHaveText("2026-10-15 12:00:00.500 +09:00");
+  await expect(rows.nth(2).getByRole("gridcell").nth(3)).toHaveText("2026-10-15 12:00:00.125 +09:00");
 });
 
 test("a WebView that refuses WebAssembly: multi-cell copy says why nothing was copied", async ({ page }) => {

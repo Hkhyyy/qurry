@@ -25,7 +25,7 @@ MarkRow	Mark Row (add the row to the selection or take it out: y copies, d delet
 ValueEditor	Value Panel (the current cell's whole value, beside the grid)	v (grid)
 ColumnNarrower	Narrow Column (the current one)	< (grid)
 ColumnWider	Widen Column (the current one)	> (grid)
-ColumnFit	Fit Column to its content (the rows loaded so far)	= (grid)
+ColumnFit	Fit Column to its content (the rows loaded so far; again: back to the width before)	= (grid)
 ColumnFitAll	Fit All Columns	—
 ColumnReset	Reset Column Widths (back to the computed widths)	—
 FindSimilar	Find Similar Rows (pgvector, by the vector column)	—

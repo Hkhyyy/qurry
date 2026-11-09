@@ -149,7 +149,7 @@
   {"gui": "grid.copyQuery", "title": "Copy Query to Clipboard", "scope": "grid"},
   {"gui": "grid.colNarrow", "tui": "ColumnNarrower", "title": "Narrow Column", "tuiTitle": "Narrow Column (the current one)", "scope": "grid", "guiKeys": ["Ctrl+Alt+Left"], "tuiPane": "grid", "tuiPaneKeys": ["<"]},
   {"gui": "grid.colWiden", "tui": "ColumnWider", "title": "Widen Column", "tuiTitle": "Widen Column (the current one)", "scope": "grid", "guiKeys": ["Ctrl+Alt+Right"], "tuiPane": "grid", "tuiPaneKeys": [">"]},
-  {"gui": "grid.colFit", "tui": "ColumnFit", "title": "Fit Column", "guiDesc": "Fit Column to its content (the rows loaded so far; also: double-click the header's right edge)", "tuiTitle": "Fit Column to its content (the rows loaded so far)", "scope": "grid", "tuiPane": "grid", "tuiPaneKeys": ["="]},
+  {"gui": "grid.colFit", "tui": "ColumnFit", "title": "Fit Column", "guiDesc": "Fit Column to its content (the rows loaded so far; also: double-click the header's right edge, again to put it back)", "tuiTitle": "Fit Column to its content (the rows loaded so far; again: back to the width before)", "scope": "grid", "tuiPane": "grid", "tuiPaneKeys": ["="]},
   {"gui": "grid.colFitAll", "tui": "ColumnFitAll", "title": "Fit All Columns", "scope": "grid"},
   {"gui": "grid.colReset", "tui": "ColumnReset", "title": "Reset Widths", "guiDesc": "Reset Widths (back to the computed widths)", "tuiTitle": "Reset Column Widths (back to the computed widths)", "scope": "grid"},
   {"tui": "TxToggle", "title": "Toggle Transaction Mode (Auto/Manual)", "tuiKeys": ["Alt+T"]},

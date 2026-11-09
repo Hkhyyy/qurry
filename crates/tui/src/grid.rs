@@ -28,6 +28,8 @@ pub struct Grid {
     pub widths: Vec<u16>,
     /// Widths the user set (< > =, or the GUI for a table tab) by column name (`id#2` for a name the result repeats), in cells (qurry_shared::format::ColumnWidths)
     pub user_widths: ColumnWidths,
+    /// A column's width before `=` fitted it, so `=` on the fitted column puts it back (the GUI's double-click on a header edge)
+    before_fit: ColumnWidths,
     /// Fractional-second digits of time columns (aligned within a column, 0 = no alignment)
     pub(crate) frac: Vec<usize>,
     /// Last rendered height (PgUp/PgDn)
@@ -142,7 +144,7 @@ static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), orig: vec![] };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), before_fit: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), orig: vec![] };
         g.compute_widths();
         g
     }
@@ -171,6 +173,7 @@ impl Grid {
     /// Widths the user set (a table tab's saved ones, or none for Reset Widths) replace the computed ones by column key
     pub fn set_user_widths(&mut self, w: ColumnWidths) {
         self.user_widths = w;
+        self.before_fit.clear();
         self.compute_widths();
     }
 
@@ -179,6 +182,29 @@ impl Grid {
         let name = self.result.columns[c].name.width() + 2;
         let body = (0..self.rows()).map(|r| self.shown(r, c, usize::MAX).map_or(6, |s| text_width(&s))).max().unwrap_or(0);
         column_width(name.max(body) as i64, 0)
+    }
+
+    /// `=`: fit column `c`; on a column that already fits, back to its width before the fit (the computed one when that isn't known)
+    pub fn toggle_fit(&mut self, c: usize) -> (String, u16) {
+        let key = self.width_keys().swap_remove(c);
+        let fit = self.fit_width(c);
+        if self.widths[c] != fit {
+            self.before_fit.insert(key, self.widths[c]);
+            return self.set_width(c, fit);
+        }
+        let back = match self.before_fit.remove(&key) {
+            Some(w) => w,
+            None => {
+                let set = self.user_widths.remove(&key);
+                self.compute_widths();
+                let base = self.widths[c];
+                if let Some(w) = set {
+                    self.user_widths.insert(key, w);
+                }
+                base
+            }
+        };
+        self.set_width(c, back)
     }
 
     /// Give column `c` the width `w` (in range); returns the width and its column's key, for saving
@@ -1014,6 +1040,21 @@ mod tests {
         let g = Grid::new(QueryResult { columns: vec![ty("s", "TEXT")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         assert_eq!(g.column_in_list(0, DbKind::Mysql).0, r"('a\\b')");
         assert_eq!(g.column_in_list(0, DbKind::Postgres).0, r"(E'a\\b')");
+    }
+    /// = fits a column; = again on the fitted column puts back the width before (a set one, else the computed one), as the GUI's double-click
+    #[test]
+    fn fit_toggles_back() {
+        let rows = vec![vec![json!("a value much longer than the header")]];
+        let ty = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
+        let mut g = Grid::new(QueryResult { columns: vec![ty("s", "TEXT")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
+        let computed = g.widths[0];
+        g.set_width(0, 5);
+        let fit = g.fit_width(0);
+        assert_eq!(g.toggle_fit(0).1, fit);
+        assert_eq!(g.toggle_fit(0).1, 5);
+        // Fitted without a known width before (a saved width): back to the computed one
+        g.set_user_widths([("s".to_string(), fit)].into());
+        assert_eq!(g.toggle_fit(0).1, computed);
     }
     /// Shift+arrow range: rectangle, copy as TSV (values only), IN list only the selected cells (row tuples for multiple columns). Plain movement clears it
     #[test]

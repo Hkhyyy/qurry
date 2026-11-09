@@ -1,7 +1,8 @@
 /* Result grid cells (ui/grid.tsx). Values are tokens · theme colors; the edit and find states are theme tokens too (--grid-*, lib/theme.ts) */
 /* Header outside the scroller, scrolled sideways only (scrollLeft follows the body). ::after leaves room for the body's
    vertical scrollbar, so the header can scroll as far right as the body */
-.grid-head { flex: none; display: flex; overflow: hidden; }
+.grid-head-wrap { flex: none; display: flex; }
+.grid-head { flex: 1; min-width: 0; display: flex; overflow: hidden; }
 .grid-head::after { content: ""; flex: none; width: 24px; }
 .grid-header { flex: none; display: flex; background: var(--panel); border-bottom: 1px solid var(--border); }
 .grid-row { position: absolute; left: 0; display: flex; }

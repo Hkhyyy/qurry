@@ -288,6 +288,24 @@ export function ResultGrid(p: Props) {
   /** Characters column i needs for its header and its longest cell as shown, over the rows loaded so far (DataGrip: Fit Column) */
   const fitOf = (i: number) => fitChars(headPx[i], Array.from({ length: rowCount }, (_, r) => shown(valueAt(r, i), i)), em);
   const fitColumn = (i: number) => userWidths.set({ [wkey[i]]: fitOf(i) });
+  /** A column's width before a double-click fitted it, so the next double-click on the fitted column puts it back (TUI: =) */
+  const beforeFit = useRef(new Map<string, number>());
+  // A new result (or Reset Widths) starts without it, as the TUI's grid does
+  useEffect(() => beforeFit.current.clear(), [result]);
+  const resetWidths = () => {
+    beforeFit.current.clear();
+    userWidths.reset();
+  };
+  const toggleFit = (i: number) => {
+    const [k, fit, now] = [wkey[i], fitOf(i), setOf(i) ?? toChars(widths[i], em)];
+    if (now === fit) {
+      userWidths.set({ [k]: beforeFit.current.get(k) ?? toChars(computed[i], em) });
+      beforeFit.current.delete(k);
+    } else {
+      beforeFit.current.set(k, now);
+      userWidths.set({ [k]: fit });
+    }
+  };
   const fitAll = () => userWidths.set(Object.fromEntries(wkey.map((k, i) => [k, fitOf(i)])));
   /** Narrow (-1) / widen (+1) column i by one step of the shared rule (the TUI's < >), from the width it has now */
   const stepColumn = (i: number, steps: number) => userWidths.set({ [wkey[i]]: stepWidth(setOf(i) ?? toChars(widths[i], em), steps) });
@@ -315,7 +333,7 @@ export function ResultGrid(p: Props) {
   const headerItems = (i: number): MenuItem[] => [
     { label: "Fit Column", ...cmd("grid.colFit"), shortcut: cmd("grid.colFit").shortcut ?? "double-click the edge", action: () => fitColumn(i) },
     { label: "Fit All Columns", ...cmd("grid.colFitAll"), action: fitAll },
-    { label: "Reset Widths", ...cmd("grid.colReset"), shortcut: cmd("grid.colReset").shortcut ?? "computed widths", action: userWidths.reset, disabled: !Object.keys(setW).length },
+    { label: "Reset Widths", ...cmd("grid.colReset"), shortcut: cmd("grid.colReset").shortcut ?? "computed widths", action: resetWidths, disabled: !Object.keys(setW).length },
     { separator: true },
     { label: "Narrow Column", ...cmd("grid.colNarrow"), action: () => stepColumn(i, -1) },
     { label: "Widen Column", ...cmd("grid.colWiden"), action: () => stepColumn(i, 1) },
@@ -948,13 +966,19 @@ export function ResultGrid(p: Props) {
           <div className="grid-body">
             {/* Column header above the scroller (not sticky inside it), so it can't drift off the toolbar while rows scroll */}
             {!chart && !transposed && (
-              <GridHead body={scrollRef}>
-                <GridHeaderRow width={total} height={HEADER_H}>
-                  <RowNumberCell
-                    width={rownumW}
-                    title="Select all (⌘a)"
-                    onMouseDown={() => setSel(single({ r: 0, c: 0 }, { r: rowCount - 1, c: cols.length - 1 }))}
-                  />
+              <GridHead
+                body={scrollRef}
+                corner={
+                  <GridHeaderRow width={rownumW} height={HEADER_H}>
+                    <RowNumberCell
+                      width={rownumW}
+                      title="Select all (⌘a)"
+                      onMouseDown={() => setSel(single({ r: 0, c: 0 }, { r: rowCount - 1, c: cols.length - 1 }))}
+                    />
+                  </GridHeaderRow>
+                }
+              >
+                <GridHeaderRow width={total - rownumW} height={HEADER_H}>
                   {spacer(padL)}
                   {colItems.map(({ index: i }) => {
                     const c = cols[i];
@@ -978,7 +1002,7 @@ export function ResultGrid(p: Props) {
                           setMenu({ x: e.clientX, y: e.clientY, items: headerItems(i) });
                         }}
                         onResize={(e) => startResize(e, i)}
-                        onFit={() => fitColumn(i)}
+                        onFit={() => toggleFit(i)}
                       />
                     );
                   })}

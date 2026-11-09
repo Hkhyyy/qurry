@@ -13,8 +13,10 @@ type Mouse = (e: MouseEvent) => void;
  * Header strip above the grid's scroller (body). It sits outside the scroller, so vertical scrolling can't move it (a sticky
  * header inside the scroller could lag WKWebView's async scrolling and show rows above it); it only follows the body's
  * scrollLeft. Wheel over it scrolls the body; a click keeps the focus on the body, so keyboard navigation keeps working.
+ * corner: the row-number column's header, beside the scrolled strip, not in it: a sticky cell in a box scrolled by script
+ * didn't stay put in the app's WKWebView, so the column headers sat one row-number width left of their columns
  */
-export function GridHead({ body, children }: { body: RefObject<HTMLElement | null>; children: ReactNode }) {
+export function GridHead({ body, corner, children }: { body: RefObject<HTMLElement | null>; corner?: ReactNode; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   // After commit (not a layout effect): the body may come after the head, and its ref is attached later in the same commit
   useEffect(() => {
@@ -29,15 +31,17 @@ export function GridHead({ body, children }: { body: RefObject<HTMLElement | nul
   }, [body]);
   return (
     <div
-      ref={ref}
-      className="grid-head"
+      className="grid-head-wrap"
       onWheel={(e) => body.current?.scrollBy(e.deltaX, e.deltaY)}
       onMouseDownCapture={(e) => {
         e.preventDefault();
         body.current?.focus({ preventScroll: true });
       }}
     >
-      {children}
+      {corner}
+      <div ref={ref} className="grid-head">
+        {children}
+      </div>
     </div>
   );
 }

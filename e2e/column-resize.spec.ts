@@ -27,7 +27,7 @@ async function openUsers(page: Page) {
   await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
 }
 
-test("table tab: drag resizes, double-click fits; the width is kept when the tab opens again and after a restart", async ({ page }) => {
+test("table tab: drag resizes, double-click fits (again: back); the width is kept when the tab opens again and after a restart", async ({ page }) => {
   await openApp(page);
   await openUsers(page);
   const name = header(page, "user_name");
@@ -61,6 +61,9 @@ test("table tab: drag resizes, double-click fits; the width is kept when the tab
   expect(fit).toBe(px(20));
   expect(await cut(header(page, "user_name"))).toBe(false);
   expect(await cut(work(page).getByRole("gridcell", { name: "user_1", exact: true }))).toBe(false);
+  // Double-clicked again on the fitted column: back to the width before the fit (TUI: = again)
+  await header(page, "user_name").locator(".col-resize").dblclick();
+  expect(await width(header(page, "user_name"))).toBe(px(3));
 });
 
 test("header menu: Fit Column, Fit All Columns, Reset Widths (back to the computed widths, also after a restart)", async ({ page }) => {
@@ -174,6 +177,15 @@ test("console result: widths kept in memory, horizontal scrolling and the virtua
       return [Math.round(heads.at(-1)!.getBoundingClientRect().right), Math.round(cells.at(-1)!.getBoundingClientRect().right)];
     });
   expect(g[0]).toBe(g[1]);
+  // The row-number corner sits beside the scrolled header, not in it (sticky in it, it scrolled away in the app's WKWebView)
+  const corner = await work(page)
+    .locator(".grid-wrap")
+    .evaluate((wrap) => {
+      const head = wrap.querySelector(".grid-head-wrap > .grid-header .rownum")!.getBoundingClientRect();
+      const body = wrap.querySelector(".grid-scroll [role=row] .rownum")!.getBoundingClientRect();
+      return [wrap.querySelectorAll(".grid-head .rownum").length, Math.round(head.left), Math.round(head.width), Math.round(body.left), Math.round(body.width)];
+    });
+  expect(corner).toEqual([0, corner[3], corner[4], corner[3], corner[4]]);
   // Nothing saved for a console result
   expect(await page.evaluate(() => localStorage.getItem("mock-columnWidths"))).toBeNull();
   await scroll.evaluate((el) => el.scrollTo(0, 0));

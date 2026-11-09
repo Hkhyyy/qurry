@@ -84,7 +84,7 @@ The TUI result grid uses the same kinds and the same setting: change it there wi
 
 A column starts as wide as its name and its first values need (up to a limit), so a long value ends in `…`. To change that:
 
-- **Drag** the right edge of a column header. **Double-click** the edge to fit the column to its content: its name and the longest value among the rows loaded so far.
+- **Drag** the right edge of a column header. **Double-click** the edge to fit the column to its content: its name and the longest value among the rows loaded so far. Double-click a fitted column's edge again to put back the width it had before (TUI: `=` again).
 - **Right-click** a column header: **Fit Column**, **Fit All Columns**, **Reset Widths** (every column back to its computed width), **Narrow Column**, **Widen Column**.
 - With a cell or a column header selected, `⌃⌥←` / `⌃⌥→` narrow / widen the current column by 4 characters (change the keys in **Settings › Keymap**, *Data grid*).
 
