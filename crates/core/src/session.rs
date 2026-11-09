@@ -2,10 +2,9 @@
 //! - SELECT-like statements fetch 500 rows at a time via a server cursor (DECLARE/FETCH) → "load more"
 //! - The backend PID is known, so a running query can be cancelled with pg_cancel_backend
 use crate::backend::{Backend, dispatch};
-use crate::db::{pg_columns, pg_origins, pg_value, query_result, ColumnInfo, QueryResult};
+use crate::db::{pg_columns, pg_origins, pg_values, query_result, ColumnInfo, QueryResult};
 use crate::error::{AppError, AppResult};
 use futures::TryStreamExt;
-use serde_json::Value;
 use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgConnection, PgPool, PgRow};
 use sqlx::{Column, Either, Executor, Postgres, Row, TypeInfo};
@@ -46,6 +45,10 @@ pub struct PgSession {
     idle_closed: bool,
     /// Rows read through the cursor for the current result (OFFSET when reopening)
     fetched: usize,
+    /// The session's time zone for timestamptz (db::pg_values): read once, again after a statement that may change it (zone_change)
+    zone: Option<crate::zone::Zone>,
+    /// Such a statement ran since the transaction began: its end may change the zone back
+    zone_set: bool,
 }
 
 /// Why loading more needs a new session: saving the source's settings, Disconnect and the idle drop close the tab sessions (app::drop_pool)
@@ -105,6 +108,16 @@ pub(crate) fn chains(s: &str) -> bool {
     matches!(words.get(after..), Some(["and", "chain", ..]))
 }
 
+/// How a statement may change the session's TimeZone: (sets: `SET [LOCAL] TIME ZONE`, `SET timezone`, `set_config('TimeZone', …)`,
+/// `RESET`, `DISCARD ALL`, a procedure or DO block; ends: the end of a transaction, which undoes a SET LOCAL or a rolled-back SET).
+/// Words in a comment or a string count too: the zone is then only read again
+fn zone_change(sql: &str) -> (bool, bool) {
+    let s = strip_comments_lead(sql);
+    let word = s.split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("");
+    let sets = ["call", "do", "execute"].contains(&word) || ["zone", "set_config", "reset", "discard"].iter().any(|k| s.contains(k));
+    (sets, ["rollback", "commit", "end", "abort"].contains(&word))
+}
+
 pub fn is_select_like(sql: &str) -> bool {
     let s = strip_comments_lead(sql);
     ["select", "with", "values", "table", "("].iter().any(|k| s.starts_with(k))
@@ -148,7 +161,7 @@ impl PgSession {
     pub async fn open(pool: &PgPool) -> AppResult<Self> {
         let mut conn = pool.acquire().await?;
         let pid: i32 = sqlx::query_scalar("select pg_backend_pid()").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), origins: Vec::new(), manual: false, in_tx: false, changed: false, reads_outside_tx: false, cursor_used: Instant::now(), idle_closed: false, fetched: 0 })
+        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), origins: Vec::new(), manual: false, in_tx: false, changed: false, reads_outside_tx: false, cursor_used: Instant::now(), idle_closed: false, fetched: 0, zone: None, zone_set: false })
     }
 
     /// keep-alive: so idle session connections are not dropped
@@ -227,12 +240,21 @@ impl PgSession {
         let r = self.conn.execute("COMMIT").await;
         // A failed COMMIT (e.g. a deferred foreign key) ends the transaction too: PostgreSQL rolls it back
         self.in_tx = false;
+        self.zone_tx_ended();
         r?;
         Ok(())
     }
 
+    /// A SET LOCAL TIME ZONE (or a SET the rollback undoes) ends with the transaction
+    fn zone_tx_ended(&mut self) {
+        if std::mem::take(&mut self.zone_set) {
+            self.zone = None;
+        }
+    }
+
     pub async fn rollback_tx(&mut self) -> AppResult<()> {
         self.close_cursor().await;
+        self.zone_tx_ended();
         self.conn.execute("ROLLBACK").await?;
         self.in_tx = false;
         Ok(())
@@ -278,7 +300,19 @@ impl PgSession {
         }
         // Production: a plain read doesn't open the Manual transaction (Session::set_reads_outside_tx)
         let read_first = self.reading_first() && plain_read(sql, crate::store::DbKind::Postgres);
+        // Before (its own rows, e.g. `select set_config('TimeZone', …), now()`, read it anew) and after (a SET has no rows)
+        let (sets, ends) = zone_change(sql);
+        if sets || (ends && self.zone_set) {
+            self.zone = None;
+        }
         let mut r = self.run_inner(sql, limit, read_first).await;
+        if sets {
+            (self.zone, self.zone_set) = (None, true);
+        }
+        // ROLLBACK TO SAVEPOINT keeps the transaction (and a SET LOCAL before the savepoint)
+        if ends && !strip_comments_lead(sql).starts_with("rollback to") {
+            self.zone_tx_ended();
+        }
         if let Ok(q) = &mut r {
             q.in_transaction = self.in_tx;
             self.changed |= self.in_tx && crate::audit::is_change(sql, crate::store::DbKind::Postgres);
@@ -355,7 +389,11 @@ impl PgSession {
     }
 
     async fn run_direct(&mut self, sql: &str, limit: usize, start: Instant) -> AppResult<QueryResult> {
-        run_direct_on(&mut self.conn, sql, limit, start).await
+        // Read the zone before, once: after a result cut off at `limit`, the connection first waits for the rest of it
+        if self.zone.is_none() && zone_change(sql) == (false, false) {
+            self.zone = crate::db::pg_zone(&mut self.conn).await;
+        }
+        run_direct_on(&mut self.conn, sql, limit, start, &mut self.zone).await
     }
 
     /// A change with its undo snapshot right before it, in one transaction (Session::run_with_snapshot)
@@ -459,7 +497,7 @@ impl PgSession {
         }
         let done = rows.len() < limit;
         self.fetched += rows.len();
-        let data: Vec<Vec<Value>> = rows.iter().map(|r| (0..r.len()).map(|i| pg_value(r, i)).collect()).collect();
+        let data = pg_values(&mut self.conn, &self.columns, &rows, &mut self.zone).await;
         if done {
             self.close_cursor().await;
         }
@@ -467,10 +505,10 @@ impl PgSession {
     }
 }
 
-/// Run a statement on the connection (no cursor)
-async fn run_direct_on(conn: &mut PgConnection, sql: &str, limit: usize, start: Instant) -> AppResult<QueryResult> {
+/// Run a statement on the connection (no cursor). `zone`: the session's time zone, read here when unknown (db::pg_values)
+async fn run_direct_on(conn: &mut PgConnection, sql: &str, limit: usize, start: Instant, zone: &mut Option<crate::zone::Zone>) -> AppResult<QueryResult> {
     let mut columns = Vec::new();
-    let mut rows: Vec<Vec<Value>> = Vec::new();
+    let mut rows: Vec<PgRow> = Vec::new();
     let mut affected = 0u64;
     let mut truncated = false;
     let mut has_rs = false;
@@ -492,25 +530,26 @@ async fn run_direct_on(conn: &mut PgConnection, sql: &str, limit: usize, start: 
                         truncated = true;
                         break;
                     }
-                    rows.push((0..row.len()).map(|i| pg_value(&row, i)).collect());
+                    rows.push(row);
                 }
             }
         }
     }
+    let rows = pg_values(conn, &columns, &rows, zone).await;
     Ok(query_result(columns, rows, affected, truncated, start, has_rs))
 }
 
 /// Undo snapshot inside the open transaction, under a savepoint: if it fails, the transaction carries on as it was (PostgreSQL would abort it)
 pub(crate) async fn pg_snapshot(conn: &mut PgConnection, sql: &str) -> AppResult<QueryResult> {
     conn.execute("SAVEPOINT qurry_snap").await?;
-    let mut r = run_direct_on(conn, sql, crate::audit::UNDO_MAX_ROWS + 1, Instant::now()).await;
+    let mut r = run_direct_on(conn, sql, crate::audit::UNDO_MAX_ROWS + 1, Instant::now(), &mut None).await;
     // A row lock needs the UPDATE privilege: a role with only SELECT and DELETE gets the snapshot without the lock (as before rows were locked)
     if let Err(AppError::Db(sqlx::Error::Database(e))) = &r
         && e.code().as_deref() == Some("42501")
         && let Some(plain) = crate::audit::pg_unlocked(sql)
     {
         conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await?;
-        r = run_direct_on(conn, &plain, crate::audit::UNDO_MAX_ROWS + 1, Instant::now()).await;
+        r = run_direct_on(conn, &plain, crate::audit::UNDO_MAX_ROWS + 1, Instant::now(), &mut None).await;
     }
     end_snapshot(conn, r.is_ok()).await?;
     r
@@ -778,6 +817,7 @@ pub fn check_exact_one(st: &str, n: u64, exact_one: bool) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
     use crate::db::{connect, Pool};
 
     /// MCP execute path: the server refuses two statements in one prepared item (nothing runs)

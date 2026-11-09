@@ -9,6 +9,7 @@ import { SettingsDialog } from "../../features/settings/SettingsDialog";
 import { setFont } from "../../lib/prefs";
 import { saveCustomTheme, setThemeSync } from "../../lib/theme";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
+import type { GridStatus, StatusItemId } from "../../lib/shared";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
 import { ConsolePane, SPLITTER_FAILED, type OutputLine } from "../../components/ConsolePane";
 import type { StmtMark } from "../../lib/stmtMark";
@@ -410,7 +411,7 @@ export const GridLoadingMore: S = {
       <div style={{ position: "relative", flex: 1 }}>
         <ResultGrid result={{ ...mixed, truncated: true }} running={false} loadingMore query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
       </div>
-      <StatusBar status="" busy={{ label: "Loading more rows", since: Date.now() - 1200, onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} widgets={{ pos: "Row 3, Col 5" }} />
+      <StatusBar status="" busy={{ label: "Loading more rows", since: Date.now() - 1200, onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} widgets={{ grid: CELL_3_5 }} />
     </div>
   ),
 };
@@ -982,24 +983,89 @@ export const Workspaces: S = { name: "Workspace rail", render: () => <Rail n={2}
 export const WorkspacesMany: S = { name: "Workspace rail — 30 workspaces (list scrolls, footer stays)", render: () => <Rail n={30} /> };
 export const WorkspacesLight: S = { name: "Workspace rail — light", globals: { theme: "light" }, render: () => <Rail n={30} /> };
 export const WorkspacesHc: S = { name: "Workspace rail — high contrast", globals: { theme: "hc" }, render: () => <Rail n={30} /> };
-/** Status bar, information only (#107): status text, transfers, update badge, read-only, the focused grid's shown columns, the focused
- * editor's (Ln, Col) or grid's (Row, Col) position, encoding. While the focused tab runs or loads more rows, the running indicator
- * (bar · what · elapsed) takes the status text's place; hovering it shows ✕, which cancels (shown hovered in the last two) */
+/** What focused grids tell the status bar (as ResultGrid does): the cell or the selection (1-based rows and columns), the selected
+ *  cells' stats, the current cell for Size (its table column's declared type, when known), the shown columns */
+const sp = (first: number, last = first, count = last - first + 1) => ({ first, last, count });
+const CELL_3_5: GridStatus = { pos: [sp(3), sp(5)], shown: [3, 8, 14] };
+const SB_NULLS: GridStatus = { pos: [sp(30, 51), sp(6)], stats: { notNull: 4, nums: 0, sum: 0, min: 0, max: 0 }, shown: [1, 9, 14] };
+const SB_NUMBERS: GridStatus = { pos: [sp(3, 42), sp(5, 7)], stats: { notNull: 120, nums: 120, sum: 1284930.5, min: 1, max: 98400 }, shown: [4, 11, 14] };
+const SB_SCATTERED: GridStatus = { pos: [sp(1, 30, 22), sp(3)], stats: { notNull: 22, nums: 0, sum: 0, min: 0, max: 0 } };
+const SB_CELL_PG: GridStatus = { kind: "postgres", pos: [sp(3), sp(4)], cell: { typeName: "VARCHAR", value: "Grüße ☕", column: { dataType: "character varying(8)" } } };
+const SB_CELL_MY: GridStatus = { kind: "mysql", pos: [sp(3), sp(4)], cell: { typeName: "VARCHAR", value: "Grüße ☕", column: { dataType: "varchar(8)", charset: "utf8mb4" } } };
+const SB_CELL_CONSOLE: GridStatus = { kind: "postgres", pos: [sp(2), sp(1)], cell: { typeName: "VARCHAR", value: "Grüße ☕" } };
+const SB_ALL: StatusItemId[] = ["notNull", "sum", "avg", "min", "max", "size", "shownColumns", "position"];
+const SbCaption = ({ children }: { children: string }) => (
+  <Text tone="muted" size="sm">
+    {children}
+  </Text>
+);
+/** Status bar, information only (#107, #132): status text, transfers, update badge, then the focused grid's items, each its own segment
+ * (muted name, value, a thin divider, no hover title): Position (the cell, or the selected rows and columns) and Shown columns by
+ * default, Not null / Sum / Avg / Min / Max / Size when turned on; the focused editor's Ln, Col; Read-only; UTF-8. While the focused tab
+ * runs or loads more rows, the running indicator (bar · what · elapsed) takes the status text's place; hovering it shows ✕, which
+ * cancels (shown hovered in the last two) */
 export const StatusBarStory: S = {
   name: "Status bar",
   render: () => (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <style>{".sb-hovered .rb-cancel { visibility: visible; }"}</style>
+      <SbCaption>Defaults (Position, Shown columns): one cell of a grid</SbCaption>
+      <StatusBar status="3000+ rows retrieved" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ grid: CELL_3_5 }} />
+      <SbCaption>22 cells in one column, 18 of them NULL, Not null turned on</SbCaption>
+      <StatusBar status="500 rows retrieved in 38 ms" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ grid: SB_NULLS }} items={["notNull", "shownColumns", "position"]} />
+      <SbCaption>40 rows × 3 numeric columns, Sum / Avg / Min / Max turned on</SbCaption>
+      <StatusBar status="500 rows retrieved in 38 ms" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ grid: SB_NUMBERS }} items={["sum", "avg", "min", "max", "shownColumns", "position"]} />
+      <SbCaption>⌘-clicked rows that aren't one range</SbCaption>
+      <StatusBar status="500 rows retrieved in 38 ms" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ grid: SB_SCATTERED }} items={["notNull", "shownColumns", "position"]} />
+      <SbCaption>Size: one cell in a PostgreSQL table tab (users.nickname varchar(8)): its bytes and the column's limit</SbCaption>
+      <StatusBar status="Table users opened" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ grid: SB_CELL_PG }} items={["size", "shownColumns", "position"]} />
+      <SbCaption>The same cell in a MySQL table tab (utf8mb4), Read-only data source</SbCaption>
+      <StatusBar status="Table users opened" readOnly onUpdate={noop} jobs={[]} widgets={{ grid: SB_CELL_MY }} items={["size", "shownColumns", "position"]} />
+      <SbCaption>A console result's column not mapped to a table column: the bytes only</SbCaption>
+      <StatusBar status="1 statement executed in 12 ms" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ grid: SB_CELL_CONSOLE }} items={["size", "shownColumns", "position"]} />
+      <SbCaption>The console editor focused (its own position), an update offered</SbCaption>
       <StatusBar status="1 statement executed in 12 ms" readOnly update="0.3.1" onUpdate={noop} jobs={[]} widgets={{ pos: "Ln 2, Col 11" }} />
       <StatusBar status="1 statement executed in 12 ms" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ pos: "Ln 2, Col 11 (8 chars)" }} />
-      <StatusBar status="3000+ rows retrieved" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ cols: "cols 3–8 of 14", pos: "Row 3, Col 5" }} />
       <StatusBar status="Table users opened" readOnly={false} onUpdate={noop} jobs={[]} />
       <div className="sb-hovered">
         <StatusBar status="" busy={{ label: "Executing", since: Date.now() - 3400, onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} widgets={{ pos: "Ln 2, Col 11" }} />
       </div>
       <div className="sb-hovered">
-        <StatusBar status="" busy={{ label: "Loading more rows", since: Date.now() - 800, onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} widgets={{ cols: "cols 3–8 of 14", pos: "Row 3, Col 5" }} />
+        <StatusBar status="" busy={{ label: "Loading more rows", since: Date.now() - 800, onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} widgets={{ grid: CELL_3_5 }} />
       </div>
+    </div>
+  ),
+};
+/** Right-click the status bar (or click an item): the checklist of items by group, Restore Defaults; it stays open while items are
+ *  toggled (↑↓ move, Space or ↩ toggles, Esc closes). The same setting as Settings › Appearance › Status bar and the TUI's ⌃k › Status
+ *  Bar Items… (settings.json, here the mock's) */
+export const StatusBarMenu: S = {
+  name: "Status bar — items checklist",
+  render: () => (
+    <div style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", height: 520 }}>
+      <StatusBar status="500 rows retrieved in 38 ms" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ grid: SB_NUMBERS }} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const bar = canvasElement.querySelector(".statusbar")!;
+    const r = bar.getBoundingClientRect();
+    fireEvent.contextMenu(bar, { clientX: r.right - 420, clientY: r.top });
+    await waitFor(() => expect(document.querySelector(".sb-menu")).toBeTruthy());
+  },
+};
+/** Narrow windows, every item on: the status text shrinks to 140 px, then UTF-8, the column limit, Max, Min, Avg, Sum, Not null, Size,
+ *  Shown columns go; Position and Read-only stay (the text gives way) */
+export const StatusBarNarrow: S = {
+  name: "Status bar — narrow widths",
+  render: () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {[1260, 1000, 800, 640, 480, 360].map((w) => (
+        <div key={w} style={{ width: w, display: "flex", flexDirection: "column", gap: 4 }}>
+          <SbCaption>{`${w} px`}</SbCaption>
+          <StatusBar status="500 rows retrieved in 38 ms" readOnly onUpdate={noop} jobs={[]} widgets={{ grid: SB_NUMBERS }} items={SB_ALL} />
+          <StatusBar status="Table users opened" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ grid: { ...SB_CELL_PG, shown: [1, 8, 12] } }} items={SB_ALL} />
+        </div>
+      ))}
     </div>
   ),
 };

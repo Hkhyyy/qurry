@@ -123,6 +123,10 @@ const checkTheme = (t: any) => {
 let keywordCase = localStorage.getItem("mock-keywordCase") ?? "off";
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
 let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
+/** settings.json "statusBarItems" (kept across a reload, as the file is; read on each call, so a test can change it as the TUI would).
+ *  Absent: the defaults; the order is the items' order (qurry_shared::statusbar::ITEMS) */
+const STATUS_ITEMS = ["notNull", "sum", "avg", "min", "max", "size", "shownColumns", "position"];
+const statusItems = (): string[] => JSON.parse(localStorage.getItem("mock-statusBarItems") ?? '["shownColumns", "position"]');
 /** settings.json "columnWidths": table (source · database · schema · table) → its set widths (kept across a reload, as the file is;
  *  read on each call, as the core reads the file, so a test can change it as the TUI would) */
 const columnWidths = (): Record<string, Record<string, number>> => JSON.parse(localStorage.getItem("mock-columnWidths") ?? "{}");
@@ -780,6 +784,18 @@ const handlers: Record<string, (a: any) => unknown> = {
     gridAlign = next;
     localStorage.setItem("mock-gridAlign", JSON.stringify(next));
     return next;
+  },
+  status_bar_items: () => statusItems(),
+  // As the core: on what is saved now, in the items' order. window.__mockChannelSaveFails: the file can't be written
+  set_status_bar_item: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    const next = STATUS_ITEMS.filter((i) => (i === a.item ? a.on : statusItems().includes(i)));
+    localStorage.setItem("mock-statusBarItems", JSON.stringify(next));
+    return next;
+  },
+  reset_status_bar_items: () => {
+    localStorage.removeItem("mock-statusBarItems");
+    return statusItems();
   },
   column_widths: (a: any) => columnWidths()[widthsKey(a.table)] ?? {},
   // As the core: merged into what is saved, kept between 3 and 200 characters. window.__mockChannelSaveFails: the file can't be written

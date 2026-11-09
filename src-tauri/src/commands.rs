@@ -808,6 +808,24 @@ pub fn set_grid_align(state: State<'_, AppState>, class: qurry_core::format::Val
     state.store.set_grid_align(class, align)
 }
 
+/// Status bar items on (shared with the TUI)
+#[tauri::command]
+pub fn status_bar_items(state: State<'_, AppState>) -> Vec<qurry_core::statusbar::Item> {
+    state.store.status_bar_items()
+}
+
+/// Turn one status bar item on or off; returns what is saved
+#[tauri::command]
+pub fn set_status_bar_item(state: State<'_, AppState>, item: qurry_core::statusbar::Item, on: bool) -> AppResult<Vec<qurry_core::statusbar::Item>> {
+    state.store.set_status_bar_item(item, on)
+}
+
+/// Restore Defaults; returns them
+#[tauri::command]
+pub fn reset_status_bar_items(state: State<'_, AppState>) -> AppResult<Vec<qurry_core::statusbar::Item>> {
+    state.store.reset_status_bar_items()
+}
+
 /// Keyword case as you type and in Reformat Code (Settings › Appearance › Keyword case; the TUI shares it)
 #[tauri::command]
 pub fn keyword_case(state: State<'_, AppState>) -> qurry_core::format::KeywordCase {

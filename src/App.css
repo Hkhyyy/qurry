@@ -444,6 +444,10 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .align-grid { display: grid; grid-template-columns: 110px 120px; gap: var(--ui-sp-2) var(--ui-sp-3); align-items: center; }
 .align-label { font-size: var(--ui-fs-sm); }
 .align-label.custom { color: var(--ok); }
+/* Rows as tall as a control row, so the field's name lines up with the first one (as Alignment's) */
+.sb-field { display: grid; grid-template-columns: 96px 1fr; grid-auto-rows: minmax(var(--ui-h-md), auto); gap: 0 var(--ui-sp-3); align-items: center; }
+.sb-field-label { font-size: var(--ui-fs-sm); color: var(--ui-text-muted); }
+.sb-field-row { display: flex; flex-wrap: wrap; gap: var(--ui-sp-1) var(--ui-sp-5); }
 /* Settings › Appearance › Theme: Sync with OS's two themes; the theme editor (features/settings/ThemeEditor.tsx) and its preview */
 .theme-sync { margin-top: var(--ui-sp-2); font-size: var(--ui-fs-sm); }
 .theme-editor { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
@@ -512,7 +516,22 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .find-rows td.hit { background: var(--grid-match); }
 .find-rows tr:hover td { background: var(--hover-tint); }
 .statusbar .grow { flex: 1; }
+/* The status text shrinks to 140 px before any status bar item goes; after them all, below it (StatusBar) */
 .sb-text { margin-left: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.statusbar .sb-text { flex: 0 1 auto; min-width: 140px; }
+.statusbar .sb-text.sb-text-squeezed { min-width: 0; }
+/* One status bar item: a muted name, the value in the text color, a thin divider between items */
+.sb-seg { display: contents; }
+.sb-seg .ui-status-item { cursor: pointer; }
+.sb-seg .ui-status-item:hover { background: var(--ui-hover); }
+.sb-label { color: var(--ui-text-muted); }
+.sb-value { color: var(--ui-text); font-variant-numeric: tabular-nums; }
+.sb-sep { flex: none; width: 1px; height: 12px; background: var(--ui-border-strong); }
+.sb-menu { min-width: 260px; }
+.sb-menu:focus { outline: none; }
+.sb-menu .ui-menu-item.active { color: var(--ui-text-on-accent); background: var(--ui-accent); }
+.sb-menu .ui-menu-item.active .ui-menu-key { color: var(--ui-text-on-accent); }
+.sb-check { display: inline-block; width: 1.2em; }
 .update-notes { max-height: 50vh; overflow: auto; font-size: 13px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 10px 0; }
 .update-notes ul { margin: 4px 0 10px; padding-left: 18px; }
 .update-notes li { margin: 2px 0; }

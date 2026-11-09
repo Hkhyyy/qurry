@@ -13,6 +13,7 @@ GUI **Settings** (`⌘,`, or the ⚙ button at the bottom of the workspace rail 
 | Grid font | Font family and size of the result and table grids. Size 9–16 px (default 12): rows keep their height, so larger text would be cut. Columns get wider with the size | No (the TUI uses the terminal's font) |
 | Keyword case | **Off** (default), **UPPER** or **lower** for SQL keywords as you type in a console and in **Reformat Code** ([below](#keyword-case-and-reformat-code)) | Yes (TUI **⌃k › Keyword Case…**) |
 | Alignment | Where cells sit in result grids, per kind of value (below) | Yes (TUI **⌃k › Grid Alignment…**) |
+| Status bar | Which items the status bar shows for the focused grid: Position, Shown columns, Not null, Sum, Avg, Min, Max, Size ([below](#status-bar-items)) | Yes (TUI **⌃k › Status Bar Items…**) |
 | Updates | Check for a new version when the app starts; **Check Now** | — |
 | Channel | Stable or beta releases ([Updates](updates.md)) | Yes |
 
@@ -91,6 +92,24 @@ A column starts as wide as its name and its first values need (up to a limit), s
 In the TUI, `<` / `>` narrow / widen the current column and `=` fits it (the key bar shows them; change them in the `F1` window, *Data grid keys*); **⌃k › Fit All Columns** and **⌃k › Reset Column Widths** do every column.
 
 A table tab remembers its widths per table (data source · database · schema · table), in `settings.json` under `"columnWidths"`, so the GUI and the TUI show the same widths: in characters, which the GUI draws in its grid font and the TUI as that many cells. A wide character (Hangul, Chinese, Japanese, emoji) counts as 2, as a terminal draws it, so a fitted column shows the whole value in both apps. A table tab reads the saved widths each time it opens, so a change made in the other app shows when you open the table again. A column you never resized keeps its computed width, and **Reset Widths** forgets the table's widths. If the settings file can't be written, the new widths still apply until the tab closes. A console result keeps its widths until it runs again; columns with the same name (a join's two `id` columns) resize on their own. The transposed view (**View as › Transpose**) keeps its own layout.
+
+### Status bar items
+
+The status bar shows, on the right, items for the focused result or table grid, each as its own segment. **Position** and **Shown columns** are on by default; turn the others on where you need them:
+
+| Item | What it shows |
+|---|---|
+| Position | The current cell (`Row 3, Col 4`), or the selected rows and columns: `Rows 5–26 (22) · Col 4`, `Rows 3–42 (40) · Cols 5–7`, `22 rows · Col 3` when the rows aren't one range (⌘-clicked) |
+| Shown columns | The columns in view when not every one fits (`cols 3–8 of 14`) |
+| Not null | The selected cells that have a value (NULL left out) |
+| Sum, Avg, Min, Max | Over the numbers among the selected cells (2 or more cells) |
+| Size | One cell: its size in bytes and characters (`Size: 11 bytes (7 chars)`; binary: its length) and, when the table's metadata gives it, its column's declared limit: `varchar(8): up to 8 chars (32 bytes in UTF-8)`, MySQL `up to 8 chars (32 bytes in utf8mb4)`, `char(8): always 8 chars (padded)`, `varbinary(16): up to 16 bytes`, `blob: up to 65,535 bytes`, `bytea: no limit (up to 1 GB)`. Not shown for numbers, dates / times and booleans |
+
+Choose them in **Settings › Appearance › Status bar**, or **right-click the status bar** (or click one of its items) for the same checklist: it stays open while you toggle items (`↑` `↓` move, `Space` or `↩` toggles, `⎋` closes); **Restore Defaults** goes back to Position and Shown columns. The choice is kept in `settings.json` as `"statusBarItems"` (the items that are on) and shared with the TUI, where **⌃k › Status Bar Items…** changes it ([TUI status line](tui.md#status-line)). Each app reads it when it starts and when you open its checklist, so a change made in the other app shows there.
+
+Size counts the bytes of the value as Qurry sends it, in UTF-8. A column in another character set (MySQL `latin1`) can store it in fewer bytes; the limit is worded in the column's own character set. A table tab knows its columns' limits; a console result only where its column is a table's column (a result of one table with its key, or a join's column of a table), otherwise Size shows the bytes only. A binary value longer than the 64 bytes a grid receives shows as `over 64 bytes`.
+
+When the window is narrow, the status text gives way first (down to a short width), then UTF-8, the column limit, Max, Min, Avg, Sum, Not null, Size and Shown columns go, in that order; Position and Read-only always stay.
 
 ## Keymap
 

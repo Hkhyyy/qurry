@@ -11,6 +11,7 @@ mod marks;
 mod notices;
 mod perf;
 mod reformat;
+mod status_items;
 mod tabs;
 mod temporary;
 mod tls_optin;

@@ -42,6 +42,8 @@ interface Props {
   completion?: FilterCompletion;
   /** The table its column widths are kept for (shared with the TUI) */
   table?: TableRef;
+  /** The data source (target id): the status bar's Size reads the table's column types from it */
+  target?: string;
 }
 
 export function TableEditor(p: Props) {
@@ -99,6 +101,7 @@ export function TableEditor(p: Props) {
           onFindSimilar={p.onFindSimilar}
           filterBar={filterBar}
           widthsOf={p.table}
+          target={p.target}
         />
         {p.error && (
           <Notice tone="danger" className="grid-overlay">

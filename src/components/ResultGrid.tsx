@@ -1,4 +1,4 @@
-import { cellText, setFocusWidgets, setStatusWidget, shownColumns } from "../lib/statusbar";
+import { setFocusWidgets, setStatusNote, shownColumns, spanOf, tableColumns, useStatusItems, useTableColumnsLoaded } from "../lib/statusbar";
 import { fracWidth, isTimeType, padFrac } from "../lib/timeFrac";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
@@ -7,7 +7,7 @@ import { Cell, Dialect, dialectOf, type JoinEdit, QueryResult } from "../lib/api
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, raw } from "../lib/extract";
-import { shared, sharedOr, sharedReady, useSharedReady } from "../lib/shared";
+import { shared, sharedOr, sharedReady, useSharedReady, type GridStatus, type StatusItemId } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
 import { CELL_PAD, CHAR_PX, fitChars, stepWidth, toChars, toPx, useColumnWidths, widthKeys, type WidthsOf } from "../lib/columnWidths";
@@ -77,7 +77,12 @@ interface Props {
   onFindSimilar?: (column: string, row: Record<string, Cell>) => void;
   /** Whose column widths these are: a table tab's table (saved, shared with the TUI) or a console result's id; absent: this grid's own */
   widthsOf?: WidthsOf;
+  /** The data source (target id) the grid's table is in: the status bar's Size reads its columns' declared types from it */
+  target?: string;
 }
+
+/** The status bar items that are over the selected cells */
+const SELECTION_ITEMS: StatusItemId[] = ["notNull", "sum", "avg", "min", "max"];
 
 /** pgvector columns (vector · halfvec · sparsevec) */
 const isVectorType = (t: string) => /^(vector|halfvec|sparsevec)$/i.test(t);
@@ -266,7 +271,7 @@ export function ResultGrid(p: Props) {
   const wasmReady = useSharedReady();
   // Widths a user set (drag, fit, the header menu, ⌃⌥← / ⌃⌥→) by column name (`id#2` for a repeated one), in characters (lib/columnWidths.ts)
   const ownWidths = useId();
-  const userWidths = useColumnWidths(p.widthsOf ?? ownWidths, (msg) => setStatusWidget("aggregate", msg));
+  const userWidths = useColumnWidths(p.widthsOf ?? ownWidths, (msg) => setStatusNote(msg));
   const setW = userWidths.widths;
   const wkey = useMemo(() => widthKeys(cols.map((c) => c.name)), [cols, wasmReady]);
   /** Column i's set width (characters), or undefined while it has none */
@@ -370,17 +375,54 @@ export function ResultGrid(p: Props) {
   /** A mouse click: ⇧ extends the last range to b, ⌘ adds a..b (a cell, a row, a column) or takes it out, a plain click starts over (DataGrip) */
   const clickSel = (e: React.MouseEvent, a: Pos, b: Pos = a) => setSel((s) => (e.shiftKey ? extend(s, b) : (isMac ? e.metaKey : e.ctrlKey) ? toggle(s, a, b) : single(a, b)));
 
-  // ─── Status bar: the current cell (Row, Col) and the shown columns, while focus is in this grid (lib/statusbar). The range follows
+  // ─── Status bar (lib/statusbar, qurry_shared::statusbar words it): the selection or the current cell (Position), the selected cells'
+  // Not null / Sum / Avg / Min / Max, the current cell's Size, the shown columns, while focus is in this grid. The shown range follows
   // sideways scrolling (the column virtualizer renders again on scroll); Chart and Transpose have neither ───
+  const statusItems = useStatusItems();
   const offset = colVirt.scrollOffset ?? 0;
   const range = scrollRef.current && !chart && !transposed ? shownColumns(colVirt.measurementsCache, offset + rownumW, offset + scrollRef.current.clientWidth) : null;
-  const shownText = range && wasmReady ? shared().shownCols(range[0] + 1, range[1] + 1, cols.length) : undefined;
-  const cellPos = cur && !chart && !transposed ? cellText(cur.r + 1, cur.c + 1) : undefined;
+  const multi = hasSel && !isSingle(sel);
+  const posSpans = useMemo<GridStatus["pos"]>(() => (chart || transposed || !cur ? undefined : multi ? [spanOf(rowsOf(sel)), spanOf(selCols(sel))] : [spanOf([cur.r]), spanOf([cur.c])]), [sel, chart, transposed]);
+  // Only while one of them is on: every selected cell's value goes to the module (at most qurry_shared::statusbar::MAX_CELLS)
+  const wantStats = multi && wasmReady && statusItems.some((i) => SELECTION_ITEMS.includes(i));
+  const stats = useMemo(() => {
+    if (!wantStats) return undefined;
+    const max = shared().statusBarInfo().maxCells;
+    const vals: Cell[] = [];
+    // A not-yet-written DEFAULT has no value to count
+    forSelected((r, c) => {
+      if (vals.length >= max) return false;
+      const v = valueAt(r, c);
+      if (v !== DEFAULT_TOKEN) vals.push(v);
+    });
+    return shared().selectionStats(vals);
+  }, [wantStats, sel, result, changes, added]);
+  // Size: the current cell alone, and its table column's declared type when the grid's columns map to a table (a table tab, a console
+  // result of one table or a join's columns of a table)
+  // (not a not-yet-written DEFAULT: it has no value yet)
+  const sizeCell = !multi && cur && !chart && !transposed && statusItems.includes("size") ? { r: dataIndex(cur.r), c: cur.c } : null;
+  const sizeAt = sizeCell && valueAt(sizeCell.r, sizeCell.c) !== DEFAULT_TOKEN ? sizeCell : null;
+  const sizeValue = sizeAt ? valueAt(sizeAt.r, sizeAt.c) : null;
+  const joinCol = sizeAt ? p.editJoin?.columns[sizeAt.c] : undefined;
+  const colRef = !sizeAt ? undefined : edit ? { schema: edit.schema, table: edit.table, column: tcol(sizeAt.c) } : joinCol && "table" in joinCol ? { ...p.editJoin!.tables[joinCol.table], column: joinCol.column } : undefined;
+  useTableColumnsLoaded();
+  const colMeta = colRef && p.target ? tableColumns(p.target, colRef.schema, colRef.table)?.find((m) => m.name === colRef.column) : undefined;
+  const kind = p.dialect?.quoting;
+  const gridStatus = useMemo<GridStatus>(
+    () => ({
+      kind,
+      pos: posSpans,
+      stats,
+      shown: range ? [range[0] + 1, range[1] + 1, cols.length] : undefined,
+      cell: sizeAt ? { typeName: cols[sizeAt.c].typeName, value: sizeValue, column: colMeta && { dataType: colMeta.dataType, charset: colMeta.charset } } : undefined,
+    }),
+    [kind, posSpans, stats, range?.[0], range?.[1], cols, sizeAt?.r, sizeAt?.c, sizeValue, colMeta],
+  );
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    setFocusWidgets(el, { pos: cellPos, cols: shownText });
-  }, [cellPos, shownText]);
+    setFocusWidgets(el, { grid: gridStatus });
+  }, [gridStatus]);
   useEffect(() => {
     const el = wrapRef.current;
     return () => {
@@ -441,7 +483,7 @@ export function ResultGrid(p: Props) {
     if (deleted.has(r)) return;
     const why = cellReason(r, c);
     // A join's read-only cell says why (one table's whole grid says it on its buttons)
-    if (why !== undefined) return void (join && why && setStatusWidget("aggregate", why));
+    if (why !== undefined) return void (join && why && setStatusNote(why));
     const v = valueAt(r, c);
     if (r < baseCount && !editableValue(v, cols[c].typeName)) return;
     setEditing({ r, c, value: v === null || v === DEFAULT_TOKEN ? "" : String(v) });
@@ -490,27 +532,9 @@ export function ResultGrid(p: Props) {
   closePanelRef.current = closePanel;
   useEffect(() => (panel && wrapRef.current ? registerValuePanel(wrapRef.current, () => closePanelRef.current()) : undefined), [panel]);
 
-  // Status bar Aggregator: Count / Sum / Avg / Min / Max when 2+ cells are selected
-  useEffect(() => {
-    if (!hasSel || isSingle(sel)) return setStatusWidget("aggregate", undefined);
-    let count = 0, nums = 0, sum = 0, min = Infinity, max = -Infinity;
-    forSelected((r, c) => {
-      if (count >= 200000) return false;
-      const v = valueAt(r, c);
-      if (v === null) return;
-      count++;
-      const n = typeof v === "number" ? v : typeof v === "string" && /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(v.trim()) ? Number(v) : NaN;
-      if (!Number.isNaN(n)) {
-        nums++;
-        sum += n;
-        min = Math.min(min, n);
-        max = Math.max(max, n);
-      }
-    });
-    const f = (n: number) => (Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString(undefined, { maximumFractionDigits: 4 }));
-    setStatusWidget("aggregate", nums ? `Count: ${count}  Sum: ${f(sum)}  Avg: ${f(sum / nums)}  Min: ${f(min)}  Max: ${f(max)}` : `Count: ${count}`);
-  }, [sel, result, changes]);
-  useEffect(() => () => setStatusWidget("aggregate", undefined), []);
+  // A note (why a paste or a copy format couldn't run) is about what was selected then
+  useEffect(() => setStatusNote(undefined), [sel, result, changes]);
+  useEffect(() => () => setStatusNote(undefined), []);
 
   /** Every selected cell that can be edited gets `v()` (a join's read-only cells keep theirs) */
   const setSelected = (v: () => Cell) => anyEdit && forSelected((r, c) => void (cellOk(r, c) && setCell(r, c, v())));
@@ -648,7 +672,7 @@ export function ResultGrid(p: Props) {
   /** The shared WASM writes the formats: without it (a WebView that refused WebAssembly) say why nothing is copied */
   const formatted = (make: () => string): string | undefined => {
     if (sharedReady()) return make();
-    setStatusWidget("aggregate", "Copy formats need WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
+    setStatusNote("Copy formats need WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
   };
   const copySelection = (header = false) => {
     if (!sel || !hasSel) return;
@@ -668,7 +692,7 @@ export function ResultGrid(p: Props) {
   const paste = async () => {
     if (!anyEdit || !cur) return;
     // Paste goes into one place (DataGrip); a ⌘-click meant as a plain click is the usual way to get several ranges here
-    if ((sel?.ranges.length ?? 0) > 1) return setStatusWidget("aggregate", "Paste needs one selected range: click a cell to select just it (⌘-click adds cells to the selection)");
+    if ((sel?.ranges.length ?? 0) > 1) return setStatusNote("Paste needs one selected range: click a cell to select just it (⌘-click adds cells to the selection)");
     const text = await navigator.clipboard.readText();
     const lines = text.replace(/\r/g, "").split("\n").filter((l, i, a) => l !== "" || i < a.length - 1);
     const grid = lines.map((l) => l.split(l.includes("\t") ? "\t" : ","));
@@ -676,7 +700,7 @@ export function ResultGrid(p: Props) {
     if (join) {
       const spots = grid.flatMap((cells, i) => cells.map((_, j) => [cur.r + i, cur.c + j]).filter(([, c]) => c < cols.length));
       const bad = spots.find(([d, c]) => d >= rowCount || !cellOk(dataIndex(d), c));
-      if (bad) return setStatusWidget("aggregate", bad[0] >= rowCount ? joinRows : cellReason(dataIndex(bad[0]), bad[1]) || "Paste reaches a cell that can't be edited");
+      if (bad) return setStatusNote(bad[0] >= rowCount ? joinRows : cellReason(dataIndex(bad[0]), bad[1]) || "Paste reaches a cell that can't be edited");
     }
     grid.forEach((cells, i) => {
       const d = cur.r + i;

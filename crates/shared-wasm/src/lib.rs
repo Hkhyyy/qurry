@@ -92,10 +92,36 @@ pub fn without_position(msg: &str) -> String {
     qurry_shared::errors::without_position(msg).to_string()
 }
 
-/// The result grid's shown columns ("cols 3–8 of 14"), or undefined when every column fits (the TUI's words)
-#[wasm_bindgen(js_name = shownCols)]
-pub fn shown_cols(first: usize, last: usize, total: usize) -> Option<String> {
-    qurry_shared::format::shown_cols(first, last, total)
+/// The status bar's items: { items (id, label, hint, group, in order), defaults, drop (which segment goes first when narrow), maxCells
+/// (the most selected cells the selection's items go over) }
+#[wasm_bindgen(js_name = statusBarInfo)]
+pub fn status_bar_info() -> Result<JsValue, JsError> {
+    use qurry_shared::statusbar::{DEFAULTS, DROP, ITEMS, Item, ItemInfo, MAX_CELLS, Part};
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Info {
+        items: [ItemInfo; 8],
+        defaults: [Item; 2],
+        drop: [Part; 8],
+        max_cells: usize,
+    }
+    to(&Info { items: ITEMS, defaults: DEFAULTS, drop: DROP, max_cells: MAX_CELLS })
+}
+
+/// The status bar's segments for the items on and what the focused grid tells (statusbar::Status; the TUI's words)
+#[wasm_bindgen(js_name = statusSegments)]
+pub fn status_segments(on: JsValue, status: JsValue) -> Result<JsValue, JsError> {
+    to(&qurry_shared::statusbar::segments(&from::<Vec<qurry_shared::statusbar::Item>>(on)?, &from(status)?))
+}
+
+/// Not null, Sum, Avg, Min, Max of the selected cells' values (statusbar::Stats)
+#[wasm_bindgen(js_name = selectionStats)]
+pub fn selection_stats(cells: JsValue) -> Result<JsValue, JsError> {
+    let mut st = qurry_shared::statusbar::Stats::default();
+    for v in from::<Vec<Value>>(cells)?.into_iter().take(qurry_shared::statusbar::MAX_CELLS) {
+        st.add(&v);
+    }
+    to(&st)
 }
 
 /// A join result's cell on the outer side where no row of `table` matched: why it is read-only (the TUI's words)

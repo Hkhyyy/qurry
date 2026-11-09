@@ -35,6 +35,14 @@ URL 에 없는 부분은 `psql` · `mysql` · `redis-cli` 처럼 환경에서 �
 - **`--ssh DEST`** 는 SSH 터널을 거칩니다. `DEST` 는 `[user@]host[:port]` 또는 `~/.ssh/config` 의 `Host` 이고, 그 `HostName`, `User`, `Port`, `IdentityFile`, `IdentityAgent`, `ProxyJump` 가 적용됩니다. ssh-agent 로, 그다음 `IdentityFile` 키 (없으면 `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa`) 로 로그인합니다. URL 의 데이터베이스 호스트는 SSH 서버에서 본 주소입니다. 처음 보는 호스트 키는 저장된 Data Source 처럼 지문을 보여 주며 멈춥니다. 확인한 뒤 `⌃k › Trust SSH Host Key` 를 하고 Data Source 를 다시 펼치세요. `~/.ssh/config` 에서 무엇을 읽는지는 [SSH 터널](data-sources.md#지원하는-데이터베이스) 을 보세요.
 - **잘못 쓰면** 화면을 열기 전에 무엇이 잘못됐는지 알려 주고 종료 코드 2 로 멈춥니다: 모르는 스킴 (`mongodb://` 는 안 됩니다), 모르는 URL 파라미터, URL 없는 `--read-only`, 잘못 쓴 URL 로 보이는 인자 (`postgres:/…`, `user:pw@host`: 비밀번호가 있을 수 있어 되풀이해 보여 주지 않습니다), 잘못 쓴 옵션 (`--readonly` 는 거부하므로 실수로 쓰기 가능한 접속을 열지 않습니다). `qurry-tui --help` 가 쓸 수 있는 형태를 보여 줍니다.
 
+## 상태 줄
+
+맨 아래 줄 왼쪽에는 상태 글이 (Production · Read-only 배지 다음에) 나오고, 그 뒤에 화면의 키와 공통 키, 그리고 포커스가 있는 결과 · 테이블 그리드라면 GUI 상태 표시줄의 항목이 나옵니다: `… ⌃k actions   Not null: 2 │ Sum: 1,329,000 │ cols 1–4 of 9 │ 2 rows · Col 3`. Position 은 맨 끝에 있습니다. **⌃k › Status Bar Items…** 에서 고르고 (기본은 Position 과 Shown columns. Not null, Sum, Avg, Min, Max, Size), GUI 와 같은 설정입니다 ([Settings › 상태 표시줄 항목](settings.md#상태-표시줄-항목)). `↑` `↓` 이동, `Space` 나 `Enter` 로 켜고 끄며 목록은 열려 있고, **Restore defaults** 는 기본으로 되돌립니다.
+
+항목이 읽는 선택은 표시한 행 (`m`) 의 커서 컬럼, 또는 `⇧↑↓←→` (또는 드래그) 로 고른 범위입니다. 둘 다 없으면 Position 은 커서 셀이고 Size 도 그 셀입니다. 테이블 탭은 컬럼에 선언된 한도를 알고, 콘솔 결과는 그 컬럼이 테이블의 컬럼일 때만 압니다.
+
+줄이 좁으면 화면의 키가 먼저 빠지고, 그다음 `⌃k actions` 를 뺀 공통 키, 그다음 항목 (컬럼 한도, Max, Min, Avg, Sum, Not null, Size, Shown columns), 마지막으로 `⌃k actions` 가 빠집니다. Position 은 남습니다. 상태 글은 항목이 없을 때처럼 줄의 절반까지 차지합니다. 그러면 항목이 빠져야 할 때만 3 분의 1 까지 양보하고 `…` 로 잘립니다. 실행 중이거나 내보내기 · 가져오기 중인 줄은 항목 때문에 잘리지 않습니다.
+
 ## 색
 
 TUI 는 시작할 때 아래 환경 변수로 색 모드를 하나 고릅니다 (먼저 맞는 줄이 이깁니다):
