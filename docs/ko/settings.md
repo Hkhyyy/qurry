@@ -13,6 +13,7 @@ GUI **Settings** (`⌘,`, 또는 맨 왼쪽 워크스페이스 막대 아래의 
 | Grid font | 결과 · 테이블 그리드의 글꼴과 크기. 크기 9–16 px (기본 12): 행 높이는 그대로라 더 크면 글자가 잘립니다. 크기에 맞춰 열이 넓어집니다 | 아니요 (TUI 는 터미널 글꼴을 씀) |
 | Keyword case | 콘솔에서 입력할 때와 **Reformat Code** 에서 SQL 키워드를 **Off** (기본), **UPPER**, **lower** 중 무엇으로 쓸지 ([아래](#키워드-대소문자와-reformat-code)) | 예 (TUI **⌃k › Keyword Case…**) |
 | Alignment | 결과 표에서 칸 안의 값을 어디에 둘지, 값 종류마다 (아래) | 예 (TUI **⌃k › Grid Alignment…**) |
+| Status bar | 포커스가 있는 그리드에 대해 상태 표시줄이 보여 줄 항목: Position, Shown columns, Not null, Sum, Avg, Min, Max, Size ([아래](#상태-표시줄-항목)) | 예 (TUI **⌃k › Status Bar Items…**) |
 | Updates | 앱을 켤 때 새 버전 확인, **Check Now** | — |
 | Channel | stable 또는 beta 릴리스 ([업데이트](updates.md)) | 예 |
 
@@ -91,6 +92,24 @@ TUI 결과 표도 같은 종류와 같은 설정을 씁니다. TUI 에서는 **�
 TUI 에서는 `<` / `>` 가 현재 컬럼을 좁히고 / 넓히고 `=` 가 내용에 맞춥니다 (키 안내 줄에 나오고, `F1` 창의 *Data grid keys* 에서 바꿀 수 있습니다). **⌃k › Fit All Columns** 와 **⌃k › Reset Column Widths** 는 모든 컬럼에 적용됩니다.
 
 테이블 탭은 너비를 테이블마다 (데이터 소스 · 데이터베이스 · 스키마 · 테이블) `settings.json` 의 `"columnWidths"` 에 기억하므로, GUI 와 TUI 가 같은 너비를 보여 줍니다. 단위는 글자 수이고, GUI 는 그리드 글꼴로, TUI 는 그만큼의 칸으로 그립니다. 넓은 문자 (한글, 한자, 일본어, 이모지) 는 터미널이 그리듯 2 글자로 세므로, 내용에 맞춘 컬럼은 두 앱 모두에서 값 전체를 보여 줍니다. 테이블 탭은 열 때마다 저장된 너비를 읽으므로, 다른 앱에서 바꾼 너비는 그 테이블을 다시 열면 보입니다. 너비를 바꾸지 않은 컬럼은 계산된 너비 그대로이고, **Reset Widths** 는 그 테이블의 너비를 지웁니다. 설정 파일에 쓸 수 없으면 새 너비는 탭을 닫을 때까지 적용됩니다. 콘솔 결과는 다시 실행할 때까지 너비를 유지하고, 이름이 같은 컬럼 (조인의 `id` 컬럼 두 개) 은 각각 따로 너비가 바뀝니다. 전치 보기 (**View as › Transpose**) 는 자기 레이아웃을 그대로 씁니다.
+
+### 상태 표시줄 항목
+
+상태 표시줄 오른쪽에는 포커스가 있는 결과 · 테이블 그리드의 항목이 하나씩 따로 나옵니다. **Position** 과 **Shown columns** 는 기본으로 켜져 있고, 나머지는 필요할 때 켭니다.
+
+| 항목 | 보여 주는 것 |
+|---|---|
+| Position | 현재 셀 (`Row 3, Col 4`), 또는 선택한 행과 열: `Rows 5–26 (22) · Col 4`, `Rows 3–42 (40) · Cols 5–7`, 행이 한 범위가 아니면 (⌘-클릭) `22 rows · Col 3` |
+| Shown columns | 모든 컬럼이 다 보이지 않을 때 보이는 컬럼 (`cols 3–8 of 14`) |
+| Not null | 선택한 셀 중 값이 있는 셀 (NULL 은 빼고) |
+| Sum, Avg, Min, Max | 선택한 셀 (2 개 이상) 중 숫자들의 합 · 평균 · 최솟값 · 최댓값 |
+| Size | 셀 하나: 크기를 바이트와 글자 수로 (`Size: 11 bytes (7 chars)`, 바이너리는 길이), 테이블 메타데이터가 알려 주면 컬럼에 선언된 한도도: `varchar(8): up to 8 chars (32 bytes in UTF-8)`, MySQL 은 `up to 8 chars (32 bytes in utf8mb4)`, `char(8): always 8 chars (padded)`, `varbinary(16): up to 16 bytes`, `blob: up to 65,535 bytes`, `bytea: no limit (up to 1 GB)`. 숫자와 날짜 / 시간에는 나오지 않습니다 |
+
+**Settings › Appearance › Status bar** 에서 고르거나, **상태 표시줄을 오른쪽 클릭** (또는 항목 하나를 클릭) 하면 같은 체크리스트가 열립니다. 항목을 켜고 끄는 동안 열려 있습니다 (`↑` `↓` 이동, `Space` 나 `↩` 켜고 끄기, `⎋` 닫기). **Restore Defaults** 는 Position 과 Shown columns 로 되돌립니다. 고른 항목은 `settings.json` 의 `"statusBarItems"` (켜진 항목들) 에 저장되고 TUI 와 공유됩니다. TUI 에서는 **⌃k › Status Bar Items…** 에서 바꿉니다 ([TUI 상태 줄](tui.md#상태-줄)). 두 앱 모두 시작할 때와 체크리스트를 열 때 읽으므로, 다른 앱에서 바꾼 것이 그때 보입니다.
+
+Size 는 Qurry 가 보내는 값의 바이트 수를 UTF-8 로 셉니다. 다른 문자 집합의 컬럼 (MySQL `latin1`) 에는 더 적은 바이트로 저장될 수 있고, 한도는 컬럼 자신의 문자 집합으로 말합니다. 테이블 탭은 컬럼의 한도를 알고, 콘솔 결과는 그 컬럼이 테이블의 컬럼일 때만 압니다 (키가 있는 한 테이블의 결과, 또는 조인에서 테이블의 컬럼). 그 밖에는 바이트만 나옵니다. 그리드가 받는 64 바이트보다 긴 바이너리 값은 `over 64 bytes` 로 나옵니다.
+
+창이 좁으면 상태 글이 먼저 (짧은 너비까지) 줄고, 그다음 UTF-8, 컬럼 한도, Max, Min, Avg, Sum, Not null, Size, Shown columns 순서로 빠집니다. Position 과 Read-only 는 항상 남습니다.
 
 ## Keymap
 
