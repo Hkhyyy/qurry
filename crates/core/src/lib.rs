@@ -54,6 +54,7 @@ pub mod transfer;
 pub mod tunnel;
 pub mod update;
 pub mod workspaces;
+pub mod zone;
 /// Console autocompletion rules (one copy, also the GUI's through WASM)
 pub use qurry_shared::complete;
 /// Grid and search helpers shared with the GUI through WASM (time fractions, tab labels, extractors, fuzzy scores, key folders, auto-map)
