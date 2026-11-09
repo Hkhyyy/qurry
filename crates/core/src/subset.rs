@@ -5,7 +5,7 @@
 //!   Masked with md5 so the same value always maps to the same value. Columns used in PK · FK are not masked (relations would break)
 //! - Inserted into the target in one transaction, skipping existing rows (PG: ON CONFLICT DO NOTHING · MySQL: ON DUPLICATE KEY UPDATE).
 //!   To avoid losing values, PG moves rows as JSON (jsonb_populate_recordset), MySQL as text / HEX
-use crate::app::{AppState, ensure_pool};
+use crate::app::{AppState, checked_pool};
 use crate::db::Pool;
 use crate::erd::{Erd, ErdColumn};
 use crate::error::{AppError, AppResult};
@@ -414,7 +414,7 @@ impl AppState {
         }
         // Relations are relative to the start schema (if they point to another schema, that table comes in too)
         let erd = self.erd(source.into(), vec![spec.schema.clone()]).await?;
-        let pool = ensure_pool(self, source).await?;
+        let pool = checked_pool(self, source).await?;
         let mut w = Walk { st: self, id: source.to_string(), pool, kind, erd, mask: spec.mask, tables: HashMap::new(), order: vec![], total: 0 };
         w.run(spec).await?;
         Ok(w)
@@ -427,6 +427,8 @@ impl AppState {
 
     /// Inserts the collected rows into target in one transaction (skipping existing rows). Returns rows sent for insert and the plan
     pub async fn subset_copy(&self, source: String, spec: SubsetSpec, target: String) -> AppResult<SubsetPlan> {
+        // Both sources' connections and tunnels are in use until it ends (in_use)
+        let _running = (self.job_running(&source), self.job_running(&target));
         let (sk, tk) = (self.kind_of(&source)?, self.kind_of(&target)?);
         if sk != tk {
             return Err(AppError::Msg("The target must be the same kind of database as the source".into()));
@@ -435,7 +437,7 @@ impl AppState {
             return Err(AppError::Msg("Pick a different data source (or database) to copy into".into()));
         }
         let w = self.subset_walk(&source, &spec).await?;
-        let tpool = ensure_pool(self, &target).await?;
+        let tpool = checked_pool(self, &target).await?;
         let mut stmts = vec![];
         for key in w.insert_order() {
             let t = &w.tables[&key];

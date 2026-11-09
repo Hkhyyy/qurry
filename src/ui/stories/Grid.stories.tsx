@@ -15,14 +15,23 @@ const ROW = 24;
 
 /**
  * Layout used by ResultGrid: the header strip (GridHead) sits above the scroller, not inside it, and only follows its
- * scrollLeft, so the header never leaves the top edge whatever the scroll timing
+ * scrollLeft, so the header never leaves the top edge whatever the scroll timing. The row-number corner sits beside the strip
  */
 function Frame({ header, width, height, children }: { header: ReactNode; width: number; height: number; children: ReactNode }) {
   const body = useRef<HTMLDivElement>(null);
   return (
     <div style={{ position: "relative", width: 600, height: 300, border: "1px solid var(--ui-border)" }}>
       <div className="grid-wrap">
-        <GridHead body={body}>{header}</GridHead>
+        <GridHead
+          body={body}
+          corner={
+            <GridHeaderRow width={W[0]} height={26}>
+              <RowNumberCell width={W[0]} title="Select all" />
+            </GridHeaderRow>
+          }
+        >
+          {header}
+        </GridHead>
         <div className="grid-scroll" ref={body} tabIndex={0}>
           <div style={{ width, height, position: "relative" }}>{children}</div>
         </div>
@@ -37,12 +46,11 @@ export const States: StoryObj = {
       width={560}
       height={ROW * 5}
       header={
-        <GridHeaderRow width={560} height={26}>
-          <RowNumberCell width={W[0]} title="Select all" />
+        <GridHeaderRow width={560 - W[0]} height={26}>
           <GridHeaderCell name="id" type="int8" pk width={W[1]} sort={{ dir: "asc" }} onSortClick={() => {}} />
           <GridHeaderCell name="user_name" type="varchar" width={W[2]} colSelected onSortClick={() => {}} />
           <GridHeaderCell name="amount" type="numeric" width={W[3]} sort={{ dir: "desc", order: 2 }} onSortClick={() => {}} />
-          <GridHeaderCell name="memo" type="text" width={W[4]} onSortClick={() => {}} />
+          <GridHeaderCell name="memo" type="text" width={W[4]} onSortClick={() => {}} onResize={() => {}} />
         </GridHeaderRow>
       }
     >
@@ -111,8 +119,7 @@ export const Scrolling: StoryObj = {
       width={WIDE}
       height={ROWS * ROW}
       header={
-        <GridHeaderRow width={WIDE} height={26}>
-          <RowNumberCell width={W[0]} title="Select all" />
+        <GridHeaderRow width={WIDE - W[0]} height={26}>
           {Array.from({ length: COLS }, (_, c) => (
             <GridHeaderCell key={c} name={`col_${c + 1}`} type="text" width={COL_W} sort={c === 0 ? { dir: "asc" } : undefined} onSortClick={() => {}} />
           ))}
@@ -148,8 +155,7 @@ function Aligned({ overrides }: { overrides: Alignments }) {
       width={AW}
       height={ROW * 3}
       header={
-        <GridHeaderRow width={AW} height={26}>
-          <RowNumberCell width={W[0]} />
+        <GridHeaderRow width={AW - W[0]} height={26}>
           {CLASSES.map((c) => (
             <GridHeaderCell key={c.name} name={c.name} type={c.type} width={CW} />
           ))}
@@ -198,8 +204,7 @@ export const JsonColumn: StoryObj = {
       width={JSON_W}
       height={ROW * JSON_ROWS.length}
       header={
-        <GridHeaderRow width={JSON_W} height={26}>
-          <RowNumberCell width={W[0]} />
+        <GridHeaderRow width={JSON_W - W[0]} height={26}>
           <GridHeaderCell name="id" type="int8" width={W[1]} />
           <GridHeaderCell name="payload" type="jsonb" width={JW} />
         </GridHeaderRow>

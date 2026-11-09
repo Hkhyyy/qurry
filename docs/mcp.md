@@ -10,7 +10,7 @@ claude mcp add qurry-rw -- qurry-mcp --allow-write  # adds the execute tool
 **Which data sources the AI sees** — each data source has an **MCP** setting (GUI: data source › Options › MCP · TUI: the `MCP` field in the data source form):
 - **Off**: not listed, and the MCP server never connects to it or reads its password. New data sources start here.
 - **Read**: browse and read-only queries.
-- **Read & write**: also `execute`, when `qurry-mcp` runs with `--allow-write`. Read-only data sources are never written. On a **Production** data source this lets an AI change production data with no one confirming it (the app's row-count check needs a person) — only turn it on if you mean that, ideally with a database user that can change just what it should.
+- **Read & write**: also `execute`, when `qurry-mcp` runs with `--allow-write`. Read-only and **Production** data sources are never written: there it stays Read (the GUI greys the choice out, the TUI saves it as read), since an AI's change would skip the row-count check the app asks a person.
 
 Data sources made before this setting existed keep working as before (read, and write with `--allow-write`), except **Production** ones, which stay hidden until you turn MCP on for them.
 

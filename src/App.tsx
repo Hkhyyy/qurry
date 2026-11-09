@@ -14,12 +14,12 @@ import { useSharedReady } from "./lib/shared";
 import { tableTabLabels } from "./lib/tabLabels";
 import { NodeInfo } from "./components/SchemaTree";
 import { leaves } from "./lib/panes";
-import { useTheme } from "./lib/theme";
+import { takeThemeNotice } from "./lib/theme";
 import { Group, Tab } from "./features/tabs/types";
 import { isMac } from "./features/shortcuts/labels";
 import { offered, upToDate } from "./features/settings/SettingsDialog";
 import { StatusBar } from "./features/settings/StatusBar";
-import { editorApis, useTabsStore } from "./features/tabs/store";
+import { useTabsStore } from "./features/tabs/store";
 import { stash, useWorkspacesStore } from "./features/workspaces/store";
 import { useWorkspaces } from "./features/workspaces/useWorkspaces";
 import { useConsole } from "./features/console/useConsole";
@@ -35,7 +35,6 @@ import { setDialog, setKeymapOpen, setSettingsOpen, setUpdate, setUpdateOpen, us
 import "./App.css";
 
 export default function App() {
-  const theme = useTheme();
   // Redraw the menu shortcut labels when the keymap changes (or the WASM module that draws them has loaded)
   const [keymapVer, setKeymapVer] = useState(0);
   useEffect(() => {
@@ -84,6 +83,11 @@ export default function App() {
   const [status, setStatus] = useState("Ready");
   // A keymap.json that doesn't load: the default keys work, the status bar says how to get the saved ones back
   useEffect(() => void loadKeymap().then((err) => err && setStatus(err)), []);
+  // The theme settings couldn't be read or the old pick moved (lib/theme.ts initTheme): what to do about it
+  useEffect(() => {
+    const n = takeThemeNotice();
+    if (n) setStatus(n);
+  }, []);
   const [treeSel, setTreeSel] = useState<NodeInfo | null>(null);
   // Every selected node (⌘-click / ⇧-click): the explorer's commands for several run on these
   const [treeSelAll, setTreeSelAll] = useState<NodeInfo[]>([]);
@@ -143,21 +147,23 @@ export default function App() {
     return () => off?.();
   }, []);
   useEffect(migrateOldHistory, []);
-  // Update the tree state when the backend closes a connection (e.g. Auto-disconnect)
+  // Update the tree state when the backend closes a connection (Auto-disconnect, a tunnel that stopped); message = why, with
+  // the data source's name (qurry_shared::errors::disconnected, the TUI's words)
   useEffect(() => {
     let off: (() => void) | undefined;
-    listen<string>("conn-disconnected", (e) => {
-      invalidateSearchIndex(e.payload);
-      invalidateCompletion(e.payload);
+    listen<{ id: string; message: string }>("conn-disconnected", (e) => {
+      invalidateSearchIndex(e.payload.id);
+      invalidateCompletion(e.payload.id);
       refresh();
-      setStatus(`Disconnected (idle): ${e.payload}`);
+      setStatus(e.payload.message);
     })
       .then((u) => (off = u))
       .catch(() => {});
     return () => off?.();
   }, [refresh]);
   useEffect(() => {
-    const onErr = (e: ErrorEvent) => setStatus(`Error: ${e.message}`);
+    // "ResizeObserver loop …" only says a resize was put off to the next frame (an editor laid out while its box settles: harmless)
+    const onErr = (e: ErrorEvent) => !e.message?.includes("ResizeObserver loop") && setStatus(`Error: ${e.message}`);
     const onRej = (e: PromiseRejectionEvent) => setStatus(`Error: ${String(e.reason)}`);
     const closeMenu = () => setTabMenu(null);
     window.addEventListener("error", onErr);
@@ -185,7 +191,7 @@ export default function App() {
   const labelOf = (t: Tab) => tabLabels.get(t.id) ?? t.title;
 
   const cons = useConsole({ conns, setStatus, refresh });
-  const { run, canCancel, busyLabel, cancelRun, loadStale, loadDbList, loadSchemaList } = cons;
+  const { run, busyLabel, cancelRun, loadStale, loadDbList, loadSchemaList } = cons;
   // The database (and schema) selects of the shown consoles and Redis browsers list as soon as they are shown, so their first click
   // opens the whole list (the caches keep them; focus / mousedown ask again only when the list isn't there)
   const listed = leaves(panes).flatMap((g) => groupActive(g) ?? []).filter((t) => t.kind === "console" || t.kind === "redis");
@@ -210,12 +216,12 @@ export default function App() {
   const transfer = useJobs({ setStatus });
   const { jobs, runJob, startExport, startImport } = transfer;
   const connActions = useConnActions({ conns, refresh, setStatus });
-  const { setColor, setScope, exportConns, importConns, removeConn } = connActions;
+  const { setColor, setScope, exportConns, importItems, loadImportLocs, removeConn } = connActions;
   const ex = useExplorer({ setStatus, refresh, activate, addTab, openConsole, run, runJob, removeConn, setInWs, setTabMenu });
   const { activateNode, buildMenu, startBackup } = ex;
 
   const [maximized, setMaximized] = useState(false);
-  const app = { conns, theme, setStatus, refresh, treeSel, treeSelAll, active, groupActive, labelOf, setTabMenu, setMaximized, ...cons, ...tabOps, ...ws, ...transfer, ...connActions, ...ex };
+  const app = { conns, setStatus, refresh, treeSel, treeSelAll, active, groupActive, labelOf, setTabMenu, setMaximized, ...cons, ...tabOps, ...ws, ...transfer, ...connActions, ...ex };
   const groups = useEditorGroups(app);
   const { renderPanes } = groups;
 
@@ -288,7 +294,8 @@ export default function App() {
                     onAdd={() => setDialog({})}
                     onRefresh={refresh}
                     onExport={exportConns}
-                    onImport={importConns}
+                    importItems={importItems}
+                    onImportOpen={loadImportLocs}
                     shown={w.id === curWs}
                     onSelect={(info, all) => (setTreeSel(info), setTreeSelAll(all))}
                     onActivate={activateNode}
@@ -323,8 +330,7 @@ export default function App() {
       <Dialogs conns={conns} setStatus={setStatus} openConsole={openConsole} startBackup={startBackup} startExport={startExport} startImport={startImport} readyToQuit={readyToQuit} />
       {search.popups}
       <StatusBar
-        run={{ canRun: !!active && active.kind === "console" && !canCancel(active), running: canCancel(active), onRun: () => active && editorApis.get(active.id)?.run(), onCancel: () => active && cancelRun(active) }}
-        status={status} busy={activeBusy ? { label: activeBusy, since: busySince.get(active.id) ?? Date.now() } : undefined} readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} jobs={jobs} />
+        status={status} busy={activeBusy ? { label: activeBusy, since: busySince.get(active.id) ?? Date.now(), onCancel: () => cancelRun(active) } : undefined} readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} jobs={jobs} />
 
       {tabMenu && <ContextMenu menu={tabMenu} onClose={() => setTabMenu(null)} />}
 

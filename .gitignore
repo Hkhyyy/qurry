@@ -38,6 +38,8 @@ secrets.json
 .vscode/*
 !.vscode/extensions.json
 .idea/
+# Import Data Sources test fixtures are IDE project folders
+!crates/core/tests/fixtures/**/.idea/
 .DS_Store
 *.suo
 *.ntvs*

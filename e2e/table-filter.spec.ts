@@ -54,8 +54,8 @@ test("ORDER BY: columns, then ASC / DESC after a column; ⇥ and a click pick, t
   await expect(order).toHaveValue("id");
   await expect(order).toBeFocused();
   await order.pressSequentially(" de");
-  await expect(rows(page)).toHaveText(["delete", "desc"]);
-  await page.keyboard.press("ArrowDown");
+  // Right after an operand the statement keywords come last
+  await expect(rows(page)).toHaveText(["desc", "delete"]);
   await expect(list(page).locator(".ui-list-item.selected .ui-list-title")).toHaveText("desc");
   await list(page).getByText("desc", { exact: true }).click();
   await expect(order).toHaveValue("id desc");
@@ -102,7 +102,8 @@ test("a whole keyword or column closes the list, so ↩ applies (`is null` doesn
   const where = field(page, "WHERE");
   await where.click();
   await where.pressSequentially("user_name is nul");
-  await expect(rows(page)).toHaveText(["null", "nulls"]);
+  // After `is` only what can follow it (`nulls` can't)
+  await expect(rows(page)).toHaveText(["null"]);
   await where.pressSequentially("l");
   await expect(list(page)).toHaveCount(0);
   const sqls = await spyQueries(page);
@@ -113,11 +114,12 @@ test("a whole keyword or column closes the list, so ↩ applies (`is null` doesn
 test("other tables and schemas are never listed, typed or asked with ⌃Space", async ({ page }) => {
   const where = field(page, "WHERE");
   await where.click();
+  // The mock's user function order_total is a function, not a table: it stays
   await where.pressSequentially("orde");
-  await expect(rows(page)).toHaveText(["order"]);
+  await expect(rows(page)).toHaveText(["order_total", "order"]);
   await page.keyboard.press("Escape");
   await page.keyboard.press("Control+Space");
-  await expect(rows(page)).toHaveText(["order"]);
+  await expect(rows(page)).toHaveText(["order_total", "order"]);
   await page.keyboard.press("Escape");
   await where.fill("");
   await page.keyboard.press("Control+Space");

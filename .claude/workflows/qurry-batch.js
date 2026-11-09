@@ -1,12 +1,12 @@
 export const meta = {
   name: 'qurry-batch',
   description: 'Qurry team harness: lead plans the batch, specialists build each item on its own branch, cross-review with adversarial checks, fix rounds, lead integrates and opens one PR',
-  whenToUse: 'A batch of Qurry work (features, bugs, review findings) that should end as one verified PR. args: { request, repo, (items[].lenses?, items[].small?), base?, batch?, pr?, items?, title?, parallel?, fixRounds?, sharedDbs?, targetDir? }',
+  whenToUse: 'A batch of Qurry work (features, bugs, review findings) that should end as one verified PR. args: { request, repo, (items[].review?, items[].lenses?), base?, batch?, pr?, items?, title?, parallel?, fixRounds?, sharedDbs?, targetDir?, buildJobs? }',
   phases: [
     { title: 'Plan', detail: 'qurry-lead splits the request into work items with owners and checks' },
     { title: 'Build', detail: 'each item on its own branch, in its own worktree, by its owner' },
-    { title: 'Review', detail: 'one reviewer per item (owner lens + correctness), medium/high findings challenged by a skeptic' },
-    { title: 'Fix', detail: 'owner fixes confirmed findings, then re-review (max 2 rounds)' },
+    { title: 'Review', detail: 'by review level: none / light (lead reads the diff at integration), standard (one reviewer), deep (lenses + skeptic for medium/high)' },
+    { title: 'Fix', detail: 'owner fixes findings; only a fixed high gets a re-check, of the fix diff only (max 2 rounds)' },
     { title: 'Integrate', detail: 'qurry-lead merges the branches, runs full verification, opens the PR' },
   ],
 }
@@ -20,11 +20,20 @@ const REPO = A.repo.replace(/\/+$/, '')
 const BASE = A.base || 'main'
 const BATCH = A.batch || null // the lead picks one if empty
 const OPEN_PR = A.pr !== false
-const MAX_FIX_ROUNDS = A.fixRounds ?? 1
+// Never more than 2: what is still open after that goes to the PR follow-ups
+const MAX_FIX_ROUNDS = Math.min(A.fixRounds ?? 2, 2)
 // Items worked on at the same time (each item runs build → reviews → fixes); keep low on a laptop
 const PARALLEL = A.parallel ?? 3
 
 const OWNER_TYPE = { 'qurry-security': 'qurry-security', 'qurry-ui': 'qurry-ui', 'qurry-perf': 'qurry-perf', implementer: 'general-purpose' }
+
+// ───────── review levels ─────────
+const REVIEW_LEVELS = ['none', 'light', 'standard', 'deep']
+const REVIEW_RULE =
+  'none: docs, text, test-only or mechanical changes; light: a small fix (about 100 lines) outside the risky areas — for both, no review agent, the lead reads the diff at integration. ' +
+  'standard: a normal feature or fix — one reviewer with the owner lens, no skeptic. ' +
+  'deep: the console run path, transactions, credentials / TLS / SSH, Production and read-only safeguards, MCP exposure, untrusted input (imports, files, URLs) — lenses (default owner + correctness), medium/high findings checked by a skeptic.'
+const levelOf = (it) => (REVIEW_LEVELS.includes(it.review) ? it.review : it.lenses?.length ? 'deep' : it.small ? 'light' : 'standard')
 
 // ───────── schemas ─────────
 const PLAN = {
@@ -46,8 +55,10 @@ const PLAN = {
           userVisible: { type: 'boolean', description: 'changes GUI/TUI behavior or looks' },
           runtime: { type: 'boolean', description: 'touches hot paths, async, memory, large data' },
           breaks: { type: 'string', description: 'who could break after updating, and how they recover; empty if nobody' },
+          review: { type: 'string', enum: REVIEW_LEVELS, description: REVIEW_RULE },
+          lenses: { type: 'array', items: { type: 'string', enum: ['security', 'ui', 'perf', 'correctness'] }, description: 'deep only: the reviewers (default: owner lens + correctness)' },
         },
-        required: ['slug', 'owner', 'branch', 'task', 'verify', 'userVisible', 'runtime', 'breaks'],
+        required: ['slug', 'owner', 'branch', 'task', 'verify', 'userVisible', 'runtime', 'breaks', 'review'],
       },
     },
     followUps: { type: 'array', items: { type: 'string' } },
@@ -82,8 +93,9 @@ const FINDINGS = {
         required: ['title', 'severity', 'where', 'scenario'],
       },
     },
+    head: { type: 'string', description: 'the commit you reviewed: `git rev-parse HEAD`' },
   },
-  required: ['findings'],
+  required: ['findings', 'head'],
 }
 const VERDICT = {
   type: 'object',
@@ -98,7 +110,7 @@ const houseRules =
   'Real servers only in Docker containers named qurry-demo-<x> on free localhost ports (check with lsof; never 127.0.0.1:15432/:25432; never touch other containers; stop yours afterwards). ' +
   "Never push, merge, or comment on GitHub. Don't automate the user's running Qurry.app. " +
   'Disk is limited: never point CARGO_TARGET_DIR anywhere else (no per-agent or scratchpad target dirs) and delete any large scratch output you create. ' +
-  'Machine limits (24 GB laptop, other agents run at the same time): before any cargo command run `export CARGO_TARGET_DIR=' + (A.targetDir || REPO + '/target') + ' CARGO_BUILD_JOBS=6` (one shared build dir; cargo waits for its lock — that is expected); ' +
+  'Machine limits (a laptop, other agents run at the same time): before any cargo command run `export CARGO_TARGET_DIR=' + (A.targetDir || REPO + '/target') + ' CARGO_BUILD_JOBS=' + (A.buildJobs || 3) + '` (one shared build dir; cargo waits for its lock — that is expected); ' +
   (A.sharedDbs ? 'use the shared test servers, do not start your own: ' + A.sharedDbs + ' — use your own schema/database/key prefix named after your item and drop it when done; ' : '') +
   'start a container only for a server version that is not shared (one at a time, named qurry-demo-<item>, stop and remove it as soon as you are done); run Playwright with one worker and one browser project at a time unless the task needs both. ' +
   'Principles: YAGNI (only what the task needs now, no speculative options or abstractions), KISS (simplest correct design), DRY (one source of truth; but no forced abstraction for things that only look alike).'
@@ -112,7 +124,7 @@ const plan = A.items?.length
   `Plan this batch of Qurry work. Base branch: ${BASE}.${BATCH ? ` Batch branch: ${BATCH}.` : ' Choose the batch branch name.'}\n\n` +
     `Request:\n${A.request}\n\n` +
     'Read the relevant code first so the items are accurate (file names, functions). Split into independently mergeable items following your planning rules; ' +
-    'put work that must edit the same function into one item. Return the plan in the given structure.',
+    'put work that must edit the same function into one item. Give each item a review level (' + REVIEW_RULE + '). Return the plan in the given structure.',
   { agentType: 'qurry-lead', schema: PLAN, label: 'lead: plan' },
 )
 if (!plan || !plan.items?.length) return { error: 'The lead returned no plan' }
@@ -125,8 +137,8 @@ const keepBranch = (branch) =>
   `Before you finish, make sure ${branch} points at your last commit: if \`git rev-parse ${branch}\` differs from \`git rev-parse HEAD\` and \`git merge-base --is-ancestor ${branch} HEAD\` succeeds, run \`git branch -f ${branch} HEAD\`; if the branch is not an ancestor, stop and say so in the report. Then run \`git checkout --detach\` so the branch is free for other worktrees.`
 // Reviewers and skeptics read a branch in their own worktree, detached, so the branch stays free for its fixer
 const readBranch = (branch) => `Start: \`git fetch origin -q; git checkout --detach ${branch}\` in your own worktree (your starting directory); never check out a branch by name. `
-// One reviewer per item (token budget): the owner's specialty plus correctness and design.
-// it.lenses (e.g. ['security', 'ui']) asks for more on a big or risky item.
+// standard: one reviewer, the owner's specialty plus correctness and design.
+// deep: it.lenses (e.g. ['security', 'ui']), default owner lens + correctness.
 const BASE_FOCUS = 'correctness: does it do what the task asked, edge cases, tests that actually prove it, regressions in nearby behavior; design — YAGNI, KISS, DRY'
 const LENSES = {
   security: { key: 'security', type: 'qurry-security', focus: 'security and data safety (credentials, what reaches a database or an AI tool, injection, temp files), who this breaks after an update; and ' + BASE_FOCUS },
@@ -135,7 +147,11 @@ const LENSES = {
   correctness: { key: 'correctness', type: 'general-purpose', focus: BASE_FOCUS },
 }
 const OWNER_LENS = { 'qurry-security': 'security', 'qurry-ui': 'ui', 'qurry-perf': 'perf', implementer: 'correctness' }
-const lensesFor = (it) => (it.lenses?.length ? it.lenses : [OWNER_LENS[it.owner] || 'correctness']).map((k) => LENSES[k] || LENSES.correctness)
+const ownerLens = (it) => OWNER_LENS[it.owner] || 'correctness'
+const lensesFor = (it) => {
+  const keys = levelOf(it) !== 'deep' ? [ownerLens(it)] : it.lenses?.length ? it.lenses : [...new Set([ownerLens(it), 'correctness'])]
+  return keys.map((k) => LENSES[k] || LENSES.correctness)
+}
 
 // Resume support: items whose round-1 review ran under the older four-lens rule keep it for round 1 (cache hits)
 const legacyLensesFor = (it) => [
@@ -146,6 +162,7 @@ const legacyLensesFor = (it) => [
 ]
 const review = async (it, round) => {
   const lenses = round === 1 && (A.legacyR1 || []).includes(it.slug) ? legacyLensesFor(it) : lensesFor(it)
+  let head = ''
   const found = (
     await parallel(
       lenses.map((l) => () =>
@@ -156,18 +173,19 @@ const review = async (it, round) => {
             'Read the code; run tests or real-server checks when a claim depends on behavior. Report only concrete problems with file:line and a scenario — no style nits. Empty list if it is fine. ' +
             'Do not modify any branch.\n' + houseRules,
           { agentType: l.type, isolation: 'worktree', schema: FINDINGS, phase: 'Review', label: `review r${round} ${l.key}: ${it.slug}` },
-        ).then((r) => (r?.findings || []).map((f) => ({ ...f, lens: l.key }))),
+        ).then((r) => {
+          head ||= r?.head || ''
+          return (r?.findings || []).map((f) => ({ ...f, lens: l.key }))
+        }),
       ),
     )
   )
     .filter(Boolean)
     .flat()
-  // only medium/high findings get a skeptic; lows go unverified to the fixer (optional) and the PR follow-ups
+  // only deep items get a skeptic, for medium/high; lows go unverified to the fixer (optional) and the PR follow-ups
   const lows = found.filter((f) => f.severity === 'low')
   const serious = found.filter((f) => f.severity !== 'low')
-  if (!serious.length) return { confirmed: [], lows }
-  // small items: no skeptic, the fixer judges each finding
-  if (it.small) return { confirmed: [], lows: found }
+  if (!serious.length || levelOf(it) !== 'deep') return { confirmed: serious, lows, head }
   const judged = await parallel(
     serious.map((f) => () =>
       agent(
@@ -181,7 +199,22 @@ const review = async (it, round) => {
   const confirmed = judged.filter((j) => j.real).map((j) => j.f)
   const dropped = judged.length - confirmed.length
   if (dropped) log(`${it.slug} r${round}: ${dropped} finding(s) refuted by the skeptic, ${confirmed.length} confirmed`)
-  return { confirmed, lows }
+  return { confirmed, lows, head }
+}
+
+// After a fix round: one agent checks the fix diff only — were the fixed findings really fixed, and did the fix break anything it touches. No fresh full review.
+const recheck = async (it, round, since, fixedList) => {
+  const l = lensesFor(it)[0]
+  const r = await agent(
+    readBranch(it.branch) +
+      `Re-check a fix round on branch ${it.branch} (Qurry work item "${it.slug}"). Review ONLY the fix diff: \`git diff ${since}..${it.branch}\` (use \`git diff ${BASE === 'main' ? 'origin/main' : BASE}...${it.branch}\` only to understand context).\n` +
+      `These findings were to be fixed:\n${fixedList}\n\n` +
+      'For each: is it really fixed (run the test or scenario that proves it)? Then: does the fix diff itself break something it touches? Report only those as findings (file:line, scenario); do not review untouched code again. Empty list if all fixed.\n' +
+      `Your lens: ${l.focus}.\nDo not modify any branch.\n` + houseRules,
+    { agentType: l.type, isolation: 'worktree', schema: FINDINGS, phase: 'Review', label: `recheck r${round}: ${it.slug}` },
+  )
+  const found = (r?.findings || []).map((f) => ({ ...f, lens: l.key }))
+  return { confirmed: found.filter((f) => f.severity !== 'low'), lows: found.filter((f) => f.severity === 'low'), head: r?.head || '' }
 }
 
 // Bounded pool: at most PARALLEL items in flight (the workflow's own cap is ~CPUs-2, too many builds for a laptop)
@@ -209,7 +242,9 @@ const build = (it) =>
     )
 const reviewAndFix = async (built, it) => {
     if (!built) return { item: it, built: null, open: ['build failed'] }
-    let { confirmed: open, lows } = await review(it, 1)
+    // none / light: no review agent; the lead reads the diff at integration
+    if (['none', 'light'].includes(levelOf(it))) return { item: it, built, fixes: [], open: [], leadReview: true }
+    let { confirmed: open, lows, head } = await review(it, 1)
     let round = 1
     const fixes = []
     while ((open.length || lows.length) && round <= MAX_FIX_ROUNDS) {
@@ -225,9 +260,10 @@ const reviewAndFix = async (built, it) => {
       )
       fixes.push(fixed)
       round++
-      // small items: one fix pass, no re-review
-      if (it.small) { open = []; lows = []; break }
-      ;({ confirmed: open, lows } = await review(it, round))
+      // only a fixed high gets a re-check by an agent (of the fix diff); medium/low fixes are checked by the lead at integration
+      const highs = open.filter((f) => f.severity === 'high')
+      if (!highs.length || !head) { open = []; lows = []; break }
+      ;({ confirmed: open, lows, head } = await recheck(it, round, head, list(highs)))
     }
     if (open.length) log(`${it.slug}: ${open.length} finding(s) still open after ${MAX_FIX_ROUNDS} fix round(s)`)
     open = [...open, ...lows]
@@ -248,6 +284,9 @@ const integration = ready.length
         `Start: \`git fetch origin -q\`; if ${batch} exists (locally or on origin) check it out, else \`git checkout -b ${batch} ${BASE === 'main' ? 'origin/main' : BASE}\`.\n` +
         `Merge these branches in order with merge commits:\n${ready.map((r) => `- ${r.item.branch} (${r.item.slug})`).join('\n')}\n\n` +
         `Item reports:\n${JSON.stringify(ready.map((r) => ({ slug: r.item.slug, task: r.item.task, verify: r.item.verify, breaks: r.item.breaks, build: r.built, fixes: r.fixes, open: r.open })), null, 1)}\n\n` +
+        (ready.some((r) => r.leadReview || r.fixes?.length)
+          ? `Before merging, read these diffs yourself (no review agent ran on them): ${ready.filter((r) => r.leadReview).map((r) => r.item.branch).join(', ') || '-'}; and the fix commits of ${ready.filter((r) => r.fixes?.length).map((r) => r.item.slug).join(', ') || '-'} (check the medium/low findings they claim to fix really are fixed). Fix small problems on the item branch yourself, list the rest as follow-ups.\n`
+          : '') +
         (held.length ? `Held back (do NOT merge; list them in the PR as follow-ups): ${held.map((r) => r.item.slug).join(', ')}\n` : '') +
         (plan.followUps?.length ? `Planned follow-ups: ${plan.followUps.join('; ')}\n` : '') +
         `Then run the full verification from your integration rules on the batch branch.\n` +

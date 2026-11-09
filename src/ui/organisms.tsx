@@ -3,7 +3,7 @@
  * Spec in README.md
  */
 import { Children, CSSProperties, FocusEvent, HTMLAttributes, InputHTMLAttributes, KeyboardEvent, ReactNode, Ref, RefObject, TdHTMLAttributes, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Button, IconButton, Spacer, TextInput } from "./atoms";
+import { Button, Checkbox, IconButton, Spacer, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { DetailRow, EmptyState, ListItem, MenuItem, MenuLabel, MenuSeparator, SectionTitle } from "./molecules";
 import { listKey, matchOptions, placePopup } from "./popup";
@@ -230,11 +230,11 @@ export function ComboBox({ value, options, onChange, onKeyDown, onBlur, onClick,
 }
 
 /** Detail list (statement · row count in confirm boxes, query · pid in sessions …) */
-export function DetailList({ items }: { items: { text: ReactNode; value?: ReactNode; tone?: "danger" | "warn"; note?: ReactNode }[] }) {
+export function DetailList({ items }: { items: { text: ReactNode; value?: ReactNode; tone?: "danger" | "warn"; note?: ReactNode; lead?: ReactNode }[] }) {
   return (
     <div className="ui-detail-list">
       {items.map((d, i) => (
-        <DetailRow key={i} value={d.value} tone={d.tone} note={d.note}>
+        <DetailRow key={i} value={d.value} tone={d.tone} note={d.note} lead={d.lead}>
           {d.text}
         </DetailRow>
       ))}
@@ -318,9 +318,9 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
         ) : "submenu" in it ? (
           <MenuItem key={i} label={it.label} hasSubmenu onMouseEnter={() => setSub(i)}>
             {sub === i && (
-              <div className="ui-menu sub" role="menu">
+              <SubMenu>
                 {it.submenu.map((s, j) => ("separator" in s ? <MenuSeparator key={j} /> : "heading" in s ? <MenuLabel key={j}>{s.heading}</MenuLabel> : "action" in s ? <MenuItem key={j} label={s.label} shortcut={s.shortcut} danger={s.danger} disabled={s.disabled} title={s.title} onClick={() => run(s.action)} /> : null))}
-              </div>
+              </SubMenu>
             )}
           </MenuItem>
         ) : (
@@ -333,6 +333,28 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
           <div className="ui-menu-footer">{footer}</div>
         </>
       )}
+    </div>
+  );
+}
+
+/** A submenu beside its item, placed on the screen (fixed): a dropdown inside a panel that clips (the explorer's ⋮) doesn't cut it off.
+ *  Opens to the left when there's no room on the right, and stays above the bottom edge. Its size follows its items, so it is
+ *  placed again when they change */
+function SubMenu({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const item = el?.parentElement;
+    if (!el || !item) return;
+    const r = item.getBoundingClientRect();
+    const left = r.right + el.offsetWidth > window.innerWidth ? r.left - el.offsetWidth : r.right;
+    const top = Math.max(4, Math.min(r.top - 5, window.innerHeight - el.offsetHeight - 4));
+    Object.assign(el.style, { position: "fixed", left: `${left}px`, top: `${top}px` });
+    // Placed again whenever its items change (a list read again while it is open)
+  }, [children]);
+  return (
+    <div ref={ref} className="ui-menu sub" role="menu">
+      {children}
     </div>
   );
 }
@@ -354,14 +376,16 @@ export function FormGrid({ children, labelWidth = 120, className }: { children: 
 export interface ConfirmOptions {
   title?: string;
   message: ReactNode;
-  /** Statement · target and the value next to it (e.g. rows to change) */
-  detail?: { text: string; value?: string; tone?: "danger" | "warn"; note?: string }[];
+  /** Statement · target and the value next to it (e.g. rows to change). checkable: a checkbox (checked) to leave the row out (confirmPick) */
+  detail?: { text: string; value?: string; tone?: "danger" | "warn"; note?: string; checkable?: boolean }[];
   okLabel?: string;
   /** null = no Cancel button (a notice to acknowledge) */
   cancelLabel?: string | null;
   danger?: boolean;
 }
-type ConfirmReq = ConfirmOptions & { resolve: (ok: boolean) => void };
+/** confirmPick: the OK label for the number of checked rows ("Import 3"); OK is disabled at 0 */
+type PickOptions = ConfirmOptions & { pickLabel: (n: number) => string };
+type ConfirmReq = ConfirmOptions & { pickLabel?: (n: number) => string; resolve: (ok: boolean, checked: boolean[]) => void };
 let showConfirm: ((r: ConfirmReq) => void) | null = null;
 
 /** Show a confirm box and wait for the answer. Without a ConfirmHost (tests), the browser confirm */
@@ -369,6 +393,15 @@ export function confirm(o: ConfirmOptions): Promise<boolean> {
   return new Promise((resolve) => {
     if (showConfirm) showConfirm({ ...o, resolve });
     else resolve(window.confirm(typeof o.message === "string" ? o.message : o.title ?? "") as unknown as boolean);
+  });
+}
+
+/** The confirm with a checkbox on each checkable detail row (all checked): which rows stay checked (by detail index), null if cancelled */
+export function confirmPick(o: PickOptions): Promise<boolean[] | null> {
+  return new Promise((resolve) => {
+    const all = (o.detail ?? []).map((d) => !!d.checkable);
+    if (showConfirm) showConfirm({ ...o, resolve: (ok, checked) => resolve(ok ? checked : null) });
+    else resolve(window.confirm(typeof o.message === "string" ? o.message : o.title ?? "") ? all : null);
   });
 }
 
@@ -383,15 +416,24 @@ export function ConfirmHost() {
     };
   }, []);
   const req = queue[0];
+  // confirmPick: the checked rows (checkable ones start checked)
+  const [checked, setChecked] = useState<boolean[]>([]);
   useEffect(() => {
+    setChecked((req?.detail ?? []).map((d) => !!d.checkable));
     // Focus Cancel for dangerous confirms, OK otherwise (so it's clear what Enter presses)
     if (req && !req.danger) okRef.current?.focus();
   }, [req]);
   if (!req) return null;
   const done = (ok: boolean) => {
     setQueue((q) => q.slice(1));
-    req.resolve(ok);
+    req.resolve(ok, checked);
   };
+  const picking = !!req.pickLabel;
+  const n = checked.filter(Boolean).length;
+  const detail = (req.detail ?? []).map((d, i) => ({
+    ...d,
+    lead: picking ? d.checkable ? <Checkbox checked={!!checked[i]} title="Leave it out by unchecking" onChange={(v) => setChecked((c) => c.map((x, j) => (j === i ? v : x)))} /> : <span /> : undefined,
+  }));
   return (
     <Modal
       title={req.title ?? "Qurry"}
@@ -406,14 +448,14 @@ export function ConfirmHost() {
               {req.cancelLabel ?? "Cancel"}
             </Button>
           )}
-          <Button ref={okRef} variant={req.danger ? "danger" : "primary"} onClick={() => done(true)}>
-            {req.okLabel ?? "OK"}
+          <Button ref={okRef} variant={req.danger ? "danger" : "primary"} disabled={picking && n === 0} onClick={() => done(true)}>
+            {req.pickLabel ? req.pickLabel(n) : req.okLabel ?? "OK"}
           </Button>
         </>
       }
     >
       <div className="ui-confirm-message">{req.message}</div>
-      {req.detail && req.detail.length > 0 && <DetailList items={req.detail} />}
+      {detail.length > 0 && <DetailList items={detail} />}
     </Modal>
   );
 }

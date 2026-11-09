@@ -1,6 +1,6 @@
 //! Backup / restore: runs pg_dump / pg_restore / psql, mysqldump / mysql (found in PATH and common install locations).
 //! Passwords go via environment variables, not the command line (so they don't show in ps). With an SSH tunnel, the tunnel port is used. Progress is bytes written (read)
-use crate::app::{AppState, ensure_pool, split_target};
+use crate::app::{AppState, checked_pool, split_target, with_pool};
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
 use crate::transfer::Job;
@@ -177,7 +177,7 @@ fn pick_mysql(mut found: Vec<(Option<&'static str>, MyBuild, PathBuf)>) -> Optio
 
 /// MySQL / MariaDB server version
 async fn my_server(st: &AppState, id: &str) -> Option<MyBuild> {
-    let r = ensure_pool(st, id).await.ok()?.run_query("SELECT VERSION()", 1).await.ok()?;
+    let r = with_pool(st, id, |p| async move { p.run_query("SELECT VERSION()", 1).await }).await.ok()?;
     Some(MyBuild::of(&crate::db::cell_text(r.rows.first()?.first()?)))
 }
 
@@ -289,7 +289,7 @@ async fn strip_definers(file: &Path, job: &Job) -> AppResult<()> {
 
 /// PG server major version (16, 17 …)
 pub(crate) async fn pg_major(st: &AppState, id: &str) -> Option<u64> {
-    let r = ensure_pool(st, id).await.ok()?.run_query("SHOW server_version_num", 1).await.ok()?;
+    let r = with_pool(st, id, |p| async move { p.run_query("SHOW server_version_num", 1).await }).await.ok()?;
     crate::db::cell_text(r.rows.first()?.first()?).parse::<u64>().ok().map(|n| n / 10000)
 }
 
@@ -553,7 +553,7 @@ async fn endpoint(st: &AppState, id: &str) -> AppResult<(String, u16, String, St
     let cfg = st.source(id)?;
     let db = split_target(id).1.map(String::from).unwrap_or_else(|| crate::sql::default_db(&cfg));
     // With an SSH / AWS SSM tunnel, open the tunnel and use its port
-    ensure_pool(st, id).await?;
+    checked_pool(st, id).await?;
     let local = crate::app::tunnel_port(st, id).await;
     let (host, port) = match local {
         Some(p) => ("127.0.0.1".to_string(), p),
@@ -985,6 +985,8 @@ impl AppState {
     /// Create a backup file. Bytes written (on failure or cancel, the partial file is deleted)
     pub async fn backup(&self, id: String, path: String, opts: BackupOptions, job_id: String) -> AppResult<u64> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
+        // Its connections and tunnel are in use until it ends (in_use)
+        let _running = self.job_running(&id);
         let file = PathBuf::from(&path);
         let r = async {
             let (host, port, user, db, password, cfg) = endpoint(self, &id).await?;
@@ -1043,6 +1045,8 @@ impl AppState {
     /// Restore from a backup file (pg_dump custom → pg_restore, SQL → psql / mysql). PostgreSQL: one transaction, rolled back on failure. MySQL: not atomic — what ran before a failure stays
     pub async fn restore(&self, id: String, path: String, opts: RestoreOptions, job_id: String) -> AppResult<()> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
+        // Its connections and tunnel are in use until it ends (in_use)
+        let _running = self.job_running(&id);
         let file = PathBuf::from(&path);
         let r = async {
             let cfg = self.source(&id)?;

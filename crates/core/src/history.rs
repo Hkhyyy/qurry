@@ -1,6 +1,6 @@
 //! Query history (statements run) and snippets (named saved queries). Shared by GUI and TUI.
 //! History: config/history.jsonl — appended one per line (so the two apps don't overwrite each other when writing at once); when it gets too long, only recent entries are kept.
-//! Passwords are not recorded (PASSWORD '…', IDENTIFIED BY '…', AUTH …)
+//! Passwords are not recorded (PASSWORD '…', IDENTIFIED BY '…'; Redis AUTH, ACL SETUSER >… by their arguments: redis_cmd::mask_secrets)
 use crate::error::AppResult;
 use std::path::{Path, PathBuf};
 
@@ -34,8 +34,6 @@ pub fn redact(sql: &str) -> String {
         [
             (r#"(?i)(\bpassword\s*(?:=\s*)?)('(?:[^']|'')*'|"[^"]*")"#, "${1}'***'"),
             (r#"(?i)(\bidentified\s+(?:with\s+\S+\s+)?by\s+)('(?:[^'\\]|\\.|'')*'|"[^"]*")"#, "${1}'***'"),
-            (r"(?im)^(\s*auth\s+)(?:\S+\s+)?\S+\s*$", "${1}***"),
-            (r"(?i)(\b(?:requirepass|masterauth)\s+)\S+", "${1}***"),
         ]
         .into_iter()
         .map(|(p, r)| (regex::Regex::new(p).unwrap(), r))
@@ -45,7 +43,8 @@ pub fn redact(sql: &str) -> String {
     for (re, with) in RULES.iter() {
         out = re.replace_all(&out, *with).into_owned();
     }
-    out
+    // Redis lines by their arguments, so quoted passwords with spaces are masked whole (AUTH, HELLO … AUTH, requirepass, ACL SETUSER >pass …)
+    out.split('\n').map(|l| qurry_shared::redis_cmd::mask_secrets(l).unwrap_or_else(|| l.to_string())).collect::<Vec<_>>().join("\n")
 }
 
 /// Number of entries to keep
@@ -126,19 +125,33 @@ impl History {
     }
 
     pub fn add(&self, conn_id: &str, database: Option<&str>, sql: &str) -> AppResult<()> {
-        let mut sql = redact(sql.trim());
-        if sql.is_empty() {
+        self.add_all(conn_id, database, &[sql.to_string()])
+    }
+
+    /// Several statements (a grid Submit's) in one append, each redacted and cut like [`History::add`]'s
+    pub fn add_all(&self, conn_id: &str, database: Option<&str>, sqls: &[String]) -> AppResult<()> {
+        let ts = now_ms();
+        let items: Vec<HistoryItem> = sqls
+            .iter()
+            .filter_map(|sql| {
+                let mut sql = redact(sql.trim());
+                if sql.is_empty() {
+                    return None;
+                }
+                if sql.len() > MAX_SQL {
+                    let mut cut = MAX_SQL;
+                    while !sql.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    sql.truncate(cut);
+                }
+                Some(HistoryItem { id: uuid::Uuid::new_v4().to_string(), conn_id: conn_id.into(), database: database.map(String::from), sql, ts })
+            })
+            .collect();
+        if items.is_empty() {
             return Ok(());
         }
-        if sql.len() > MAX_SQL {
-            let mut cut = MAX_SQL;
-            while !sql.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            sql.truncate(cut);
-        }
-        let item = HistoryItem { id: uuid::Uuid::new_v4().to_string(), conn_id: conn_id.into(), database: database.map(String::from), sql, ts: now_ms() };
-        self.append(&[item])
+        self.append(&items)
     }
 
     /// Most recent first. conn = only that Data Source, filter = entries containing the text (case-insensitive). Identical statements only once
@@ -225,7 +238,45 @@ mod tests {
         assert_eq!(redact("alter role a with password = 'x'"), "alter role a with password = '***'");
         assert_eq!(redact("CREATE USER 'a'@'%' IDENTIFIED BY 'p@ss'"), "CREATE USER 'a'@'%' IDENTIFIED BY '***'");
         assert_eq!(redact("AUTH default s3cret"), "AUTH ***");
+        // The Redis Terminal's history (per data source, ↑↓) goes through the same rules
+        assert_eq!(redact("auth s3cret"), "auth ***");
+        assert_eq!(redact("HELLO 3 AUTH default s3cret SETNAME me"), "HELLO 3 AUTH *** SETNAME me");
+        assert_eq!(redact("CONFIG SET requirepass s3cret"), "CONFIG SET requirepass ***");
+        assert_eq!(redact("config set masterauth s3cret"), "config set masterauth ***");
+        assert_eq!(redact("HGET auth field"), "HGET auth field");
         assert_eq!(redact("select 1"), "select 1");
+        // Quoted passwords with spaces are masked whole, ACL SETUSER and MIGRATE too (redis_cmd::mask_secrets has the rest)
+        assert_eq!(redact(r#"AUTH default "my secret pw""#), "AUTH ***");
+        assert_eq!(redact(r#"HELLO 3 AUTH default "my secret""#), "HELLO 3 AUTH ***");
+        assert_eq!(redact(r#"CONFIG SET requirepass "a b c""#), "CONFIG SET requirepass ***");
+        assert_eq!(redact("ACL SETUSER bob on >s3cret"), "ACL SETUSER bob on >***");
+        assert_eq!(redact("MIGRATE h 6379 k 0 5000 AUTH hunter2"), "MIGRATE h 6379 k 0 5000 AUTH ***");
+        assert_eq!(redact("GET a\nAUTH 'x y'\nGET b"), "GET a\nAUTH ***\nGET b", "each line of a script");
+    }
+
+    /// What the Terminal sends to history.add is stored masked
+    #[test]
+    fn stores_terminal_lines_masked() {
+        let (h, d) = tmp();
+        h.add("rd", Some("db0"), r#"AUTH default "my secret pw""#).unwrap();
+        let raw = std::fs::read_to_string(d.join("history.jsonl")).unwrap();
+        assert!(!raw.contains("secret") && h.list(Some("rd"), "", 10)[0].sql == "AUTH ***", "{raw}");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// A grid Submit's statements: one append, each masked, blanks left out, the last one listed first
+    #[test]
+    fn add_all_appends_each_masked() {
+        let (h, d) = tmp();
+        h.add("a", Some("shop"), "select 0").unwrap();
+        h.add_all("a", Some("shop"), &["update t set a = 1".into(), " ".into(), "alter role r password 'pw'".into()]).unwrap();
+        h.add_all("a", None, &[]).unwrap();
+        let raw = std::fs::read_to_string(d.join("history.jsonl")).unwrap();
+        assert_eq!(raw.lines().count(), 3, "{raw}");
+        let v = h.list(Some("a"), "", 10);
+        assert_eq!(v.iter().map(|i| i.sql.as_str()).collect::<Vec<_>>(), ["alter role r password '***'", "update t set a = 1", "select 0"]);
+        assert!(v.iter().all(|i| i.database.as_deref() == Some("shop")));
+        let _ = std::fs::remove_dir_all(d);
     }
 
     #[test]

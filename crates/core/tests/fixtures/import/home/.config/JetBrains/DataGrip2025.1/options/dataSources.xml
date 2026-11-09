@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<application>
+  <component name="dataSourceStorage" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="linux-pg" uuid="ee00ff11-9999-4b2c-9d3e-000000000001">
+      <driver-ref>postgresql</driver-ref>
+      <jdbc-url>jdbc:postgresql://[fd00::15]:5433/ops</jdbc-url>
+    </data-source>
+  </component>
+</application>

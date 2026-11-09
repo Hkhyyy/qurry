@@ -21,7 +21,11 @@ test("SSH/SSL tab: Tunnel None / SSH / AWS SSM, test and save through SSM", asyn
   await expect(d.getByPlaceholder("bastion.example.com")).toHaveCount(0);
   await expect(d.getByRole("textbox", { name: "AWS profile" })).toHaveAttribute("placeholder", "(default profile)");
   await expect(d.getByRole("textbox", { name: "Region" })).toHaveAttribute("placeholder", "(the profile's region)");
-  await expect(d.getByText("Qurry stores no AWS secrets")).toBeVisible();
+  // The SSM note sits behind the footer's ⓘ
+  await d.getByRole("button", { name: "About AWS SSM" }).click();
+  await expect(page.getByRole("note", { name: "About AWS SSM" })).toContainText("Qurry stores no AWS secrets");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("note")).toHaveCount(0);
   await d.getByRole("textbox", { name: "AWS profile" }).fill("prod");
   await d.getByRole("textbox", { name: "Region" }).fill("ap-northeast-2");
   await d.getByRole("textbox", { name: "Instance id" }).fill("i-0123456789abcdef0");
@@ -75,7 +79,8 @@ test("AWS SSM: a local Host gets a hint on the General tab, not an error", async
 });
 
 test("AWS SSM: a long Test Connection error is scrolled into view in the fixed-size dialog", async ({ page }) => {
-  await page.setViewportSize({ width: 1100, height: 700 });
+  // Short enough that the error ends below the body with macOS fonts
+  await page.setViewportSize({ width: 1100, height: 640 });
   await openProps(page);
   const d = dialog(page);
   await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssm");
@@ -93,8 +98,10 @@ test("AWS SSM: a long Test Connection error is scrolled into view in the fixed-s
       return !!n && !!b && n.y >= b.y && n.y + n.height <= b.y + b.height;
     }, { message: "the whole error, its last line included, is inside the dialog body" })
     .toBe(true);
-  // The body scrolled, but the tab strip stays pinned at its top: the labels are still shown, not only the active underline
-  expect(await body.evaluate((el) => el.scrollTop), "the body scrolled to show the error").toBeGreaterThan(0);
+  // Where the error didn't fit (it depends on the fonts: CI's Linux ones are shorter), the body scrolled to it; the tab strip stays
+  // pinned at its top either way: the labels are still shown, not only the active underline
+  const [overflows, scrolled] = await body.evaluate((el) => [el.scrollHeight > el.clientHeight + 1, el.scrollTop > 0]);
+  expect(scrolled, "the body scrolled to show the error").toBe(overflows);
   const tab = d.getByRole("tab", { name: /SSH\/SSL/ });
   const [t, b] = [await tab.boundingBox(), await body.boundingBox()];
   expect(t && b && t.y >= b.y && t.y + t.height <= b.y + b.height, "the SSH/SSL tab is inside the dialog body").toBe(true);
@@ -133,6 +140,12 @@ test("AWS SSM: a Test Connection that keeps starting shows the elapsed time and 
   await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssh");
   await expect(d.getByRole("status")).toHaveCount(0);
   await expect(d.getByRole("button", { name: "Test SSH Connection" })).toBeEnabled();
+  // An empty private key uses ssh-agent, then the ~/.ssh/config IdentityFile keys (core tunnel.rs)
+  await expect(d.getByRole("textbox", { name: "Private key" })).toHaveAttribute("placeholder", /ssh-agent/);
+  await expect(d.getByText("Host and port on General are reached from the SSH server.")).toBeVisible();
+  await d.getByRole("button", { name: "About SSH tunnels" }).click();
+  await expect(page.getByRole("note", { name: "About SSH tunnels" })).toContainText("~/.ssh/config Host");
+  await d.getByRole("button", { name: "About SSH tunnels" }).click();
   await page.waitForTimeout(300);
   await expect(d.getByText("Test cancelled")).toHaveCount(0);
   await expect(d.locator(".conn-test-actions")).toHaveCount(0);
@@ -171,4 +184,131 @@ test("Schemas tab: unchecking one database or schema under All keeps the others;
   await expect(row).toContainText("1 schemas");
   await box("billing").click();
   await expect(row).toContainText("all schemas");
+});
+
+async function newSource(page: import("@playwright/test").Page) {
+  await page.locator(".ws-explorer.on").getByTitle("Add Data Source").click();
+  await page.getByRole("menuitem", { name: "New Data Source…" }).click();
+  const d = dialog(page);
+  await expect(d.locator(".ui-modal-title")).toHaveText("New Data Source");
+  return d;
+}
+
+// A half-filled new source isn't connected (the server would only answer with an error): the tab says what's left, then lists
+test("Schemas tab of a new data source that isn't filled in says what's missing and doesn't connect", async ({ page }) => {
+  await page.evaluate(() => {
+    const w = window as any;
+    const orig = w.__TAURI_INTERNALS__.invoke;
+    w.__lists = 0;
+    w.__TAURI_INTERNALS__.invoke = (cmd: string, args: unknown) => (cmd === "form_databases" && w.__lists++, orig(cmd, args));
+  });
+  const d = await newSource(page);
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  // The form starts on localhost: the user is what's left
+  await expect(d.getByText("Fill in User on the General tab to list the databases here.")).toBeVisible();
+  await expect(d.locator(".ui-notice.tone-danger")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__lists)).toBe(0);
+  // Filled in: listed when the tab is shown again
+  await d.getByRole("tab", { name: "General" }).click();
+  await d.getByPlaceholder("user@localhost").fill("orders");
+  await d.locator(".ui-row").filter({ hasText: "Port" }).getByRole("textbox").first().fill("orders-db.example.com");
+  await d.getByRole("textbox", { name: "User", exact: true }).fill("app");
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  await expect(d.locator(".scope-list").getByRole("checkbox", { name: "All databases", exact: true })).toBeChecked();
+  // (twice in development: React's StrictMode mounts the tab twice, the first one is cancelled)
+  expect(await page.evaluate(() => (window as any).__lists)).toBeGreaterThan(0);
+});
+
+// DataGrip lists a new data source's databases and schemas with the form's settings, before it is saved (as Test Connection connects)
+test("Schemas tab of a new data source lists with the form's settings; the scope is saved with OK", async ({ page }) => {
+  const d = await newSource(page);
+  await d.getByPlaceholder("user@localhost").fill("orders");
+  await d.locator(".ui-row").filter({ hasText: "Port" }).getByRole("textbox").first().fill("orders-db.example.com");
+  await d.getByRole("textbox", { name: "User", exact: true }).fill("app");
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  const box = (name: string) => d.locator(".scope-list").getByRole("checkbox", { name, exact: true });
+  await expect(box("All databases")).toBeChecked();
+  await expect(d.getByText("Save the data source first")).toHaveCount(0);
+  await expect(d.getByText("Only checked items show in the Database Explorer; none checked shows all.")).toBeVisible();
+  await d.getByRole("button", { name: "About the Schemas tab" }).click();
+  await expect(page.getByRole("note", { name: "About the Schemas tab" })).toHaveText("Listed with this dialog's settings, as Test Connection connects; nothing is saved until OK.");
+  await page.keyboard.press("Escape");
+  await box("shop_app_test").click();
+  const row = d.locator(".scope-row", { has: page.getByRole("checkbox", { name: "shop_app", exact: true }) });
+  await row.locator(".twisty").click();
+  await box("billing").click();
+  await expect(row).toContainText("1 schemas");
+  await d.getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+
+  // Saved with the source: Properties shows the same choice, listed through the saved source
+  await treeNode(page, "orders").click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^Properties/ }).click();
+  await d.getByRole("tab", { name: "Schemas ●" }).click();
+  await expect(box("shop_app_test")).not.toBeChecked();
+  await expect(box("postgres")).toBeChecked();
+  await expect(row).toContainText("1 schemas");
+  await expect(d.getByText("nothing is saved until OK")).toHaveCount(0);
+});
+
+test("Schemas tab of a new data source: a failed connect says why and tries again with the dialog's settings then", async ({ page }) => {
+  const d = await newSource(page);
+  await d.getByRole("textbox", { name: "User", exact: true }).fill("app");
+  // The mock's server without TLS: refused until Allow unencrypted is ticked
+  await d.locator(".ui-row").filter({ hasText: "Port" }).getByRole("textbox").first().fill("10.0.0.12");
+  const size = await d.boundingBox();
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  const list = d.locator(".scope-list");
+  await expect(d.locator(".ui-notice.tone-danger")).toContainText("✕ ");
+  await expect(list).toHaveCount(0);
+  expect(await d.boundingBox(), "the dialog keeps its size").toEqual(size);
+  await d.getByRole("button", { name: "Try Again" }).click();
+  await expect(d.getByRole("button", { name: "Try Again" })).toBeVisible();
+
+  // Fixed through Test Connection's Allow unencrypted: Try Again uses the dialog's settings as they are now
+  await d.getByRole("button", { name: "Test Connection" }).click();
+  await d.getByRole("button", { name: "Allow unencrypted for this data source" }).last().click();
+  await expect(d.getByText(/^✓ /)).toBeVisible();
+  await d.getByRole("button", { name: "Try Again" }).click();
+  await expect(list.getByRole("checkbox", { name: "shop_app", exact: true })).toBeVisible();
+
+  // Or right under the Schemas error: it ticks the setting in the form and lists again
+  await d.getByRole("tab", { name: "Options" }).click();
+  await d.getByText("Allow unencrypted connection").click();
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  await expect(list).toHaveCount(0);
+  await d.locator(".ui-modal-body").getByRole("button", { name: "Allow unencrypted for this data source" }).first().click();
+  await expect(list.getByRole("checkbox", { name: "shop_app", exact: true })).toBeVisible();
+
+  // A database whose schemas can't be listed says why in its place; expanding it again tries again
+  await page.evaluate(() => ((window as any).__mockDbRefuse = "shop_app_test"));
+  const row = d.locator(".scope-row", { has: page.getByRole("checkbox", { name: "shop_app_test", exact: true }) });
+  await row.locator(".twisty").click();
+  await expect(d.locator(".scope-children")).toHaveText('permission denied for database "shop_app_test"');
+  await row.locator(".twisty").click();
+  await page.evaluate(() => delete (window as any).__mockDbRefuse);
+  await row.locator(".twisty").click();
+  await expect(list.getByRole("checkbox", { name: "billing", exact: true })).toBeVisible();
+});
+
+test("Schemas tab of a new data source: a slow connect shows the time and Cancel Listing (or Esc) stops it", async ({ page }) => {
+  const d = await newSource(page);
+  await d.getByRole("textbox", { name: "User", exact: true }).fill("app");
+  const size = await d.boundingBox();
+  // An AWS SSM instance that never connects: elapsed time, Esc and Cancel Listing stop it and keep the dialog
+  await d.getByRole("tab", { name: /SSH\/SSL/ }).click();
+  await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssm");
+  await d.getByRole("textbox", { name: "Instance id" }).fill("i-00000000000000000");
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  await expect(d.getByRole("status")).toContainText(/Connecting with this dialog's settings… \d+\.\d s/);
+  expect(await d.boundingBox(), "the dialog keeps its size while connecting").toEqual(size);
+  await page.keyboard.press("Escape");
+  await expect(d.getByText("✕ Cancelled.")).toBeVisible();
+  await d.getByRole("button", { name: "Try Again" }).click();
+  await expect(d.getByRole("status")).toBeVisible();
+  await d.getByRole("button", { name: "Cancel Listing" }).click();
+  await expect(d.getByText("✕ Cancelled.")).toBeVisible();
+  await expect(dialog(page)).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
 });

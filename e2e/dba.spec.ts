@@ -11,7 +11,9 @@ test("switching reports drops the previous report's error while the new one load
   await expect(error).toBeVisible();
   // The toolbar names the denied report, not the list's first one
   await expect(page.locator(".dba-report")).toHaveValue("roles");
-  await expect(page.locator(".dba-help")).toHaveText(/Login roles/);
+  await page.locator(".dba-bar").getByRole("button", { name: "About Users & Roles" }).click();
+  await expect(page.getByRole("note", { name: "About Users & Roles" })).toHaveText(/Login roles/);
+  await page.keyboard.press("Escape");
 
   await page.locator(".dba-report").selectOption("table_sizes");
   await expect(page.locator(".dba-bar").getByRole("button", { name: "Loading…" })).toBeVisible();

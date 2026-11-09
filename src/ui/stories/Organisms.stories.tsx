@@ -40,7 +40,7 @@ import {
   Toolbar,
   ToolbarSep,
 } from "..";
-import { connTabVars, type Theme } from "../../lib/theme";
+import { connTabVars } from "../../lib/theme";
 import { TabIcon } from "../icons";
 
 /** Organisms: blocks made of molecules — toolbar · dialog · confirm dialog · menu · popover · list · table · form */
@@ -317,13 +317,13 @@ const RIGHT: DemoTab[] = [
 const MANY: DemoTab[] = Array.from({ length: 16 }, (_, i) => (i % 3 === 0 ? { label: `console ${i + 1}`, kind: "console", color: [PROD, DEV, MYSQL][(i / 3) % 3] } : { label: `table_${i + 1}`, kind: "table", obj: "table" }));
 
 /** One editor group as the app draws it (useEditorGroups): tab strip over the work area. Click a tab or a pane to activate / focus it */
-function DemoGroup({ tabs, theme, state, onFocus }: { tabs: DemoTab[]; theme: Theme; state?: "focused" | "unfocused"; onFocus?: () => void }) {
+function DemoGroup({ tabs, state, onFocus }: { tabs: DemoTab[]; state?: "focused" | "unfocused"; onFocus?: () => void }) {
   const [active, setActive] = useState(tabs.length >> 1);
   return (
     <div className={"panel editor-group" + (state ? " " + state : "")} style={{ flex: 1, minWidth: 0 }} onMouseDownCapture={onFocus}>
       <TabStrip className="tabs" activeKey={String(active)} overflow={tabs.map((t, i) => ({ key: String(i), label: t.label, active: i === active, onSelect: () => setActive(i) }))}>
         {tabs.map((t, i) => (
-          <TabItem key={i} icon={<TabIcon kind={t.kind} obj={t.obj} />} label={t.label} active={i === active} onClose={() => {}} onMouseDown={() => setActive(i)} style={connTabVars(t.color, theme)} />
+          <TabItem key={i} icon={<TabIcon kind={t.kind} obj={t.obj} />} label={t.label} active={i === active} onClose={() => {}} onMouseDown={() => setActive(i)} style={connTabVars(t.color)} />
         ))}
       </TabStrip>
       <div className="work-area" style={{ height: 56, boxShadow: tabs[active].color ? `inset 0 2px 0 ${tabs[active].color}` : undefined }} />
@@ -331,31 +331,31 @@ function DemoGroup({ tabs, theme, state, onFocus }: { tabs: DemoTab[]; theme: Th
   );
 }
 
-function TabBars({ theme }: { theme: Theme }) {
+function TabBars() {
   const [focused, setFocused] = useState(0);
   const state = (g: number) => (focused === g ? "focused" : "unfocused");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, width: 900 }}>
       <Text tone="muted">One pane</Text>
       <div style={{ display: "flex", border: "1px solid var(--ui-border)" }}>
-        <DemoGroup tabs={LEFT} theme={theme} />
+        <DemoGroup tabs={LEFT} />
       </div>
       <Text tone="muted">Split: the focused pane's active tab has the accent bar, the other pane's a gray one</Text>
       <div style={{ display: "flex", gap: 1, background: "var(--ui-border)", border: "1px solid var(--ui-border)" }}>
-        <DemoGroup tabs={LEFT} theme={theme} state={state(0)} onFocus={() => setFocused(0)} />
-        <DemoGroup tabs={RIGHT} theme={theme} state={state(1)} onFocus={() => setFocused(1)} />
+        <DemoGroup tabs={LEFT} state={state(0)} onFocus={() => setFocused(0)} />
+        <DemoGroup tabs={RIGHT} state={state(1)} onFocus={() => setFocused(1)} />
       </div>
       <Text tone="muted">Many tabs: the strip scrolls to the active tab; ▾ lists them all</Text>
       <div style={{ display: "flex", width: 640, border: "1px solid var(--ui-border)" }}>
-        <DemoGroup tabs={MANY} theme={theme} />
+        <DemoGroup tabs={MANY} />
       </div>
     </div>
   );
 }
 
-export const TabBarDark: S = { name: "Tab bar — dark", globals: { theme: "dark" }, render: () => <TabBars theme="dark" /> };
-export const TabBarLight: S = { name: "Tab bar — light", globals: { theme: "light" }, render: () => <TabBars theme="light" /> };
-export const TabBarHc: S = { name: "Tab bar — high contrast", globals: { theme: "hc" }, render: () => <TabBars theme="hc" /> };
+export const TabBarDark: S = { name: "Tab bar — dark", globals: { theme: "dark" }, render: () => <TabBars /> };
+export const TabBarLight: S = { name: "Tab bar — light", globals: { theme: "light" }, render: () => <TabBars /> };
+export const TabBarHc: S = { name: "Tab bar — high contrast", globals: { theme: "hc" }, render: () => <TabBars /> };
 
 // ───────── List popup under a field (PopupList) and its two uses: ComboBox (free text) · FontPicker (select, in Screens) ─────────
 const PG_TYPES = ["integer", "bigint", "smallint", "numeric(10,2)", "real", "double precision", "boolean", "text", "varchar(255)", "char(1)", "date", "timestamp", "timestamptz", "time", "interval", "uuid", "json", "jsonb", "bytea", "inet", "text[]"];

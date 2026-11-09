@@ -1,15 +1,16 @@
-import { setStatusWidget } from "../lib/statusbar";
+import { cellText, setFocusWidgets, setStatusWidget, shownColumns } from "../lib/statusbar";
 import { fracWidth, isTimeType, padFrac } from "../lib/timeFrac";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
+import { Cell, Dialect, dialectOf, type JoinEdit, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, raw } from "../lib/extract";
-import { sharedReady, useSharedReady } from "../lib/shared";
+import { shared, sharedOr, sharedReady, useSharedReady } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
+import { CELL_PAD, CHAR_PX, fitChars, stepWidth, toChars, toPx, useColumnWidths, widthKeys, type WidthsOf } from "../lib/columnWidths";
 import { isJsonType, jsonCell } from "../lib/jsonSpans";
 import { contains, copyTable, extend, forEachCell, isSingle, type Pos, selCols, selRows as rowsOf, type Selection, single, toggle } from "../lib/gridSelection";
 
@@ -37,8 +38,6 @@ export interface EditTarget {
 
 /** A console result the backend didn't check (qurry_shared::errors::CONSOLE_READ_ONLY, the TUI's text) */
 export const CONSOLE_READ_ONLY = "Console results are read-only. Open the table to edit its rows.";
-/** A console result in Manual mode or an open transaction (qurry_shared::errors::CONSOLE_IN_TX): edits save in a transaction of their own */
-export const CONSOLE_IN_TX = "Read-only in a transaction: edits are saved in a transaction of their own. Commit or roll back and switch to Tx: Auto to edit these rows.";
 
 let lastExtractor: Extractor = "CSV"; // The last chosen extractor is the default for new tabs (DataGrip)
 
@@ -46,6 +45,8 @@ interface Props {
   result: QueryResult;
   /** For the table data editor: the edit target */
   edit?: EditTarget;
+  /** A console result from a join (#102): per column, the table its edits go to or why it is read-only (no rows added or deleted) */
+  editJoin?: JoinEdit;
   /** Read-only data source: editing disabled */
   readOnly?: boolean;
   /** Why rows can't be edited here, on the greyed-out edit buttons (console results: the backend's reason, or CONSOLE_READ_ONLY) */
@@ -74,6 +75,8 @@ interface Props {
   rowActions?: { label: string; danger?: boolean; run: (row: Record<string, Cell>) => void }[];
   /** Table data (pgvector): find rows close to this row. row = column name → value */
   onFindSimilar?: (column: string, row: Record<string, Cell>) => void;
+  /** Whose column widths these are: a table tab's table (saved, shared with the TUI) or a console result's id; absent: this grid's own */
+  widthsOf?: WidthsOf;
 }
 
 /** pgvector columns (vector · halfvec · sparsevec) */
@@ -135,6 +138,12 @@ export function ResultGrid(p: Props) {
   const tcol = (i: number) => edit?.columns?.[i] ?? cols[i].name;
   const pkIdx = useMemo(() => (edit ? edit.pk.map((k) => (edit.columns ? edit.columns.indexOf(k) : cols.findIndex((c) => c.name === k))) : []), [edit, cols]);
   const canEdit = !p.readOnly && !!edit && edit.pk.length > 0 && pkIdx.every((i) => i >= 0);
+  /** A join result: its cells are edited per table, by that table's key; rows can't be added, cloned or deleted */
+  const join = p.readOnly ? undefined : p.editJoin;
+  const anyEdit = canEdit || !!join;
+  /** The key columns the header marks: a join's tables' keys */
+  const keyCols = join ? join.tables.flatMap((t) => t.pkAt) : pkIdx;
+  const joinRows = sharedOr("Rows can be added or deleted only in a result from one table.", (s) => s.editJoinRows());
   const baseCount = result.rows.length;
   const rowCount = baseCount + added.length;
   const serverSort = !!p.onServerSort && sortViaOrderBy;
@@ -183,6 +192,38 @@ export function ResultGrid(p: Props) {
   const rowAt = (r: number) => (r < baseCount ? result.rows[r] : added[r - baseCount]);
   const valueAt = (r: number, c: number): Cell => (r < baseCount && changes[r] && c in changes[r] ? changes[r][c] : rowAt(r)?.[c] ?? null);
 
+  /** Why data cell (r, c) can't be edited ("": it can't, nothing to say), or undefined when it can. In a join, per table: a column
+   *  of a table whose key isn't in the result says why, and the outer side where no row matched (its key NULL) is read-only */
+  const cellReason = (r: number, c: number): string | undefined => {
+    if (!join) return canEdit ? undefined : (p.readOnlyReason ?? "");
+    const col = join.columns[c];
+    if (!col) return "";
+    if ("readOnly" in col) return col.readOnly;
+    const t = join.tables[col.table];
+    const name = `${t.schema}.${t.table}`;
+    return t.pkAt.some((i) => result.rows[r]?.[i] === null) ? sharedOr(`Read-only: no ${name} row matches this row (outer join).`, (s) => s.editNoRow(name)) : undefined;
+  };
+  const cellOk = (r: number, c: number) => !deleted.has(r) && cellReason(r, c) === undefined;
+  /** A join's column that can't be edited in any row: why, for its header */
+  const colReason = (c: number) => {
+    const col = join?.columns[c];
+    return col && "readOnly" in col ? col.readOnly : undefined;
+  };
+
+  // Loading more puts the new rows before the added ones: what pointed at an added row (the selection, the cell being edited, the
+  // Value Editor's draft) moves down with it, so Delete Row or Revert Selected never hit a row that was just loaded
+  const lastBase = useRef(baseCount);
+  useEffect(() => {
+    const was = lastBase.current;
+    lastBase.current = baseCount;
+    const by = baseCount - was;
+    if (by <= 0 || !added.length) return;
+    const mv = (r: number) => (r >= was ? r + by : r);
+    setSel((s) => s && { ranges: s.ranges.map((x) => ({ ...x, r0: mv(x.r0), r1: mv(x.r1) })), anchor: { ...s.anchor, r: mv(s.anchor.r) }, cur: { ...s.cur, r: mv(s.cur.r) } });
+    setEditing((ed) => ed && { ...ed, r: mv(ed.r) });
+    setDraft((d) => d && { ...d, r: mv(d.r) });
+  }, [baseCount]);
+
   // Reset edit state when the result changes (kept when load more only added rows)
   const firstRow = result.rows[0];
   useEffect(() => {
@@ -212,19 +253,28 @@ export function ResultGrid(p: Props) {
   // Character widths below are for the default grid font size (12px)
   const em = useFonts().grid.size / DEFAULTS.grid.size;
   const rownumW = Math.max(ROWNUM_W, Math.round(ROWNUM_W * em));
-  const widths = useMemo(
+  const headPx = useMemo(() => cols.map((col, ci) => col.name.length * 7.6 * em + col.typeName.length * 6.2 + 48 + (keyCols.includes(ci) ? 16 : 0)), [cols, pkIdx, join, em]);
+  const computed = useMemo(
     () =>
-      cols.map((col, ci) => {
-        const head = col.name.length * 7.6 * em + col.typeName.length * 6.2 + 48 + (pkIdx.includes(ci) ? 16 : 0);
+      cols.map((_, ci) => {
         let len = 0;
         for (const row of result.rows.slice(0, 200)) len = Math.max(len, display(row[ci]).length);
-        return Math.min(Math.max(head, len * 7.3 * em + 20, 64), 420 * em);
+        return Math.min(Math.max(headPx[ci], len * CHAR_PX * em + CELL_PAD, 64), 420 * em);
       }),
-    [cols, firstRow, pkIdx, em],
+    [cols, firstRow, headPx, em],
   );
+  const wasmReady = useSharedReady();
+  // Widths a user set (drag, fit, the header menu, ⌃⌥← / ⌃⌥→) by column name (`id#2` for a repeated one), in characters (lib/columnWidths.ts)
+  const ownWidths = useId();
+  const userWidths = useColumnWidths(p.widthsOf ?? ownWidths, (msg) => setStatusWidget("aggregate", msg));
+  const setW = userWidths.widths;
+  const wkey = useMemo(() => widthKeys(cols.map((c) => c.name)), [cols, wasmReady]);
+  /** Column i's set width (characters), or undefined while it has none */
+  const setOf = (i: number): number | undefined => (Object.prototype.hasOwnProperty.call(setW, wkey[i]) ? setW[wkey[i]] : undefined);
+  /** The one place a column's width comes from (layout, virtualization, scrolling): the user's, else the computed one */
+  const widths = useMemo(() => computed.map((w, i) => { const s = setOf(i); return s === undefined ? w : toPx(s, em); }), [computed, setW, wkey, em]);
   const total = rownumW + widths.reduce((a, b) => a + b, 0);
   // Time columns: align fractional-second digits within the column (values unchanged)
-  const wasmReady = useSharedReady();
   const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows, wasmReady]);
   const shown = (v: Cell, ci: number) => (fracW[ci] && typeof v === "string" ? padFrac(v, fracW[ci]) : display(v));
   // Value class of each cell and where it sits (Settings › Appearance › Alignment; the TUI grid's rule)
@@ -233,6 +283,62 @@ export function ResultGrid(p: Props) {
   const aligns = useMemo(() => cols.map((c, ci) => alignTable(alignOverrides, c.typeName, result.rows, ci)), [cols, result.rows, alignOverrides, wasmReady]);
   // JSON columns color their text cells (lib/jsonSpans.ts, the TUI grid's tokenizer)
   const jsonCol = useMemo(() => cols.map((c) => isJsonType(c.typeName)), [cols, wasmReady]);
+
+  // ─── Column widths ───
+  /** Characters column i needs for its header and its longest cell as shown, over the rows loaded so far (DataGrip: Fit Column) */
+  const fitOf = (i: number) => fitChars(headPx[i], Array.from({ length: rowCount }, (_, r) => shown(valueAt(r, i), i)), em);
+  const fitColumn = (i: number) => userWidths.set({ [wkey[i]]: fitOf(i) });
+  /** A column's set width before a double-click fitted it (0: none, the computed one), so the next double-click puts it back (TUI: =) */
+  const beforeFit = useRef(new Map<string, number>());
+  // A new result (or Reset Widths) starts without it, as the TUI's grid does
+  useEffect(() => beforeFit.current.clear(), [result]);
+  const resetWidths = () => {
+    beforeFit.current.clear();
+    userWidths.reset();
+  };
+  const toggleFit = (i: number) => {
+    const [k, fit] = [wkey[i], fitOf(i)];
+    // Back exactly: a width the column had, or none (its computed pixels; rounding them to characters could land on the fit again)
+    if (setOf(i) === fit) {
+      userWidths.set({ [k]: beforeFit.current.get(k) ?? 0 });
+      beforeFit.current.delete(k);
+    } else {
+      beforeFit.current.set(k, setOf(i) ?? 0);
+      userWidths.set({ [k]: fit });
+    }
+  };
+  const fitAll = () => userWidths.set(Object.fromEntries(wkey.map((k, i) => [k, fitOf(i)])));
+  /** Narrow (-1) / widen (+1) column i by one step of the shared rule (the TUI's < >), from the width it has now */
+  const stepColumn = (i: number, steps: number) => userWidths.set({ [wkey[i]]: stepWidth(setOf(i) ?? toChars(widths[i], em), steps) });
+  /** Dragging a header's right edge: the width follows the pointer (in whole characters), saved once on release */
+  const startResize = (e: React.MouseEvent, i: number) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const [x0, w0, name] = [e.clientX, widths[i], wkey[i]];
+    let last: number | null = null;
+    const move = (ev: MouseEvent) => {
+      const w = toChars(w0 + ev.clientX - x0, em);
+      if (w !== last) userWidths.set({ [name]: (last = w) }, false);
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      document.body.classList.remove("col-resizing");
+      if (last !== null) userWidths.set({ [name]: last });
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    document.body.classList.add("col-resizing");
+  };
+  /** The column header's menu: widths of this column or all of them */
+  const headerItems = (i: number): MenuItem[] => [
+    { label: "Fit Column", ...cmd("grid.colFit"), shortcut: cmd("grid.colFit").shortcut ?? "double-click the edge", action: () => fitColumn(i) },
+    { label: "Fit All Columns", ...cmd("grid.colFitAll"), action: fitAll },
+    { label: "Reset Widths", ...cmd("grid.colReset"), shortcut: cmd("grid.colReset").shortcut ?? "computed widths", action: resetWidths, disabled: !Object.keys(setW).length },
+    { separator: true },
+    { label: "Narrow Column", ...cmd("grid.colNarrow"), action: () => stepColumn(i, -1) },
+    { label: "Widen Column", ...cmd("grid.colWiden"), action: () => stepColumn(i, 1) },
+  ];
 
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => scrollRef.current, estimateSize: () => ROW_H, overscan: 20 });
   // Horizontally, render only visible columns too (tables with many columns). Blank cells fill the width on both sides
@@ -263,6 +369,24 @@ export function ResultGrid(p: Props) {
   const selectCell = (pos: Pos, ext: boolean) => setSel((s) => (ext ? extend(s, pos) : single(pos)));
   /** A mouse click: ⇧ extends the last range to b, ⌘ adds a..b (a cell, a row, a column) or takes it out, a plain click starts over (DataGrip) */
   const clickSel = (e: React.MouseEvent, a: Pos, b: Pos = a) => setSel((s) => (e.shiftKey ? extend(s, b) : (isMac ? e.metaKey : e.ctrlKey) ? toggle(s, a, b) : single(a, b)));
+
+  // ─── Status bar: the current cell (Row, Col) and the shown columns, while focus is in this grid (lib/statusbar). The range follows
+  // sideways scrolling (the column virtualizer renders again on scroll); Chart and Transpose have neither ───
+  const offset = colVirt.scrollOffset ?? 0;
+  const range = scrollRef.current && !chart && !transposed ? shownColumns(colVirt.measurementsCache, offset + rownumW, offset + scrollRef.current.clientWidth) : null;
+  const shownText = range && wasmReady ? shared().shownCols(range[0] + 1, range[1] + 1, cols.length) : undefined;
+  const cellPos = cur && !chart && !transposed ? cellText(cur.r + 1, cur.c + 1) : undefined;
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    setFocusWidgets(el, { pos: cellPos, cols: shownText });
+  }, [cellPos, shownText]);
+  useEffect(() => {
+    const el = wrapRef.current;
+    return () => {
+      if (el) setFocusWidgets(el, undefined);
+    };
+  }, []);
 
   // ─── Find (Find on Current Page) ───
   const findLower = findText.toLowerCase();
@@ -314,14 +438,17 @@ export function ResultGrid(p: Props) {
     setChanges((ch) => ({ ...ch, [r]: { ...ch[r], [c]: next } }));
   };
   const startEdit = (r: number, c: number) => {
-    if (!canEdit || deleted.has(r)) return;
+    if (deleted.has(r)) return;
+    const why = cellReason(r, c);
+    // A join's read-only cell says why (one table's whole grid says it on its buttons)
+    if (why !== undefined) return void (join && why && setStatusWidget("aggregate", why));
     const v = valueAt(r, c);
     if (r < baseCount && !editableValue(v, cols[c].typeName)) return;
     setEditing({ r, c, value: v === null || v === DEFAULT_TOKEN ? "" : String(v) });
   };
   // ─── Value Editor panel (follows the current cell) ───
   const panelCell = active && active.r < rowCount ? active : null;
-  const panelReadOnly = (r: number, c: number) => !canEdit || deleted.has(r) || (r < baseCount && !editableValue(valueAt(r, c), cols[c].typeName));
+  const panelReadOnly = (r: number, c: number) => !cellOk(r, c) || (r < baseCount && !editableValue(valueAt(r, c), cols[c].typeName));
   const panelShown = panelCell ? panelText(cols[panelCell.c].typeName, raw(valueAt(panelCell.r, panelCell.c))) : { json: false, text: "" };
   /** Write a draft to its cell; the reason when a json / jsonb column refuses it */
   const writeDraft = (d: PanelDraft): string | null => {
@@ -385,9 +512,11 @@ export function ResultGrid(p: Props) {
   }, [sel, result, changes]);
   useEffect(() => () => setStatusWidget("aggregate", undefined), []);
 
-  const setNull = () => canEdit && forSelected((r, c) => setCell(r, c, null));
-  const setDefault = () => canEdit && forSelected((r, c) => setCell(r, c, DEFAULT_TOKEN));
-  const genUuid = () => canEdit && forSelected((r, c) => setCell(r, c, crypto.randomUUID()));
+  /** Every selected cell that can be edited gets `v()` (a join's read-only cells keep theirs) */
+  const setSelected = (v: () => Cell) => anyEdit && forSelected((r, c) => void (cellOk(r, c) && setCell(r, c, v())));
+  const setNull = () => setSelected(() => null);
+  const setDefault = () => setSelected(() => DEFAULT_TOKEN);
+  const genUuid = () => setSelected(() => crypto.randomUUID());
 
   const addRow = () => {
     if (!canEdit) return;
@@ -444,7 +573,26 @@ export function ResultGrid(p: Props) {
   };
 
   const tableRef = edit ? `${quoteIdent(edit.schema)}.${quoteIdent(edit.table)}` : "MY_TABLE";
+  /** A join: per edited row, one UPDATE for each table its edits go to, found by that table's key (never by a column's name) */
+  const joinStatements = (j: JoinEdit): string[] => {
+    const out: string[] = [];
+    for (const [rs, ch] of Object.entries(changes)) {
+      const r = Number(rs);
+      const sets = new Map<number, string[]>();
+      for (const [cs, v] of Object.entries(ch)) {
+        const col = j.columns[Number(cs)];
+        if (col && "table" in col) sets.set(col.table, [...(sets.get(col.table) ?? []), `${quoteIdent(col.column)} = ${lit(v)}`]);
+      }
+      for (const [ti, set] of sets) {
+        const t = j.tables[ti];
+        const where = t.pk.map((k, i) => `${quoteIdent(k)} = ${sqlLiteral(result.rows[r][t.pkAt[i]])}`).join(" AND ");
+        out.push(`UPDATE ${quoteIdent(t.schema)}.${quoteIdent(t.table)} SET ${set.join(", ")} WHERE ${where};`);
+      }
+    }
+    return out;
+  };
   const buildStatements = (): string[] => {
+    if (join) return joinStatements(join);
     if (!edit) return [];
     const where = (r: number) => pkIdx.map((i) => `${quoteIdent(tcol(i))} = ${sqlLiteral(result.rows[r][i])}`).join(" AND ");
     const out: string[] = [];
@@ -518,12 +666,18 @@ export function ResultGrid(p: Props) {
   };
   /** Paste: split multi-line TSV/CSV into cells, adding new rows if there are not enough (DataGrip) */
   const paste = async () => {
-    if (!canEdit || !cur) return;
+    if (!anyEdit || !cur) return;
     // Paste goes into one place (DataGrip); a ⌘-click meant as a plain click is the usual way to get several ranges here
     if ((sel?.ranges.length ?? 0) > 1) return setStatusWidget("aggregate", "Paste needs one selected range: click a cell to select just it (⌘-click adds cells to the selection)");
     const text = await navigator.clipboard.readText();
     const lines = text.replace(/\r/g, "").split("\n").filter((l, i, a) => l !== "" || i < a.length - 1);
     const grid = lines.map((l) => l.split(l.includes("\t") ? "\t" : ","));
+    // A join: only into cells that can be edited, and no rows added
+    if (join) {
+      const spots = grid.flatMap((cells, i) => cells.map((_, j) => [cur.r + i, cur.c + j]).filter(([, c]) => c < cols.length));
+      const bad = spots.find(([d, c]) => d >= rowCount || !cellOk(dataIndex(d), c));
+      if (bad) return setStatusWidget("aggregate", bad[0] >= rowCount ? joinRows : cellReason(dataIndex(bad[0]), bad[1]) || "Paste reaches a cell that can't be edited");
+    }
     grid.forEach((cells, i) => {
       const d = cur.r + i;
       const r = d < rowCount ? dataIndex(d) : -1;
@@ -562,7 +716,7 @@ export function ResultGrid(p: Props) {
     // A grid command's key is the grid's even when the command is disabled now (⌘r while running must not reload the WebView)
     if (commandsFor(spec, "grid").length) return runKey(spec, "grid", () => [...toolbarCommands(), ...(cur && cells ? cellItems(cur.r, cur.c) : [])]), stop();
     if (!cur || !cells) return;
-    if ((e.key === "Enter" || e.key === "F2") && canEdit && active) return startEdit(active.r, active.c), stop();
+    if ((e.key === "Enter" || e.key === "F2") && anyEdit && active) return startEdit(active.r, active.c), stop();
     if (e.key === "Escape") {
       setFindOpen(false);
       return;
@@ -578,7 +732,7 @@ export function ResultGrid(p: Props) {
       return stop();
     }
     // Typing directly in a cell starts editing (DataGrip)
-    if (canEdit && active && e.key.length === 1 && !mod && !e.altKey) {
+    if (anyEdit && active && e.key.length === 1 && !mod && !e.altKey) {
       startEdit(active.r, active.c);
       setEditing((ed) => (ed ? { ...ed, value: e.key } : ed));
       return stop();
@@ -596,9 +750,9 @@ export function ResultGrid(p: Props) {
     const rowObj = Object.fromEntries(cols.map((col, i) => [col.name, valueAt(r, i)]));
     const items: MenuItem[] = [
       ...(p.rowActions?.length ? ([...p.rowActions.map((a) => ({ label: a.label, danger: a.danger, action: () => a.run(rowObj) })), { separator: true }] as MenuItem[]) : []),
-      ...(canEdit ? ([{ label: "Edit", shortcut: "↩", action: () => startEdit(r, c) }] as MenuItem[]) : []),
+      ...(anyEdit ? ([{ label: "Edit", shortcut: "↩", action: () => startEdit(r, c), disabled: !cellOk(r, c) }] as MenuItem[]) : []),
       { label: "Open in Value Editor", ...cmd("grid.valueEditor"), action: openPanel },
-      ...(canEdit
+      ...(anyEdit
         ? ([
             { label: "Revert Selected", ...cmd("grid.revert"), action: revertSelected },
             { separator: true },
@@ -612,7 +766,7 @@ export function ResultGrid(p: Props) {
       { label: "Copy with Headers", ...cmd("grid.copyHeaders"), action: () => copySelection(true), disabled: extractor !== "CSV" && extractor !== "TSV" },
       { label: "Copy as IN List  ('a', 'b', …)", ...cmd("grid.copyInList"), action: copyInList },
       { label: "Change Data Extractor", submenu: EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })) },
-      ...(canEdit ? ([{ label: "Paste", shortcut: k.paste, action: paste }] as MenuItem[]) : []),
+      ...(anyEdit ? ([{ label: "Paste", shortcut: k.paste, action: paste }] as MenuItem[]) : []),
       ...(canEdit
         ? ([
             { separator: true },
@@ -698,13 +852,17 @@ export function ResultGrid(p: Props) {
     { label: "Export Data…", ...cmd("grid.export"), action: p.onExport },
     ...viewItems(),
     ...optionItems(),
+    // The header menu's commands on the current column (the focused cell's, or the clicked header's); not in Transpose or Chart
+    ...(cur && !chart && !transposed ? headerItems(cur.c) : headerItems(0).map((x) => ({ ...x, disabled: true }))),
   ];
 
-  /** An edit button's tooltip and description: the command, and why it's greyed out when the grid says so */
-  const reason = canEdit ? undefined : p.readOnlyReason;
-  const editButton = (title: string, id: string) => ({
-    title: reason ? `${keyTitle(title, id)} — ${reason}` : keyTitle(title, id),
-    "aria-description": reason,
+  /** An edit button's tooltip and description: the command, and why it's greyed out when the grid says so (a join's row buttons: why
+   *  rows can't be added or deleted there) */
+  const reason = anyEdit ? undefined : p.readOnlyReason;
+  const rowReason = canEdit ? undefined : join ? joinRows : p.readOnlyReason;
+  const editButton = (title: string, id: string, why = reason) => ({
+    title: why ? `${keyTitle(title, id)} — ${why}` : keyTitle(title, id),
+    "aria-description": why,
   });
   const rowsLabel = `${baseCount}${result.truncated ? "+" : ""} row${baseCount === 1 ? "" : "s"}`;
 
@@ -712,7 +870,13 @@ export function ResultGrid(p: Props) {
     <div className="grid-wrap" ref={wrapRef} tabIndex={-1} onKeyDown={onKeyDown}>
       {/* ── DataGrip grid toolbar ── */}
       <Toolbar onMouseDown={(e) => e.stopPropagation()}>
-        <IconButton title={keyTitle("Reload Page", "grid.reload")} onClick={p.onReload} disabled={p.running}><IcReload /></IconButton>
+        {/* One button: ↻ reloads, and is ■ in the same spot during every load of this grid (a run, a load-more on scroll); ■ cancels only
+            the fetch in flight, the rows already here stay */}
+        {p.running || loadingMore ? (
+          <IconButton tone="danger" title={keyTitle("Cancel", "grid.cancel")} onClick={p.onCancel}><IcStop /></IconButton>
+        ) : (
+          <IconButton title={keyTitle("Reload Page", "grid.reload")} onClick={p.onReload}><IcReload /></IconButton>
+        )}
         <IconButton active={!!interval}
           title="Update Interval"
           onClick={(e) =>
@@ -723,10 +887,9 @@ export function ResultGrid(p: Props) {
         >
           <IcClock />
         </IconButton>
-        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "grid.cancel")} onClick={p.onCancel} disabled={!p.running && !loadingMore}><IcStop /></IconButton>
         <ToolbarSep />
-        <IconButton {...editButton("Add Row", "grid.addRow")} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
-        <IconButton {...editButton("Delete Row", "grid.deleteRows")} onClick={deleteRows} disabled={!canEdit || !hasSel}><IcMinus /></IconButton>
+        <IconButton {...editButton("Add Row", "grid.addRow", rowReason)} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
+        <IconButton {...editButton("Delete Row", "grid.deleteRows", rowReason)} onClick={deleteRows} disabled={!canEdit || !hasSel}><IcMinus /></IconButton>
         <IconButton {...editButton("Revert Selected", "grid.revert")} onClick={revertSelected} disabled={!pendingCount}><IcRevert /></IconButton>
         <IconButton {...editButton("Preview Pending Changes", "grid.preview")} onClick={() => setPreview({ sql: buildStatements(), readOnly: true })} disabled={!pendingCount}><IcPreview /></IconButton>
         <IconButton active={false} className={pendingCount ? "accent" : undefined} {...editButton("Submit", "grid.submit")} onClick={submit} disabled={!pendingCount}><IcSubmit /></IconButton>
@@ -804,13 +967,19 @@ export function ResultGrid(p: Props) {
           <div className="grid-body">
             {/* Column header above the scroller (not sticky inside it), so it can't drift off the toolbar while rows scroll */}
             {!chart && !transposed && (
-              <GridHead body={scrollRef}>
-                <GridHeaderRow width={total} height={HEADER_H}>
-                  <RowNumberCell
-                    width={rownumW}
-                    title="Select all (⌘a)"
-                    onMouseDown={() => setSel(single({ r: 0, c: 0 }, { r: rowCount - 1, c: cols.length - 1 }))}
-                  />
+              <GridHead
+                body={scrollRef}
+                corner={
+                  <GridHeaderRow width={rownumW} height={HEADER_H}>
+                    <RowNumberCell
+                      width={rownumW}
+                      title="Select all (⌘a)"
+                      onMouseDown={() => setSel(single({ r: 0, c: 0 }, { r: rowCount - 1, c: cols.length - 1 }))}
+                    />
+                  </GridHeaderRow>
+                }
+              >
+                <GridHeaderRow width={total - rownumW} height={HEADER_H}>
                   {spacer(padL)}
                   {colItems.map(({ index: i }) => {
                     const c = cols[i];
@@ -821,13 +990,20 @@ export function ResultGrid(p: Props) {
                         key={i}
                         name={c.name}
                         type={c.typeName}
-                        pk={pkIdx.includes(i)}
+                        pk={keyCols.includes(i)}
+                        readOnly={colReason(i)}
                         width={widths[i]}
                         colSelected={selColSet.has(i)}
                         sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}
                         // Header click = select the whole column (DataGrip)
                         onMouseDown={(e) => clickSel(e, { r: 0, c: i }, { r: rowCount - 1, c: i })}
                         onSortClick={(e) => clickSort(i, e.altKey)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setMenu({ x: e.clientX, y: e.clientY, items: headerItems(i) });
+                        }}
+                        onResize={(e) => startResize(e, i)}
+                        onFit={() => toggleFit(i)}
                       />
                     );
                   })}
@@ -908,6 +1084,8 @@ export function ResultGrid(p: Props) {
                               active={cur?.r === d && cur?.c === ci}
                               changed={!!changed}
                               match={isMatch(d, ci)}
+                              // A join's cell that can't be edited: why, on hover (whole columns say it on their header too)
+                              title={join && !isNew ? cellReason(r, ci) || undefined : undefined}
                               onMouseDown={(e) => {
                                 if (e.button !== 0) return;
                                 dragging.current = true;

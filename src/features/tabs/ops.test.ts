@@ -106,6 +106,16 @@ describe("pane operations", () => {
     expect(liveSql.has(ts[1].id)).toBe(false);
     expect(closed).toEqual([ts[1].id]);
   });
+
+  it("a Production console starts in Manual where Manual works (PostgreSQL, MySQL), never on Redis or a driver plugin (core ConnectionConfig::starts_manual)", () => {
+    const prod = (kind: string, options = {}) => ({ ...conn, id: `p-${kind}`, kind, options: { confirmChanges: true, ...options } }) as ConnectionView;
+    const manual = (c: ConnectionView) => buildTab(c, "console", {}, 0, "c").txManual;
+    expect(["postgres", "mysql"].map((k) => manual(prod(k)))).toEqual([true, true]);
+    expect(["redis", "sqlite", "mssql", "oracle", "clickhouse", "duckdb"].map((k) => manual(prod(k)))).toEqual([false, false, false, false, false, false]);
+    expect(manual(prod("redis", { txManual: true }))).toBe(false);
+    expect(manual(prod("postgres", { productionManual: false }))).toBe(false);
+    expect(buildTab(prod("redis"), "console", {}, 0, "c").output).toEqual([]);
+  });
 });
 
 describe("ddlObject", () => {

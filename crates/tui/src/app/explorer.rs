@@ -1,6 +1,9 @@
 use super::*;
 use qurry_core::ddl::DropTarget;
 
+/// A data source's databases, its default one, and (Redis) each database's key count
+type DbList = (Vec<String>, String, HashMap<String, i64>);
+
 impl App {
     // ───────── Data Sources ─────────
 
@@ -28,21 +31,26 @@ impl App {
                 for c in back {
                     a.retry_failed_tables(&c);
                 }
+                if let Some((id, incident)) = a.startup.take() {
+                    a.open_start(&id, incident);
+                }
             }
             Err(e) => a.status = format!("Failed to load data sources: {e}"),
         });
     }
 
-    /// Top of the explorer: only the current workspace's Data Sources (in the order added to the workspace)
+    /// Top of the explorer: the temporary Data Sources from the command line (in every workspace, never in a workspace's list, which
+    /// is shared with the GUI), then the current workspace's (in the order added to the workspace)
     pub fn rebuild_roots(&mut self) {
         let mine = &self.workspaces[self.cur_ws].conns;
-        self.tree.roots = mine
-            .iter()
-            .filter_map(|id| self.conns.iter().find(|c| &c.config.id == id))
+        let temporary = self.conns.iter().filter(|c| c.temporary);
+        self.tree.roots = temporary
+            .chain(mine.iter().filter_map(|id| self.conns.iter().find(|c| &c.config.id == id && !c.temporary)))
             .map(|c| Node {
                 key: c.config.id.clone(),
                 label: c.config.name.clone(),
-                hint: format!("{:?}", c.config.kind).to_lowercase() + if c.config.active_ssh().is_some() { " · ssh" } else if c.config.active_ssm().is_some() { " · ssm" } else { "" },
+                hint: format!("{:?}", c.config.kind).to_lowercase()
+                    + if c.config.active_ssh().is_some() { " · ssh" } else if c.config.active_ssm().is_some() { " · ssm" } else { "" },
                 kind: NodeKind::Conn,
                 conn: c.config.id.clone(),
                 db: None,
@@ -54,12 +62,30 @@ impl App {
         self.tree.clamp();
     }
 
-    /// Data Sources in no workspace (just created, or created in the GUI) → the current workspace
+    /// Data Sources in no workspace (just created, or created in the GUI) → the current workspace. Not temporary ones (rebuild_roots)
     pub fn ws_adopt_orphans(&mut self) {
         let known: HashSet<String> = self.workspaces.iter().flat_map(|w| w.conns.iter().cloned()).collect();
-        let orphans: Vec<String> = self.conns.iter().map(|c| c.config.id.clone()).filter(|id| !known.contains(id)).collect();
+        let orphans: Vec<String> = self.conns.iter().filter(|c| !c.temporary).map(|c| c.config.id.clone()).filter(|id| !known.contains(id)).collect();
         let cur = self.cur_ws;
         self.workspaces[cur].conns.extend(orphans);
+    }
+
+    /// Started with a URL (main.rs): once the list has the temporary source, select it and connect; incident mode opens
+    /// Database Admin › Sessions on it
+    pub fn start_with(&mut self, conn: String, incident: bool) {
+        self.startup = Some((conn, incident));
+        self.reload_conns();
+    }
+
+    fn open_start(&mut self, conn: &str, incident: bool) {
+        self.focus = Focus::Tree;
+        if !self.tree.select_key(conn) {
+            return;
+        }
+        self.connect(conn);
+        if incident {
+            self.dba_open("sessions".into());
+        }
     }
 
     pub(crate) fn default_db(&self, conn: &str) -> String {
@@ -154,31 +180,40 @@ impl App {
                 let def = sql::default_db(&cfg);
                 self.spawn(
                     async move {
+                        // Redis: its databases with their key counts; keys are browsed in the Redis tab, not in the tree
+                        if kind == DbKind::Redis {
+                            let o = st.redis_overview(conn).await.map_err(err)?;
+                            return Ok::<_, String>((o.databases.iter().map(|d| d.name.clone()).collect(), def, o.databases.into_iter().map(|d| (d.name, d.keys)).collect()));
+                        }
                         let dbs = st.list_databases(conn.clone()).await.map_err(err)?;
                         // Connected: fill the search cache in the background so lookups work next time without connecting
                         let st2 = st.clone();
                         tokio::spawn(async move { st2.warm_search_cache(conn).await });
-                        Ok::<_, String>((dbs, def))
+                        Ok((dbs, def, HashMap::new()))
                     },
-                    move |a, r: Result<(Vec<String>, String), String>| {
-                        let r = r.map(|(dbs, def)| {
+                    move |a, r: Result<DbList, String>| {
+                        let r = r.map(|(dbs, def, keys)| {
                             qurry_core::app::visible_dbs(&cfg, dbs, &def)
                                 .into_iter()
                                 .map(|d| Node {
                                     key: format!("{}|{d}", cfg.id),
+                                    hint: match keys.get(&d) {
+                                        Some(n) => qurry_shared::redis_cmd::key_count(*n),
+                                        None if d == def => "default".into(),
+                                        None => String::new(),
+                                    },
                                     label: d.clone(),
-                                    hint: if d == def { "default".into() } else { String::new() },
                                     kind: NodeKind::Db,
                                     conn: cfg.id.clone(),
                                     db: Some(d),
                                     schema: None,
                                     name: None,
-                                    expandable: true,
+                                    expandable: kind != DbKind::Redis,
                                 })
                                 .collect::<Vec<_>>()
                         });
                         // DB to auto-expand: the only visible DB if there's one, otherwise the default DB (only if visible)
-                        let auto = r.as_ref().ok().and_then(|ns| if ns.len() == 1 { ns.first().cloned() } else { ns.iter().find(|n| n.hint == "default").cloned() });
+                        let auto = r.as_ref().ok().and_then(|ns| if ns.len() == 1 { ns.first().cloned() } else { ns.iter().find(|n| n.hint == "default").cloned() }).filter(|n| n.expandable);
                         done(a, key, r);
                         a.reload_conns();
                         if let Some(n) = auto {
@@ -336,8 +371,11 @@ impl App {
         let kind = self.kind_of(&n.conn);
         // Connection·DB·schema·folder: Enter/double-click = expand (regardless of DB kind). F4 / Ctrl+↓ = console, key browser for Redis
         match &n.kind {
-            NodeKind::Conn | NodeKind::Db if f4 && kind == DbKind::Redis => {
-                let db = n.db.clone().unwrap_or_else(|| self.default_db(&n.conn));
+            // Redis: F4 on the source, Enter / F4 on a database opens the source's Redis tab (or switches it to that database)
+            NodeKind::Conn | NodeKind::Db if kind == DbKind::Redis && (f4 || n.kind == NodeKind::Db) => {
+                // The source itself: its open tab as it is
+                let open = self.tabs.iter().find(|t| t.conn == n.conn && matches!(t.kind, TabKind::Redis(_))).map(|t| t.db.clone());
+                let db = n.db.clone().or(open).unwrap_or_else(|| self.default_db(&n.conn));
                 self.open_redis(&n.conn, db, None)
             }
             NodeKind::Conn | NodeKind::Db if f4 => self.open_console(&n.conn, n.db.clone()),

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { bind, bindableIn, bindings, eventSpec, formatSpec, isCustom, onKeymapChange, removeKey, resetAllShortcuts, resetShortcut, Scope, SCOPE_LABEL, SHORTCUTS } from "../lib/shortcuts";
-import { Button, EmptyState, IconButton, SearchField, Spacer, Text } from "../ui";
+import { Button, EmptyState, IconButton, Named, SearchField, Spacer, Text } from "../ui";
 
 /** Settings › Keymap: change command shortcuts. Pressing a key records it; the key is removed from overlapping commands in the same scope */
 export function KeymapEditor() {
@@ -82,7 +82,13 @@ export function KeymapEditor() {
         })}
       </div>
       <div className="keymap-editor-foot">
-        <span className="hint">{note ?? "Saved to keymap.json in the config folder. Moving, typing, Enter, Esc and copy / paste keys are fixed (Keymap Reference lists them)."}</span>
+        <span className="hint">
+          {note ?? (
+            <Named about="the keymap" info={["Saved to keymap.json in the config folder.", "Keymap Reference lists the keys that can't be changed."]}>
+              Moving, typing, Enter, Esc and copy / paste keys can't be changed.
+            </Named>
+          )}
+        </span>
         <Spacer />
         <Button size="sm" onClick={() => (resetAllShortcuts(), setNote("All shortcuts reset to defaults"))} disabled={!!rec}>Reset All</Button>
       </div>

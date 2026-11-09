@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ConnectionView, fake, FakePreview, subset, SubsetPlan, SubsetSpec } from "../lib/api";
 import { ask, notice } from "../lib/dialogs";
-import { Badge, Button, Checkbox, Field, Hint, Modal, Notice, SectionTitle, Select, Table, Td, Text, TextInput, Th } from "../ui";
+import { Badge, Button, Checkbox, Field, Hint, Modal, Named, Notice, SectionTitle, Select, Table, Td, Text, TextInput, Th } from "../ui";
 
 const MAX_ROWS = 100_000;
 
@@ -71,7 +71,9 @@ export function GenerateDataDialog({ target, schema, table, production, onDone, 
       ))}
       {pv && (
         <>
-          <SectionTitle>Columns</SectionTitle>
+          <SectionTitle>
+            <Named info={["Foreign keys use rows that already exist in the referenced table.", "Auto-numbered and generated columns are left to the database."]}>Columns</Named>
+          </SectionTitle>
           <div className="gen-plan">
             <Table>
               <thead>
@@ -115,7 +117,6 @@ export function GenerateDataDialog({ target, schema, table, production, onDone, 
               </tbody>
             </Table>
           </div>
-          <Hint>Foreign keys use rows that already exist in the referenced table. Auto-numbered and generated columns are left to the database.</Hint>
         </>
       )}
     </Modal>
@@ -211,9 +212,14 @@ export function CopyRowsDialog({ source, schema, table, conn, conns, onDone, onC
           <Text tone="muted">No other {conn.kind === "mysql" ? "MySQL" : "PostgreSQL"} data source — add one to copy into</Text>
         )}
       </Field>
-      <Checkbox checked={mask} onChange={setMask}>
-        Mask personal data (email, phone, people's names, address, ID / card numbers, passwords, birth dates, IP)
-      </Checkbox>
+      <Named
+        about="masking"
+        info={["Masked values are md5-based, so the same value always masks the same way.", "That hides values, it doesn't protect them: anyone with a list of likely values (emails, phone numbers) can find the original by hashing the list."]}
+      >
+        <Checkbox checked={mask} onChange={setMask}>
+          Mask personal data (email, phone, people's names, address, ID / card numbers, passwords, birth dates, IP)
+        </Checkbox>
+      </Named>
       {err && <Notice tone="danger">{err}</Notice>}
       {plan && (
         <>
@@ -248,7 +254,7 @@ export function CopyRowsDialog({ source, schema, table, conn, conns, onDone, onC
               </tbody>
             </Table>
           </div>
-          <Hint>The tables must already exist in the target (Compare Schemas makes the DDL). Masked values are md5-based, so the same value always masks the same way.</Hint>
+          <Hint>The tables must already exist in the target (Compare Schemas makes the DDL).</Hint>
         </>
       )}
     </Modal>

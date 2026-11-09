@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ask, askText } from "../lib/dialogs";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { api, currentFirst, QueryResult, redis, RedisKeyDetail, RedisKeyRow, RedisReply } from "../lib/api";
+import { api, history, QueryResult, redis, RedisDbInfo, RedisKeyDetail, RedisKeyRow, RedisOverview, RedisReply } from "../lib/api";
 import { keyTree, parentPaths, visibleRows } from "../lib/keyTree";
-import { useSharedReady } from "../lib/shared";
+import { sharedOr, useSharedReady, type RedisAssist, type RedisReplyTable } from "../lib/shared";
+import { isRead } from "../lib/stmtKind";
 import { FolderIcon } from "../ui/icons";
-import { Badge, Button, EmptyState, FormGrid, IconButton, Modal, Notice, Select, Spacer, Table, Tabs, Td, Text, TextArea, TextInput, Th, ToolButton, Toolbar, TreeRow } from "../ui";
+import { Badge, Button, EmptyState, FormGrid, IconButton, Modal, Named, Notice, Select, Spacer, Table, Tabs, Td, Text, TextArea, TextInput, Th, ToolButton, Toolbar, TreeRow } from "../ui";
 
 const isMacOS = navigator.platform.toLowerCase().includes("mac");
 
@@ -14,21 +15,30 @@ const isMacOS = navigator.platform.toLowerCase().includes("mac");
 const KEY_ROW_H = 22;
 const TERM_MAX = 1000;
 
-/** Medis-style Redis browser: key list on the left (pattern·type filter, SCAN load more), Content / Terminal / Info / Config on the right */
+/** Medis-style Redis browser, one tab per data source: the database picker and key filter on top, the key list on the left
+ *  (pattern·type filter, SCAN load more), Content / Terminal / Info / Config on the right */
 interface Props {
   target: string;
+  connId: string;
   connName: string;
   database: string;
-  dbList: string[];
   readOnly: boolean;
+  /** Production (confirm changes): the Terminal asks before a write */
+  production: boolean;
   initialKey?: string;
   onSwitchDb: (db: string) => void;
-  onLoadDbs: () => void;
   onStatus: (s: string) => void;
 }
 
+/** Why the Config tab is greyed out (its tooltip), and what Config says if CONFIG fails anyway */
+const CONFIG_REFUSED =
+  "This server doesn't allow CONFIG — managed Redis services (AWS ElastiCache / MemoryDB, Azure Cache, GCP Memorystore, Upstash …) disable or rename it. Its settings are in the provider's console (e.g. the ElastiCache parameter group). Server details are in Info.";
+
+/** "db0 · 500 keys" (qurry_shared::redis_cmd::db_label, as the TUI); the name alone until the module loads */
+const dbLabel = (d: RedisDbInfo) => sharedOr(d.name, (s) => s.redisDbLabel(d.name, d.keys));
+
 const TYPES = ["string", "hash", "list", "set", "zset", "stream"];
-export const TYPE_COLOR: Record<string, string> = {
+const TYPE_COLOR: Record<string, string> = {
   string: "#5f9ea0",
   hash: "#b07cc6",
   list: "#6a9fd8",
@@ -37,7 +47,7 @@ export const TYPE_COLOR: Record<string, string> = {
   stream: "#5aa469",
 };
 
-export function TypeBadge({ type }: { type: string }) {
+function TypeBadge({ type }: { type: string }) {
   return (
     <Badge color={TYPE_COLOR[type] ?? "#777"} className="rd-badge">
       {type === "zset" ? "ZSET" : type.toUpperCase()}
@@ -45,14 +55,8 @@ export function TypeBadge({ type }: { type: string }) {
   );
 }
 
-const fmtTtl = (ms: number) => {
-  if (ms < 0) return "";
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
-  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
-};
+/** A key's TTL as the key list shows it ("1d 4h"), — without expiry (qurry_shared::redis_cmd::ttl_label, as the TUI) */
+const fmtTtl = (ms: number) => sharedOr("", (s) => s.redisTtl(ms));
 const fmtBytes = (n: number | null) => (n == null ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
 /** Same output as redis-cli */
@@ -76,7 +80,7 @@ export function formatReply(v: RedisReply, indent = ""): string {
 }
 
 export function RedisBrowser(p: Props) {
-  const [pattern, setPattern] = useState("*");
+  const [pattern, setPattern] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [keys, setKeys] = useState<RedisKeyRow[]>([]);
   const [cursor, setCursor] = useState("0");
@@ -110,11 +114,23 @@ export function RedisBrowser(p: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const keyVirt = useVirtualizer({ count: rows.length, getScrollElement: () => listRef.current, estimateSize: () => KEY_ROW_H, overscan: 20 });
 
+  // The database picker's key counts and whether CONFIG works (checked on connect), read again with each new scan
+  const [overview, setOverview] = useState<RedisOverview | null>(null);
+  const loadOverview = () => redis.overview(p.target).then(setOverview, () => {});
+  const configOff = overview?.configAllowed === false;
+  useEffect(() => {
+    if (configOff && tab === "config") setTab("info");
+  }, [configOff]);
+
+  // A scan of the database shown before that answers late is dropped (shownTarget: the database shown now)
   const scan = async (reset: boolean) => {
+    const asked = p.target;
     setScanning(true);
     setError(null);
+    if (reset) loadOverview();
     try {
-      const page = await redis.scan(p.target, reset ? "0" : cursor, pattern, 500, typeFilter);
+      const page = await redis.scan(asked, reset ? "0" : cursor, pattern, 500, typeFilter);
+      if (asked !== shownTarget.current) return;
       setKeys((ks) => {
         // Merge only the new (sorted) page into the already sorted list (instead of re-sorting everything each time)
         const have = new Set(reset ? [] : ks.map((k) => k.key));
@@ -127,14 +143,23 @@ export function RedisBrowser(p: Props) {
       });
       setCursor(page.cursor);
     } catch (e) {
-      setError(String(e));
+      if (asked === shownTarget.current) setError(String(e));
     } finally {
-      setScanning(false);
+      if (asked === shownTarget.current) setScanning(false);
     }
   };
   useEffect(() => {
     scan(true);
   }, [p.target, typeFilter]);
+  // Another database: its own keys (the key and folders picked in the last one aren't there)
+  const shownTarget = useRef(p.target);
+  useEffect(() => {
+    if (shownTarget.current === p.target) return;
+    shownTarget.current = p.target;
+    setSel(p.initialKey ?? null);
+    setCur(null);
+    setOpen(new Set());
+  }, [p.target]);
   useEffect(() => {
     if (p.initialKey) setSel(p.initialKey);
   }, [p.initialKey]);
@@ -158,25 +183,27 @@ export function RedisBrowser(p: Props) {
       }}
     >
       <Toolbar className="rd-toolbar">
-        <Text strong>{p.connName}</Text>
-        <Select value={p.database} onMouseDown={p.onLoadDbs} onFocus={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
-          {currentFirst(p.database, p.dbList).map((d) => (
-            <option key={d} value={d}>
-              {d}
+        <Select className="rd-db" value={p.database} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database (the explorer's databases switch it too)" aria-label="Database">
+          {(overview?.databases.some((d) => d.name === p.database) ? overview.databases : [{ name: p.database, keys: -1 }, ...(overview?.databases ?? [])]).map((d) => (
+            <option key={d.name} value={d.name}>
+              {dbLabel(d)}
             </option>
           ))}
         </Select>
-        <TextInput
-          className="rd-pattern"
-          value={pattern}
-          spellCheck={false}
-          placeholder="Key name or pattern (e.g. user:*)"
-          onChange={(e) => setPattern(e.target.value)}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Enter") scan(true);
-          }}
-        />
+        <Named about="key patterns" info={["SCAN MATCH pattern: * any characters, ? one, [ab] a or b.", "Enter applies it."]}>
+          <TextInput
+            className="rd-pattern"
+            value={pattern}
+            spellCheck={false}
+            aria-label="Filter keys"
+            placeholder="Filter keys (pattern, e.g. prod:user:*)"
+            onChange={(e) => setPattern(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") scan(true);
+            }}
+          />
+        </Named>
         <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} title="Filter by type">
           <option value="">All types</option>
           {TYPES.map((t) => (
@@ -236,7 +263,7 @@ export function RedisBrowser(p: Props) {
                         open={open.has(r.path)}
                         icon={<FolderIcon />}
                         label={r.name}
-                        trailing={r.count.toLocaleString()}
+                        sub={r.count.toLocaleString("en-US")}
                         selected={cur === r.path}
                         style={style}
                         title={`${r.path}:*`}
@@ -255,7 +282,7 @@ export function RedisBrowser(p: Props) {
                       icon={<TypeBadge type={k.type} />}
                       iconClass="rd-type"
                       label={k.key}
-                      trailing={fmtTtl(k.ttl)}
+                      trailing={<span className={k.ttl < 0 ? "rd-ttl none" : "rd-ttl"}>{fmtTtl(k.ttl)}</span>}
                       selected={!cur && k.key === sel}
                       style={style}
                       title={k.key}
@@ -285,7 +312,11 @@ export function RedisBrowser(p: Props) {
           <div className="rd-right">
             <Tabs
               size="sm"
-              items={(["content", "terminal", "info", "config"] as const).map((t) => ({ id: t, label: t[0].toUpperCase() + t.slice(1) }))}
+              items={(["content", "terminal", "info", "config"] as const).map((t) => ({
+                id: t,
+                label: t[0].toUpperCase() + t.slice(1),
+                ...(t === "config" && configOff ? { disabled: true, title: CONFIG_REFUSED } : {}),
+              }))}
               value={tab}
               onChange={setTab}
             />
@@ -312,7 +343,18 @@ export function RedisBrowser(p: Props) {
                 ) : (
                   <EmptyState>Select a key on the left.</EmptyState>
                 ))}
-              {tab === "terminal" && <Terminal target={p.target} prompt={`${p.connName}[${p.database.replace(/^db/, "")}]>`} onChanged={() => scan(true)} />}
+              {tab === "terminal" && (
+                <Terminal
+                  target={p.target}
+                  connId={p.connId}
+                  connName={p.connName}
+                  database={p.database}
+                  readOnly={p.readOnly}
+                  production={p.production}
+                  prompt={`${p.database}>`}
+                  onChanged={() => scan(true)}
+                />
+              )}
               {tab === "info" && <ServerTable target={p.target} command="INFO" />}
               {tab === "config" && <ServerTable target={p.target} command="CONFIG GET *" />}
             </div>
@@ -693,70 +735,241 @@ function ValueEditor({ text, fmt, setFmt, pretty, readOnly, onSave, label, big }
 
 // ───────── Terminal (redis-cli) ─────────
 
-function Terminal({ target, prompt, onChanged }: { target: string; prompt: string; onChanged: () => void }) {
-  const [lines, setLines] = useState<{ kind: "in" | "out" | "err"; text: string }[]>([]);
+type TermLine = { kind: "in" | "out" | "err" | "note" | "nil"; text: string } | { kind: "table"; table: RedisReplyTable };
+type Choice = { insert: string; label: string; args?: string; summary?: string; write?: boolean };
+
+/** How many key names the completion asks a bounded SCAN for */
+const KEY_CHOICES = 50;
+
+/**
+ * redis-cli in a tab: command and key-name completion with argument hints (the bundled command table, qurry_shared through WASM),
+ * ↑↓ history per data source (Query History, passwords masked), HELP <command>, replies shown by type. Same rules as the console:
+ * a read-only source runs reads only, Production asks before a write, FLUSHALL / FLUSHDB / DEL … always ask
+ */
+function Terminal({ target, connId, connName, database, readOnly, production, prompt, onChanged }: {
+  target: string; connId: string; connName: string; database: string; readOnly: boolean; production: boolean; prompt: string; onChanged: () => void;
+}) {
+  const [lines, setLines] = useState<TermLine[]>([]);
   const [input, setInput] = useState("");
-  const hist = useRef<string[]>([]);
+  const [caret, setCaret] = useState(0);
+  const [hist, setHist] = useState<string[]>([]);
   const hi = useRef(-1);
+  const [keys, setKeys] = useState<{ prefix: string; names: string[] } | null>(null);
+  const [pick, setPick] = useState(0);
+  const [closed, setClosed] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const end = useRef<HTMLDivElement>(null);
+  const ready = useSharedReady();
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
   }, [lines]);
+  const loadHist = () => history.list(connId, "", 200).then((h) => setHist(h.map((x) => x.sql)), () => {});
+  useEffect(() => {
+    loadHist();
+  }, [connId]);
+
+  // What the word before the caret can become: commands (with their arguments) or key names (from a bounded SCAN)
+  const assist = useMemo(() => sharedOr<RedisAssist | null>(null, (s) => s.redisAssist(input.slice(0, caret))), [input, caret, ready]);
+  useEffect(() => {
+    if (!assist?.key) return setKeys(null);
+    const prefix = assist.prefix;
+    const t = setTimeout(() => redis.keyNames(target, prefix, KEY_CHOICES).then((names) => setKeys({ prefix, names }), () => setKeys(null)), 120);
+    return () => clearTimeout(t);
+  }, [assist?.key, assist?.prefix, target]);
+  const choices: Choice[] =
+    closed || !assist
+      ? []
+      : assist.commands.length
+        ? assist.commands.map((c) => ({ insert: c.insert, label: c.doc.name, args: c.doc.args, summary: c.doc.summary, write: !c.read }))
+        : assist.key && keys?.prefix === assist.prefix
+          ? sharedOr<Choice[]>([], (s) => s.redisKeyChoices(assist.prefix, keys.names))
+          : [];
+  // Key names: ↩ picks one only after ↑↓ moved to it, else it runs the line (⇥ always picks), so a key typed out in full
+  // (`GET user:1`) isn't swapped for a longer one the SCAN found (`user:10`)
+  const [moved, setMoved] = useState(false);
+  const enterPicks = !!assist?.commands.length || moved;
+  const sel = Math.min(pick, Math.max(choices.length - 1, 0));
+  // The arguments still to type, after the text (a highlighted command shows its own)
+  const hint = choices.length && choices[sel].args !== undefined ? choices[sel].args : (assist?.hint ?? "");
+  const edit = (v: string, at = v.length) => {
+    setInput(v);
+    setCaret(at);
+    setPick(0);
+    setMoved(false);
+    setClosed(false);
+  };
+  const choose = (c: Choice) => {
+    if (!assist) return;
+    const head = input.slice(0, caret - assist.prefix.length) + c.insert + " ";
+    edit(head + input.slice(caret).replace(/^\S*\s?/, ""), head.length);
+    placeCaret.current = head.length;
+  };
+  // After a pick the caret goes after the inserted word, before the next key is typed
+  const placeCaret = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (placeCaret.current === null) return;
+    inputRef.current?.setSelectionRange(placeCaret.current, placeCaret.current);
+    placeCaret.current = null;
+  }, [input]);
+
+  // Keep only the last TERM_MAX lines of output
+  const push = (...xs: TermLine[]) => setLines((l) => [...l, ...xs].slice(-TERM_MAX));
   const submit = async () => {
     const line = input.trim();
     if (!line) return;
-    hist.current = [line, ...hist.current.filter((h) => h !== line)].slice(0, 200);
     hi.current = -1;
-    setInput("");
+    edit("");
     if (line.toLowerCase() === "clear") return setLines([]);
-    // Destructive commands like FLUSHALL·FLUSHDB·DEL ask once more
+    const echo: TermLine = { kind: "in", text: `${prompt} ${line}` };
+    // This source's history (the core masks AUTH / HELLO … AUTH / requirepass), also for a HELP or a refused line; not for a cancelled one
+    const remember = () => history.add(connId, database, line).then(loadHist, () => {});
+    const help = sharedOr<string | undefined>(undefined, (s) => s.redisHelp(line));
+    if (help) return remember(), push(echo, { kind: "note", text: help });
+    const write = !isRead("redis", line);
+    // Read-only runs reads only (the backend refuses the rest too; said here, nothing is asked first)
+    if (readOnly && write)
+      return (
+        remember(),
+        push(echo, { kind: "err", text: `(error) "${connName}" is read-only: ${line.split(/\s+/)[0].toUpperCase()} changes data. A read-only data source runs read commands only (Data Source Properties ▸ Read-only).` })
+      );
+    // FLUSHALL · FLUSHDB · DEL … always ask; on Production every write asks (one question for both)
     const why = await api.unsafeReason("redis", line).catch(() => null);
-    if (why && !(await ask(`${why}. Run it anyway?`, { detail: [{ text: line, tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return;
-    // Keep only the last TERM_MAX lines of output
-    const push = (x: { kind: "in" | "out" | "err"; text: string }) => setLines((l) => [...l, x].slice(-TERM_MAX));
-    push({ kind: "in", text: `${prompt} ${line}` });
+    if (why || (production && write)) {
+      const ok = await ask(why ? `${why}. Run it anyway?` : "This command changes data. Run it?", {
+        title: production ? `Production: ${connName}` : `${connName}: dangerous command`,
+        detail: [{ text: line.slice(0, 300), value: database, tone: "danger" }],
+        okLabel: why ? "Run Anyway" : "Run",
+        danger: true,
+      });
+      inputRef.current?.focus();
+      if (!ok) return;
+    }
+    remember();
+    push(echo);
     try {
       const r = await redis.execLine(target, line);
-      push({ kind: "out", text: formatReply(r) });
-      if (!/^(get|hget|hgetall|lrange|smembers|zrange|scan|keys|type|ttl|pttl|exists|info|config|dbsize|ping|strlen|llen|scard|zcard|hlen|xrange|xlen|memory|object)\b/i.test(line)) onChanged();
+      const table = sharedOr<RedisReplyTable | undefined>(undefined, (s) => s.redisReplyTable(line, r));
+      push(table ? { kind: "table", table } : r === null ? { kind: "nil", text: "(nil)" } : { kind: "out", text: formatReply(r) });
+      if (write) onChanged();
     } catch (e) {
       push({ kind: "err", text: `(error) ${String(e).replace(/^Redis: /, "")}` });
     }
   };
   return (
-    <div className="rd-terminal" onClick={(e) => (e.currentTarget.querySelector("input") as HTMLInputElement | null)?.focus()}>
+    <div className="rd-terminal" onClick={(e) => (e.target as HTMLElement).closest(".rd-term-table, pre") || inputRef.current?.focus()}>
       <div className="rd-term-out">
-        {lines.map((l, i) => (
-          <pre key={i} className={l.kind}>
-            {l.text}
-          </pre>
-        ))}
+        {lines.map((l, i) =>
+          l.kind === "table" ? (
+            <table key={i} className="rd-term-table">
+              <thead>
+                <tr>
+                  {l.table.heads.map((h) => (
+                    <th key={h}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {l.table.rows.map((r, j) => (
+                  <tr key={j}>
+                    {r.map((c, k) => (
+                      <td key={k}>{c}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <pre key={i} className={l.kind}>
+              {l.text}
+            </pre>
+          ),
+        )}
         <div ref={end} />
       </div>
       <div className="rd-term-in">
         <Text tone="muted">{prompt}</Text>
-        <TextInput
-          autoFocus
-          value={input}
-          spellCheck={false}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Enter") submit();
-            else if (e.key === "ArrowUp" && hist.current.length) {
-              e.preventDefault();
-              hi.current = Math.min(hi.current + 1, hist.current.length - 1);
-              setInput(hist.current[hi.current]);
-            } else if (e.key === "ArrowDown") {
-              e.preventDefault();
-              hi.current = Math.max(hi.current - 1, -1);
-              setInput(hi.current < 0 ? "" : hist.current[hi.current]);
-            } else if (e.key === "l" && e.ctrlKey) {
-              e.preventDefault();
-              setLines([]);
-            }
-          }}
-        />
+        <div className="rd-term-field">
+          {choices.length > 0 && (
+            <div className="rd-term-pop" role="listbox" aria-label="Completions">
+              {choices.slice(0, 200).map((c, i) => (
+                <div
+                  key={c.label}
+                  role="option"
+                  aria-selected={i === sel}
+                  className={i === sel ? "rd-term-choice sel" : "rd-term-choice"}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    choose(c);
+                  }}
+                >
+                  <b>{c.label}</b>
+                  {c.args && <span className="args">{c.args}</span>}
+                  {c.summary && <span className="sum">{c.summary}</span>}
+                  {c.write && (
+                    <span className="rd-term-w" title="Changes data: a read-only data source refuses it, Production asks first">
+                      write
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {/* The arguments still to type, right after the text (a hidden copy of the text pushes them there) */}
+          {hint && caret === input.length && (
+            <span className="rd-term-ghost" aria-hidden>
+              <span className="pad">{input}</span>
+              {input.endsWith(" ") || !input ? "" : " "}
+              {hint}
+            </span>
+          )}
+          <TextInput
+            ref={inputRef}
+            autoFocus
+            value={input}
+            spellCheck={false}
+            aria-label="Redis command"
+            onChange={(e) => edit(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+            onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? input.length)}
+            onBlur={() => setClosed(true)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              const open = choices.length > 0;
+              if (open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                e.preventDefault();
+                setPick((sel + (e.key === "ArrowDown" ? 1 : choices.length - 1)) % choices.length);
+                setMoved(true);
+              } else if (open && (e.key === "Tab" || (e.key === "Enter" && enterPicks))) {
+                e.preventDefault();
+                choose(choices[sel]);
+              } else if (open && e.key === "Escape") {
+                e.preventDefault();
+                setClosed(true);
+              } else if (e.key === "Tab") {
+                // ⇥ asks for the list again after ⎋ closed it
+                e.preventDefault();
+                setClosed(false);
+              } else if (e.key === "Enter") {
+                // No keypress after it: the confirm that may open would take it as a click on its focused button
+                e.preventDefault();
+                submit();
+              } else if (e.key === "ArrowUp" && hist.length) {
+                e.preventDefault();
+                hi.current = Math.min(hi.current + 1, hist.length - 1);
+                edit(hist[hi.current]);
+                setClosed(true);
+              } else if (e.key === "ArrowDown") {
+                e.preventDefault();
+                hi.current = Math.max(hi.current - 1, -1);
+                edit(hi.current < 0 ? "" : hist[hi.current]);
+                setClosed(true);
+              } else if (e.key === "l" && e.ctrlKey) {
+                e.preventDefault();
+                setLines([]);
+              }
+            }}
+          />
+        </div>
+        <span className="rd-term-keys">↑↓ history · ⇥ complete · HELP command</span>
       </div>
     </div>
   );
@@ -776,11 +989,7 @@ function ServerTable({ target, command }: { target: string; command: string }) {
   }, [target, command]);
   // Managed Redis (AWS ElastiCache · MemoryDB, Azure, GCP Memorystore, Upstash …) renames or blocks CONFIG
   if (err && /^CONFIG/i.test(command) && /unknown command|NOPERM|disabled|not allowed/i.test(err))
-    return (
-      <Notice>
-        This server doesn't allow <code>CONFIG</code> — managed Redis services (AWS ElastiCache / MemoryDB, Azure Cache, GCP Memorystore, Upstash …) disable or rename it. Its settings are in the provider's console (e.g. the ElastiCache parameter group). Server details are still in Info.
-      </Notice>
-    );
+    return <Notice>{CONFIG_REFUSED}</Notice>;
   if (err) return <Notice tone="danger">{err}</Notice>;
   if (!r) return <EmptyState>Loading…</EmptyState>;
   const rows = q ? r.rows.filter((row) => row.some((c) => String(c ?? "").toLowerCase().includes(q.toLowerCase()))) : r.rows;

@@ -116,6 +116,8 @@
 /* ── Form ── */
 .ui-field { display: grid; grid-template-columns: 120px 1fr; align-items: center; column-gap: var(--ui-sp-4); row-gap: var(--ui-sp-1); margin-bottom: var(--ui-sp-3); }
 .ui-field-label { color: var(--ui-text-muted); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A field's content is always beside its label: a second row of controls (Theme's Sync with OS pickers) doesn't drop into the label column */
+.ui-field > :not(.ui-field-label) { grid-column: 2; }
 .ui-field-hint { grid-column: 2; font-size: var(--ui-fs-sm); color: var(--ui-text-muted); }
 .ui-field-error { grid-column: 2; font-size: var(--ui-fs-sm); color: var(--ui-danger); }
 .ui-input, .ui-select {
@@ -128,6 +130,8 @@
 .ui-input.full, .ui-select.full { width: 100%; }
 .ui-check { display: inline-flex; align-items: center; gap: var(--ui-sp-2); cursor: pointer; }
 .ui-check input { margin: 0; }
+/* A line under a checkbox, aligned with its text */
+.ui-check-note { margin-top: var(--ui-sp-1); padding-left: calc(13px + var(--ui-sp-2)); }
 .ui-radio-group { display: flex; flex-direction: column; gap: var(--ui-sp-2); }
 .ui-radio-group.row { flex-direction: row; gap: var(--ui-sp-5); }
 
@@ -150,6 +154,7 @@
 .ui-tab { padding: var(--ui-sp-2) var(--ui-sp-1) var(--ui-sp-3); font: inherit; color: var(--ui-text-muted); background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; cursor: pointer; }
 .ui-tab:hover { color: var(--ui-text); background: none; }
 .ui-tab.active { color: var(--ui-text); border-bottom-color: var(--ui-accent); }
+.ui-tab.disabled, .ui-tab.disabled:hover { color: var(--ui-text-muted); opacity: 0.45; cursor: default; }
 
 /* ── Notice / EmptyState ── */
 .ui-notice { padding: var(--ui-sp-3) var(--ui-sp-4); border-radius: var(--ui-radius-md); font-size: var(--ui-fs-sm); line-height: 1.5; background: var(--ui-surface-2); border: 1px solid var(--ui-border); white-space: pre-wrap; }
@@ -222,7 +227,8 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-detail-text { flex: 1; min-width: 0; font-family: var(--ui-font-mono); font-size: var(--ui-fs-sm); white-space: pre-wrap; word-break: break-word; }
 .ui-detail-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--ui-sp-1); }
 .ui-detail-note { font-size: var(--ui-fs-sm); color: var(--ui-text-muted); }
-.ui-detail-value { flex: none; font-size: var(--ui-fs-sm); color: var(--ui-text-muted); }
+.ui-detail-lead { flex: none; width: 16px; align-self: flex-start; display: flex; justify-content: center; }
+.ui-detail-value { flex: none; max-width: 45%; text-align: right; font-size: var(--ui-fs-sm); color: var(--ui-text-muted); }
 .ui-detail-value.tone-danger { color: var(--ui-danger); font-weight: 600; }
 .ui-detail-value.tone-warn { color: var(--ui-warn); font-weight: 600; }
 .ui-menu-item { position: relative; display: flex; align-items: center; gap: var(--ui-sp-6); min-height: 24px; padding: 0 var(--ui-sp-3); border-radius: var(--ui-radius-sm); white-space: nowrap; cursor: default; }
@@ -306,3 +312,16 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 /* DDL tab of an object: its icon + a small page mark in the lower right corner (TabIcon) */
 .ui-ddl-mark { position: relative; display: inline-flex; }
 .ui-ddl-mark > svg:last-child { position: absolute; right: -3px; bottom: -2px; }
+
+/* ── About (ⓘ): Named · InfoTip ── */
+.ui-named { display: inline-flex; align-items: center; gap: var(--ui-sp-2); max-width: 100%; vertical-align: middle; }
+/* Wraps or ends with … as its container does (labels don't wrap, hints do) */
+.ui-named-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* 18px everywhere, toolbars included (.ui-toolbar .ui-icon-btn) */
+.ui-icon-btn.ui-info-btn { width: 18px; height: 18px; flex: none; }
+/* In a toolbar the next control keeps its distance from the ⓘ, as the ⓘ keeps its own from the name */
+.ui-toolbar > .ui-named { margin-right: var(--ui-sp-3); }
+.ui-info-btn[aria-expanded="true"] { color: var(--ui-accent); }
+/* Above any dialog it is opened from */
+.ui-menu.ui-info-pop { z-index: calc(var(--ui-z-dialog) + 1); width: 340px; max-width: calc(100vw - 16px); padding: var(--ui-sp-3) var(--ui-sp-4); font-size: var(--ui-fs-sm); line-height: 1.5; white-space: normal; text-align: left; }
+.ui-info-text { display: flex; flex-direction: column; gap: var(--ui-sp-2); }

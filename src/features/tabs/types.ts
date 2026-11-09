@@ -51,6 +51,8 @@ interface Tab {
   output: OutputLine[];
   txManual: boolean;
   inTx: boolean;
+  /** The backend's reminder about a Production transaction left open (tx-idle), until the transaction ends or a statement runs */
+  txIdle?: string;
   /** Result tab with an open server cursor (target for loading more) */
   cursorEntry?: string;
   /** Pin Tab */

@@ -19,6 +19,13 @@ export async function openApp(page: Page) {
   await expect(page.locator(".tree-node", { hasText: "[DEV] shop_app" })).toBeVisible();
 }
 
+/** Open the mock app in a theme (settings.json "theme", which the mock keeps in localStorage), with custom themes if given */
+export async function openInTheme(page: Page, theme: string, custom: unknown[] = []) {
+  await page.goto("");
+  await page.evaluate(([theme, custom]) => localStorage.setItem("mock-themeSettings", JSON.stringify({ theme, sync: { dark: "dark", light: "light" }, custom })), [theme, custom] as const);
+  await openApp(page);
+}
+
 export const treeNode = (page: Page, text: string) => page.locator(".ws-explorer.on .tree-node", { hasText: text }).first();
 /** Explorer row by its exact accessible name ("users", "tables 2", "[DEV] shop_app 3") */
 export const treeItem = (page: Page, name: string) => page.locator(".ws-explorer.on").getByRole("treeitem", { name, exact: true });
@@ -49,6 +56,18 @@ export async function openConsole(page: Page, conn = "[DEV] shop_app") {
 
 /** The visible console editor */
 export const editor = (page: Page) => page.locator(".work-layer:visible .monaco-editor").first();
+
+/** The console's text: its rendered lines in order (Monaco keeps them in any DOM order; WebKit's innerText drops the breaks) */
+export const editorText = (page: Page) =>
+  editor(page)
+    .locator(".view-line")
+    .evaluateAll((els) =>
+      els
+        .map((e) => [parseFloat((e as HTMLElement).style.top), e.textContent ?? ""] as const)
+        .sort((x, y) => x[0] - y[0])
+        .map(([, t]) => t.replace(/\u00a0/g, " "))
+        .join("\n"),
+    );
 
 /** Replace the console text (typed, so completion and auto-closing quotes behave as for a user) */
 export async function typeSql(page: Page, sql: string) {

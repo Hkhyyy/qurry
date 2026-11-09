@@ -1,6 +1,6 @@
 //! DBA reports: sessions/locks, slow queries, size/indexes/bloat, maintenance/VACUUM progress, replication/server, privileges. Shows query results as tables with a few actions (end session, generate SQL).
 //! GUI and TUI show the same report list as is
-use crate::app::{AppState, ensure_pool};
+use crate::app::{AppState, checked_pool};
 use crate::db::{Pool, QueryResult};
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
@@ -533,7 +533,7 @@ impl AppState {
         if list.is_empty() {
             return Err(AppError::Msg(format!("{} is not available for this database", (d.info)().title)));
         }
-        let pool = match ensure_pool(self, &id).await {
+        let pool = match checked_pool(self, &id).await {
             Ok(p) => p,
             Err(e) => return Err(self.connect_failed(&id, e)),
         };
@@ -591,7 +591,7 @@ impl AppState {
     pub async fn preview_impact(&self, id: String, sql: String) -> AppResult<Option<i64>> {
         let kind = self.kind_of(&id)?;
         let Some(q) = crate::guard::impact_count_sql(&sql, kind) else { return Ok(None) };
-        let r = ensure_pool(self, &id).await?.run_query(&q, 1).await?;
+        let r = checked_pool(self, &id).await?.run_query(&q, 1).await?;
         Ok(crate::guard::impact_count(&r))
     }
 
@@ -608,7 +608,7 @@ impl AppState {
             (DbKind::Mysql, true) => format!("KILL {pid}"),
             (k, _) => return Err(AppError::Msg(format!("Not available for {k:?}"))),
         };
-        let pool = ensure_pool(self, &id).await?;
+        let pool = checked_pool(self, &id).await?;
         let r = match pool.run_query(&q, 1).await {
             // RDS / Aurora MySQL: killing another user's thread needs CONNECTION_ADMIN, which the master user lacks; mysql.rds_kill(_query) does it.
             // Elsewhere (no such procedure) the KILL error stays
@@ -901,7 +901,7 @@ mod tests {
     /// Report queries stop at the time limit, which applies to that query only
     async fn report_time_limit(kind: DbKind, sleep: &str) {
         let Some(st) = state(kind).await else { return };
-        let pool = ensure_pool(&st, "d").await.unwrap();
+        let pool = crate::app::ensure_pool(&st, "d").await.unwrap();
         let t = std::time::Instant::now();
         let e = run_limited(&pool, kind, sleep, 1).await.expect_err("time limit");
         assert!(t.elapsed() < std::time::Duration::from_millis(2900), "{e}");
@@ -924,7 +924,7 @@ mod tests {
             _ => "SET SESSION max_execution_time = 1000",
         };
         let st = state_with(kind, script).await.unwrap();
-        let pool = ensure_pool(&st, "d").await.unwrap();
+        let pool = crate::app::ensure_pool(&st, "d").await.unwrap();
         let t = std::time::Instant::now();
         let e = run_limited(&pool, kind, sleep, 30).await.expect_err("server limit");
         assert!(t.elapsed() < std::time::Duration::from_millis(2900) && is_timeout(&e), "{e}");

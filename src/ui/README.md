@@ -16,6 +16,8 @@
 
 ## 토큰 (`tokens.css`)
 
+Colors are theme tokens: every theme's values are in `crates/shared/src/themes.json` (the TUI draws from it too), and `lib/theme.ts` sets them on `<html>`. The values below are Dark's.
+
 | 종류 | 토큰 | 값 (dark) | 쓰는 곳 |
 |---|---|---|---|
 | 바탕 | `--ui-bg` | #1e1f22 | 편집기, 표, 입력칸 |
@@ -23,9 +25,9 @@
 | | `--ui-surface-2` | #26282b | 한 단계 낮은 면 |
 | | `--ui-hover` · `--ui-selected` | #33353a · #2e436e | 올림 · 고른 줄 |
 | 선 | `--ui-border` · `--ui-border-strong` | #393b40 · #4e5157 | 구역 · 입력칸 테두리 |
-| 글자 | `--ui-text` · `--ui-text-muted` · `--ui-text-on-accent` | #dfe1e5 · #868a91 · #fff | 본문 · 설명 · 강조색 위 |
+| 글자 | `--ui-text` · `--ui-text-muted` · `--ui-text-on-accent` | #dfe1e5 · #8b8f95 · #fff | 본문 · 설명 · 강조색 위 |
 | 색 | `--ui-accent` · `--ui-danger` · `--ui-warn` · `--ui-ok` | #3574f0 · #f75464 · #e5a64b · #5fb865 | 주 버튼 · 위험 · 주의 · 성공 |
-| JSON | `--ui-json-key` · `-string` · `-number` · `-keyword` · `-punct` | #c77dbb · #6aab73 · #2aacb8 · #cf8e6d · #868a91 | JSON cells in result grids (the TUI uses the same values) |
+| JSON | `--ui-json-key` · `-string` · `-number` · `-keyword` · `-punct` | #c77dbb · #6aab73 · #2aacb8 · #cf8e6d · #8b8f95 | JSON cells in result grids (the TUI uses the same values) |
 | 간격 | `--ui-sp-1` … `--ui-sp-6` | 2 · 4 · 8 · 12 · 16 · 24px | padding · gap · margin 은 이 값만 |
 | 둥글기 | `--ui-radius-sm` / `-md` / `-lg` | 4 · 6 · 10px | 버튼 / 메뉴 · 목록 / 대화상자 |
 | 글자 크기 | `--ui-fs-xs` / `-sm` / `-md` / `-lg` | 11 · 12 · 13 · 14px | 배지 / 보조 / 본문 / 제목 |
@@ -51,6 +53,7 @@
 | 조각 | 규칙 |
 |---|---|
 | `Field` · `RadioGroup` · `FormSection` · `Hint` · `ColorPicker` | 라벨 + 칸 (힌트 · 오류는 아래; `group` = 제 라벨이 있는 칸 여럿: `<div>` 라서 라벨을 눌러도 첫 칸으로 가지 않음) / 선택지마다 설명 / 구역 제목 / 작은 회색 설명 / 색 고르기 |
+| `Named` · `InfoTip` | 설명하는 이름 바로 뒤의 ⓘ: 칸의 라벨 (`Field` 의 `info`), 체크박스 옆 (라벨 안이 아니라서 ⓘ 를 눌러도 체크되지 않음), 힌트 줄, 구역 제목 — 어디서나 같은 간격 · 같은 팝오버. 누르거나 Space · Enter 로 열고, Esc (팝오버만 닫고 초점은 ⓘ 로) · 바깥 클릭 · 스크롤로 닫는다. 이름은 "About <이름>". 고르기 전에 꼭 읽어야 할 한 줄 (경고 · 결과) 만 보이게 두고 나머지 설명은 ⓘ 뒤로 |
 | `SearchField` | ⌕ + 입력 (+ 불러오는 중 ◌). `bare` = 팝오버 머리처럼 테두리 없이 크게 |
 | `Tabs` · `SectionTitle` · `KeyHints` | 구역 바꾸기 (`size` sm) / 목록 · 창 안의 작은 제목 / "↩ Open · ⇥ Next tab" |
 | `Notice` · `EmptyState` | 안내 · 경고 · 오류 한 덩어리 / 비어 있을 때 |
@@ -72,7 +75,7 @@
 | `PopupList` · `ComboBox` | 칸 바로 아래 뜨는 목록 하나 (칸 왼쪽에 맞춤, 아래 자리가 없으면 위로, 창 안에; 바깥 스크롤이면 닫힘; 키는 `listKey`: ↑↓ PgUp PgDn · ↩ · ⎋) / 자유 입력 + 제안 (타입 칸: 치면 거르고 — 같음 · 앞 · 포함 순, 맞는 게 없으면 안 뜸 — ↩ · ⇥ 고름, ⎋ 는 목록만 닫음). 고르기만 하는 쪽은 FontPicker (검색 칸 + PopupList). 맨 `<datalist>` 는 쓰지 않는다 (WKWebView 가 엉뚱한 곳에 그림) |
 | `Table` · `Th` · `Td` | 작은 표 (`num` · `mono` · `muted`) |
 | `FormGrid` | 긴 설정 창: `<label>` + 칸, 줄 전체는 `FormSection` |
-| `GridHead` · `GridHeaderRow` · `GridHeaderCell` · `GridRow` · `RowNumberCell` · `GridCell` · `JsonText` · `CellEditor` | 결과 표 칸 (상태: 선택 · 커서 · 바뀜 · 찾기 · 추가 · 지움 · null · 숫자). 가상 스크롤 · 선택은 ResultGrid. `GridHead`: header strip above the scroller (not sticky inside it), follows its scrollLeft. `GridCell` `align`: left · right · center per value class (`lib/gridAlign.ts`, Settings › Appearance › Alignment). `JsonText`: a JSON cell's text in colors (`--ui-json-*`; pieces from `lib/jsonSpans.ts`) |
+| `GridHead` · `GridHeaderRow` · `GridHeaderCell` · `GridRow` · `RowNumberCell` · `GridCell` · `JsonText` · `CellEditor` | 결과 표 칸 (상태: 선택 · 커서 · 바뀜 · 찾기 · 추가 · 지움 · null · 숫자). 가상 스크롤 · 선택은 ResultGrid. `GridHead`: header strip above the scroller (not sticky inside it), follows its scrollLeft. `GridHeaderCell` `onResize` · `onFit`: its right edge resizes the column (drag) or fits it (double-click; widths in `lib/columnWidths.ts`). `GridCell` `align`: left · right · center per value class (`lib/gridAlign.ts`, Settings › Appearance › Alignment). `JsonText`: a JSON cell's text in colors (`--ui-json-*`; pieces from `lib/jsonSpans.ts`) |
 
 아이콘 (`icons.tsx`) 은 DB 종류별 고유색을 쓴다. 테마를 따라야 하는 것 (펼침 화살표) 은 `currentColor`.
 

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig authType="PASSWORD" host="shop-bastion.example.com" id="c0ffee00-7777-4a1b-9c2d-00000000bb01" port="22" nameFormat="DESCRIPTIVE" username="shop-ops" />
+    </configs>
+  </component>
+</project>

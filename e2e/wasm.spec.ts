@@ -43,7 +43,8 @@ test("while the WebAssembly module loads, ⌘↩ shows it and runs once, what th
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+Enter");
   await expect(page.locator(".statusbar .running-bar")).toContainText("Loading the statement splitter");
-  await expect(work(page).getByTitle(/^Execute/)).toBeDisabled();
+  // The toolbar's ▶ is ■ while it waits
+  await expect(work(page).locator(".console-toolbar").getByRole("button", { name: "Cancel (⌘F2)" })).toBeVisible();
   // Pressed again after an edit: still one run, of the text at the last press
   await page.keyboard.press("Meta+Enter");
   await typeSql(page, "select * from contracts");
@@ -93,21 +94,22 @@ test("a ⌘↩ waiting for the module runs the text it was pressed on, not an ed
   await expect(work(page).locator(".output-log .ol.sql")).toContainText("select * from users");
 });
 
-test("the toolbar's Cancel cancels a ⌘↩ waiting for the module", async ({ page }) => {
+test("the toolbar's ■ cancels a ⌘↩ waiting for the module, and is ▶ again", async ({ page }) => {
   const release = await holdWasm(page);
   await openApp(page);
   await openConsole(page);
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+Enter");
-  const stop = work(page).getByTitle(/^Cancel Running Statements/);
+  const toolbar = work(page).locator(".console-toolbar");
+  const stop = toolbar.getByRole("button", { name: "Cancel (⌘F2)" });
+  // ▶ is ■ while the run waits, and the status bar's indicator says so
   await expect(stop).toBeEnabled();
-  // The status bar's Run · Cancel say the same
-  await expect(page.locator(".statusbar").getByTitle("Cancel Running Statements")).toBeEnabled();
-  await expect(page.locator(".statusbar").getByTitle(/^Execute/)).toBeDisabled();
+  await expect(toolbar.getByRole("button", { name: /^Execute/ })).toHaveCount(0);
+  await expect(page.locator(".statusbar .running-bar")).toContainText("Loading the statement splitter");
   await stop.click();
   await expect(page.locator(".statusbar .running-bar")).toHaveCount(0);
-  await expect(stop).toBeDisabled();
-  await expect(page.locator(".statusbar").getByTitle("Cancel Running Statements")).toBeDisabled();
+  await expect(stop).toHaveCount(0);
+  await expect(toolbar.getByRole("button", { name: "Execute (⌘↩)" })).toBeEnabled();
   await release();
   await page.waitForTimeout(500);
   await expect(work(page).locator(".output-log .ol.sql")).toHaveCount(0);

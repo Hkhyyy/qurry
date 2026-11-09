@@ -1,6 +1,6 @@
 import type { ConnectionView } from "../../lib/api";
 import { api } from "../../lib/api";
-import { getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "../../lib/theme";
+import { allThemes, findTheme, setThemePick, SYSTEM, useThemeState } from "../../lib/theme";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
 import { CopyRowsDialog, GenerateDataDialog } from "../../components/DataTools";
 import { HistoryDialog } from "../../components/HistoryDialog";
@@ -51,7 +51,7 @@ type Deps = {
 
 /** Theme, Settings, data transfer and object dialogs, the text and confirm dialogs, Update and Keymap Reference */
 export function Dialogs({ conns, setStatus, openConsole, startBackup, startExport, startImport, readyToQuit }: Deps) {
-  const theme = useTheme();
+  const { settings: themeSettings, current } = useThemeState();
   const settingsOpen = useDialogsStore((s) => s.settingsOpen);
   const schemeOpen = useDialogsStore((s) => s.schemeOpen);
   const keymapOpen = useDialogsStore((s) => s.keymapOpen);
@@ -65,23 +65,30 @@ export function Dialogs({ conns, setStatus, openConsole, startBackup, startExpor
   const backupReq = useDialogsStore((s) => s.backupReq);
   return (
     <>
-      {schemeOpen && (
-        <RecentFiles
-          title="Theme"
-          start={["dark", "light", "hc", "system"].indexOf(getThemePref())}
-          items={[
-            { key: "dark", icon: getThemePref() === "dark" ? "●" : "", title: "Dark", hint: "" },
-            { key: "light", icon: getThemePref() === "light" ? "●" : "", title: "Light", hint: "" },
-            { key: "hc", icon: getThemePref() === "hc" ? "●" : "", title: "High contrast", hint: "" },
-            { key: "system", icon: getThemePref() === "system" ? "●" : "", title: "Sync with OS", hint: `currently ${THEME_LABEL[theme]}` },
-          ]}
-          onClose={() => setSchemeOpen(false)}
-          onPick={(k) => {
-            setSchemeOpen(false);
-            setThemePref(k as ThemePref);
-          }}
-        />
-      )}
+      {schemeOpen &&
+        (() => {
+          // Quick Switch Theme (as DataGrip's ⌃` › Theme): built-in, then custom themes, Sync with OS, and the editor
+          const pick = themeSettings.theme ?? "dark";
+          const name = (id: string) => findTheme(themeSettings, id)?.name ?? id;
+          const items = [
+            ...allThemes(themeSettings).map((t) => ({ key: t.id, icon: pick === t.id ? "●" : "", title: t.name, hint: t.custom ? "custom" : "", open: true })),
+            { key: SYSTEM, icon: pick === SYSTEM ? "●" : "", title: "Sync with OS", hint: `${name(themeSettings.sync.dark)} / ${name(themeSettings.sync.light)}, now ${current.name}`, open: true },
+            { key: "", icon: "", title: "Edit Colors…", hint: "Settings › Appearance", open: true },
+          ];
+          return (
+            <RecentFiles
+              title="Theme"
+              start={Math.max(0, items.findIndex((i) => i.key === pick))}
+              items={items}
+              onClose={() => setSchemeOpen(false)}
+              onPick={(k) => {
+                setSchemeOpen(false);
+                if (k) setThemePick(k).catch((e) => setStatus(String(e)));
+                else setSettingsOpen("theme");
+              }}
+            />
+          );
+        })()}
       {settingsOpen && (
         <SettingsDialog
           initialPage={settingsOpen}

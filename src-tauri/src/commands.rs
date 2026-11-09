@@ -2,7 +2,7 @@
 use crate::app::{AppState, BatchResult, ConnectionView, ImportResult};
 use crate::db::QueryResult;
 use crate::error::AppResult;
-use crate::store::ConnectionConfig;
+use crate::store::{ConnectionConfig, ImportPlan};
 use qurry_core::transfer::{Dest, Format, ImportSpec, Preview};
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
@@ -47,33 +47,65 @@ pub async fn test_connection(state: State<'_, AppState>, config: ConnectionConfi
     cancellable_test(test_id, state.test_connection(config, password, ssh_secret)).await
 }
 
+/// Schemas tab of a data source that isn't saved yet: its databases, listed with the form's settings (as test_connection connects)
+#[tauri::command]
+pub async fn form_databases(state: State<'_, AppState>, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>, test_id: Option<String>) -> AppResult<Vec<String>> {
+    cancellable_test(test_id, state.form_databases(config, password, ssh_secret)).await
+}
+
+/// The schemas of one database of a data source that isn't saved yet
+#[tauri::command]
+pub async fn form_schemas(state: State<'_, AppState>, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>, database: String, test_id: Option<String>) -> AppResult<Vec<crate::meta::SchemaInfo>> {
+    cancellable_test(test_id, state.form_schemas(config, password, ssh_secret, database)).await
+}
+
 /// Test Connection on the SSH/SSL tab: checks the SSH login only.
 #[tauri::command]
 pub async fn test_ssh(state: State<'_, AppState>, config: ConnectionConfig, ssh_secret: Option<String>, test_id: Option<String>) -> AppResult<String> {
     cancellable_test(test_id, state.test_ssh(config, ssh_secret)).await
 }
 
-/// Running Test Connections by the dialog's test id, for cancel_test
-static TESTS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Notify>>>> = std::sync::LazyLock::new(Default::default);
+/// Running Test Connections by the dialog's test id, for cancel_test, and the ids cancelled before their test started
+#[derive(Default)]
+struct Tests {
+    running: std::collections::HashMap<String, std::sync::Arc<tokio::sync::Notify>>,
+    cancelled: std::collections::HashMap<String, std::time::Instant>,
+}
+static TESTS: std::sync::LazyLock<std::sync::Mutex<Tests>> = std::sync::LazyLock::new(Default::default);
+/// How long a cancel waits for its test to start (IPC calls can arrive out of order); then it is forgotten
+const CANCEL_KEPT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Runs a test that cancel_test can stop: the test is dropped, and with it its SSH / AWS SSM tunnel (an SSM session can take 30s)
-async fn cancellable_test(id: Option<String>, test: impl std::future::Future<Output = AppResult<String>>) -> AppResult<String> {
+async fn cancellable_test<T>(id: Option<String>, test: impl std::future::Future<Output = AppResult<T>>) -> AppResult<T> {
     let Some(id) = id else { return test.await };
     let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
-    TESTS.lock().unwrap().insert(id.clone(), cancel.clone());
+    {
+        let mut all = TESTS.lock().unwrap();
+        // Cancelled before it got here: it never starts
+        if all.cancelled.remove(&id).is_some() {
+            return Err(crate::error::AppError::Msg("Test cancelled".into()));
+        }
+        all.running.insert(id.clone(), cancel.clone());
+    }
     let r = tokio::select! {
         r = test => r,
         _ = cancel.notified() => Err(crate::error::AppError::Msg("Test cancelled".into())),
     };
-    TESTS.lock().unwrap().remove(&id);
+    TESTS.lock().unwrap().running.remove(&id);
     r
 }
 
 #[tauri::command]
 pub fn cancel_test(test_id: String) {
-    if let Some(c) = TESTS.lock().unwrap().remove(&test_id) {
+    let mut all = TESTS.lock().unwrap();
+    match all.running.remove(&test_id) {
         // notify_one keeps the wake-up if the test isn't waiting yet
-        c.notify_one();
+        Some(c) => c.notify_one(),
+        // Not started yet, or already done: kept for a while for a test that starts after it (old ones are dropped here)
+        None => {
+            all.cancelled.retain(|_, at| at.elapsed() < CANCEL_KEPT);
+            all.cancelled.insert(test_id, std::time::Instant::now());
+        }
     }
 }
 
@@ -124,10 +156,11 @@ pub async fn close_session(state: State<'_, AppState>, tab_id: String) -> AppRes
     state.close_session(tab_id).await
 }
 
+/// A result grid's Submit (each UPDATE / DELETE exactly one row). tab_id = the console the result is in: in Manual mode or with a
+/// transaction open the edits join it and stay pending (AppState::submit_edits)
 #[tauri::command]
-/// exact_one = saving a table edit (roll everything back unless UPDATE/DELETE hits exactly 1 row)
-pub async fn execute_batch(state: State<'_, AppState>, id: String, statements: Vec<String>, exact_one: Option<bool>) -> AppResult<BatchResult> {
-    state.execute_batch(id, statements, exact_one.unwrap_or(false)).await
+pub async fn submit_edits(state: State<'_, AppState>, id: String, tab_id: Option<String>, statements: Vec<String>) -> AppResult<BatchResult> {
+    state.submit_edits(id, tab_id, statements).await
 }
 
 /// Fill the search cache after connecting (the frontend doesn't wait)
@@ -158,6 +191,16 @@ pub async fn redis_scan(state: State<'_, AppState>, id: String, cursor: String, 
 }
 
 #[tauri::command]
+pub async fn redis_overview(state: State<'_, AppState>, id: String) -> AppResult<crate::redisdb::ServerOverview> {
+    state.redis_overview(id).await
+}
+
+#[tauri::command]
+pub async fn redis_key_names(state: State<'_, AppState>, id: String, prefix: String, max: usize) -> AppResult<Vec<String>> {
+    state.redis_key_names(id, prefix, max).await
+}
+
+#[tauri::command]
 pub async fn redis_key(state: State<'_, AppState>, id: String, key: String, limit: Option<usize>) -> AppResult<crate::redisdb::KeyDetail> {
     state.redis_key(id, key, limit).await
 }
@@ -179,25 +222,41 @@ pub async fn export_connections(app: tauri::AppHandle, state: State<'_, AppState
     Ok(Some((state.export_connections(path.clone()).await?, path)))
 }
 
-/// Pick a file to import → preview what changes. The actual import is import_picked (after the user confirms)
+/// Import Data Sources ▸ the DataGrip / IntelliJ / DBeaver locations found on this computer
 #[tauri::command]
-pub async fn pick_import_file(app: tauri::AppHandle, state: State<'_, AppState>, pending: State<'_, PendingImport>) -> AppResult<Option<Vec<String>>> {
-    let picked = app.dialog().file().add_filter("JSON", &["json"]).blocking_pick_file();
+pub async fn import_locations(state: State<'_, AppState>) -> AppResult<Vec<qurry_core::import::Location>> {
+    Ok(state.import_locations(&qurry_core::import::home()))
+}
+
+/// A found location → the preview. Only a path import_locations lists is read. The actual import is import_picked (after the user confirms)
+#[tauri::command]
+pub async fn import_location(state: State<'_, AppState>, pending: State<'_, PendingImport>, path: String) -> AppResult<ImportPlan> {
+    let plan = state.import_location(&path, &qurry_core::import::home())?;
+    *pending.0.lock().unwrap() = Some(plan.clone());
+    Ok(plan)
+}
+
+/// File… / Folder… → the native picker (the backend opens it, so the webview can't name a path) → the preview
+#[tauri::command]
+pub async fn pick_import(app: tauri::AppHandle, state: State<'_, AppState>, pending: State<'_, PendingImport>, folder: bool) -> AppResult<Option<ImportPlan>> {
+    let d = app.dialog().file();
+    let picked = if folder { d.blocking_pick_folder() } else { d.add_filter("Data sources", &["json", "xml"]).blocking_pick_file() };
     let Some(path) = picked.and_then(|p| p.into_path().ok()) else { return Ok(None) };
-    let lines = state.import_preview(path.display().to_string())?;
-    *pending.0.lock().unwrap() = Some(path);
-    Ok(Some(lines))
+    let plan = state.import_plan(&path, &qurry_core::import::home())?;
+    *pending.0.lock().unwrap() = Some(plan.clone());
+    Ok(Some(plan))
 }
 
+/// Import the rows the user left checked (`picked[i]` for row i of the preview)
 #[tauri::command]
-pub async fn import_picked(state: State<'_, AppState>, pending: State<'_, PendingImport>) -> AppResult<ImportResult> {
-    let path = pending.0.lock().unwrap().take().ok_or_else(|| crate::error::AppError::Msg("Choose a file first".into()))?;
-    state.import_connections(path.display().to_string()).await
+pub async fn import_picked(state: State<'_, AppState>, pending: State<'_, PendingImport>, picked: Vec<bool>) -> AppResult<ImportResult> {
+    let plan = pending.0.lock().unwrap().take().ok_or_else(|| crate::error::AppError::Msg("Choose what to import first".into()))?;
+    state.import_apply(&plan, &picked).await
 }
 
-/// The picked import file (between preview and the actual import)
+/// The preview being confirmed (between the preview and the actual import)
 #[derive(Default)]
-pub struct PendingImport(pub std::sync::Mutex<Option<std::path::PathBuf>>);
+pub struct PendingImport(pub std::sync::Mutex<Option<ImportPlan>>);
 
 /// The save dialog is opened here (backend): write only to the path the user picked, so the webview can't pass an arbitrary path to write
 fn save_dialog(app: &tauri::AppHandle, default_name: &str, filter: &str, exts: &[&str]) -> Option<String> {
@@ -749,6 +808,77 @@ pub fn set_grid_align(state: State<'_, AppState>, class: qurry_core::format::Val
     state.store.set_grid_align(class, align)
 }
 
+/// Keyword case as you type and in Reformat Code (Settings › Appearance › Keyword case; the TUI shares it)
+#[tauri::command]
+pub fn keyword_case(state: State<'_, AppState>) -> qurry_core::format::KeywordCase {
+    state.store.keyword_case()
+}
+
+#[tauri::command]
+pub fn set_keyword_case(state: State<'_, AppState>, case: qurry_core::format::KeywordCase) -> AppResult<()> {
+    state.store.set_keyword_case(case)
+}
+
+/// Theme, Sync with OS and custom themes (Settings › Appearance › Theme; settings.json, shared with the TUI)
+#[tauri::command]
+pub fn theme_settings(state: State<'_, AppState>) -> qurry_core::theme::ThemeSettings {
+    state.store.theme_settings()
+}
+
+/// A built-in or custom theme id, or "system"
+#[tauri::command]
+pub fn set_theme(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    state.store.set_theme(&id)
+}
+
+#[tauri::command]
+pub fn set_theme_sync(state: State<'_, AppState>, sync: qurry_core::theme::ThemeSync) -> AppResult<()> {
+    state.store.set_theme_sync(&sync)
+}
+
+/// Adds (empty id) or replaces a custom theme after checking it; the saved theme
+#[tauri::command]
+pub fn save_custom_theme(state: State<'_, AppState>, theme: qurry_core::theme::CustomTheme) -> AppResult<qurry_core::theme::CustomTheme> {
+    state.store.save_custom_theme(&theme)
+}
+
+#[tauri::command]
+pub fn delete_custom_theme(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    state.store.delete_custom_theme(&id)
+}
+
+/// Import…: the native picker, then the file read and checked (not saved: the editor shows it first); None if cancelled
+#[tauri::command]
+pub async fn import_theme(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<Option<qurry_core::theme::CustomTheme>> {
+    let Some(path) = app.dialog().file().add_filter("Qurry theme", &["json"]).blocking_pick_file().and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    Ok(Some(state.store.read_theme_file(&path)?))
+}
+
+/// Export…: the save dialog (backend), then the theme file; the path, None if cancelled
+#[tauri::command]
+pub async fn export_theme(app: tauri::AppHandle, state: State<'_, AppState>, theme: qurry_core::theme::CustomTheme) -> AppResult<Option<String>> {
+    let name = format!("{}.qurry-theme.json", theme.name.chars().filter(|c| c.is_alphanumeric() || " -_".contains(*c)).collect::<String>().trim());
+    let Some(path) = save_dialog(&app, &name, "Qurry theme", &["json"]) else { return Ok(None) };
+    state.store.write_theme_file(std::path::Path::new(&path), &theme)?;
+    Ok(Some(path))
+}
+
+/// Column widths a user gave a table tab's columns (settings.json "columnWidths", shared with the TUI)
+#[tauri::command]
+pub fn column_widths(state: State<'_, AppState>, table: qurry_core::store::TableRef) -> qurry_core::format::ColumnWidths {
+    state.store.column_widths(&table)
+}
+
+#[tauri::command]
+pub fn set_column_widths(state: State<'_, AppState>, table: qurry_core::store::TableRef, widths: qurry_core::format::ColumnWidths) -> AppResult<qurry_core::format::ColumnWidths> {
+    state.store.set_column_widths(&table, &widths)
+}
+
+#[tauri::command]
+pub fn reset_column_widths(state: State<'_, AppState>, table: qurry_core::store::TableRef) -> AppResult<()> {
+    state.store.reset_column_widths(&table)
+}
+
 /// Saves the channel, then answers what it offers from the saved check only (no request): None if nothing was checked yet or checks are off
 #[tauri::command]
 pub fn set_update_channel(state: State<'_, AppState>, channel: qurry_core::update::Channel) -> AppResult<Option<UpdateInfo>> {
@@ -850,8 +980,20 @@ mod ipc_tests {
         let e = run.await.unwrap().unwrap_err().to_string();
         assert_eq!(e, "Test cancelled");
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
-        assert!(TESTS.lock().unwrap().is_empty());
-        cancel_test("unknown".into());
+        assert!(!TESTS.lock().unwrap().running.contains_key("t1"));
+    }
+
+    /// A cancel that arrives before its test registered (IPC calls can overtake each other) still stops it, at once; an old one is forgotten
+    #[tokio::test]
+    async fn a_cancel_before_the_test_starts_stops_it() {
+        cancel_test("early".into());
+        let e = cancellable_test(Some("early".into()), std::future::pending::<AppResult<String>>()).await.unwrap_err().to_string();
+        assert_eq!(e, "Test cancelled");
+        assert!(!TESTS.lock().unwrap().cancelled.contains_key("early"), "used once");
+        TESTS.lock().unwrap().cancelled.insert("old".into(), std::time::Instant::now() - CANCEL_KEPT);
+        cancel_test("late".into());
+        let all = TESTS.lock().unwrap();
+        assert!(!all.cancelled.contains_key("old") && all.cancelled.contains_key("late"));
     }
 
     /// Call commands with the same JSON the frontend sends.

@@ -105,6 +105,7 @@ export const KEYMAP: KeySection[] = [
       [null, "editor.cancel"],
       [null, "editor.history"],
       ["⌃Space", "Code completion"],
+      [null, "editor.quickFix"],
       [null, "editor.reformat"],
       ["⌘/", "Line comment"],
       [null, "editor.blockComment"],
@@ -144,6 +145,9 @@ export const KEYMAP: KeySection[] = [
       [null, "grid.cancel"],
       [null, "grid.ddl"],
       ["click header · ⌥ click", "Sort · add to multi-column sort"],
+      [null, "grid.colNarrow"],
+      [null, "grid.colWiden"],
+      ["drag · double-click a header's right edge", "Resize the column · fit it to its content (right-click a header: Fit All Columns, Reset Widths)"],
     ],
   },
   {
@@ -153,6 +157,7 @@ export const KEYMAP: KeySection[] = [
       ["⌘r", "Redis: scan keys again"],
       ["⌘s", "Redis: save the value being edited"],
       ["⌃l", "Redis terminal: clear"],
+      ["⇥ · ↑↓ · ↩", "Redis terminal: complete (commands with arguments, key names) · choose / history · pick / run"],
     ],
   },
 ];

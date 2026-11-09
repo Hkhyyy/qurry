@@ -69,6 +69,18 @@ pub fn format_reply(v: &Value) -> String {
     go(v, 0)
 }
 
+/// The Redis command line's reply shown by type (qurry_shared::redis_cmd::reply_table, as the GUI's Terminal): a hash as an aligned
+/// field / value table, a list numbered, set members one per line; the rest as redis-cli prints it
+pub fn format_typed(line: &str, v: &Value) -> String {
+    let Some(t) = qurry_shared::redis_cmd::reply_table(line, v) else { return format_reply(v) };
+    let w = t.rows.iter().map(|r| r[0].chars().count()).chain([t.heads[0].chars().count()]).max().unwrap_or(0);
+    let row = |cells: Vec<&str>| match cells[..] {
+        [a, b] => format!("{a:<w$}  {b}"),
+        _ => cells.join("  "),
+    };
+    std::iter::once(row(t.heads.clone())).chain(t.rows.iter().map(|r| row(r.iter().map(String::as_str).collect()))).collect::<Vec<_>>().join("\n")
+}
+
 /// Smallest screen the layout is drawn for (explorer · tabs · status line still readable); below it, a message instead
 pub const MIN_SIZE: (u16, u16) = (40, 10);
 
@@ -81,7 +93,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_screen(f, app);
     }
     sanitize(f.buffer_mut());
-    app.color.apply(f.buffer_mut(), app.theme.light(app.auto_light));
+    app.color.apply(f.buffer_mut(), &crate::theme::Look::of(&app.themes, app.auto_light));
 }
 
 /// Says the size and the size needed, centered and wrapped so it fits even a few cells
@@ -109,6 +121,7 @@ fn draw_screen(f: &mut Frame, app: &mut App) {
     // With two or more workspaces, one line at the top: 1 Default │ 2 Reports (Alt+n · click)
     app.hits.workspaces.clear();
     app.hits.text = Rect::default();
+    app.hits.run = Rect::default();
     app.hits.cancel = Rect::default();
     let main = if app.workspaces.len() > 1 {
         let [bar, rest] = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).areas(main);
@@ -221,15 +234,25 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         }
         if matches!(n.kind, NodeKind::Conn) {
             row = row.bold();
+            // Before the name: a long URL name would cut it off at the end of the row
+            if let Some(c) = app.conn(&n.conn).filter(|c| c.temporary) {
+                row = row.lead(temporary_badge(c.config.read_only)).lead(Span::raw(" "));
+            }
         }
         // Exactly the explorer width (with horizontal scroll applied), so the background reaches the line end and a wide char cut at the end doesn't break the color
         lines.push(row.fit(app.tree.hoff, inner.width as usize));
     }
     if vis.is_empty() {
-        lines.push(Line::from(muted("No data sources. Press n to add one.")));
+        lines.push(Line::from(muted("No data sources. Press n to add one,")));
+        lines.push(Line::from(muted(format!("or {} › Import Data Sources… (DataGrip, DBeaver).", app.keys.label(crate::app::Action::Palette)))));
     }
     // Horizontal scroll (Shift+←/→, trackpad left/right) is already done by fit_spans
     f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The explorer's mark on a temporary data source (qurry-tui postgres://…)
+pub fn temporary_badge(read_only: bool) -> Span<'static> {
+    crate::kit::badge(if read_only { "TEMP · READ-ONLY" } else { "TEMP" }, WARN)
 }
 
 fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
@@ -417,22 +440,25 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     let color = app.color;
     let align = app.align.clone();
     let ro = app.tabs.get(idx).and_then(|t| app.conn(&t.conn)).map(|c| c.config.read_only).unwrap_or(false);
+    let kind = app.tabs.get(idx).map(|t| app.kind_of(&t.conn)).unwrap_or(qurry_core::store::DbKind::Postgres);
     let pct = app.console_pct;
     // Rebindable commands are shown with their first key in the current keymap
     let k = |a: crate::app::Action| app.keys.keys(a).first().map(|s| disp(s)).unwrap_or_else(|| "—".into());
     use crate::app::Action as A;
     let (k_out, k_run, k_commit, k_rollback, k_cancel, k_submit) = (k(A::ToggleOutput), k(A::Execute), k(A::Commit), k(A::Rollback), k(A::Cancel), k(A::Submit));
+    let k_fix = k(A::QuickFix);
     // The value panel beside result and table grids, and its keys (v toggles it, ⌃w closes it from the grid)
     let value_panel = app.value_panel;
     let value_keys = app.keys.slot_keys(crate::keys::Slot { action: A::ValueEditor, pane: Scope::Grid }).first().map(|k| crate::keys::pane_disp(k));
     let value_keys = format!(" {} / {} close ", value_keys.unwrap_or_else(|| "—".into()), k(A::CloseTab));
     let finding = focused && matches!(app.popup, Some(Popup::Find(_)));
-    // A run or a load-more in flight: the console's [■ Cancel] button (the status line says what and for how long)
+    // A run or a load-more in flight: the console's [▶ Run] is [■ Cancel] (the status line says what and for how long). The TUI has no
+    // grid toolbar (the GUI's ↻ / ■), so a console result's load-more is this button's too
     let busy = app.tabs[idx].busy().is_some();
-    // The Execute chooser's highlighted option: the console rows it would run
+    // The Execute chooser's highlighted option: the console text it would run
     let preview = match &app.popup {
         Some(Popup::Palette(p)) if focused => match App::palette_matches(p).get(p.sel).map(|i| &i.action) {
-            Some(crate::app::PAction::Run { rows, .. }) => rows.clone(),
+            Some(crate::app::PAction::Run { spans, .. }) => spans.clone(),
             _ => vec![],
         },
         _ => vec![],
@@ -450,28 +476,37 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             } else {
                 (Rect::default(), ed)
             };
+            let button = if busy { format!("[■ Cancel {k_cancel}]") } else { format!("[▶ Run {k_run}]") };
             let title = format!(
-                " {db} · Tx: {}{}{}{} ",
+                " {db} · Tx: {}{} · {button}{} ",
                 if c.tx_manual { "Manual" } else { "Auto" },
                 if c.in_tx { format!(" (pending — {k_commit} commit / {k_rollback} rollback)") } else { String::new() },
-                if busy { format!(" · [■ Cancel {k_cancel}]") } else { String::new() },
                 if ro { " · read-only" } else { "" }
             );
             let editing = focus == Focus::Editor;
             if !editing {
                 c.complete = None;
             }
-            // [■ Cancel] spot (the title starts right after the top-left corner)
-            app.hits.cancel = match (busy, title.find("[■ Cancel")) {
-                (true, Some(at)) => {
-                    use unicode_width::UnicodeWidthStr;
-                    let x = ed.x + 1 + title[..at].width() as u16;
-                    let w = title[at..].find(']').map(|e| title[at..at + e + 1].width() as u16).unwrap_or(0);
-                    Rect { x, y: ed.y, width: w.min(ed.right().saturating_sub(x)), height: 1 }
-                }
-                _ => Rect::default(),
+            // The button's spot (the title starts right after the top-left corner)
+            let spot = {
+                use unicode_width::UnicodeWidthStr;
+                let at = title.find(&button).unwrap_or_default();
+                let x = ed.x + 1 + title[..at].width() as u16;
+                Rect { x, y: ed.y, width: (button.width() as u16).min(ed.right().saturating_sub(x)), height: 1 }
             };
-            c.editor.set_block(panel(title, editing));
+            // Only the focused pane's: a click acts on the active tab
+            if focused {
+                *(if busy { &mut app.hits.cancel } else { &mut app.hits.run }) = spot;
+            }
+            // Unclosed quotes and brackets (the GUI console's markers); on the caret's line the bottom border says what is open
+            let text = c.editor.lines().join("\n");
+            let open = qurry_shared::pairs::unbalanced(&text, kind);
+            let at_caret = open.iter().find(|u| crate::input::pairs::position(&text, u.start).0 == c.editor.cursor().0);
+            let block = panel(title, editing);
+            c.editor.set_block(match at_caret {
+                Some(u) => block.title_bottom(Line::styled(format!(" {} ", u.message), Style::default().fg(DANGER)).right_aligned()),
+                None => block,
+            });
             c.editor.set_line_number_style(Style::default().fg(DIM));
             // Put an invisible mark (underline color) on the cursor cell: found after drawing and used to place autocomplete·compute mouse positions
             let mark = Style::default().underline_color(CARET_MARK);
@@ -480,7 +515,10 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             // tui-textarea doesn't expose its scroll position → use the cursor cell just drawn
             let drawn = find_caret(f, ed);
             draw_marks(f, c, ed, drawn);
+            draw_names(f, c, ed, drawn);
+            draw_unbalanced(f, c, ed, drawn, &text, &open);
             draw_preview(f, c, ed, drawn, &preview);
+            draw_run_error(f, c, ed, drawn);
             let caret = if editing && c.complete.is_some() { drawn } else { None };
             if focused {
                 app.hits.caret = drawn.map(|(x, y)| (x, y, c.editor.cursor().0, c.editor.cursor().1));
@@ -517,6 +555,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             }
             if let (Some((x, y)), Some(cmp)) = (caret, &c.complete) {
                 draw_completion(f, cmp, x, y);
+            } else if let Some((x, y)) = drawn.filter(|_| editing) {
+                draw_hint(f, c, ed, x, y, &k_fix);
             }
         }
         TabKind::Table(tt) => {
@@ -610,7 +650,10 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
         TabKind::Redis(r) => {
             let [left, right] = Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).areas(body);
             let kf = focus == Focus::Grid && !r.focus_value;
-            let title = format!(" Keys {} — {}{} {} ", r.pattern, r.keys.len(), if r.cursor != "0" { "+" } else { "" }, if r.scanning { "scanning…" } else { "" });
+            // " db0 · 500 keys · prod:user:* — 3 " : the database (d switches it), the filter (/), the keys scanned so far
+            let db = r.dbs.iter().find(|d| d.name == tab.db).map(|d| qurry_shared::redis_cmd::db_label(&d.name, d.keys)).unwrap_or_else(|| tab.db.clone());
+            let filter = if r.pattern.is_empty() { String::new() } else { format!(" · {}", r.pattern) };
+            let title = format!(" {db}{filter} — {}{} {}", r.keys.len(), if r.cursor != "0" { "+" } else { "" }, if r.scanning { "scanning… " } else { "" });
             let b = panel(title, kf);
             let inner = b.inner(left);
             f.render_widget(b, left);
@@ -629,11 +672,15 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 .map(|(i, row)| {
                     let w = inner.width as usize;
                     let line = match row {
-                        crate::app::KRow::Folder { path, name, depth, count } => Row::new(name.clone()).indent(*depth).chevron(Some(r.open.contains(path))).lead(icon("▤", ACCENT)).trailing(count.to_string()),
+                        // The folder's key count beside its name (muted), like "tables 68"; the right column only has key TTLs
+                        crate::app::KRow::Folder { path, name, depth, count } => Row::new(name.clone()).indent(*depth).chevron(Some(r.open.contains(path))).lead(icon("▤", ACCENT)).hint(count.to_string()),
                         crate::app::KRow::Key { idx, depth } => {
                             let k = &r.keys[*idx];
-                            let ttl = if k.ttl >= 0 { format!("{}s", k.ttl / 1000) } else { String::new() };
-                            Row::new(k.key.clone()).indent(*depth).chevron(None).lead(badge(&format!("{:<6}", k.ty.to_uppercase()), type_color(&k.ty))).lead(Span::raw(" ")).trailing(ttl)
+                            let ttl = qurry_shared::redis_cmd::ttl_label(k.ttl);
+                            // A long name is cut with … so the TTL column stays (indent · slot · badge · gaps)
+                            let room = w.saturating_sub(depth * 2 + 2 + 9 + ttl.chars().count() + 2);
+                            let name = if k.key.chars().count() <= room { k.key.clone() } else { k.key.chars().take(room.saturating_sub(1)).collect::<String>() + "…" };
+                            Row::new(name).indent(*depth).chevron(None).lead(badge(&format!("{:<6}", k.ty.to_uppercase()), type_color(&k.ty))).lead(Span::raw(" ")).trailing(ttl)
                         }
                     };
                     ListItem::new(line.selected(i == r.sel, kf).fit(0, w))
@@ -711,18 +758,153 @@ fn draw_marks(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u
     }
 }
 
-/// The rows an Execute chooser option would run, on the selection background (text columns, past the line numbers).
-/// Rows on screen are counted from the cursor cell just drawn, as for the gutter marks
-fn draw_preview(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>, rows: &[(usize, usize)]) {
-    let Some((_, cy)) = caret.filter(|_| !rows.is_empty()) else { return };
-    let top = c.editor.cursor().0 as i64 - (cy as i64 - ed.y as i64 - 1);
-    let x0 = ed.x + 1 + c.editor.lines().len().to_string().len() as u16 + 2;
+/// Unknown names (complete::marks) underlined in red. Rows on screen are counted from the cursor cell just drawn, as for the gutter
+/// marks, and so are the text's columns (tui-textarea scrolls sideways without saying how far)
+fn draw_names(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>) {
+    use unicode_width::UnicodeWidthStr;
+    let Some((cx, cy)) = caret.filter(|_| !c.assist.names.is_empty()) else { return };
+    let (crow, ccol) = c.editor.cursor();
+    let lines = c.editor.lines();
+    let top = crow as i64 - (cy as i64 - ed.y as i64 - 1);
+    let x0 = (ed.x + 1 + lines.len().to_string().len() as u16 + 2) as i64;
+    let width = |row: usize, col: usize| lines.get(row).map_or(0, |l| l.chars().take(col).collect::<String>().width() as i64);
+    let scroll = x0 + width(crow, ccol) - cx as i64;
+    let (right, bottom) = (ed.right().saturating_sub(1) as i64, ed.bottom().saturating_sub(1) as i64);
+    let buf = f.buffer_mut();
+    for m in &c.assist.names {
+        let y = ed.y as i64 + 1 + m.row as i64 - top;
+        if y <= ed.y as i64 || y >= bottom {
+            continue;
+        }
+        for x in (x0 + width(m.row, m.from) - scroll).max(x0)..(x0 + width(m.row, m.to) - scroll).min(right) {
+            let cell = &mut buf[(x as u16, y as u16)];
+            // The cursor cell keeps its mark (find_caret reads it)
+            if cell.underline_color != CARET_MARK {
+                cell.modifier.insert(Modifier::UNDERLINED);
+                cell.underline_color = DANGER;
+            }
+        }
+    }
+}
+
+/// Unclosed quotes and brackets (qurry_shared::pairs::unbalanced): the character underlined in the danger color, and its line's number
+/// in the danger color. Rows and the sideways scroll are read from the cursor cell just drawn, as for the gutter marks
+fn draw_unbalanced(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>, text: &str, open: &[qurry_shared::pairs::Unbalanced]) {
+    use unicode_width::UnicodeWidthStr;
+    let Some((cx, cy)) = caret.filter(|_| !open.is_empty()) else { return };
+    let lines = c.editor.lines();
+    let digits = lines.len().to_string().len();
+    let x0 = (ed.x + 1 + digits as u16 + 2) as i64;
+    let (crow, ccol) = c.editor.cursor();
+    // Display cells before `col`, a tab running to the next tab stop as tui-textarea draws it
+    let tab = c.editor.tab_length().max(1) as i64;
+    let width = |row: usize, col: usize| {
+        lines[row].chars().take(col).fold(0, |w, ch| if ch == '\t' { w + tab - w % tab } else { w + ch.to_string().width() as i64 })
+    };
+    // Columns scrolled off to the left
+    let shift = x0 + width(crow, ccol) - cx as i64;
+    let top = crow as i64 - (cy as i64 - ed.y as i64 - 1);
+    let buf = f.buffer_mut();
+    for u in open {
+        let (row, col) = crate::input::pairs::position(text, u.start);
+        let y = ed.y as i64 + 1 + row as i64 - top;
+        if y <= ed.y as i64 || y >= ed.bottom() as i64 - 1 {
+            continue;
+        }
+        let y = y as u16;
+        for x in ed.x + 2..ed.x + 2 + digits as u16 {
+            buf[(x, y)].set_fg(DANGER);
+        }
+        let x = x0 + width(row, col) - shift;
+        if x >= x0 && x < ed.right() as i64 - 1 {
+            let cell = &mut buf[(x as u16, y)];
+            cell.set_fg(DANGER);
+            cell.modifier |= Modifier::UNDERLINED | Modifier::BOLD;
+        }
+    }
+}
+
+/// The hint line above the caret (below on the editor's first row): the unknown name the caret is on with its fixes and the key
+/// that lists them, else the signature of the call the caret is in, its current parameter highlighted
+fn draw_hint(f: &mut Frame, c: &crate::app::Console, ed: Rect, x: u16, y: u16, fix_key: &str) {
+    let (row, col) = c.editor.cursor();
+    let dim = Style::default().fg(DIM);
+    let line = if let Some(m) = c.assist.at(row, col) {
+        let fixes = if m.fixes.is_empty() { String::new() } else { format!(" · {fix_key} {}", m.fixes.join(", ")) };
+        Line::from(vec![Span::styled(format!(" {}", m.message), Style::default().fg(DANGER)), Span::styled(format!("{fixes} "), dim)])
+    } else if let Some(sig) = &c.assist.sig {
+        // The overload with a parameter at the caret's, else the first
+        let s = sig.signatures.iter().find(|s| s.params.len() > sig.active).unwrap_or(&sig.signatures[0]);
+        let (head, tail) = (&s.label[..s.label.find('(').unwrap_or(0)], s.label.rfind(')').map_or("", |i| &s.label[i..]));
+        let mut spans = vec![Span::raw(format!(" {head}("))];
+        for (i, p) in s.params.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw(", "));
+            }
+            let on = i == sig.active || i + 1 == s.params.len() && sig.active >= i && p.contains('…');
+            spans.push(Span::styled(p.clone(), if on { Style::default().fg(ACCENT).add_modifier(Modifier::BOLD) } else { Style::default() }));
+        }
+        spans.push(Span::raw(format!("{tail} ")));
+        if sig.signatures.len() > 1 {
+            spans.push(Span::styled(format!("(+{} more) ", sig.signatures.len() - 1), dim));
+        }
+        Line::from(spans)
+    } else {
+        return;
+    };
+    let screen = f.area();
+    let w = (line.width() as u16).min(screen.width);
+    let y = if y > ed.y + 1 { y - 1 } else { y + 1 };
+    let r = Rect { x: x.min(screen.right().saturating_sub(w)), y: y.min(screen.bottom().saturating_sub(1)), width: w, height: 1 };
+    clear(f, r);
+    f.render_widget(Paragraph::new(line).style(Style::default().bg(POPUP_BG)), r);
+}
+
+/// The text an Execute chooser option would run, on the selection background (exactly its range, as the GUI highlights it)
+fn draw_preview(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>, spans: &[crate::app::Span]) {
+    for &span in spans {
+        paint_span(f, c, ed, caret, span, |cell| {
+            cell.set_bg(SEL);
+        });
+    }
+}
+
+/// The last run's error, underlined in the danger colour where the server points (else over the statement). An edit clears it
+fn draw_run_error(f: &mut Frame, c: &mut crate::app::Console, ed: Rect, caret: Option<(u16, u16)>) {
+    if c.run_error.as_ref().is_some_and(|e| e.lines != c.editor.lines()) {
+        c.run_error = None;
+    }
+    if let Some(e) = &c.run_error {
+        paint_span(f, c, ed, caret, e.span, |cell| {
+            cell.set_style(Style::default().fg(DANGER).add_modifier(Modifier::UNDERLINED));
+        });
+    }
+}
+
+/// Restyle the cells of an editor span (text columns, past the line numbers). Rows and columns on screen are counted from the
+/// cursor cell just drawn (tui-textarea scrolls both ways and doesn't say how far), as for the gutter marks
+fn paint_span(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>, ((r0, c0), (r1, c1)): crate::app::Span, style: impl Fn(&mut ratatui::buffer::Cell)) {
+    use unicode_width::UnicodeWidthChar;
+    let Some((cx, cy)) = caret else { return };
+    let lines = c.editor.lines();
+    let (crow, ccol) = c.editor.cursor();
+    let width = |l: &str, n: usize| l.chars().take(n).map(|ch| ch.width().unwrap_or(0) as i64).sum::<i64>();
+    let top = crow as i64 - (cy as i64 - ed.y as i64 - 1);
+    let x0 = ed.x + 1 + lines.len().to_string().len() as u16 + 2;
+    let left = width(lines.get(crow).map_or("", |l| l.as_str()), ccol) - (cx as i64 - x0 as i64);
+    let right = ed.right().saturating_sub(1) as i64;
     let buf = f.buffer_mut();
     for y in ed.y + 1..ed.bottom().saturating_sub(1) {
         let row = top + (y - ed.y - 1) as i64;
-        if row >= 0 && rows.iter().any(|&(a, b)| (a as i64..=b as i64).contains(&row)) {
-            for x in x0..ed.right().saturating_sub(1) {
-                buf[(x, y)].set_bg(SEL);
+        let Some(line) = (row >= r0 as i64 && row <= r1 as i64).then(|| lines.get(row as usize)).flatten() else { continue };
+        let from = if row as usize == r0 { c0 } else { 0 };
+        let to = if row as usize == r1 { c1 } else { line.chars().count() };
+        for (k, ch) in line.chars().enumerate().take(to).skip(from) {
+            let x = x0 as i64 + width(line, k) - left;
+            for dx in 0..ch.width().unwrap_or(0).max(1) as i64 {
+                if (x0 as i64..right).contains(&(x + dx)) {
+                    style(&mut buf[((x + dx) as u16, y)]);
+                }
             }
         }
     }
@@ -755,6 +937,9 @@ fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) 
                 ItemKind::Schema => ("◇", Color::Gray),
                 ItemKind::Keyword => ("k", C_KEYWORD),
                 ItemKind::Value => ("=", crate::kit::NUMBER),
+                ItemKind::Join => ("⋈", crate::kit::C_VIEW),
+                ItemKind::Function => ("ƒ", crate::kit::C_ROUTINE),
+                ItemKind::Snippet => ("»", ACCENT),
             };
             ListItem::new(Row::new(format!("{:<lw$} ", it.label)).lead(icon(glyph, color)).hint(it.detail.clone()).selected(i == cmp.sel, true).line())
         })
@@ -773,6 +958,11 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
     // Pane keys (rebindable: F1 › Database Explorer keys / Data grid keys)
     let pane = |pane: Scope, a: A, l: &'static str| app.keys.slot_keys(crate::keys::Slot { action: a, pane }).first().map(|k| (crate::keys::pane_disp(k), l));
     let (tree, grid) = (|a, l| pane(Scope::Tree, a, l), |a, l| pane(Scope::Grid, a, l));
+    // Column widths: narrower · wider · fit (< > =) in one hint
+    let widths = || {
+        let k: Vec<String> = [A::ColumnNarrower, A::ColumnWider, A::ColumnFit].into_iter().filter_map(|a| grid(a, "").map(|(k, _)| k)).collect();
+        (!k.is_empty()).then(|| (k.join(" "), "width"))
+    };
     let (ctx, glob) = match app.focus {
         Focus::Tree => (
             vec![fixed("Enter", "open"), fixed("F4", "console"), tree(A::ManageSchemas, "schemas"), fixed("/", "filter"), tree(A::NewDataSource, "new"), tree(A::EditDataSource, "edit"), tree(A::WsMoveConn, "workspace"), tree(A::Refresh, "refresh"), cmd(A::Ddl, "DDL")],
@@ -785,10 +975,10 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
         Focus::Grid => (
             match app.tabs.get(app.active).map(|t| &t.kind) {
                 Some(TabKind::Table(_)) => vec![
-                    fixed("Enter", "edit"), grid(A::ValueEditor, "value"), grid(A::AddRow, "add"), grid(A::DeleteRow, "delete"), grid(A::SetNull, "NULL"), cmd(A::Submit, "submit"), grid(A::Revert, "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), grid(A::ExportCsv, "export"),
+                    fixed("Enter", "edit"), grid(A::ValueEditor, "value"), widths(), grid(A::AddRow, "add"), grid(A::DeleteRow, "delete"), grid(A::SetNull, "NULL"), cmd(A::Submit, "submit"), grid(A::Revert, "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), grid(A::ExportCsv, "export"),
                 ],
                 Some(TabKind::Redis(r)) if r.focus_value => vec![fixed("e", "edit"), fixed("a", "add"), fixed("x", "delete"), fixed("Esc", "keys")],
-                Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("/", "pattern"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
+                Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("d", "database"), fixed("/", "filter"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
                 Some(TabKind::Text(t)) if t.structure_view => vec![fixed("v", "SQL"), fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Text(t)) if t.has_structure() => vec![fixed("v", "structure"), fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Text(t)) if t.ddl_of.is_some() => vec![fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
@@ -806,7 +996,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                     v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy"), fixed("d", "database")]);
                     v
                 }
-                _ => vec![fixed("s", "sort"), fixed("y", "copy"), grid(A::ValueEditor, "value"), grid(A::ExportCsv, "export"), fixed("Esc", "editor")],
+                _ => vec![fixed("s", "sort"), fixed("y", "copy"), grid(A::ValueEditor, "value"), widths(), grid(A::ExportCsv, "export"), fixed("Esc", "editor")],
             },
             vec![cmd(A::NewConsole, "console"), cmd(A::RecentTabs, "tabs"), cmd(A::SearchEverywhere, "search"), cmd(A::Palette, "actions")],
         ),
@@ -915,10 +1105,12 @@ fn ssl_mode_note(mode: &str) -> &'static str {
 }
 
 /// What an empty form field means (the GUI shows the same as a placeholder)
-fn empty_field_note(label: &str) -> Option<&'static str> {
+fn empty_field_note(label: &str, ssh_auth: &str) -> Option<&'static str> {
     match label {
         "AWS profile" => Some("(default profile)"),
         "AWS region" => Some("(the profile's region)"),
+        "SSH key file" => Some("(ssh-agent, then ~/.ssh/config IdentityFile)"),
+        "SSH secret" if ssh_auth == "password" => Some("(ssh-agent)"),
         _ => None,
     }
 }
@@ -1069,9 +1261,10 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             f.render_widget(Paragraph::new(lines), inner);
         }
         Popup::Confirm { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Confirm ", text, key_hints(&[("y / Enter", "yes"), ("n / Esc", "no")])),
+        Popup::ImportPick(p) => draw_import(f, area, p),
         // Like Confirm, but only y allows (no Enter): the popup opened on its own
         Popup::AllowPlaintext { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Allow Unencrypted ", text, key_hints(&[("y", "allow"), ("n / Esc", "cancel")])),
-        Popup::Input { title, body, input, complete, filter, .. } => {
+        Popup::Input { title, body, input, complete, filter, redis, .. } => {
             // The title goes on the border; the body (answers, reasons) in a box below, wrapped, so it isn't cut off
             let body: Vec<Line> = body.lines().map(|l| Line::raw(disp(l))).collect();
             let bh = if body.is_empty() { 0 } else { wrapped_height(&body, 90u16.min(area.width.saturating_sub(4)).saturating_sub(2)) + 2 };
@@ -1085,9 +1278,21 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }).block(b), br);
             }
             clear(f, r);
-            let hint = if filter.is_none() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
+            let hint = if redis.is_some() { "Enter / Esc · Tab complete · ↑↓ history · HELP command" } else if filter.is_none() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
             input.set_block(panel(format!(" {} ({hint}) ", disp(title)), true));
             f.render_widget(&*input, r);
+            // The Redis command line: the arguments still to type, muted, after the text
+            if redis.is_some() {
+                let line = input.lines().first().cloned().unwrap_or_default();
+                let at = line.chars().count();
+                let args = qurry_shared::redis_cmd::assist(&line).hint;
+                if input.cursor().1 == at && !args.is_empty() {
+                    let x = r.x + 1 + at as u16 + u16::from(!line.is_empty() && !line.ends_with(' '));
+                    let w = r.right().saturating_sub(x + 1);
+                    let ghost = Rect { x, y: r.y + 1, width: w, height: 1 };
+                    f.render_widget(Paragraph::new(Span::styled(args, Style::default().fg(DIM))), ghost);
+                }
+            }
             // The console's completion list, right under the input at the word being completed
             if let Some(cmp) = complete {
                 draw_completion(f, cmp, r.x + 1 + input.cursor().1 as u16, r.bottom() - 1);
@@ -1180,6 +1385,46 @@ fn draw_confirm(f: &mut Frame, area: Rect, title: &'static str, text: &str, keys
     fits
 }
 
+/// Import Data Sources' confirm: the question (from, path, counts, MCP Off and passwords said once), then two lines per source —
+/// [x] / [ ] and what is added (skipped rows have no box) with the value on the right, the mapped settings or the reason under it.
+/// The row under the cursor is highlighted and kept in view; the keys stay at the bottom
+fn draw_import(f: &mut Frame, area: Rect, p: &crate::import::ImportPick) {
+    let w = 110u16.min(area.width.saturating_sub(4));
+    let iw = w.saturating_sub(2);
+    let msg: Vec<Line> = p.plan.message.lines().map(|l| Line::raw(disp(l))).collect();
+    let mh = wrapped_height(&msg, iw);
+    let n = p.count();
+    let hint = key_hints(&[("Space", "check"), ("↑↓", "move"), ("y / Enter", &format!("import {n}")), ("n / Esc", "cancel")]);
+    let rows = p.plan.rows.len() as u16;
+    let mut r = centered(area, 110, mh + 1 + rows * 2 + 1 + 1 + 2);
+    if r.height < 8 {
+        r = Rect { y: area.y, height: area.height, ..r };
+    }
+    let inner = popup(f, r, " Confirm ");
+    let [top, _, list, _, bottom] = Layout::vertical([Constraint::Length(mh.min(inner.height.saturating_sub(5))), Constraint::Length(1), Constraint::Min(2), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: false }), top);
+    f.render_widget(Paragraph::new(hint), bottom);
+    // Cut to n cells with … (a long warning or server name never runs into the other)
+    let cut = |s: String, n: usize| if s.chars().count() <= n { s } else { s.chars().take(n.saturating_sub(1)).collect::<String>() + "…" };
+    // Two lines a row, scrolled so the cursor row shows
+    let fit = (list.height / 2).max(1) as usize;
+    let first = p.sel.saturating_sub(fit - 1).min(p.plan.rows.len().saturating_sub(fit));
+    let mut lines = vec![];
+    for (i, row) in p.plan.rows.iter().enumerate().skip(first).take(fit) {
+        let bg = if i == p.sel { Style::default().bg(SEL) } else { Style::default() };
+        let boxed = if !row.checkable { "    " } else if p.checked[i] { "[x] " } else { "[ ] " };
+        let tone = if row.tone.as_deref() == Some("warn") { Style::default().fg(WARN) } else { Style::default().fg(DIM) };
+        let text_style = if row.checkable { Style::default() } else { Style::default().fg(DIM) };
+        let w = iw as usize;
+        let value = cut(disp(&row.value), w * 2 / 5);
+        let left = cut(format!("{boxed}{}", disp(&row.text)), w.saturating_sub(value.chars().count() + 2));
+        let pad = w.saturating_sub(left.chars().count() + value.chars().count());
+        lines.push(Line::from(vec![Span::styled(left, text_style), Span::raw(" ".repeat(pad)), Span::styled(value, tone)]).style(bg));
+        lines.push(Line::styled(cut(format!("      {}", disp(&row.note)), w), Style::default().fg(DIM)).style(bg));
+    }
+    f.render_widget(Paragraph::new(lines), list);
+}
+
 /// Data Source form. Only the chosen Tunnel's fields show. The size stays the same whatever the Tunnel and the message (a test
 /// starting or failing doesn't move the form). The message and key hints stay at the bottom; when the window is too short for
 /// every field, the fields scroll to keep the focused one in view and the bottom border says which field it is
@@ -1211,7 +1456,7 @@ fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
             if fl.label == "SSL mode" {
                 spans.push(Span::styled(format!("  {}", ssl_mode_note(&fl.value)), Style::default().fg(DIM)));
             }
-            if let Some(note) = empty_field_note(fl.label).filter(|_| fl.value.trim().is_empty()) {
+            if let Some(note) = empty_field_note(fl.label, form.value("SSH auth")).filter(|_| fl.value.trim().is_empty()) {
                 spans.push(Span::styled(format!("  {note}"), Style::default().fg(DIM)));
             }
             Line::from(spans)
@@ -1421,6 +1666,21 @@ mod tests {
             let s = h.screen(w, ht);
             assert!(s.contains("Name ▏") && s.contains("Esc cancel"), "{w}×{ht}\n{s}");
         }
+    }
+
+    /// An SSH tunnel with an empty key file or password says it uses ssh-agent, like the GUI's placeholders
+    #[tokio::test]
+    async fn conn_form_says_empty_ssh_credentials_use_the_agent() {
+        let mut h = crate::testkit::Harness::new().await;
+        let cfg = serde_json::from_value(serde_json::json!({ "id": "", "name": "t", "kind": "postgres", "host": "db", "port": 5432, "user": "u", "database": "d",
+            "ssh": { "enabled": true, "host": "bastion", "port": 22, "user": "ops", "auth": "key", "keyPath": "" } })).unwrap();
+        h.app.conn_form(Some(cfg));
+        let s = h.screen(120, 40);
+        assert!(s.contains("(ssh-agent, then ~/.ssh/config IdentityFile)"), "{s}");
+        let Some(Popup::ConnForm(f)) = &mut h.app.popup else { unreachable!() };
+        f.fields.iter_mut().find(|x| x.label == "SSH auth").unwrap().value = "password".into();
+        let s = h.screen(120, 40);
+        assert!(s.lines().any(|l| l.contains("SSH secret") && l.contains("(ssh-agent)")), "{s}");
     }
 
     /// The Production confirm at the minimum size keeps its question and keys; the statements that don't fit are counted

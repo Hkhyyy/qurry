@@ -4,7 +4,7 @@
 use qurry_core::update;
 use qurry_core::update::{expected_sha, sha256_of, verify_sums};
 #[cfg(test)]
-use qurry_core::update::UPDATE_PUBKEY;
+use qurry_core::update::UPDATE_PUBKEYS;
 use std::path::{Path, PathBuf};
 
 /// Suffix of the release file name for this platform (releases are built for Apple Silicon · Intel macOS and x86_64 Linux)
@@ -133,7 +133,7 @@ fn replace(exe: &Path, asset: &update::Asset, sums: &update::Asset, sums_sig: &u
     let result = (|| -> std::io::Result<Vec<PathBuf>> {
         let sums_file = tmp.join("SHA256SUMS");
         download(&sums.url, &sums_file, quiet)?;
-        // First check that the checksum list is signed with the update key (same key as the GUI updater)
+        // First check that the checksum list is signed with an update key this build trusts (update::UPDATE_PUBKEYS)
         let sig_file = tmp.join("SHA256SUMS.sig");
         download(&sums_sig.url, &sig_file, quiet)?;
         verify_sums(&std::fs::read(&sums_file)?, &std::fs::read_to_string(&sig_file)?).map_err(|e| err(format!("SHA256SUMS {e} — not installed")))?;
@@ -222,11 +222,13 @@ mod tests {
         // Signature of "hello\n" made with the real key
         const SIG: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRL0hTaDZuRlFnQkFMUWNzY1hnK3BORU8rU2hESWFGWnJOb0hEZTZBT1lUVFc1QmNjWEs5TVdaYnRhSllBbXVDUDJuYUR6azJCd1dLd0JaU3V3akJMRExwQiswdkhyZVFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNzIyOTE5CWZpbGU6U0hBMjU2U1VNUwpCbytybzN4VVNOeXJlVFRHZXFGRHZidGJBV00zU1JKMk1SRXRJZVhCcEZIbS9TNUVuWm5FZVhKeGh0RG15VFNQVDFtTFUzdXpTd3VFelhVUlg2VldCUT09Cg==";
         assert!(super::verify_sums(b"hello\n", SIG).is_ok());
+        // Signed with the current key itself, not only with some listed key (during a rotation the old key follows it and would also pass verify_sums)
+        assert!(qurry_core::update::verify_sums_with(&super::UPDATE_PUBKEYS[..1], b"hello\n", SIG).is_ok());
         assert!(super::verify_sums(b"hello!\n", SIG).is_err());
         assert!(super::verify_sums(b"hello\n", "bm90IGEgc2lnbmF0dXJl").is_err());
-        // Same public key as the GUI (tauri.conf.json)
+        // The current key (first in the list) is the GUI's (tauri.conf.json)
         let conf: serde_json::Value = serde_json::from_str(include_str!("../../../src-tauri/tauri.conf.json")).unwrap();
-        assert_eq!(conf["plugins"]["updater"]["pubkey"].as_str(), Some(super::UPDATE_PUBKEY));
+        assert_eq!(conf["plugins"]["updater"]["pubkey"].as_str(), Some(super::UPDATE_PUBKEYS[0]));
     }
 
     /// Releases ship Apple Silicon · Intel macOS and x86_64 Linux bundles

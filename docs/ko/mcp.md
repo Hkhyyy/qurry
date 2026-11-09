@@ -12,7 +12,7 @@ claude mcp add qurry-rw -- qurry-mcp --allow-write  # execute 도구 추가
 **AI 에게 보이는 Data Source** — Data Source 마다 **MCP** 설정이 있습니다 (GUI: Data Source › Options › MCP · TUI: Data Source 폼의 `MCP` 칸).
 - **Off**: 목록에 없고, MCP 서버가 접속하지도 비밀번호를 읽지도 않습니다. 새 Data Source 는 여기서 시작합니다.
 - **Read**: 둘러보기와 읽기 전용 쿼리.
-- **Read & write**: `qurry-mcp` 를 `--allow-write` 로 띄우면 `execute` 도. 읽기 전용 Data Source 는 쓰지 않습니다. **Production** Data Source 에 켜면 AI 가 운영 데이터를 아무 확인 없이 바꿀 수 있습니다 (앱의 바뀔 행 수 확인은 사람이 있어야 합니다) — 정말 그럴 때만, 되도록 바꿔도 되는 것만 바꿀 수 있는 DB 사용자로 켜세요.
+- **Read & write**: `qurry-mcp` 를 `--allow-write` 로 띄우면 `execute` 도. 읽기 전용 Data Source 와 **Production** Data Source 는 쓰지 않고 Read 에 머뭅니다 (GUI 는 이 선택지를 회색으로 막고, TUI 는 read 로 저장합니다). AI 의 변경은 앱이 사람에게 묻는 바뀔 행 수 확인을 건너뛰기 때문입니다.
 
 이 설정이 생기기 전에 만든 Data Source 는 예전처럼 동작합니다 (읽기, `--allow-write` 면 쓰기). **Production** 만은 MCP 를 켜 주기 전까지 보이지 않습니다.
 

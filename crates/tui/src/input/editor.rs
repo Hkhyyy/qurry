@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) fn editor_key(app: &mut App, k: KeyEvent) {
+    let kind = app.tabs.get(app.active).map(|t| app.kind_of(&t.conn)).unwrap_or(qurry_core::store::DbKind::Postgres);
     let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) else {
         app.focus = Focus::Grid;
         return grid_key(app, k);
@@ -31,19 +32,30 @@ pub(super) fn editor_key(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Char(_) if k.modifiers.contains(KeyModifiers::SUPER) => {}
+        // ' " ( [ close themselves, a closing one types over, ⌫ in an empty pair removes both, around a selection they wrap it
+        _ if pair_key(&mut c.editor, &k, kind) => {}
+        // Undo / redo: a Reformat Code or keyword case change is one step
+        KeyCode::Char('u') if k.modifiers == KeyModifiers::CONTROL => c.undo(),
+        KeyCode::Char('r') if k.modifiers == KeyModifiers::CONTROL => c.redo(),
         _ => {
             c.editor.input(k);
         }
     }
+    let plain = !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    // A space, newline or punctuation typed after a keyword: the keyword case (Off by default)
+    let typing = !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
+    if typing && (k.code == KeyCode::Enter || matches!(k.code, KeyCode::Char(ch) if !(ch.is_alphanumeric() || ch == '_' || ch == '$'))) {
+        app.case_typed_keyword();
+    }
     // Typing a word or '.' opens it (like the GUI), deleting while open re-filters. Any other key closes it
     // (On macOS Ctrl+Space switches input sources, so opening by typing is the default)
-    let plain = !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
     let typed = plain && matches!(k.code, KeyCode::Char(ch) if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '\'' || ch == ' ' || ch == '>');
     if typed || (open && k.code == KeyCode::Backspace) {
         app.update_completion(false);
     } else if let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
         c.complete = None;
     }
+    app.update_assist();
 }
 
 #[cfg(test)]
@@ -79,13 +91,16 @@ mod tests {
         h.key("F5");
         let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no chooser") };
         assert_eq!(p.items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["select 2", "All statements (3)", "From caret to end"]);
-        // Which of the three statement rows are drawn on the selection background
+        // Which of the three statements are drawn on the selection background (their text, not the `;` or past the line's end)
         let lines = |h: &mut Harness| {
             let buf = h.buffer(100, 30);
             let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
             ["1", "2", "3"].map(|n| {
                 let y = (0..30).find(|&y| row(y).contains(&format!("select {n};"))).unwrap();
-                buf[(60, y)].bg == crate::ui::SEL
+                let s = row(y);
+                let x = s[..s.find(&format!("select {n};")).unwrap()].chars().count() as u16;
+                assert!(buf[(x + 8, y)].bg != crate::ui::SEL && buf[(60, y)].bg != crate::ui::SEL);
+                buf[(x, y)].bg == crate::ui::SEL && buf[(x + 7, y)].bg == crate::ui::SEL
             })
         };
         assert_eq!(lines(&mut h), [false, true, false]);

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AuditEntry, auditLog } from "../lib/api";
 import { shared } from "../lib/shared";
-import { Badge, Button, CodeBlock, List, ListItem, Modal, Notice, SearchField, SectionTitle, Text } from "../ui";
+import { Badge, Button, CodeBlock, List, ListItem, Modal, Named, Notice, SearchField, SectionTitle, Text } from "../ui";
 
 type Tone = "neutral" | "warn" | "danger" | "accent";
 /** Tone of each result word qurry-shared's audit::status gives */
@@ -71,7 +71,12 @@ export function ProductionLog({ connId, onOpenUndo, onClose }: { connId: string 
       }}
       footer={
         <>
-          <span className="ui-modal-foot-hint">Changes run on Production data sources · undo is kept for simple UPDATE / DELETE (up to 1,000 rows)</span>
+          <span className="ui-modal-foot-hint">
+            Changes run on Production data sources ·{" "}
+            <Named about="undo" info={["Undo is kept for simple UPDATE / DELETE (up to 1,000 rows)."]}>
+              Undo
+            </Named>
+          </span>
           <Button onClick={onClose}>Close</Button>
           <Button variant="primary" disabled={!cur?.undo} onClick={() => cur && onOpenUndo(cur)}>
             Open Undo in Console

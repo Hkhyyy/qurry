@@ -2,22 +2,131 @@
  * Molecules: a row · cell made of a few atoms — list row, detail row, menu item, form field, tab, hint, section title.
  * Spec in README.md
  */
-import { HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useState } from "react";
-import { Avatar, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
+import { HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Avatar, Badge, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
-import { Chevron } from "./icons";
+import { Chevron, IcInfo } from "./icons";
+import { placePopup } from "./popup";
+
+// ───────── About (ⓘ) ─────────
+/** The open ⓘ's close: opening another one closes it (one explanation at a time) */
+let closeOpenTip: (() => void) | null = null;
+
+/**
+ * ⓘ button with what a name means: click, Space or Enter toggles a small popover (the menu surface) under it, kept inside the
+ * window. Esc closes the popover only (not the dialog around it) and puts focus back on the ⓘ; a click outside, a scroll or
+ * opening another ⓘ closes it. A span with the button role, not a <button>: a <button> inside a <label> (a Field's) would be
+ * the label's control, so a click on the name would open the ⓘ instead of focusing the field
+ */
+export function InfoTip({ about, info }: { about: string; info: ReactNode[] }) {
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState<{ left: number; top: number } | null>(null);
+  const btn = useRef<HTMLSpanElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const id = useId();
+  // Placed once its size is known (hidden until then)
+  useLayoutEffect(() => {
+    if (!open || !btn.current || !pop.current) return setAt(null);
+    const r = btn.current.getBoundingClientRect();
+    setAt(placePopup(r, pop.current.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }));
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    closeOpenTip?.();
+    closeOpenTip = close;
+    const outside = (e: Event) => !pop.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node);
+    const down = (e: globalThis.MouseEvent) => outside(e) && setOpen(false);
+    const scroll = (e: Event) => outside(e) && setOpen(false);
+    const key = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(false);
+      btn.current?.focus();
+    };
+    window.addEventListener("mousedown", down, true);
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("scroll", scroll, true);
+    window.addEventListener("resize", scroll);
+    return () => {
+      window.removeEventListener("mousedown", down, true);
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("scroll", scroll, true);
+      window.removeEventListener("resize", scroll);
+      if (closeOpenTip === close) closeOpenTip = null;
+    };
+  }, [open]);
+  return (
+    <>
+      <span
+        ref={btn}
+        role="button"
+        tabIndex={0}
+        className="ui-icon-btn ui-info-btn"
+        aria-label={`About ${about}`}
+        title={`About ${about}`}
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        // Its text (not the note, whose name is "About …"): read out with the ⓘ while it is open
+        aria-describedby={open ? `${id}-text` : undefined}
+        // Inside a <label>: don't also activate its control
+        onClick={(e) => (e.preventDefault(), setOpen((o) => !o))}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          // Not the dialog's Enter (OK, Open Undo …) and no page scroll on Space
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+      >
+        <IcInfo />
+      </span>
+      {open &&
+        createPortal(
+          <div ref={pop} id={id} role="note" aria-label={`About ${about}`} className="ui-menu ui-info-pop" style={at ?? { left: 0, top: 0, visibility: "hidden" }}>
+            <div id={`${id}-text`} className="ui-info-text">
+              {info.map((l, i) => (
+                <div key={i}>{l}</div>
+              ))}
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+/**
+ * A name and its ⓘ right after it, with the same gap everywhere: a field's label, a checkbox (the ⓘ beside it, not inside its
+ * label, so clicking the ⓘ doesn't tick it), a section title, a hint line. about = the name the ⓘ is announced with (default: the
+ * text itself). Without info it is just the name
+ */
+export function Named({ children, about, info }: { children: ReactNode; about?: string; info?: ReactNode[] }) {
+  if (!info?.length) return <>{children}</>;
+  return (
+    <span className="ui-named">
+      {/* A text name shrinks with … in a narrow label column; the ⓘ never does */}
+      {typeof children === "string" ? <span className="ui-named-text">{children}</span> : children}
+      <InfoTip about={about ?? (typeof children === "string" ? children : "")} info={info} />
+    </span>
+  );
+}
 
 // ───────── Form ─────────
 /**
- * Label + field on one line. Hint · error below the field.
+ * Label + field on one line. Hint · error below the field; info = what the field means, behind an ⓘ after the label (Named).
  * group = several controls with their own labels: a div (role group), so a click on the field's label doesn't land in the first control
  */
-export function Field({ label, hint, error, children, className, group }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; children: ReactNode; className?: string; group?: boolean }) {
+export function Field({ label, hint, error, info, children, className, group }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; info?: ReactNode[]; children: ReactNode; className?: string; group?: boolean }) {
   const Tag = group ? "div" : "label";
+  const name = typeof label === "string" ? label : undefined;
   return (
-    <Tag className={cx("ui-field", className)} role={group ? "group" : undefined} aria-label={group && typeof label === "string" ? label : undefined}>
-      <span className="ui-field-label" title={typeof label === "string" ? label : undefined}>
-        {label}
+    <Tag className={cx("ui-field", className)} role={group ? "group" : undefined} aria-label={group ? name : undefined}>
+      <span className="ui-field-label" title={name}>
+        <Named about={name} info={info}>
+          {label}
+        </Named>
       </span>
       {children}
       {hint && <span className="ui-field-hint">{hint}</span>}
@@ -109,12 +218,14 @@ export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttribu
 }
 
 // ───────── Tabs · titles ─────────
-export function Tabs<T extends string>({ items, value, onChange, size, label }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (id: T) => void; size?: "sm"; label?: string }) {
-  // ←/→ (and Home/End) select the previous/next tab and move focus with it, as in the ARIA tab pattern
+/** A `disabled` tab is greyed out and can't be picked, but still shows its `title` (why) on hover: aria-disabled, not disabled */
+export function Tabs<T extends string>({ items, value, onChange, size, label }: { items: { id: T; label: ReactNode; disabled?: boolean; title?: string }[]; value: T; onChange: (id: T) => void; size?: "sm"; label?: string }) {
+  // ←/→ (and Home/End) select the previous/next tab and move focus with it, as in the ARIA tab pattern (skipping disabled ones)
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const i = items.findIndex((t) => t.id === value);
-    const n = { ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: items.length - 1 }[e.key];
-    if (n === undefined || n < 0 || n >= items.length || n === i) return;
+    const on = items.map((t, j) => (t.disabled ? -1 : j)).filter((j) => j >= 0);
+    const n = { ArrowLeft: on.filter((j) => j < i).pop(), ArrowRight: on.find((j) => j > i), Home: on[0], End: on[on.length - 1] }[e.key];
+    if (n === undefined || n === i) return;
     e.preventDefault();
     onChange(items[n].id);
     e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[n]?.focus();
@@ -122,7 +233,16 @@ export function Tabs<T extends string>({ items, value, onChange, size, label }: 
   return (
     <div className={cx("ui-tabs", size === "sm" && "size-sm")} role="tablist" aria-label={label} onKeyDown={onKeyDown}>
       {items.map((t) => (
-        <button key={t.id} type="button" role="tab" aria-selected={value === t.id} className={cx("ui-tab", value === t.id && "active")} onClick={() => onChange(t.id)}>
+        <button
+          key={t.id}
+          type="button"
+          role="tab"
+          aria-selected={value === t.id}
+          aria-disabled={t.disabled || undefined}
+          title={t.title}
+          className={cx("ui-tab", value === t.id && "active", t.disabled && "disabled")}
+          onClick={() => !t.disabled && onChange(t.id)}
+        >
           {t.label}
         </button>
       ))}
@@ -133,6 +253,19 @@ export function Tabs<T extends string>({ items, value, onChange, size, label }: 
 export const SectionTitle = ({ children, className }: { children: ReactNode; className?: string }) => <div className={cx("ui-section-title", className)}>{children}</div>;
 
 // ───────── Hints ─────────
+/**
+ * A console's open transaction (#106), beside its Commit / Roll back: its changes aren't saved until one of them, and closing the
+ * tab, switching the database or quitting asks first. production = a Production data source (red); idle = the reminder fired
+ */
+export function TxPending({ production, idle }: { production?: boolean; idle?: string }) {
+  const title = `A transaction is open in this console: Commit saves what changed in it, Roll back undoes it. Closing the tab, switching the database or quitting asks first.${idle ? `\n${idle}` : ""}`;
+  return (
+    <span role="status" className="tx-pending" title={title}>
+      <Badge tone={production ? "danger" : "warn"}>● Transaction pending{idle ? " · idle" : ""}</Badge>
+    </span>
+  );
+}
+
 export function Notice({ tone, children, className }: { tone?: "warn" | "danger" | "ok"; children: ReactNode; className?: string }) {
   return <div className={cx("ui-notice", tone && `tone-${tone}`, className)}>{children}</div>;
 }
@@ -278,9 +411,11 @@ export function ListItem({
 
 /** Detail row: code (statement · query) + value on the right (rows · pid · version), a note in plain text under the code (why it
  *  asks). Value colored by tone */
-export function DetailRow({ children, value, tone, note }: { children: ReactNode; value?: ReactNode; tone?: "danger" | "warn"; note?: ReactNode }) {
+/** lead = a control before the text (a checkbox to leave the row out) */
+export function DetailRow({ children, value, tone, note, lead }: { children: ReactNode; value?: ReactNode; tone?: "danger" | "warn"; note?: ReactNode; lead?: ReactNode }) {
   return (
     <div className="ui-detail-row">
+      {lead !== undefined && <span className="ui-detail-lead">{lead}</span>}
       {note === undefined ? (
         <code className="ui-detail-text">{children}</code>
       ) : (

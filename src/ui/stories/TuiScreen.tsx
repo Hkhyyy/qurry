@@ -39,11 +39,12 @@ const DARK_BG = "#1e1f22";
 /** The terminal's own colors for light scenes (kit_snapshots.rs css(): a common light terminal palette) */
 const LIGHT = { bg: "#ffffff", fg: "#383a42", border: "#d4d6dc" };
 
-export function TuiScreen({ scene }: { scene: Scene }) {
-  const [BG, FG, border] = scene.light ? [LIGHT.bg, LIGHT.fg, LIGHT.border] : [DARK_BG, DARK_FG, "#393b40"];
+/** colors: the terminal's own colors instead of the dark / light ones (a theme preview) */
+export function TuiScreen({ scene, colors }: { scene: Scene; colors?: { bg: string; fg: string; border: string } }) {
+  const [BG, FG, border] = colors ? [colors.bg, colors.fg, colors.border] : scene.light ? [LIGHT.bg, LIGHT.fg, LIGHT.border] : [DARK_BG, DARK_FG, "#393b40"];
   return (
     <div>
-      <div style={{ marginBottom: 8, color: "var(--ui-text-muted)" }}>{scene.desc}</div>
+      {scene.desc && <div style={{ marginBottom: 8, color: "var(--ui-text-muted)" }}>{scene.desc}</div>}
       <pre
         style={{
           display: "inline-block",

@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, expect, openApp, test, treeItem } from "./app";
+import { dialog, expect, openApp, openInTheme, test, treeItem } from "./app";
 
 test.beforeEach(async ({ page }) => openApp(page));
 
@@ -71,7 +71,7 @@ test("Modify Table › column type: typing filters (prefix first), a click picks
 });
 
 test("Modify Table › column type: the list closes when the columns scroll, and follows the light theme", async ({ page }) => {
-  await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+  await openInTheme(page, "light");
   await openDesigner(page);
   const field = typeField(page, "id");
   await field.click();

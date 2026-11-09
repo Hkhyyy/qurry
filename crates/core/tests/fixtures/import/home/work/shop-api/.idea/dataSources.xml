@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="shop-pg" uuid="aa11bb22-6666-4f70-9182-000000000001">
+      <driver-ref>postgresql</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>org.postgresql.Driver</jdbc-driver>
+      <jdbc-url>jdbc:postgresql://shop-db.internal:6432/shop?ApplicationName=datagrip</jdbc-url>
+      <working-dir>$ProjectFileDir$</working-dir>
+    </data-source>
+    <data-source source="LOCAL" name="shop-mongo" uuid="aa11bb22-6666-4f70-9182-000000000002">
+      <driver-ref>mongo</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>com.dbschema.MongoJdbcDriver</jdbc-driver>
+      <jdbc-url>mongodb://mongo.internal:27017/shop</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="shop-legacy" uuid="aa11bb22-6666-4f70-9182-000000000003">
+      <driver-ref>mysql.8</driver-ref>
+      <jdbc-url>jdbc:mysql://legacy.internal/shop_old</jdbc-url>
+    </data-source>
+  </component>
+</project>

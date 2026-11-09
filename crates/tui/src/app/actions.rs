@@ -22,6 +22,7 @@ pub fn def(a: Action) -> &'static ActionDef {
 pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::NewConsole, hint: "", run: new_console },
     ActionDef { action: Action::Execute, hint: "", run: |app| app.execute(false) },
+    ActionDef { action: Action::QuickFix, hint: "", run: |app| app.quick_fix() },
     ActionDef { action: Action::Explain, hint: "", run: |app| app.execute(true) },
     ActionDef { action: Action::ExplainAnalyze, hint: "", run: explain_analyze },
     ActionDef { action: Action::Cancel, hint: "", run: |app| app.cancel() },
@@ -44,6 +45,11 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::CopyInList, hint: "", run: copy_in_list },
     ActionDef { action: Action::MarkRow, hint: "", run: mark_row },
     ActionDef { action: Action::ValueEditor, hint: "", run: toggle_value_panel },
+    ActionDef { action: Action::ColumnNarrower, hint: "", run: |app| app.resize_columns(Resize::Step(-1)) },
+    ActionDef { action: Action::ColumnWider, hint: "", run: |app| app.resize_columns(Resize::Step(1)) },
+    ActionDef { action: Action::ColumnFit, hint: "", run: |app| app.resize_columns(Resize::Fit) },
+    ActionDef { action: Action::ColumnFitAll, hint: "", run: |app| app.resize_columns(Resize::FitAll) },
+    ActionDef { action: Action::ColumnReset, hint: "", run: |app| app.resize_columns(Resize::Reset) },
     ActionDef { action: Action::FindSimilar, hint: "", run: |app| app.find_similar() },
     ActionDef { action: Action::RagSearch, hint: "", run: |app| app.rag_search_start() },
     ActionDef { action: Action::RagBuild, hint: "", run: |app| app.rag_build_start() },
@@ -66,6 +72,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::CompareSchemas, hint: "", run: |app| app.compare_schemas_start() },
     ActionDef { action: Action::CompareData, hint: "", run: |app| app.compare_data_start() },
     ActionDef { action: Action::RunMigrations, hint: "", run: |app| app.migrations_start() },
+    ActionDef { action: Action::ImportDataSources, hint: "", run: |app| app.ds_import_start() },
     ActionDef { action: Action::BackupDb, hint: "", run: |app| app.backup_start() },
     ActionDef { action: Action::RestoreDb, hint: "", run: |app| app.restore_start() },
     ActionDef { action: Action::DbaReports, hint: "", run: |app| app.dba_palette() },
@@ -96,6 +103,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::ToggleExplorer, hint: "", run: toggle_explorer },
     ActionDef { action: Action::ToggleOutput, hint: "", run: toggle_output },
     ActionDef { action: Action::Complete, hint: "", run: complete },
+    ActionDef { action: Action::Reformat, hint: "", run: |app| app.reformat() },
     ActionDef { action: Action::SplitRight, hint: "", run: |app| app.split_focused(SplitDir::Right) },
     ActionDef { action: Action::SplitDown, hint: "", run: |app| app.split_focused(SplitDir::Down) },
     ActionDef { action: Action::Unsplit, hint: "", run: |app| app.unsplit() },
@@ -114,6 +122,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::Palette, hint: "", run: |app| app.palette_actions() },
     ActionDef { action: Action::TrustSshHost, hint: "", run: trust_ssh_host },
     ActionDef { action: Action::PasswordKey, hint: "", run: |app| app.password_key() },
+    ActionDef { action: Action::KeywordCase, hint: "", run: |app| app.palette_keyword_case() },
     ActionDef { action: Action::GridAlign, hint: "", run: |app| app.palette_grid_align(qurry_core::format::ValueClass::String) },
     ActionDef { action: Action::Theme, hint: "", run: |app| app.palette_theme() },
     ActionDef { action: Action::CheckUpdate, hint: "", run: |app| app.check_update() },
@@ -240,15 +249,15 @@ fn revert(app: &mut App) {
     }
 }
 
-// Table data and console results from one table with its key (App::edit_grid; otherwise the status line says why)
+// Table data and console results from one table with its key, not a join's (App::edit_rows; otherwise the status line says why)
 fn add_row(app: &mut App) {
-    if let Some(g) = app.edit_grid() {
+    if let Some(g) = app.edit_rows() {
         g.add_row();
     }
 }
 
 fn delete_row(app: &mut App) {
-    if let Some(g) = app.edit_grid() {
+    if let Some(g) = app.edit_rows() {
         g.delete_rows();
     }
 }
@@ -258,7 +267,7 @@ fn mark_row(app: &mut App) {
     if !matches!(app.tabs.get(app.active).map(|t| &t.kind), Some(TabKind::Table(_) | TabKind::Console(_))) {
         return;
     }
-    let table = app.edit_to().is_ok();
+    let table = matches!(app.edit_to(), Ok(crate::app::tables::EditTo::Table(_)));
     let Some(g) = app.grid_mut() else { return };
     g.toggle_mark();
     let n = g.marked.len();

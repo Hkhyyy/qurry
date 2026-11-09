@@ -21,12 +21,14 @@ mod conns;
 mod explorer;
 mod palette;
 mod redis;
+mod reformat;
 mod run;
 mod splits;
 mod tables;
 mod tabs;
 
 pub use actions::{title, ACTIONS};
+pub use tables::Resize;
 #[cfg(test)]
 pub(crate) use run::explain_analyze_ask_text;
 
@@ -55,6 +57,59 @@ pub struct Console {
     pub complete: Option<Completion>,
     /// Gutter marks of the statements runs executed
     pub marks: Marks,
+    /// The call around the caret and the unknown names near it (refreshed after each key)
+    pub assist: Assist,
+    /// Where the statements about to run are in the editor, and its lines then (run_marked; empty for a run of statements typed
+    /// nowhere): the run's error is marked through them unless the text changed since (e.g. typed on while Production rows counted)
+    pub run_spans: (Vec<Span>, Vec<String>),
+    /// The last run's error, underlined in the editor until its text changes or the next run starts
+    pub run_error: Option<RunError>,
+    /// Replacements (Reformat Code, keyword case) that ⌃u / ⌃r undo and redo as one step (reformat.rs)
+    pub joined: Vec<reformat::Joined>,
+}
+
+/// What the console shows about the text near the caret: the signature of the call it's in (the hint line) and the tables and
+/// columns its statements' scope lacks (underlined; ⌥↩ lists their fixes)
+#[derive(Default)]
+pub struct Assist {
+    pub sig: Option<complete::Signature>,
+    pub names: Vec<NameMark>,
+}
+
+/// An unknown name on an editor row: its chars [from, to), why, and the closest names
+#[derive(Clone, Debug, PartialEq)]
+pub struct NameMark {
+    pub row: usize,
+    pub from: usize,
+    pub to: usize,
+    pub message: String,
+    pub fixes: Vec<String>,
+}
+
+impl Assist {
+    /// The mark the caret (row, col) is on or right after
+    pub fn at(&self, row: usize, col: usize) -> Option<&NameMark> {
+        self.names.iter().find(|m| m.row == row && m.from <= col && col <= m.to)
+    }
+}
+
+/// A stretch of the editor: (row, char column) of its start and its end (exclusive)
+pub type Span = ((usize, usize), (usize, usize));
+
+/// A failed statement's error in the editor: where the server points (else the whole statement), on the lines it ran from
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunError {
+    pub span: Span,
+    pub lines: Vec<String>,
+}
+
+/// Where byte `at` of `text` is in the editor, when `text` starts at `origin` (row, char column)
+pub fn editor_pos(text: &str, at: usize, origin: (usize, usize)) -> (usize, usize) {
+    let head = &text[..at.min(text.len())];
+    match head.rfind('\n') {
+        Some(nl) => (origin.0 + head.matches('\n').count(), head[nl + 1..].chars().count()),
+        None => (origin.0, origin.1 + head.chars().count()),
+    }
 }
 
 /// How a run statement's gutter mark shows it (DataGrip): … running, ✓ done, ✗ failed (symbols, so NO_COLOR reads them too)
@@ -170,7 +225,23 @@ pub struct FilterSource {
     pub table: String,
     pub order_by: bool,
     pub db: String,
-    pub mysql: bool,
+    /// The tab's data source kind (MySQL inserts names bare; quotes and brackets pair up as it reads them)
+    pub kind: DbKind,
+}
+
+/// The Redis browser's command line (:), the GUI's Terminal: completion from the shared command table (qurry_shared::redis_cmd)
+/// and key names from a bounded SCAN, ↑↓ through this data source's history
+pub struct RedisPrompt {
+    /// The Redis tab it runs in
+    pub tab: u64,
+    /// This data source's history, newest first (passwords masked by the core)
+    pub hist: Vec<String>,
+    /// The history line shown (None: what is being typed)
+    pub hi: Option<usize>,
+    /// Key names read for a prefix (the last SCAN asked)
+    pub keys: Option<(String, Vec<String>)>,
+    /// ↑↓ moved in the open list since the last edit: only then ↩ picks a key name (else it runs the line; ⇥ always picks)
+    pub moved: bool,
 }
 
 /// Editor split (the GUI's Split Right / Split Down). Each pane (group) has its own tab bar
@@ -259,8 +330,11 @@ pub struct DbaTab {
     pub gone: Option<String>,
 }
 
-/// Medis-style Redis browser: key list on the left, value on the right
+/// Medis-style Redis browser, one per data source: key list on the left, value on the right; d switches its database
 pub struct RedisTab {
+    /// The server's databases with their key counts (the title's "db0 · 500 keys" and d's list), read with each new scan
+    pub dbs: Vec<qurry_core::redisdb::RedisDb>,
+    /// SCAN MATCH pattern (key filter); empty = every key
     pub pattern: String,
     pub keys: Vec<KeyRow>,
     pub cursor: String,
@@ -287,6 +361,10 @@ pub enum KRow {
 }
 
 impl RedisTab {
+    pub fn new(pattern: &str, want: Option<String>) -> Self {
+        RedisTab { dbs: vec![], pattern: pattern.into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, open: HashSet::new(), detail: None, text: None, value: None, focus_value: false, scanning: false, want }
+    }
+
     /// Visible rows: folders first (by name), then keys. Only expanded folders show contents (same rules as the explorer's tree::key_folders)
     pub fn rows(&self) -> Vec<KRow> {
         fn level(r: &RedisTab, idx: Vec<usize>, depth: usize, prefix: &str, out: &mut Vec<KRow>) {
@@ -397,17 +475,23 @@ pub enum PAction {
     Object { conn: String, db: String, e: IndexEntryLite },
     Tab(u64),
     /// Statements picked in the execution picker popup
-    Run { stmts: Vec<String>, rows: Vec<(usize, usize)>, explain: bool },
+    Run { stmts: Vec<String>, spans: Vec<Span>, explain: bool },
     /// Change execution settings
     Exec(qurry_core::exec::ExecSettings),
     /// Update channel picked
     Channel(qurry_core::update::Channel),
+    /// Keyword case picked
+    KeywordCase(qurry_core::format::KeywordCase),
     /// Grid alignment: a value class picked (→ pick where it sits)
     AlignClass(qurry_core::format::ValueClass),
     /// Grid alignment: where a value class sits, picked
     Align(qurry_core::format::ValueClass, qurry_core::format::Align),
     /// Theme picked
-    Theme(crate::theme::Theme),
+    Theme(String),
+    /// Import Data Sources: a location found (its path)
+    ImportFrom(String),
+    /// Import Data Sources: File or folder… (asks for a path)
+    ImportPath,
 }
 #[derive(Clone)]
 pub struct IndexEntryLite {
@@ -505,7 +589,7 @@ pub enum Popup {
     Note { title: String, text: String, back: Box<Popup> },
     /// Single-line input. filter = a table tab's WHERE / ORDER BY completes like the console, complete = its open list
     /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
-    Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, filter: Option<FilterSource>, complete: Option<Completion> },
+    Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, filter: Option<FilterSource>, redis: Option<RedisPrompt>, complete: Option<Completion> },
     /// `opened` is set when the confirm comes up on its own (open_after_notices, or a notice over it closing): then, as for
     /// AllowPlaintext, y / Enter count only after TLS_ASK_GRACE without any key, so typing meant for the editor or a form never answers it
     Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: Option<std::time::Instant> },
@@ -518,6 +602,8 @@ pub enum Popup {
     Scope(crate::scope::ScopeEditor),
     /// Editor find/replace bar (⌃F)
     Find(crate::find::FindBar),
+    /// Import Data Sources' confirm: a checkbox per added row (Space), y / Enter imports the checked ones
+    ImportPick(crate::import::ImportPick),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -532,6 +618,7 @@ pub enum Action {
     MarkNode,
     DropObject,
     Execute,
+    QuickFix,
     Explain,
     ExplainAnalyze,
     Cancel,
@@ -557,6 +644,11 @@ pub enum Action {
     CopyInList,
     MarkRow,
     ValueEditor,
+    ColumnNarrower,
+    ColumnWider,
+    ColumnFit,
+    ColumnFitAll,
+    ColumnReset,
     FindSimilar,
     RagSearch,
     RagBuild,
@@ -577,6 +669,7 @@ pub enum Action {
     CompareSchemas,
     CompareData,
     RunMigrations,
+    ImportDataSources,
     ShowDiagram,
     QueryHistory,
     ProductionLog,
@@ -601,6 +694,7 @@ pub enum Action {
     Unsplit,
     OtherSplit,
     Complete,
+    Reformat,
     TrustSshHost,
     Palette,
     CycleFocus,
@@ -616,6 +710,7 @@ pub enum Action {
     ExplorerWider,
     ManageSchemas,
     PasswordKey,
+    KeywordCase,
     GridAlign,
     Theme,
     CheckUpdate,
@@ -653,7 +748,8 @@ pub struct Hits {
     pub last_click: Option<(std::time::Instant, u16, u16)>,
     /// Screen cell where the console cursor was drawn and the cursor then (row, col) — for mapping mouse position to text position (tui-textarea doesn't expose scroll position)
     pub caret: Option<(u16, u16, usize, usize)>,
-    /// [■ Cancel] in the running console's title bar (click to cancel)
+    /// The console title's one button (the GUI toolbar's ▶ / ■): [▶ Run] runs, [■ Cancel] while it runs cancels; the other is empty
+    pub run: ratatui::layout::Rect,
     pub cancel: ratatui::layout::Rect,
     /// Text tab (DDL·diagram) body — scroll with the wheel
     pub text: ratatui::layout::Rect,
@@ -752,17 +848,23 @@ pub struct App {
     /// Whether last session's tabs were restored (once, after the first Data Source list load), and the last saved content
     restored: bool,
     saved_ws: String,
+    /// Data sources whose console said it starts in Manual because it is Production (errors::PRODUCTION_MANUAL): once per run
+    told_manual: std::collections::HashSet<String>,
     /// Last sync with the shared workspace list (None = not yet)
     pub ws_shared: Option<Vec<qurry_core::workspaces::WsInfo>>,
     /// The save file has synced with the shared list before (missing workspaces were deleted elsewhere)
     pub ws_synced: bool,
+    /// The temporary source to open once the list is loaded, and whether in incident mode (App::start_with)
+    startup: Option<(String, bool)>,
     /// What the terminal can show (set from the environment at startup; drawing maps the frame to it)
     pub color: crate::theme::ColorMode,
-    /// The Theme setting (settings.json, read at startup and by ⌃k › Theme…) and what Auto picks for this terminal (COLORFGBG, set at startup)
-    pub theme: crate::theme::Theme,
+    /// The theme settings shared with the GUI (settings.json, read at startup and by ⌃k › Theme…) and whether this terminal is light (COLORFGBG, set at startup: Sync with OS goes by it)
+    pub themes: qurry_core::theme::ThemeSettings,
     pub auto_light: bool,
     /// Grid alignment per value class, shared with the GUI's Settings › Appearance › Alignment (settings.json, read at startup and by ⌃k › Grid Alignment…)
     pub align: qurry_core::format::Alignments,
+    /// Keyword case as you type and in Reformat Code, shared with the GUI's Settings › Appearance › Keyword case (settings.json, read at startup and by ⌃k › Keyword Case…)
+    pub keyword_case: qurry_core::format::KeywordCase,
     /// The last frame was the 'terminal too small' message: keys and clicks would act on a screen that isn't drawn
     pub too_small: bool,
     /// Tests only (testkit): answers console statements and the Production row counts instead of the database
@@ -771,6 +873,8 @@ pub struct App {
     /// Tests only: every command run_action ran, in order (tests/actions.rs checks keys reach the right one)
     #[cfg(test)]
     pub ran: Vec<Action>,
+    /// Where Import Data Sources looks for DataGrip / IntelliJ / DBeaver settings (the home folder; tests use a fake one)
+    pub import_home: std::path::PathBuf,
 }
 
 /// Tests only (testkit): stands in for the database, answering each query by its text
@@ -781,7 +885,7 @@ pub fn fuzzy(q: &str, text: &str) -> Option<i64> {
     qurry_core::fuzzy::score(q, text, Default::default()).map(|s| s as i64)
 }
 
-fn err<E: std::fmt::Display>(e: E) -> String {
+pub(crate) fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
@@ -797,8 +901,9 @@ impl App {
             Err(e) => (Default::default(), Some(format!("keymap.json ignored ({e}) — default keys in use; fix or delete {} and restart", state.store.dir().join("keymap.json").display()))),
         };
         let align = state.store.grid_align();
-        let theme = crate::theme::Theme::parse(state.store.tui_theme().as_deref());
+        let themes = state.store.theme_settings();
         let mut a = App {
+            keyword_case: state.store.keyword_case(),
             align,
             hits: Hits::default(),
             state,
@@ -834,24 +939,27 @@ impl App {
             update: None,
             restart: false,
             restored: false,
+            startup: None,
             saved_ws: String::new(),
+            told_manual: Default::default(),
             ws_shared: None,
             ws_synced: false,
             color: Default::default(),
-            theme,
+            themes,
             auto_light: false,
             too_small: false,
             #[cfg(test)]
             fake_db: None,
             #[cfg(test)]
             ran: vec![],
+            import_home: qurry_core::import::home(),
             next_id: 1,
             exec: Default::default(),
             ddl_structure: false,
             workspaces: vec![Workspace { id: uuid::Uuid::new_v4().to_string(), name: "Default".into(), conns: vec![], saved: None }],
             cur_ws: 0,
         };
-        if let Some(e) = keys_err {
+        if let Some(e) = keys_err.or_else(|| a.keys.shadowed_notice()) {
             a.status = e;
         }
         a.reload_conns();

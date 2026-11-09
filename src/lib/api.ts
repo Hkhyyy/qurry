@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { sharedOr, type Align, type Alignments, type ValueClass } from "./shared";
+import { sharedOr, type Align, type Alignments, type KeywordCase, type ValueClass } from "./shared";
 import type { DataFormat } from "./transfer";
+import type { CustomTheme, ThemeSettings, ThemeSync } from "./theme";
 
 export type DbKind = "postgres" | "mysql" | "redis" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "mongodb" | "oracle" | "qdrant" | "chroma" | "milvus";
 /** DBs connected via a separately downloaded driver plugin */
@@ -63,6 +64,8 @@ export interface ConnOptions {
   singleDb?: boolean;
   /** Production: modifying statements show the affected row count and ask for confirmation */
   confirmChanges?: boolean;
+  /** Production: consoles start in Manual transaction mode (unset = on; core ConnOptions::starts_manual) */
+  productionManual?: boolean | null;
   /** Remote MySQL with SSL unset may connect in plain text if it can't do TLS */
   allowPlaintext?: boolean;
   /** Whether it is visible to the MCP server (missing on older sources: Production hidden, others read·write) */
@@ -118,8 +121,17 @@ export interface QueryResult {
   moreError?: string;
   /** A console SELECT's result whose rows can be edited like a table tab's: in this table (not sent on load more) */
   edit?: ResultEditTarget;
-  /** A console result whose rows can't be edited, and why (instead of `edit`). Neither: not checked */
+  /** A console SELECT's join result (#102): per column, the table it is edited in or why it can't be (instead of `edit`) */
+  editJoin?: JoinEdit;
+  /** A console result whose rows can't be edited, and why (instead of `edit`). None of the three: not checked */
   readOnlyReason?: string;
+}
+
+/** A join result's edits (qurry_shared::result_edit::JoinEdit): tables = the ones that can be edited, each found by its key (result
+ *  column pkAt[j] holds pk[j]); columns = one per result column. Rows can't be added or deleted */
+export interface JoinEdit {
+  tables: { schema: string; table: string; pk: string[]; pkAt: number[] }[];
+  columns: ({ table: number; column: string } | { readOnly: string })[];
 }
 
 /** Where a console result's edits go: result column i is the table's column `columns[i]`; `pk` is the table's primary key */
@@ -144,6 +156,18 @@ export interface ReleaseInfo {
   notes: string;
   assets: { name: string; url: string }[];
 }
+/** The table a table tab shows, which its column widths are kept for (qurry_core::store::TableRef) */
+export interface TableRef {
+  source: string;
+  /** The tab's database; empty: the source's default (the core names it) */
+  database: string;
+  schema: string;
+  table: string;
+}
+
+/** Column widths a user set, by column name, in characters (qurry_shared::format::ColumnWidths) */
+export type ColumnWidths = Record<string, number>;
+
 export interface UpdateInfo {
   current: string;
   /** The update channel the check was for */
@@ -196,6 +220,24 @@ export const api = {
   /** Grid alignment per value class: only the classes the user changed. Kept in the config folder, shared with the TUI */
   gridAlign: () => invoke<Alignments>("grid_align"),
   setGridAlign: (cls: ValueClass, align: Align) => invoke<Alignments>("set_grid_align", { class: cls, align }),
+  /** Keyword case as you type and in Reformat Code (settings.json, shared with the TUI) */
+  keywordCase: () => invoke<KeywordCase>("keyword_case"),
+  setKeywordCase: (keywordCase: KeywordCase) => invoke<void>("set_keyword_case", { case: keywordCase }),
+  /** Theme pick, Sync with OS and custom themes, shared with the TUI (settings.json) */
+  themeSettings: () => invoke<ThemeSettings>("theme_settings"),
+  setTheme: (id: string) => invoke<void>("set_theme", { id }),
+  setThemeSync: (sync: ThemeSync) => invoke<void>("set_theme_sync", { sync }),
+  /** Checked first (known base and colors, #rrggbb); an empty id adds one. The saved theme */
+  saveCustomTheme: (theme: CustomTheme) => invoke<CustomTheme>("save_custom_theme", { theme }),
+  deleteCustomTheme: (id: string) => invoke<void>("delete_custom_theme", { id }),
+  /** The picked theme file, checked (not saved); null if cancelled. Throws why a file is refused */
+  importTheme: () => invoke<CustomTheme | null>("import_theme"),
+  /** The path written, null if cancelled */
+  exportTheme: (theme: CustomTheme) => invoke<string | null>("export_theme", { theme }),
+  /** Column widths a user gave a table tab's columns, shared with the TUI; setting merges into what is saved and returns it */
+  columnWidths: (table: TableRef) => invoke<ColumnWidths>("column_widths", { table }),
+  setColumnWidths: (table: TableRef, widths: ColumnWidths) => invoke<ColumnWidths>("set_column_widths", { table, widths }),
+  resetColumnWidths: (table: TableRef) => invoke<void>("reset_column_widths", { table }),
   /** Download the new version, swap it in, and restart the app (progress via the "update-progress" event) */
   installUpdate: () => invoke<void>("install_update"),
   /** Open tabs·splits (restored on restart) */
@@ -218,6 +260,11 @@ export const api = {
     invoke<string>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null, testId: testId ?? null }),
   testSsh: (config: ConnectionConfig, sshSecret?: string, testId?: string) => invoke<string>("test_ssh", { config, sshSecret: sshSecret ?? null, testId: testId ?? null }),
   cancelTest: (testId: string) => invoke<void>("cancel_test", { testId }),
+  /** Schemas tab of a data source that isn't saved yet: listed with the form's settings, connecting as testConnection does (cancelTest(testId) stops it) */
+  formDatabases: (config: ConnectionConfig, password?: string, sshSecret?: string, testId?: string) =>
+    invoke<string[]>("form_databases", { config, password: password ?? null, sshSecret: sshSecret ?? null, testId: testId ?? null }),
+  formSchemas: (config: ConnectionConfig, database: string, password?: string, sshSecret?: string, testId?: string) =>
+    invoke<SchemaInfo[]>("form_schemas", { config, database, password: password ?? null, sshSecret: sshSecret ?? null, testId: testId ?? null }),
   connect: (id: string) => invoke<string>("connect", { id }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   runQuery: (id: string, sql: string, tabId?: string, limit = 500) => invoke<QueryResult>("run_query", { id, sql, limit, tabId: tabId ?? null }),
@@ -228,13 +275,19 @@ export const api = {
   commitTx: (tabId: string) => invoke<string | null>("commit_tx", { tabId }),
   rollbackTx: (tabId: string) => invoke<string | null>("rollback_tx", { tabId }),
   closeSession: (tabId: string) => invoke<void>("close_session", { tabId }),
-  /** exactOne = saving grid edits (roll back everything unless each UPDATE/DELETE hits exactly 1 row) */
-  executeBatch: (id: string, statements: string[], exactOne = false) => invoke<BatchResult>("execute_batch", { id, statements, exactOne }),
+  /** A grid's Submit: none is saved unless each UPDATE / DELETE changes exactly 1 row. tabId = the console the result is in: in Manual
+   *  mode or with a transaction open, the edits run in it and stay pending until Commit / Roll back */
+  submitEdits: (id: string, tabId: string | undefined, statements: string[]) => invoke<BatchResult>("submit_edits", { id, tabId, statements }),
   // For file writes the backend opens the save dialog itself (the webview doesn't pick the path). null if canceled
   exportConnections: () => invoke<[number, string] | null>("export_connections"),
-  /** Pick a file to import → preview the changes. importPicked on confirm */
-  pickImportFile: () => invoke<string[] | null>("pick_import_file"),
-  importPicked: () => invoke<{ added: number; updated: number }>("import_picked"),
+  /** Import Data Sources ▸ the DataGrip / IntelliJ / DBeaver locations found on this computer */
+  importLocations: () => invoke<ImportLocation[]>("import_locations"),
+  /** A found location → its preview. importPicked on confirm */
+  importLocation: (path: string) => invoke<ImportPlan>("import_location", { path }),
+  /** File… / Folder… (the backend opens the native picker) → the preview. null if canceled */
+  pickImport: (folder: boolean) => invoke<ImportPlan | null>("pick_import", { folder }),
+  /** Import the rows left checked (picked[i] for row i of the preview) */
+  importPicked: (picked: boolean[]) => invoke<{ added: number; updated: number; message: string }>("import_picked", { picked }),
   saveTextFile: (defaultName: string, text: string) => invoke<string | null>("save_text_file", { defaultName, text }),
   /** Data export: file (save dialog) or clipboard text. null if the save dialog is closed. Progress via the "transfer-progress" event */
   exportData: (id: string, sql: string, format: DataFormat, clipboard: boolean, defaultName: string, table: [string, string] | null, job: string) =>
@@ -277,12 +330,26 @@ export interface TableStructure extends TableDetail {
 }
 /** One row of the workspace list (shared by GUI · TUI) */
 export interface WsInfo { id: string; name: string; connIds: string[] }
-export interface CompletionTable { schema: string; name: string; columns: [string, string][] }
+/** Completion metadata (qurry_shared::complete::CompletionTable): a table with its columns and foreign keys, or a user function (`routine`, no columns) */
+export interface CompletionTable {
+  schema: string;
+  name: string;
+  columns: [string, string][];
+  fks?: { columns: string[]; refSchema: string; refTable: string; refColumns: string[] }[];
+  routine?: { args: string; returns: string };
+}
 
 export type DbaAction = { kind: "kill"; label: string; terminate: boolean } | { kind: "sql"; label: string; template: string } | { kind: "explain"; label: string };
 export interface DbaReportInfo { id: string; title: string; group: string; help: string; actions: DbaAction[] }
 /** Execution plan analysis (core): shares·warnings. PlanNode is in components/ConsolePane */
 export const analyzePlan = (json: string) => invoke<import("../components/ConsolePane").PlanNode>("analyze_plan", { json });
+/** A DataGrip / IntelliJ / DBeaver location found on this computer (core import::Location) */
+export interface ImportLocation { label: string; path: string; shown: string; count: number }
+/** One row of the import confirm: added / updated rows can be left out, skipped ones can't (core import::ImportRow) */
+export interface ImportRow { text: string; note: string; value: string; tone: "warn" | null; checkable: boolean }
+/** What an import would do; importable 0 = a notice instead of the confirm (core import::ImportPlan) */
+export interface ImportPlan { title: string; message: string; rows: ImportRow[]; importable: number }
+
 export interface HistoryItem { id: string; connId: string; database?: string; sql: string; ts: number }
 export interface Snippet { id: string; name: string; sql: string; connId?: string | null }
 /** Test data generation: fill method per column · sample rows · warnings */
@@ -428,7 +495,13 @@ export const redisDb = (database?: string | null) => `db${String(database ?? "")
 export interface RedisKeyRow { key: string; type: string; ttl: number }
 export interface RedisKeyDetail { type: string; ttl: number; length: number; memory: number | null; encoding: string | null; value: unknown; truncated: boolean }
 export type RedisReply = null | number | string | boolean | { status: string } | RedisReply[];
+export interface RedisDbInfo { name: string; keys: number }
+/** The databases with their key counts, and whether CONFIG works (checked on connect: managed Redis refuses it) */
+export interface RedisOverview { configAllowed: boolean; databases: RedisDbInfo[] }
 export const redis = {
+  overview: (id: string) => invoke<RedisOverview>("redis_overview", { id }),
+  /** Key names starting with `prefix`, from a bounded SCAN (Terminal completion) */
+  keyNames: (id: string, prefix: string, max = 50) => invoke<string[]>("redis_key_names", { id, prefix, max }),
   scan: (id: string, cursor: string, pattern: string, count: number, typeFilter?: string) =>
     invoke<{ cursor: string; keys: RedisKeyRow[] }>("redis_scan", { id, cursor, pattern, count, typeFilter: typeFilter || null }),
   key: (id: string, key: string, limit?: number) => invoke<RedisKeyDetail>("redis_key", { id, key, limit: limit ?? null }),

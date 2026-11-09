@@ -49,7 +49,7 @@ impl Backend for Arc<PluginConn> {
                     return Ok(out);
                 }
                 let cols = self.table_detail(&s.name, &r.name).await.map(|d| d.columns.into_iter().map(|c| (c.name, c.data_type)).collect()).unwrap_or_default();
-                out.push(CompletionTable { schema: s.name.clone(), name: r.name, columns: cols });
+                out.push(CompletionTable { schema: s.name.clone(), name: r.name, columns: cols, ..Default::default() });
             }
         }
         Ok(out)

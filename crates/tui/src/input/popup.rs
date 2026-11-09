@@ -125,9 +125,13 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
             KeyCode::Char('y') | KeyCode::Char('Y') => on_yes(app),
             _ => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: Instant::now() }),
         },
-        Popup::Input { title, body, mut input, on_ok, filter, mut complete } => {
+        Popup::Input { title, body, mut input, on_ok, filter, mut redis, mut complete } => {
             // The open list (a table filter's completion) takes the console's list keys: ↑↓ PgUp PgDn move, ↩ / ⇥ pick, ⎋ closes it
+            // The Redis command line's key names: ↩ runs the line unless ↑↓ moved to one (⇥ picks), so a key typed out in full
+            // isn't swapped for a longer one the SCAN found
+            let keys_unmoved = redis.as_ref().is_some_and(|p| !p.moved) && complete.as_ref().is_some_and(|c| c.items.first().is_some_and(|i| i.kind == qurry_core::complete::ItemKind::Value));
             if let Some(cmp) = &mut complete
+                && !(keys_unmoved && k.code == KeyCode::Enter)
                 && let Some(key) = list_key(cmp, k.code)
             {
                 match key {
@@ -139,14 +143,47 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                         complete = None;
                     }
                     ListKey::Close => complete = None,
-                    ListKey::Moved => {}
+                    ListKey::Moved => {
+                        if let Some(p) = &mut redis {
+                            p.moved = true;
+                        }
+                    }
                 }
-                app.popup = Some(Popup::Input { title, body, input, on_ok, filter, complete });
+                app.popup = Some(Popup::Input { title, body, input, on_ok, filter, redis, complete });
                 return;
             }
             match k.code {
                 KeyCode::Esc => {}
                 KeyCode::Enter => on_ok(app, input.lines().join("")),
+                // The Redis command line: ↑↓ through this data source's history, newest first (↓ past the newest: an empty line)
+                KeyCode::Up | KeyCode::Down if redis.is_some() => {
+                    let p = redis.as_mut().expect("redis prompt");
+                    p.hi = match (k.code, p.hi) {
+                        (KeyCode::Up, None) if !p.hist.is_empty() => Some(0),
+                        (KeyCode::Up, Some(i)) => Some((i + 1).min(p.hist.len() - 1)),
+                        (KeyCode::Down, Some(i)) => i.checked_sub(1),
+                        (_, h) => h,
+                    };
+                    input = tui_textarea::TextArea::new(vec![p.hi.map(|i| p.hist[i].clone()).unwrap_or_default()]);
+                    input.set_cursor_line_style(ratatui::style::Style::default());
+                    input.move_cursor(tui_textarea::CursorMove::End);
+                    app.popup = Some(Popup::Input { title, body, input, on_ok, filter, redis, complete: None });
+                }
+                _ if redis.is_some() => {
+                    // Commands and their arguments complete as you type; key names once a bounded SCAN has read them
+                    if k.code != KeyCode::Tab {
+                        input.input(k);
+                    }
+                    let p = redis.as_mut().expect("redis prompt");
+                    p.hi = None;
+                    p.moved = false;
+                    let (c, ask_keys) = App::redis_complete(&input, p);
+                    let tab = p.tab;
+                    app.popup = Some(Popup::Input { title, body, input, on_ok, filter, redis, complete: c });
+                    if let Some(prefix) = ask_keys {
+                        app.redis_key_names(tab, prefix);
+                    }
+                }
                 _ => {
                     // Typing a word or '.' opens the list, deleting re-filters an open one, ⇥ / ⌃Space ask at the cursor (a
                     // single-line input inserts no tab); other keys close it
@@ -154,16 +191,33 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                     let plain = !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
                     let typed = plain && matches!(k.code, KeyCode::Char(c) if c.is_alphanumeric() || c == '_' || c == '.' || c == '\'' || c == ' ');
                     let refilter = complete.is_some() && k.code == KeyCode::Backspace;
-                    if !ask {
+                    // The WHERE / ORDER BY inputs pair up quotes and brackets, as the console does
+                    let paired = !ask && filter.as_ref().is_some_and(|f| pair_key(&mut input, &k, f.kind));
+                    if !ask && !paired {
                         input.input(k);
                     }
                     complete = filter.as_ref().filter(|_| ask || typed || refilter).and_then(|f| filter_complete(&input, f, ask));
-                    app.popup = Some(Popup::Input { title, body, input, on_ok, filter, complete });
+                    app.popup = Some(Popup::Input { title, body, input, on_ok, filter, redis, complete });
                 }
             }
         }
         // Handled separately above
         Popup::Find(bar) => app.popup = Some(Popup::Find(bar)),
+        // Space checks the row under the cursor, y / Enter imports the checked ones, n / Esc cancel
+        Popup::ImportPick(mut p) => {
+            match k.code {
+                KeyCode::Esc | KeyCode::Char('n') => return,
+                KeyCode::Down | KeyCode::Char('j') => p.move_by(1),
+                KeyCode::Up | KeyCode::Char('k') => p.move_by(-1),
+                KeyCode::PageDown => p.move_by(10),
+                KeyCode::PageUp => p.move_by(-10),
+                KeyCode::Char(' ') => p.toggle(),
+                KeyCode::Char('y' | 'Y') | KeyCode::Enter if p.count() > 0 => return app.ds_import_apply(p),
+                KeyCode::Char('y' | 'Y') | KeyCode::Enter => app.status = "Check at least one data source to import (Space), or n / Esc to cancel".into(),
+                _ => {}
+            }
+            app.popup = Some(Popup::ImportPick(p));
+        }
         Popup::Scope(mut e) => {
             match k.code {
                 KeyCode::Esc => return,
@@ -656,38 +710,54 @@ mod tests {
         assert!(h.app.status.contains("Qurry 99.0.0-beta.1 is available"), "{}", h.app.status);
     }
 
-    /// ⌃k › Theme…: opens on the current theme, says what Auto picks here; the pick switches the colors at once and is saved
-    /// in settings.json (read again at the next start). Auto on a light terminal says at startup how to get the dark colors back
+    /// ⌃k › Theme…: the built-in themes, the custom ones made in the GUI and Sync with OS (the GUI's dark / light pick by COLORFGBG);
+    /// opens on the current one. The pick switches the colors at once and is saved in settings.json for both apps (read again at
+    /// the next start). Sync with OS on a light terminal says at startup how to get the dark colors back
     #[tokio::test]
     async fn theme_is_picked_from_the_palette() {
-        use crate::theme::Theme;
+        use qurry_core::theme::CustomTheme;
         let mut h = Harness::new().await;
         h.app.auto_light = true;
-        assert_eq!(h.app.theme, Theme::Auto);
+        assert_eq!(h.app.theme_pick(), "system");
         let status_bg = |h: &mut Harness| h.buffer(120, 30)[(0, 29)].bg;
         let light_bg = status_bg(&mut h);
         assert!(h.app.startup_notice().unwrap().contains("⌃k › Theme… › Dark"), "{:?}", h.app.startup_notice());
+        // A custom theme saved by the GUI meanwhile shows up when the list opens
+        let mine = CustomTheme { id: String::new(), name: "Night shift".into(), base: "dracula".into(), colors: [("sel".into(), "#123456".into())].into() };
+        h.app.state.store.save_custom_theme(&mine).unwrap();
         h.app.palette_theme();
         let s = h.screen(120, 30);
-        assert!(s.contains("● Auto") && s.contains("COLORFGBG): light now") && s.contains("  Dark") && s.contains("  Light"), "{s}");
-        h.key("Down");
+        for want in ["  Dark", "  Light", "  High contrast", "  Dracula", "  One Dark", "  Solarized Dark", "  Solarized Light", "  Night shift", "custom, dark", "● Sync with OS", "Dark / Light by the terminal background (COLORFGBG): Light now"] {
+            assert!(s.contains(want), "{want}: {s}");
+        }
+        // Up from Sync with OS: the custom theme
+        h.key("Up");
         h.key("Enter");
-        assert_eq!((h.app.theme, h.app.state.store.tui_theme().as_deref()), (Theme::Dark, Some("dark")));
-        assert_eq!(h.app.status, "Theme: Dark — dark colors");
+        assert_eq!((h.app.theme_pick(), h.app.state.store.theme_settings().theme.as_deref()), ("custom-1", Some("custom-1")));
+        assert_eq!(h.app.status, "Theme: Night shift — saved for the GUI too");
         assert_eq!(h.app.startup_notice(), None, "picked by hand: nothing to say at startup");
-        assert_eq!(status_bg(&mut h), crate::kit::SURFACE);
-        assert_ne!(light_bg, crate::kit::SURFACE);
-        // Reopened on Dark: Enter keeps it; Light on a dark terminal
+        let buf = h.buffer(120, 30);
+        assert_eq!(buf[(0, 29)].bg, ratatui::style::Color::Rgb(0x21, 0x22, 0x2c), "the status line in Dracula's panel color");
+        assert_eq!(buf[(60, 10)].bg, ratatui::style::Color::Rgb(0x28, 0x2a, 0x36), "Dracula's background drawn");
+        // Reopened on it; Dark by typing its name, on a dark terminal: the terminal's own background, the status line SURFACE
         h.app.auto_light = false;
         h.app.palette_theme();
-        assert!(h.screen(120, 30).contains("● Dark"));
+        assert!(h.screen(120, 30).contains("● Night shift"));
+        h.type_str("dark");
+        h.key("Enter");
+        assert_eq!(h.app.state.store.theme_settings().theme.as_deref(), Some("dark"));
+        assert_eq!(status_bg(&mut h), crate::kit::SURFACE);
+        assert_ne!(light_bg, crate::kit::SURFACE);
+        assert_eq!(h.buffer(120, 30)[(60, 10)].bg, ratatui::style::Color::Reset);
+        // Light on a dark terminal: the light palette
+        h.app.palette_theme();
         h.key("Down");
         h.key("Enter");
-        assert_eq!((h.app.theme, h.app.state.store.tui_theme().as_deref()), (Theme::Light, Some("light")));
+        assert_eq!(h.app.theme_pick(), "light");
         assert_eq!(status_bg(&mut h), light_bg);
         // The next start reads it
         let next = crate::app::App::new(h.app.state.clone(), h.app.tx.clone());
-        assert_eq!(next.theme, Theme::Light);
+        assert_eq!(next.theme_pick(), "light");
     }
 
     /// ⌃k › Grid Alignment…: a row per value class, Enter picks Left / Center / Right (NULL also Column type, its default); saved to

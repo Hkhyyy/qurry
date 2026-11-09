@@ -1,0 +1,31 @@
+# The GUI's shared WASM (src/wasm/pkg) for the web and e2e jobs of ci.yml: restored from the cache when nothing it is built from changed
+# (crates/shared*, Cargo.lock, the workspace's wasm profile, scripts/wasm.sh, the toolchain versions), else built with the WASM toolchain
+# and saved right away (so a failing test doesn't lose it). Either way it sets QURRY_WASM_PREBUILT, so the pnpm scripts that run
+# `pnpm wasm` first (test, build, dev, Storybook) don't build it again. Needs Node (actions/setup-node) for wasm-opt on a miss.
+name: Shared WASM
+description: src/wasm/pkg from the cache, or built with the WASM toolchain and cached
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      id: cache
+      with:
+        path: src/wasm/pkg
+        key: wasm-pkg-${{ hashFiles('crates/shared*/**', 'Cargo.lock', 'Cargo.toml', 'scripts/wasm.sh', '.github/actions/wasm-toolchain/action.yml') }}
+
+    - if: steps.cache.outputs.cache-hit != 'true'
+      uses: ./.github/actions/wasm-toolchain
+
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: scripts/wasm.sh
+
+    - if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        path: src/wasm/pkg
+        key: ${{ steps.cache.outputs.cache-primary-key }}
+
+    - shell: bash
+      run: echo "QURRY_WASM_PREBUILT=1" >> "$GITHUB_ENV"

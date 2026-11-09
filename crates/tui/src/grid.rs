@@ -24,7 +24,12 @@ pub struct Grid {
     pub deleted: BTreeSet<usize>,
     /// Number of newly added rows (appended to the end of result.rows)
     pub added: usize,
+    /// Each column's width as drawn: the user's (`user_widths`), else the one computed from the header and the first rows
     pub widths: Vec<u16>,
+    /// Widths the user set (< > =, or the GUI for a table tab) by column name (`id#2` for a name the result repeats), in cells (qurry_shared::format::ColumnWidths)
+    pub user_widths: ColumnWidths,
+    /// A column's set width before `=` fitted it (0: none, the computed one), so `=` on the fitted column puts it back (the GUI's double-click)
+    before_fit: ColumnWidths,
     /// Fractional-second digits of time columns (aligned within a column, 0 = no alignment)
     pub(crate) frac: Vec<usize>,
     /// Last rendered height (PgUp/PgDn)
@@ -106,7 +111,7 @@ pub fn cell_text(v: &Value) -> String {
     }
 }
 pub(crate) use qurry_core::format::{is_time_type, pad_frac};
-use qurry_core::format::{cell_align, cell_class, column_class, is_json_type, json_spans, type_class, Align, Alignments, JsonKind, ValueClass};
+use qurry_core::format::{cell_align, cell_class, column_class, column_keys, column_width, is_json_type, json_spans, text_width, type_class, Align, Alignments, ColumnWidths, JsonKind, ValueClass};
 use qurry_core::extract::{self, Format, Rows};
 use qurry_core::store::DbKind;
 
@@ -139,13 +144,14 @@ static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), orig: vec![] };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), before_fit: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), orig: vec![] };
         g.compute_widths();
         g
     }
 
     pub fn compute_widths(&mut self) {
         let r = &self.result;
+        let keys = self.width_keys();
         self.widths = r
             .columns
             .iter()
@@ -153,10 +159,58 @@ impl Grid {
             .map(|(i, c)| {
                 let body = r.rows.iter().take(300).map(|row| row.get(i).map(cell_text).unwrap_or_default().width()).max().unwrap_or(0);
                 // +2: room for the sort indicator (▲▼)
-                ((c.name.width() + 2).max(body).clamp(4, 40) + 1) as u16
+                self.user_widths.get(&keys[i]).copied().unwrap_or(((c.name.width() + 2).max(body).clamp(4, 40) + 1) as u16)
             })
             .collect();
         self.compute_frac();
+    }
+
+    /// The keys of `user_widths`: each column's name, `id#2` for a name the result repeats (qurry_shared::format::column_keys)
+    fn width_keys(&self) -> Vec<String> {
+        column_keys(self.result.columns.iter().map(|c| c.name.as_str()))
+    }
+
+    /// Widths the user set (a table tab's saved ones, or none for Reset Widths) replace the computed ones by column key
+    pub fn set_user_widths(&mut self, w: ColumnWidths) {
+        self.user_widths = w;
+        self.before_fit.clear();
+        self.compute_widths();
+    }
+
+    /// Fit: the cells column `c` needs for its header (with the sort mark) and its longest value, over the rows loaded so far
+    pub fn fit_width(&self, c: usize) -> u16 {
+        let name = self.result.columns[c].name.width() + 2;
+        let body = (0..self.rows()).map(|r| self.shown(r, c, usize::MAX).map_or(6, |s| text_width(&s))).max().unwrap_or(0);
+        column_width(name.max(body) as i64, 0)
+    }
+
+    /// `=`: fit column `c`; on a column fitted to that width, back to the width it had set before (or none: its computed width).
+    /// Returns the column's key and its width to save, 0 to forget it (Store::set_column_widths)
+    pub fn toggle_fit(&mut self, c: usize) -> (String, u16) {
+        let key = self.width_keys().swap_remove(c);
+        let fit = self.fit_width(c);
+        let set = self.user_widths.get(&key).copied();
+        if set != Some(fit) {
+            self.before_fit.insert(key, set.unwrap_or(0));
+            return self.set_width(c, fit);
+        }
+        match self.before_fit.remove(&key).unwrap_or(0) {
+            0 => {
+                self.user_widths.remove(&key);
+                self.compute_widths();
+                (key, 0)
+            }
+            w => self.set_width(c, w),
+        }
+    }
+
+    /// Give column `c` the width `w` (in range); returns the width and its column's key, for saving
+    pub fn set_width(&mut self, c: usize, w: u16) -> (String, u16) {
+        let key = self.width_keys().swap_remove(c);
+        let w = column_width(w.into(), 0);
+        self.user_widths.insert(key.clone(), w);
+        self.compute_widths();
+        (key, w)
     }
 
     /// Time columns: longest fractional-second digits among loaded values
@@ -175,13 +229,24 @@ impl Grid {
             .collect();
     }
 
+    /// Loaded rows go before the added ones (Submit inserts the last `added` rows, Revert drops them): the added rows, their edits,
+    /// marks and the cursor on them move down with them
     pub fn append(&mut self, more: QueryResult) {
-        let n = self.result.rows.len();
-        self.result.rows.extend(more.rows);
+        let (n, k) = (self.result.rows.len(), more.rows.len());
+        let at = n - self.added;
+        self.result.rows.splice(at..at, more.rows);
         self.result.truncated = more.truncated;
         self.compute_frac();
+        if self.added > 0 {
+            let mv = |r: usize| if r >= at { r + k } else { r };
+            self.edits = std::mem::take(&mut self.edits).into_iter().map(|((r, c), v)| ((mv(r), c), v)).collect();
+            self.marked = std::mem::take(&mut self.marked).into_iter().map(mv).collect();
+            self.row = mv(self.row);
+            self.anchor = self.anchor.map(|(r, c)| (mv(r), c));
+        }
         if !self.orig.is_empty() {
-            self.orig.extend(n..self.result.rows.len());
+            // The loaded rows, in the order they came (orig covers them only: added rows stay last, unsorted)
+            self.orig.extend(at..at + k);
             self.apply_local_sort();
         }
     }
@@ -198,7 +263,7 @@ impl Grid {
             _ => Some((col, false)),
         };
         if self.orig.is_empty() {
-            self.orig = (0..self.rows()).collect();
+            self.orig = (0..self.rows() - self.added).collect();
         }
         self.apply_local_sort();
         if self.sort.is_none() {
@@ -206,18 +271,32 @@ impl Grid {
         }
     }
 
+    /// Sorts the loaded rows (orig: where each came in the result); the added rows stay last, where Submit and Revert find them.
+    /// Edits and deletes move with their rows
     fn apply_local_sort(&mut self) {
         // Marks are row positions: they would point at other rows once sorted
         self.marked.clear();
-        let mut rows: Vec<(usize, Vec<Value>)> = std::mem::take(&mut self.orig).into_iter().zip(std::mem::take(&mut self.result.rows)).collect();
+        let base = self.rows() - self.added;
+        let loaded: Vec<Vec<Value>> = self.result.rows.drain(..base).collect();
+        // (place in the result, row now, values)
+        let mut rows: Vec<(usize, usize, Vec<Value>)> = std::mem::take(&mut self.orig).into_iter().zip(loaded).enumerate().map(|(now, (o, v))| (o, now, v)).collect();
         match self.sort {
             Some((c, desc)) => rows.sort_by(|a, b| {
-                let o = cmp_cell(a.1.get(c), b.1.get(c), desc);
+                let o = cmp_cell(a.2.get(c), b.2.get(c), desc);
                 if desc { o.reverse() } else { o }
             }),
             None => rows.sort_by_key(|r| r.0),
         }
-        (self.orig, self.result.rows) = rows.into_iter().unzip();
+        let mut to = vec![0; base];
+        for (i, r) in rows.iter().enumerate() {
+            to[r.1] = i;
+        }
+        let mv = |r: usize| if r < base { to[r] } else { r };
+        self.edits = std::mem::take(&mut self.edits).into_iter().map(|((r, c), v)| ((mv(r), c), v)).collect();
+        self.deleted = std::mem::take(&mut self.deleted).into_iter().map(mv).collect();
+        let (orig, sorted): (Vec<usize>, Vec<Vec<Value>>) = rows.into_iter().map(|(o, _, v)| (o, v)).unzip();
+        self.orig = orig;
+        self.result.rows.splice(0..0, sorted);
     }
 
     pub fn rows(&self) -> usize {
@@ -389,6 +468,16 @@ impl Grid {
         } else {
             self.edits.insert((r, c), Some(v));
         }
+    }
+
+    /// The cells a paste of `text` writes from the current cell (rows past the last one would be added)
+    pub fn paste_spots(&self, text: &str) -> Vec<(usize, usize)> {
+        let mut lines: Vec<&str> = text.split('\n').collect();
+        if lines.len() > 1 && lines.last() == Some(&"") {
+            lines.pop();
+        }
+        let n = self.cols();
+        lines.iter().enumerate().flat_map(|(i, l)| (0..l.split('\t').count()).map(move |j| (self.row + i, self.col + j))).filter(|&(_, c)| c < n).collect()
     }
 
     /// Paste: fill from the current cell. Tabs for multiple cells, lines for multiple rows (spreadsheet·DataGrip copy). Missing rows are added, overflowing columns dropped
@@ -637,7 +726,7 @@ impl Grid {
                         None => Line::from(text),
                     };
                     let mut st = match class {
-                        ValueClass::Null => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                        ValueClass::Null => Style::default().fg(crate::kit::NULL_TEXT).add_modifier(Modifier::ITALIC),
                         ValueClass::Number => Style::default().fg(crate::kit::NUMBER),
                         _ => Style::default(),
                     };
@@ -688,17 +777,29 @@ impl Grid {
                 buf[(x, y)].set_symbol("│").set_style(line);
             }
         }
-        // Horizontal scrollbar: visible range in bold on the bottom border (click or drag to move); a block on the focused, already thick border
+        // Horizontal scrollbar on the bottom border (GUI: "cols 3–8 of 14" in the status bar): the border line itself is the bar, a dim
+        // thin track with a heavier bold thumb over the shown columns (the same focused or not, so it shows in NO_COLOR too), then the
+        // shown range at its right end, before the load-more message. Click or drag the track to move
         self.hbar = Rect::default();
-        if self.col_off > 0 || self.col_off + full < self.cols() {
-            let track = Rect { x: inner.x, y: area.bottom().saturating_sub(1), width: inner.width - msg_w, height: 1 };
+        let last = self.col_off + full.max(1);
+        if let Some(text) = qurry_shared::format::shown_cols(self.col_off + 1, last, self.cols()) {
+            let accent = if focused { Color::Cyan } else { Color::Gray };
+            let label = format!(" ◀ {text} ▶ ");
+            let room = inner.width - msg_w;
+            // A narrow grid keeps the track and drops the range
+            let label_w = if room >= label.width() as u16 + 10 { label.width() as u16 } else { 0 };
+            let track = Rect { x: inner.x, y: area.bottom().saturating_sub(1), width: room - label_w, height: 1 };
             let n = self.cols() as u32;
             let tw = track.width as u32;
             let start = (self.col_off as u32 * tw / n) as u16;
             let len = ((full.max(1) as u32 * tw).div_ceil(n) as u16).clamp(2, track.width - start);
-            let thumb = Style::default().fg(if focused { Color::Cyan } else { Color::Gray });
-            for x in track.x + start..track.x + start + len {
-                buf[(x, track.y)].set_symbol(if focused { "█" } else { "━" }).set_style(thumb);
+            for x in track.left()..track.right() {
+                let on = (track.x + start..track.x + start + len).contains(&x);
+                let st = if on { Style::default().fg(accent).add_modifier(Modifier::BOLD) } else { Style::default().fg(crate::kit::DIM) };
+                buf[(x, track.y)].set_symbol(if on { "━" } else { "─" }).set_style(st);
+            }
+            if label_w > 0 {
+                buf.set_string(track.right(), track.y, &label, Style::default().fg(accent));
             }
             self.hbar = track;
         }
@@ -712,7 +813,7 @@ impl Grid {
         let block = Block::default().borders(Borders::ALL).title(title).title_bottom(Line::styled(close, Style::default().fg(crate::kit::DIM))).border_style(Style::default().fg(Color::DarkGray));
         let lines: Vec<Line> = match (col, self.value(self.row, self.col)) {
             (None, _) => vec![],
-            (Some(_), None) => vec![Line::styled("<null>", Style::default().fg(crate::kit::DIM).add_modifier(Modifier::ITALIC))],
+            (Some(_), None) => vec![Line::styled("<null>", Style::default().fg(crate::kit::NULL_TEXT).add_modifier(Modifier::ITALIC))],
             (Some(c), Some(v)) => {
                 let p = qurry_shared::value::panel_text(&c.type_name, &v);
                 if p.json { json_lines(&p.text) } else { p.text.lines().map(|l| Line::raw(l.to_string())).collect() }
@@ -793,7 +894,7 @@ mod tests {
             let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 6)).unwrap();
             term.draw(|f| g.render(f, f.area(), "r".into(), true, mode, &Alignments::new())).unwrap();
             let mut buf = term.backend().buffer().clone();
-            mode.apply(&mut buf, false);
+            mode.apply(&mut buf, &crate::theme::Look::dark());
             buf
         };
         // Colors of the cells from the first `from` on row y, one per symbol (the second half of a wide char skipped)
@@ -862,6 +963,60 @@ mod tests {
         assert_eq!(g.sort, None);
         assert_eq!(vals(&g), ["10", "<null>", "9", "100", "50"]);
     }
+
+    /// Rows loaded after Add Row go before the added one: Submit still inserts only the added row, Revert drops only it, and its
+    /// edit and the cursor on it move with it
+    #[test]
+    fn load_more_keeps_added_rows_last() {
+        let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
+        let page = |v: &[i64], more| QueryResult { columns: vec![col("a")], rows: v.iter().map(|x| vec![json!(x)]).collect(), rows_affected: 0, truncated: more, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None };
+        let mut g = Grid::new(page(&[1, 2], true));
+        g.add_row();
+        g.set_value(2, 0, "new".into());
+        g.append(page(&[3, 4], false));
+        let vals = |g: &Grid| g.result.rows.iter().map(|r| cell_text(&r[0])).collect::<Vec<_>>();
+        assert_eq!(vals(&g), ["1", "2", "3", "4", "<null>"]);
+        assert!(g.is_added(4) && !g.is_added(2) && g.row == 4);
+        assert_eq!(g.edits.keys().copied().collect::<Vec<_>>(), [(4, 0)]);
+        g.revert();
+        assert_eq!(vals(&g), ["1", "2", "3", "4"]);
+    }
+
+    /// The same with the local sort on: the loaded rows are sorted, the added row stays last with its edit, and edits and deletes
+    /// of loaded rows move with them when the sort changes
+    #[test]
+    fn local_sort_keeps_added_rows_last_and_edits_on_their_rows() {
+        let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
+        let page = |v: &[i64], more| QueryResult { columns: vec![col("a")], rows: v.iter().map(|x| vec![json!(x)]).collect(), rows_affected: 0, truncated: more, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None };
+        let vals = |g: &Grid| g.result.rows.iter().map(|r| cell_text(&r[0])).collect::<Vec<_>>();
+        let mut g = Grid::new(page(&[3, 1], true));
+        g.toggle_local_sort();
+        assert_eq!(vals(&g), ["1", "3"]);
+        g.add_row();
+        g.set_value(2, 0, "9".into());
+        g.append(page(&[2], false));
+        assert_eq!(vals(&g), ["1", "2", "3", "<null>"]);
+        assert!(g.is_added(3) && !g.is_added(2) && g.added == 1);
+        assert_eq!(g.edits.iter().map(|(k, v)| (*k, v.as_deref())).collect::<Vec<_>>(), [((3, 0), Some("9"))]);
+        // Sorting again: an edit and a delete on loaded rows stay on them
+        g.set_value(2, 0, "30".into());
+        g.deleted.insert(0);
+        g.toggle_local_sort();
+        assert_eq!(vals(&g), ["3", "2", "1", "<null>"]);
+        assert_eq!(g.edits.iter().map(|(k, v)| (*k, v.as_deref())).collect::<Vec<_>>(), [((0, 0), Some("30")), ((3, 0), Some("9"))]);
+        assert_eq!(g.deleted.iter().copied().collect::<Vec<_>>(), [2]);
+        // Off: the result's order, the added row still last; Revert drops only it
+        g.toggle_local_sort();
+        assert_eq!(vals(&g), ["3", "1", "2", "<null>"]);
+        g.revert();
+        assert_eq!(vals(&g), ["3", "1", "2"]);
+        // Add Row while sorted, then sort the other way: it stays last
+        g.toggle_local_sort();
+        g.add_row();
+        g.toggle_local_sort();
+        assert_eq!(vals(&g), ["3", "2", "1", "<null>"]);
+        assert!(g.is_added(3));
+    }
     /// Whole column as an IN list: ('a', 'b'). Numbers as is, duplicates·NULL dropped (same as GUI lib/inList.ts)
     #[test]
     fn column_as_in_list() {
@@ -883,6 +1038,27 @@ mod tests {
         assert_eq!(g.column_in_list(0, DbKind::Mysql).0, r"('a\\b')");
         assert_eq!(g.column_in_list(0, DbKind::Postgres).0, r"(E'a\\b')");
     }
+    /// = fits a column; = again on the fitted column puts back the width before (a set one, else the computed one), as the GUI's double-click
+    #[test]
+    fn fit_toggles_back() {
+        let rows = vec![vec![json!("a value much longer than the header")]];
+        let ty = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
+        let mut g = Grid::new(QueryResult { columns: vec![ty("s", "TEXT")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
+        let computed = g.widths[0];
+        let fit = g.fit_width(0);
+        // No set width: fit, then forget it (0 to save), the computed width again
+        assert_eq!(g.toggle_fit(0).1, fit);
+        assert_eq!(g.toggle_fit(0), ("s".to_string(), 0));
+        assert_eq!((g.widths[0], g.user_widths.len()), (computed, 0));
+        // A set width: fit, then that width again
+        g.set_width(0, 5);
+        assert_eq!(g.toggle_fit(0).1, fit);
+        assert_eq!(g.toggle_fit(0).1, 5);
+        // Fitted without a known width before (a saved width): back to the computed one
+        g.set_user_widths([("s".to_string(), fit)].into());
+        assert_eq!(g.toggle_fit(0).1, 0);
+        assert_eq!(g.widths[0], computed);
+    }
     /// Shift+arrow range: rectangle, copy as TSV (values only), IN list only the selected cells (row tuples for multiple columns). Plain movement clears it
     #[test]
     fn range_selection_copies_tsv_and_in_list() {
@@ -902,25 +1078,47 @@ mod tests {
         assert_eq!(g.in_list(DbKind::Postgres), ("(1, 2, 3)".to_string(), 3));
     }
 
-    /// Focus shows in the border's shape, not only its color (NO_COLOR has none); the scrollbar thumb stays visible on the thick border
+    /// Focus shows in the border's shape, not only its color (NO_COLOR has none). The bottom border is the horizontal scrollbar (#107):
+    /// a dim thin track, a bold heavier thumb over the shown columns (the same focused or not), the shown range at its right end
     #[test]
-    fn focused_grid_has_a_thick_border_and_a_block_thumb() {
+    fn grid_bottom_border_is_a_scrollbar_with_the_shown_columns() {
         let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
         let cols: Vec<_> = (0..12).map(|i| col(&format!("column_{i}"))).collect();
         let rows = vec![(0..12).map(|i| json!(i)).collect()];
         let mut g = Grid::new(QueryResult { columns: cols, rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
-        let draw = |g: &mut Grid, focused: bool| {
-            let mut term = Terminal::new(ratatui::backend::TestBackend::new(40, 6)).unwrap();
+        let draw = |g: &mut Grid, focused: bool, w: u16| {
+            let mut term = Terminal::new(ratatui::backend::TestBackend::new(w, 6)).unwrap();
             term.draw(|f| g.render(f, f.area(), "t".into(), focused, Default::default(), &Default::default())).unwrap();
             let buf = term.backend().buffer().clone();
-            (buf[(0, 0)].symbol().to_string(), (0..40).map(|x| buf[(x, 5)].symbol()).collect::<String>())
+            let bottom: Vec<_> = (0..w).map(|x| buf[(x, 5)].clone()).collect();
+            (buf[(0, 0)].symbol().to_string(), bottom)
         };
-        let (corner, bottom) = draw(&mut g, true);
-        assert_eq!(corner, "┏");
-        assert!(bottom.contains('█') && bottom.contains('━'), "{bottom}");
-        let (corner, bottom) = draw(&mut g, false);
-        assert_eq!(corner, "┌");
-        assert!(bottom.contains('━') && bottom.contains('─'), "{bottom}");
+        let text = |cells: &[ratatui::buffer::Cell]| cells.iter().map(|c| c.symbol()).collect::<String>();
+        for focused in [true, false] {
+            let (corner, bottom) = draw(&mut g, focused, 60);
+            assert_eq!(corner, if focused { "┏" } else { "┌" });
+            let line = text(&bottom);
+            let end = if focused { " ◀ cols 1–4 of 12 ▶ ┛" } else { " ◀ cols 1–4 of 12 ▶ ┘" };
+            assert!(line.starts_with(if focused { "┗━━" } else { "└━━" }) && line.ends_with(end), "{line}");
+            // The thumb: heavier and bold over the first 4 of 12 columns; the rest of the track thin and dim
+            let track = &bottom[1..bottom.len() - 1 - " ◀ cols 1–4 of 12 ▶ ".chars().count()];
+            let thumb = track.iter().take_while(|c| c.symbol() == "━").count();
+            assert!(thumb >= 2 && track[..thumb].iter().all(|c| c.modifier.contains(Modifier::BOLD)), "{line}");
+            assert!(track[thumb..].iter().all(|c| c.symbol() == "─" && c.fg == crate::kit::DIM && !c.modifier.contains(Modifier::BOLD)), "{line}");
+            assert_eq!(g.hbar.width as usize, track.len());
+        }
+        // Scrolled to the end: the thumb at the right end of the track, the range follows
+        g.col = 11;
+        let (_, bottom) = draw(&mut g, true, 60);
+        let line = text(&bottom);
+        assert!(line.contains("━ ◀ cols 9–12 of 12 ▶ ┛"), "{line}");
+        // Every column fits: a plain border, no range
+        let (_, bottom) = draw(&mut g, true, 200);
+        assert!(!text(&bottom).contains("cols") && g.hbar.width == 0, "{}", text(&bottom));
+        // Too narrow for the range: only the track
+        g.col = 0;
+        let (_, bottom) = draw(&mut g, true, 26);
+        assert!(!text(&bottom).contains("cols") && text(&bottom).contains('━') && g.hbar.width == 24, "{}", text(&bottom));
     }
 
     /// A 3×3 grid of "r{row}c{col}" values
@@ -935,7 +1133,7 @@ mod tests {
         let mut term = Terminal::new(ratatui::backend::TestBackend::new(40, 8)).unwrap();
         term.draw(|f| {
             g.render(f, f.area(), "t".into(), true, mode, &Default::default());
-            mode.apply(f.buffer_mut(), false);
+            mode.apply(f.buffer_mut(), &crate::theme::Look::dark());
         })
         .unwrap();
         let buf = term.backend().buffer().clone();

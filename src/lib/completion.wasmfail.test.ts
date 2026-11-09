@@ -5,10 +5,14 @@ const providers = vi.hoisted(() => new Map<string, any>());
 const notice = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("./monaco", () => ({
   monaco: {
+    Uri: { parse: (s: string) => s },
+    editor: { onDidCreateModel: () => ({}), getModel: () => null, setModelMarkers: () => {} },
     languages: {
       CompletionItemKind: {},
       CompletionTriggerKind: { Invoke: 0, TriggerCharacter: 1 },
       registerCompletionItemProvider: (lang: string, p: unknown) => (providers.set(lang, p), {}),
+      registerSignatureHelpProvider: () => ({}),
+      registerCodeActionProvider: () => ({}),
     },
   },
 }));

@@ -8,8 +8,8 @@ test("Settings (⌘,): sections, theme, Escape closes", async ({ page }) => {
   await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Settings");
   await expect(dialog(page).getByRole("listbox").getByRole("option")).toHaveText(["Appearance", "Keymap", "Passwords"]);
   await expect(dialog(page).getByRole("listbox").getByRole("option", { name: "Appearance" })).toHaveAttribute("aria-selected", "true");
-  await expect(dialog(page).getByRole("combobox", { name: /Theme/ }).locator("option")).toHaveText(["Dark", "Light", "High contrast"]);
-  await expect(dialog(page).getByRole("combobox", { name: /Theme/ })).toHaveValue(/dark/i);
+  await expect(dialog(page).getByRole("combobox", { name: "Theme", exact: true }).locator("option")).toHaveText(["Dark", "Light", "High contrast", "Dracula", "One Dark", "Solarized Dark", "Solarized Light"]);
+  await expect(dialog(page).getByRole("combobox", { name: "Theme", exact: true })).toHaveValue("dark");
   await expect(dialog(page).getByRole("checkbox", { name: /Check for updates automatically/ })).toBeChecked();
   await page.keyboard.press("Escape");
   await expect(dialog(page)).toHaveCount(0);

@@ -28,6 +28,8 @@ pub enum Flow {
     ErdDb(String),
     /// Pick the DB a DBA report tab runs on (tab id)
     DbaDb(u64),
+    /// Pick the database a Redis tab shows (tab id)
+    RedisDb(u64),
     /// Copy part of production data (crate::datatools): pick child steps · destination Data Source (source target id, source Data Source, condition)
     CopyDepth(Box<(String, String, qurry_core::subset::SubsetSpec)>),
     CopyMask(Box<(String, String, qurry_core::subset::SubsetSpec)>),
@@ -115,6 +117,7 @@ impl App {
             Some(f @ (Flow::RagSearch | Flow::RagBuild | Flow::RagDest(_) | Flow::RagProvider(_))) => self.rag_flow(f, value),
             Some(Flow::ErdDb(conn)) => self.erd_run(conn, value, None),
             Some(Flow::DbaDb(id)) => self.dba_switch_db(id, value),
+            Some(Flow::RedisDb(id)) => self.redis_switch_db(id, value),
             Some(Flow::CopyDepth(b)) => self.copy_rows_mask(*b, value),
             Some(Flow::CopyMask(b)) => self.copy_rows_target(*b, value),
             Some(Flow::CopyTarget(b)) => self.copy_rows_preview(*b, value),

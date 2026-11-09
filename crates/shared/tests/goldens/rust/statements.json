@@ -109,7 +109,7 @@
   },
   "redis-get": {
     "DDL_RE": false,
-    "isReadStmt": false
+    "isReadStmt": true
   },
   "redis-set": {
     "DDL_RE": false,

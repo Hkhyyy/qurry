@@ -13,8 +13,10 @@ type Mouse = (e: MouseEvent) => void;
  * Header strip above the grid's scroller (body). It sits outside the scroller, so vertical scrolling can't move it (a sticky
  * header inside the scroller could lag WKWebView's async scrolling and show rows above it); it only follows the body's
  * scrollLeft. Wheel over it scrolls the body; a click keeps the focus on the body, so keyboard navigation keeps working.
+ * corner: the row-number column's header, beside the scrolled strip, not in it: a sticky cell in a box scrolled by script
+ * didn't stay put in the app's WKWebView, so the column headers sat one row-number width left of their columns
  */
-export function GridHead({ body, children }: { body: RefObject<HTMLElement | null>; children: ReactNode }) {
+export function GridHead({ body, corner, children }: { body: RefObject<HTMLElement | null>; corner?: ReactNode; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   // After commit (not a layout effect): the body may come after the head, and its ref is attached later in the same commit
   useEffect(() => {
@@ -29,15 +31,17 @@ export function GridHead({ body, children }: { body: RefObject<HTMLElement | nul
   }, [body]);
   return (
     <div
-      ref={ref}
-      className="grid-head"
+      className="grid-head-wrap"
       onWheel={(e) => body.current?.scrollBy(e.deltaX, e.deltaY)}
       onMouseDownCapture={(e) => {
         e.preventDefault();
         body.current?.focus({ preventScroll: true });
       }}
     >
-      {children}
+      {corner}
+      <div ref={ref} className="grid-head">
+        {children}
+      </div>
     </div>
   );
 }
@@ -51,30 +55,40 @@ export const GridHeaderRow = ({ width, height, children }: { width: number; heig
 
 /**
  * Header cell: 🔑 name type ……… sort button (↑ ↓ · order number if several).
- * sort = current sort (if none, ⇅ only on hover)
+ * sort = current sort (if none, ⇅ only on hover). With onResize the right edge is a resize handle: drag it to resize,
+ * double-click it to fit (onFit). readOnly = why the column can't be edited in a grid whose other columns can (a join's)
  */
 export function GridHeaderCell({
   name,
   type,
   pk,
+  readOnly,
   width,
   colSelected,
   sort,
   onMouseDown,
   onSortClick,
+  onContextMenu,
+  onResize,
+  onFit,
 }: {
   name: string;
   type: string;
   pk?: boolean;
+  readOnly?: string;
   width: number;
   colSelected?: boolean;
   sort?: { dir: "asc" | "desc"; order?: number };
   onMouseDown?: Mouse;
   onSortClick?: (e: MouseEvent) => void;
+  onContextMenu?: Mouse;
+  onResize?: Mouse;
+  onFit?: () => void;
 }) {
   return (
-    <div className={cx("cell head", sort && "sorted", colSelected && "col-sel")} style={{ width }} title={`${name} : ${type}`} role="columnheader" onMouseDown={onMouseDown}>
+    <div className={cx("cell head", sort && "sorted", colSelected && "col-sel", readOnly && "read-only")} style={{ width }} title={readOnly ? `${name} : ${type}\n${readOnly}` : `${name} : ${type}`} aria-description={readOnly} role="columnheader" onMouseDown={onMouseDown} onContextMenu={onContextMenu}>
       {pk && <span className="pk-mark">🔑</span>}
+      {readOnly && <span className="ro-mark" aria-hidden>🔒</span>}
       <span className="col-name">{name}</span>
       <span className="col-type">{type.toLowerCase()}</span>
       {onSortClick && (
@@ -82,6 +96,17 @@ export function GridHeaderCell({
           {sort ? (sort.dir === "asc" ? "↑" : "↓") : "⇅"}
           {sort?.order !== undefined && <sub>{sort.order}</sub>}
         </span>
+      )}
+      {onResize && (
+        <span
+          className="col-resize"
+          title="Drag to resize · double-click to fit the content"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            onResize(e);
+          }}
+          onDoubleClick={onFit}
+        />
       )}
     </div>
   );
@@ -111,12 +136,15 @@ export function GridCell({
   active,
   changed,
   match,
+  title,
   onMouseDown,
   onMouseEnter,
   onDoubleClick,
   onContextMenu,
 }: {
   children: ReactNode;
+  /** Hover text: why this cell can't be edited where others can (a join's outer side) */
+  title?: string;
   width: number;
   kind?: "null" | "num";
   align?: "left" | "right" | "center";
@@ -136,6 +164,7 @@ export function GridCell({
     <div
       className={cx("cell", kind, align && `al-${align}`, selected && "sel", active && "active", changed && "changed", match && "match")}
       style={{ width }}
+      title={title}
       role="gridcell"
       aria-selected={selected}
       onMouseDown={onMouseDown}

@@ -7,7 +7,7 @@ Everything Qurry does, chapter by chapter. Start with **Getting started** if you
 | Chapter | What's in it |
 |---|---|
 | [Getting started](getting-started.md) | Install, updates, your first data source and query (GUI and TUI), where settings are kept |
-| [Settings](settings.md) | Theme, editor and grid fonts, alignment of values in result grids (NULL, numbers, …), updates, keymap, where the password key is kept, what the TUI shares |
+| [Settings](settings.md) | Theme, editor and grid fonts, keyword case and Reformat Code, alignment of values in result grids (NULL, numbers, …), updates, keymap, where the password key is kept, what the TUI shares |
 | [Updates](updates.md) | Stable and beta update channels, in-app updates, macOS 12, how releases are made |
 | [Data sources](data-sources.md) | Supported databases, SSH / SSL and connection options, Production mode, drivers |
 | [Workspaces](workspaces.md) | Separate sets of tabs and data sources, each with its own explorer |

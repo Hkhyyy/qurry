@@ -1,9 +1,11 @@
-//! Whether a console result can be edited the way a table tab is: a plain SELECT from one table whose every result column is a
-//! column of that table, with the table's whole primary key in the result. The server says where each column comes from
-//! (qurry_core::editable); the statement check and the rules live here, so the reasons read the same in the GUI and the TUI.
+//! Whether a console result can be edited the way a table tab is, and where each edit goes. A plain SELECT from one table, with
+//! the table's whole primary key in the result, edits like a table tab (rows can be added and deleted too). A join edits per
+//! table (#102): a column of a base table whose whole primary key is in the result writes to that table's row, found by its key;
+//! every other column is read-only with the reason. The server says where each column comes from (qurry_core::editable); the
+//! statement check and the rules live here, so the reasons read the same in the GUI and the TUI.
 //!
 //! The statement check matters even where the server reports column origins: a self-join (`t a JOIN t b`) gives columns of one
-//! table but of two different rows, and editing such a row by its key would write to the wrong one.
+//! table but of two different rows, and only the select list says which occurrence of the table a column is.
 use crate::errors as e;
 use crate::guard::{Tok, scan};
 use crate::kind::DbKind;
@@ -19,38 +21,108 @@ pub struct EditTarget {
     pub columns: Vec<String>,
 }
 
-/// Flattened into the result: `edit` or `readOnlyReason`
+/// A join result's edits (#102): per result column, the table occurrence it writes to or why it can't be edited. Rows can't be
+/// added or deleted (a result row isn't a row of one table)
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JoinEdit {
+    /// The table occurrences whose rows can be edited, each found by its own primary key
+    pub tables: Vec<JoinTable>,
+    /// One per result column
+    pub columns: Vec<ColumnEdit>,
+}
+
+/// A table occurrence of a join that can be edited: `pk_at[j]` is the result column holding its key column `pk[j]`
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JoinTable {
+    pub schema: String,
+    pub table: String,
+    pub pk: Vec<String>,
+    pub pk_at: Vec<usize>,
+}
+
+/// Where an edit of one result column goes: `table` (an index into JoinEdit::tables) and its column there, or why it can't be edited
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged, rename_all = "camelCase")]
+pub enum ColumnEdit {
+    To { table: usize, column: String },
+    ReadOnly {
+        #[serde(rename = "readOnly")]
+        read_only: String,
+    },
+}
+
+impl JoinEdit {
+    /// Where an edit of result column `c` goes in a row, or why it can't be edited there. null(i): result column i is NULL in
+    /// that row. A key is never NULL, so a NULL in the table's key means no row of it matched (the outer side of a join)
+    pub fn cell(&self, c: usize, null: impl Fn(usize) -> bool) -> Result<(&JoinTable, &str), String> {
+        match self.columns.get(c) {
+            Some(ColumnEdit::To { table, column }) => {
+                let t = &self.tables[*table];
+                match t.pk_at.iter().any(|&i| null(i)) {
+                    true => Err(e::edit_no_row(&format!("{}.{}", t.schema, t.table))),
+                    false => Ok((t, column)),
+                }
+            }
+            Some(ColumnEdit::ReadOnly { read_only }) => Err(read_only.clone()),
+            None => Err(e::EDIT_UNMATCHED.into()),
+        }
+    }
+}
+
+/// Flattened into the result: `edit` (one table), `editJoin` (a join) or `readOnlyReason`
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum Editable {
     #[serde(rename = "edit")]
     Table(EditTarget),
+    #[serde(rename = "editJoin")]
+    Join(JoinEdit),
     #[serde(rename = "readOnlyReason")]
     ReadOnly(String),
 }
 
-/// A select-list item as written
+/// A select-list item as written. `of` = the table or alias it is qualified with (`u.name`, `u.*`), as the server reads it
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     /// `*` or `t.*`
-    All,
+    All { of: Option<String> },
     /// A bare or qualified column name (quotes stripped), and its alias
-    Column { name: String, alias: Option<String> },
+    Column { of: Option<String>, name: String, alias: Option<String> },
     /// Anything else: an expression, a literal, a function call
     Other,
 }
 
-/// A plain SELECT from one table
+/// A table in FROM: `[schema.]table [[AS] alias]`
 #[derive(Debug, Clone, PartialEq)]
-pub struct OneTable {
+pub struct FromTable {
     pub schema: Option<String>,
     pub table: String,
-    pub items: Vec<Item>,
+    pub alias: Option<String>,
 }
 
-/// What follows the table (and its alias) in a plain SELECT
-const AFTER_TABLE: &[&str] = &["where", "order", "limit", "offset", "fetch", "for", "lock"];
-const JOINS: &[&str] = &["join", "inner", "left", "right", "full", "cross", "natural", "straight_join"];
-/// Words that end the FROM item, so they aren't its alias
+impl FromTable {
+    /// What the select list qualifies its columns with
+    fn key(&self) -> &str {
+        self.alias.as_deref().unwrap_or(&self.table)
+    }
+}
+
+/// A plain SELECT from one table or a join of tables
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shape {
+    pub items: Vec<Item>,
+    /// The tables in FROM, in order (one for a plain SELECT from one table)
+    pub from: Vec<FromTable>,
+    /// A join with USING or NATURAL: its join columns are merged, so `*` doesn't list each table's columns in turn
+    pub using: bool,
+}
+
+/// What follows FROM
+const AFTER_FROM: &[&str] = &["where", "order", "limit", "offset", "fetch", "for", "lock"];
+/// The words a join starts with (a function such as left(…) is followed by a parenthesis)
+const JOIN_WORDS: &[&str] = &["natural", "inner", "cross", "left", "right", "full", "join", "straight_join"];
+/// Words that end a FROM item, so they aren't its alias
 const NOT_ALIAS: &[&str] = &[
     "where", "order", "limit", "offset", "fetch", "for", "lock", "join", "inner", "left", "right", "full", "cross", "natural", "straight_join", "group", "having", "union",
     "intersect", "except", "window", "tablesample", "partition", "use", "force", "ignore", "on", "using",
@@ -61,9 +133,10 @@ const VALUE_WORDS: &[&str] = &[
     "utc_time", "utc_timestamp",
 ];
 
-/// The table and select list of a plain `SELECT … FROM one_table [alias] [WHERE …] [ORDER BY …] [LIMIT …] [FOR UPDATE]`, or why
-/// the statement isn't one (errors::EDIT_*). Subqueries inside WHERE are fine: they don't add result columns
-pub fn one_table_select(sql: &str, kind: DbKind) -> Result<OneTable, String> {
+/// The tables and select list of a plain `SELECT … FROM t [alias] {[NATURAL] [INNER | CROSS | LEFT | RIGHT | FULL [OUTER]] JOIN
+/// u [alias] [ON … | USING (…)] | , u} [WHERE …] [ORDER BY …] [LIMIT …]`, or why the statement isn't one (errors::EDIT_*).
+/// Subqueries inside ON and WHERE are fine: they don't add result columns
+pub fn select_shape(sql: &str, kind: DbKind) -> Result<Shape, String> {
     let sc = scan(sql, kind);
     if sc.exec_comment {
         return Err(e::EDIT_NOT_PLAIN.into());
@@ -85,8 +158,7 @@ pub fn one_table_select(sql: &str, kind: DbKind) -> Result<OneTable, String> {
             "union" | "intersect" | "except" => return Err(e::edit_combined(&x.text.to_uppercase())),
             "group" => return Err(e::edit_combined("GROUP BY")),
             "having" => return Err(e::edit_combined("HAVING")),
-            "join" | "straight_join" => return Err(e::EDIT_MANY_TABLES.into()),
-            "into" => return Err(e::EDIT_NOT_PLAIN.into()),
+            "into" | "lateral" => return Err(e::EDIT_NOT_PLAIN.into()),
             // FOR UPDATE / SHARE / NO KEY UPDATE / KEY SHARE, MySQL LOCK IN SHARE MODE: in Auto mode the cursor's transaction keeps
             // the row locks while the result is open, and the edits, saved on another connection, would wait on them
             "for" | "lock" => return Err(e::EDIT_LOCKS.into()),
@@ -94,44 +166,85 @@ pub fn one_table_select(sql: &str, kind: DbKind) -> Result<OneTable, String> {
             _ => {}
         }
     }
-    let from = (1..t.len()).find(|&i| kw(i, "from")).ok_or_else(|| e::EDIT_NO_TABLE.to_string())?;
-    // The table: name or schema.name, not a subquery, a function or ONLY / LATERAL
-    let mut i = from + 1;
-    let mut parts = Vec::new();
-    loop {
-        let Some(x) = t.get(i).filter(|x| x.word && x.depth == 0 && !(kw(i, "only") || kw(i, "lateral"))) else { return Err(e::EDIT_NOT_PLAIN.into()) };
-        parts.push(name(x, sql, kind));
-        i += 1;
-        if t.get(i).is_some_and(|x| x.text == ".") {
-            i += 1;
-        } else {
-            break;
-        }
-    }
-    let (schema, table) = match parts.len() {
-        1 => (None, parts.remove(0)),
-        2 => (Some(parts.remove(0)), parts.remove(0)),
-        _ => return Err(e::EDIT_NOT_PLAIN.into()),
+    let from_at = (1..t.len()).find(|&i| kw(i, "from")).ok_or_else(|| e::EDIT_NO_TABLE.to_string())?;
+    // A word that starts a join here (not a name after a dot, not a function such as left(…))
+    let joins_at = |i: usize| {
+        t.get(i).is_some_and(|x| x.word && !x.quoted && x.depth == 0 && JOIN_WORDS.contains(&x.text.as_str()))
+            && !t.get(i + 1).is_some_and(|n| n.text == "(")
+            && !(i > 0 && t[i - 1].text == ".")
     };
-    if t.get(i).is_some_and(|x| x.text == "(") {
-        return Err(e::EDIT_NOT_PLAIN.into());
-    }
-    // Its alias
-    if kw(i, "as") {
-        i += 2;
-    } else if t.get(i).is_some_and(|x| x.word && (x.quoted || !NOT_ALIAS.contains(&x.text.as_str()))) {
-        i += 1;
-    }
-    if let Some(x) = t.get(i) {
-        if x.text == "," || JOINS.iter().any(|w| kw(i, w)) {
-            return Err(e::EDIT_MANY_TABLES.into());
+    let mut from = Vec::new();
+    let mut using = false;
+    let mut i = from_at + 1;
+    loop {
+        // The table: name or schema.name, not a subquery, a function, parentheses or ONLY
+        let mut parts = Vec::new();
+        loop {
+            let Some(x) = t.get(i).filter(|x| x.word && x.depth == 0 && !kw(i, "only")) else { return Err(e::EDIT_NOT_PLAIN.into()) };
+            parts.push(name(x, sql, kind));
+            i += 1;
+            if t.get(i).is_some_and(|x| x.text == ".") {
+                i += 1;
+            } else {
+                break;
+            }
         }
-        if !AFTER_TABLE.iter().any(|w| kw(i, w)) {
+        let (schema, table) = match parts.len() {
+            1 => (None, parts.remove(0)),
+            2 => (Some(parts.remove(0)), parts.remove(0)),
+            _ => return Err(e::EDIT_NOT_PLAIN.into()),
+        };
+        if t.get(i).is_some_and(|x| x.text == "(") {
             return Err(e::EDIT_NOT_PLAIN.into());
         }
+        // Its alias
+        let alias_at = if kw(i, "as") { i + 1 } else { i };
+        let alias = match t.get(alias_at) {
+            Some(x) if x.word && x.depth == 0 && (x.quoted || !NOT_ALIAS.contains(&x.text.as_str())) => {
+                i = alias_at + 1;
+                Some(name(x, sql, kind))
+            }
+            _ if alias_at != i => return Err(e::EDIT_NOT_PLAIN.into()),
+            _ => None,
+        };
+        from.push(FromTable { schema, table, alias });
+        // ON … / USING (…): read past it to the next join or what follows FROM
+        if kw(i, "using") {
+            using = true;
+            i += 1;
+            if !t.get(i).is_some_and(|x| x.text == "(") {
+                return Err(e::EDIT_NOT_PLAIN.into());
+            }
+            i += 1;
+            while t.get(i).is_some_and(|x| x.depth > 0) {
+                i += 1;
+            }
+        } else if kw(i, "on") {
+            i += 1;
+            while i < t.len() && !(t[i].depth == 0 && (t[i].text == "," || joins_at(i) || AFTER_FROM.iter().any(|w| kw(i, w)))) {
+                i += 1;
+            }
+        }
+        match t.get(i) {
+            None => break,
+            Some(_) if AFTER_FROM.iter().any(|w| kw(i, w)) => break,
+            Some(x) if x.text == "," && x.depth == 0 => i += 1,
+            Some(_) if joins_at(i) => {
+                // [NATURAL] [INNER | CROSS | LEFT | RIGHT | FULL] [OUTER] JOIN, STRAIGHT_JOIN
+                using |= kw(i, "natural");
+                while !(kw(i, "join") || kw(i, "straight_join")) {
+                    if !(joins_at(i) || kw(i, "outer")) {
+                        return Err(e::EDIT_NOT_PLAIN.into());
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            Some(_) => return Err(e::EDIT_NOT_PLAIN.into()),
+        }
     }
-    let items = t[1..from].split(|x| x.text == "," && x.depth == 0).map(|it| item(it, sql, kind)).collect();
-    Ok(OneTable { schema, table, items })
+    let items = t[1..from_at].split(|x| x.text == "," && x.depth == 0).map(|it| item(it, sql, kind)).collect();
+    Ok(Shape { items, from, using })
 }
 
 /// A name as the server reads it: quotes stripped, unquoted PostgreSQL names lowercased
@@ -151,11 +264,13 @@ fn item(it: &[Tok], sql: &str, kind: DbKind) -> Item {
         true => !(kind == DbKind::Mysql && sql[x.start..].starts_with('"')),
         false => x.word && !x.text.starts_with(|c: char| c.is_ascii_digit()) && !VALUE_WORDS.contains(&x.text.as_str()),
     };
+    // The part before the last one: the table or alias (schema.table.column has the table there too)
+    let of = |i: usize| (i >= 3).then(|| name(&it[i - 3], sql, kind));
     // name(.name)*, or (name.)* followed by *
     let mut i = 0;
     loop {
         if is(i, "*") {
-            return if i + 1 == it.len() { Item::All } else { Item::Other };
+            return if i + 1 == it.len() { Item::All { of: (i >= 2).then(|| name(&it[i - 2], sql, kind)) } } else { Item::Other };
         }
         match it.get(i) {
             Some(x) if part(x) => i += 1,
@@ -172,15 +287,16 @@ fn item(it: &[Tok], sql: &str, kind: DbKind) -> Item {
     if i == 1 && it.get(1).is_some_and(|a| a.text == "'" && (a.start == it[0].end || it[0].text.starts_with('_'))) {
         return Item::Other;
     }
+    let of = of(i);
     let alias_at = if is(i, "as") { i + 1 } else { i };
     match it.get(alias_at) {
-        None if alias_at == i => Item::Column { name: col, alias: None },
-        Some(a) if alias_at + 1 == it.len() && (a.word || a.text == "'") => Item::Column { name: col, alias: Some(name(a, sql, kind)) },
+        None if alias_at == i => Item::Column { of, name: col, alias: None },
+        Some(a) if alias_at + 1 == it.len() && (a.word || a.text == "'") => Item::Column { of, name: col, alias: Some(name(a, sql, kind)) },
         _ => Item::Other,
     }
 }
 
-/// The table a result comes from, as the catalog has it
+/// A table a result comes from, as the catalog has it
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableInfo {
     pub schema: String,
@@ -198,8 +314,8 @@ pub fn mysql_sources(items: &[Item], result: &[String], t: &TableInfo) -> Result
     let mut out: Vec<(Option<String>, Option<&str>)> = Vec::new();
     for it in items {
         match it {
-            Item::All => out.extend(t.columns.iter().map(|c| (Some(c.clone()), Some(c.as_str())))),
-            Item::Column { name, alias } => {
+            Item::All { .. } => out.extend(t.columns.iter().map(|c| (Some(c.clone()), Some(c.as_str())))),
+            Item::Column { name, alias, .. } => {
                 let c = t.columns.iter().find(|c| c.eq_ignore_ascii_case(name)).ok_or_else(|| e::EDIT_UNMATCHED.to_string())?;
                 out.push((Some(c.clone()), Some(alias.as_deref().unwrap_or(name))));
             }
@@ -214,7 +330,7 @@ pub fn mysql_sources(items: &[Item], result: &[String], t: &TableInfo) -> Result
     }
 }
 
-/// The rules, once the table and the table column of each result column (None: computed) are known
+/// The rules for one table, once the table column of each result column (None: computed) is known
 pub fn decide(t: &TableInfo, result: &[String], sources: &[Option<String>]) -> Editable {
     let ro = Editable::ReadOnly;
     let full = format!("{}.{}", t.schema, t.table);
@@ -233,9 +349,117 @@ pub fn decide(t: &TableInfo, result: &[String], sources: &[Option<String>]) -> E
         return ro(e::edit_no_pk(&full));
     }
     if !t.pk.iter().all(|k| cols.contains(k)) {
-        return ro(e::edit_missing_pk(&t.pk));
+        return ro(e::edit_missing_pk(&full, &t.pk));
     }
     Editable::Table(EditTarget { schema: t.schema.clone(), table: t.table.clone(), pk: t.pk.clone(), columns: cols })
+}
+
+/// Where a join result's column comes from
+#[derive(Debug, Clone, PartialEq)]
+pub enum Source {
+    /// Column `column` of the table in FROM at `from`
+    Col { from: usize, column: String },
+    /// An expression, an aggregate, a cast, a system column
+    Computed,
+    /// Not known for sure: the reason it is read-only
+    Unknown(String),
+}
+
+/// The select list lined up with the result: each column's source and the name the server should give it (None: computed).
+/// cols[k] = the columns of the table in FROM at k, None when unknown. None when the items can't be lined up with the result
+/// (a `*` over a table whose columns aren't known, or with USING / NATURAL, whose merged columns come once)
+pub fn align(shape: &Shape, cols: &[Option<Vec<String>>], kind: DbKind, result: usize) -> Option<Vec<(Source, Option<String>)>> {
+    // PostgreSQL names are as the server reads them already (lowercased unless quoted); MySQL column names ignore case
+    let same = |a: &str, b: &str| if kind == DbKind::Mysql { a.eq_ignore_ascii_case(b) } else { a == b };
+    let keyed = |q: &str| {
+        let hits: Vec<usize> = (0..shape.from.len()).filter(|&k| same(shape.from[k].key(), q)).collect();
+        (hits.len() == 1).then(|| hits[0])
+    };
+    let column = |k: usize, n: &str| cols.get(k)?.as_ref()?.iter().find(|c| same(c, n)).cloned();
+    let mut out = Vec::new();
+    for it in &shape.items {
+        match it {
+            Item::All { of: None } if shape.using => return None,
+            Item::All { of: None } => {
+                for (k, c) in cols.iter().enumerate() {
+                    out.extend(c.as_ref()?.iter().map(|n| (Source::Col { from: k, column: n.clone() }, Some(n.clone()))));
+                }
+            }
+            Item::All { of: Some(q) } => {
+                let k = keyed(q)?;
+                out.extend(cols.get(k)?.as_ref()?.iter().map(|n| (Source::Col { from: k, column: n.clone() }, Some(n.clone()))));
+            }
+            Item::Column { of, name, alias } => {
+                let shown = Some(alias.clone().unwrap_or_else(|| name.clone()));
+                // Qualified: that table's. Bare: the one table that has it (the server refuses one that more than one has)
+                let ks: Vec<usize> = match of {
+                    Some(q) => keyed(q).into_iter().collect(),
+                    None => (0..shape.from.len()).filter(|&k| column(k, name).is_some()).collect(),
+                };
+                out.push(match ks[..] {
+                    [k] => match column(k, name) {
+                        Some(c) => (Source::Col { from: k, column: c }, shown),
+                        None => (Source::Unknown(e::EDIT_UNMATCHED.into()), shown),
+                    },
+                    _ => (Source::Unknown(e::EDIT_UNMATCHED.into()), shown),
+                });
+            }
+            Item::Other => out.push((Source::Computed, None)),
+        }
+    }
+    (out.len() == result).then_some(out)
+}
+
+/// The rules for a join, once the tables in FROM (Err: why that one can't be edited, such as a temporary table) and the source
+/// of each result column are known. A table's columns can be edited when it is a base table whose whole primary key is in the
+/// result; when none can, the result is read-only with the first column's reason
+pub fn decide_join(tables: &[Result<TableInfo, String>], result: &[String], sources: &[Source]) -> Editable {
+    let full = |t: &TableInfo| format!("{}.{}", t.schema, t.table);
+    // Each table's targets: its key columns' result columns, or why its columns are read-only
+    let mut target: Vec<Result<usize, String>> = Vec::new();
+    let mut targets = Vec::new();
+    for (k, t) in tables.iter().enumerate() {
+        let at = |c: &str| sources.iter().position(|s| matches!(s, Source::Col { from, column } if *from == k && column == c));
+        target.push(match t {
+            Err(why) => Err(why.clone()),
+            Ok(t) if t.not_table.is_some() => Err(e::edit_not_table(&full(t), t.not_table.unwrap_or_default())),
+            Ok(t) if t.pk.is_empty() => Err(e::edit_no_pk(&full(t))),
+            Ok(t) => match t.pk.iter().map(|c| at(c)).collect::<Option<Vec<usize>>>() {
+                None => Err(e::edit_missing_pk(&full(t), &t.pk)),
+                Some(pk_at) => {
+                    targets.push(JoinTable { schema: t.schema.clone(), table: t.table.clone(), pk: t.pk.clone(), pk_at });
+                    Ok(targets.len() - 1)
+                }
+            },
+        });
+    }
+    let columns: Vec<ColumnEdit> = sources
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let ro = |read_only: String| ColumnEdit::ReadOnly { read_only };
+            match s {
+                // The same table column twice: an edit in one cell would leave the other showing the old value
+                Source::Col { from, column } if sources[..i].contains(s) || sources[i + 1..].contains(s) => match &target[*from] {
+                    Ok(_) => ro(e::edit_duplicate(column)),
+                    Err(why) => ro(why.clone()),
+                },
+                Source::Col { from, column } => match &target[*from] {
+                    Ok(t) => ColumnEdit::To { table: *t, column: column.clone() },
+                    Err(why) => ro(why.clone()),
+                },
+                Source::Computed => ro(e::edit_computed(&result[i])),
+                Source::Unknown(why) => ro(why.clone()),
+            }
+        })
+        .collect();
+    if !columns.iter().any(|c| matches!(c, ColumnEdit::To { .. })) {
+        return match columns.into_iter().next() {
+            Some(ColumnEdit::ReadOnly { read_only }) => Editable::ReadOnly(read_only),
+            _ => Editable::ReadOnly(e::EDIT_NO_TABLE.into()),
+        };
+    }
+    Editable::Join(JoinEdit { tables: targets, columns })
 }
 
 #[cfg(test)]
@@ -246,39 +470,67 @@ mod tests {
     const MY: DbKind = DbKind::Mysql;
 
     fn col(n: &str) -> Item {
-        Item::Column { name: n.into(), alias: None }
+        Item::Column { of: None, name: n.into(), alias: None }
+    }
+    fn qcol(of: &str, n: &str) -> Item {
+        Item::Column { of: Some(of.into()), name: n.into(), alias: None }
+    }
+    fn all() -> Item {
+        Item::All { of: None }
+    }
+    fn tab(t: &str, alias: Option<&str>) -> FromTable {
+        FromTable { schema: None, table: t.into(), alias: alias.map(String::from) }
+    }
+    fn one(q: &str, k: DbKind) -> Shape {
+        let s = select_shape(q, k).unwrap_or_else(|e| panic!("{q}: {e}"));
+        assert_eq!(s.from.len(), 1, "{q}");
+        s
     }
 
     #[test]
     fn plain_selects_from_one_table() {
-        let ok = |q: &str, k: DbKind| one_table_select(q, k).unwrap_or_else(|e| panic!("{q}: {e}"));
-        let r = ok("select * from users", PG);
-        assert_eq!(r, OneTable { schema: None, table: "users".into(), items: vec![Item::All] });
-        let r = ok("SELECT u.id, u.\"Name\" AS n, email e FROM Public.Users u WHERE id IN (SELECT 1 UNION SELECT 2) ORDER BY 1 LIMIT 5;", PG);
-        assert_eq!(r.schema.as_deref(), Some("public"));
-        assert_eq!(r.table, "users");
-        assert_eq!(r.items, vec![col("id"), Item::Column { name: "Name".into(), alias: Some("n".into()) }, Item::Column { name: "email".into(), alias: Some("e".into()) }]);
-        let r = ok("select `Id`, t.* , shop.t.name from shop.`My T` as t limit 10", MY);
-        assert_eq!((r.schema.as_deref(), r.table.as_str()), (Some("shop"), "My T"));
-        assert_eq!(r.items, vec![col("Id"), Item::All, col("name")]);
+        let r = one("select * from users", PG);
+        assert_eq!(r, Shape { items: vec![all()], from: vec![tab("users", None)], using: false });
+        let r = one("SELECT u.id, u.\"Name\" AS n, email e FROM Public.Users u WHERE id IN (SELECT 1 UNION SELECT 2) ORDER BY 1 LIMIT 5;", PG);
+        assert_eq!(r.from, vec![FromTable { schema: Some("public".into()), table: "users".into(), alias: Some("u".into()) }]);
+        assert_eq!(r.items, vec![qcol("u", "id"), Item::Column { of: Some("u".into()), name: "Name".into(), alias: Some("n".into()) }, Item::Column { of: None, name: "email".into(), alias: Some("e".into()) }]);
+        let r = one("select `Id`, t.* , shop.t.name from shop.`My T` as t limit 10", MY);
+        assert_eq!((r.from[0].schema.as_deref(), r.from[0].table.as_str()), (Some("shop"), "My T"));
+        assert_eq!(r.items, vec![col("Id"), Item::All { of: Some("t".into()) }, qcol("t", "name")]);
         // -- comment and /* */ before it, a trailing comment after the ;
-        ok("-- top\n/* x */ select id from t; -- done", PG);
+        one("-- top\n/* x */ select id from t; -- done", PG);
         // Expressions are items of their own (the origins or the table decide later)
-        let r = ok("select id, lower(name), 1, id + 1 as x, id::text, current_date, \"s\", null, count(*) from t", MY);
+        let r = one("select id, lower(name), 1, id + 1 as x, id::text, current_date, \"s\", null, count(*) from t", MY);
         assert_eq!(r.items, vec![col("id"), Item::Other, Item::Other, Item::Other, Item::Other, Item::Other, Item::Other, Item::Other, Item::Other]);
         // A string alias (MySQL)
-        assert_eq!(ok("select id 'the id' from t", MY).items, vec![Item::Column { name: "id".into(), alias: Some("the id".into()) }]);
+        assert_eq!(one("select id 'the id' from t", MY).items, vec![Item::Column { of: None, name: "id".into(), alias: Some("the id".into()) }]);
         // IS DISTINCT FROM in WHERE isn't DISTINCT
-        ok("select id from t where a is distinct from b", PG);
+        one("select id from t where a is distinct from b", PG);
     }
 
     #[test]
-    fn refuses_what_isnt_one_table() {
-        let why = |q: &str, k: DbKind| one_table_select(q, k).expect_err(q);
-        for q in ["select a.id from t a join t b on a.p = b.id", "select * from t, u", "select * from t a, u b", "select * from t left join u using (id)", "select * from t natural join u", "select * from t cross join u"] {
-            assert_eq!(why(q, PG), e::EDIT_MANY_TABLES, "{q}");
-        }
-        assert_eq!(why("select * from t straight_join u", MY), e::EDIT_MANY_TABLES);
+    fn joins_list_their_tables() {
+        let ok = |q: &str, k: DbKind| select_shape(q, k).unwrap_or_else(|e| panic!("{q}: {e}"));
+        let r = ok("select * from crm.voc as vo left join public.users as pu on vo.user_idx = pu.idx where vo.idx = 1", PG);
+        assert_eq!(r.from, vec![FromTable { schema: Some("crm".into()), table: "voc".into(), alias: Some("vo".into()) }, FromTable { schema: Some("public".into()), table: "users".into(), alias: Some("pu".into()) }]);
+        assert!(!r.using);
+        // Every join form; ON with subqueries, functions named like join words, a column named like one after a dot
+        let r = ok("select a.id, b.* from t a inner join u b on b.p = a.id and left(a.x, 1) = right(b.y, 1) and a.full = (select 1) natural left outer join v cross join w, x straight_join y order by 1", MY);
+        assert_eq!(r.from.iter().map(|f| f.table.as_str()).collect::<Vec<_>>(), ["t", "u", "v", "w", "x", "y"]);
+        assert_eq!(r.items, vec![qcol("a", "id"), Item::All { of: Some("b".into()) }]);
+        assert!(r.using, "NATURAL merges columns");
+        assert!(ok("select * from t join u using (id, k)", PG).using);
+        assert!(!ok("select * from t full outer join u on t.id = u.id, v", PG).using);
+        // Self-join: two occurrences
+        let r = ok("select a.id, b.id from t a join t b on a.parent = b.id", PG);
+        assert_eq!(r.from, vec![tab("t", Some("a")), tab("t", Some("b"))]);
+        // Unaliased, then an alias with AS and a quoted alias
+        assert_eq!(ok("select 1 from t join u as \"U\" on true", PG).from, vec![tab("t", None), tab("u", Some("U"))]);
+    }
+
+    #[test]
+    fn refuses_what_isnt_a_plain_select() {
+        let why = |q: &str, k: DbKind| select_shape(q, k).expect_err(q);
         assert_eq!(why("select a, count(*) from t group by a", PG), e::edit_combined("GROUP BY"));
         assert_eq!(why("select distinct a from t", PG), e::edit_combined("DISTINCT"));
         assert_eq!(why("select distinct on (a) a, id from t", PG), e::edit_combined("DISTINCT"));
@@ -289,7 +541,12 @@ mod tests {
         for q in [
             "with x as (select * from t) select * from x",
             "select * from (select * from t) s",
+            "select * from t join (select * from u) s on true",
+            "select * from t, lateral (select 1) s",
+            "select * from t join lateral f(t.id) on true",
+            "select * from (t join u on true)",
             "select * from generate_series(1, 3) g",
+            "select * from t join generate_series(1, 3) g on true",
             "select * from only t",
             "select * into t2 from t",
             "select id from t; select id from u",
@@ -299,16 +556,19 @@ mod tests {
             "select * from db.s.t",
             "select * from t tablesample system (10)",
             "select row_number() over w, id from t window w as (order by id)",
+            "select * from t left u on true",
+            "select * from t join u using id",
         ] {
             assert_eq!(why(q, PG), e::EDIT_NOT_PLAIN, "{q}");
         }
-        // MySQL executable comments, partitions
+        // MySQL executable comments, partitions, index hints
         assert_eq!(why("select /*! sql_no_cache */ id from t", MY), e::EDIT_NOT_PLAIN);
         assert_eq!(why("select id from t partition (p0)", MY), e::EDIT_NOT_PLAIN);
+        assert_eq!(why("select * from t join u use index (i) on true", MY), e::EDIT_NOT_PLAIN);
         // Words inside strings or quotes don't count
-        one_table_select("select id, \"group\" from t where note = 'a join b union c'", PG).unwrap();
+        select_shape("select id, \"group\" from t where note = 'a join b union c'", PG).unwrap();
         // Locking reads: in Auto mode the cursor's transaction holds the locks while edits save on another connection
-        for q in ["select * from t for update", "select * from t where id = 1 for share", "select * from t for no key update", "select * from t for key share", "select * from t a for update of a nowait"] {
+        for q in ["select * from t for update", "select * from t where id = 1 for share", "select * from t for no key update", "select * from t for key share", "select * from t a join u b on true for update of a nowait"] {
             assert_eq!(why(q, PG), e::EDIT_LOCKS, "{q}");
         }
         for q in ["select * from t lock in share mode", "select * from t where id > 0 for share", "select * from t for update skip locked"] {
@@ -318,6 +578,9 @@ mod tests {
 
     fn table(cols: &[&str], pk: &[&str]) -> TableInfo {
         TableInfo { schema: "public".into(), table: "users".into(), not_table: None, columns: cols.iter().map(|c| c.to_string()).collect(), pk: pk.iter().map(|c| c.to_string()).collect() }
+    }
+    fn named(t: &str, cols: &[&str], pk: &[&str]) -> TableInfo {
+        TableInfo { table: t.into(), ..table(cols, pk) }
     }
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|c| c.to_string()).collect()
@@ -337,7 +600,7 @@ mod tests {
             Editable::ReadOnly(why) => why,
             other => panic!("{other:?}"),
         };
-        assert_eq!(ro(&["name"], some(&["name"]), &t), e::edit_missing_pk(&s(&["id"])));
+        assert_eq!(ro(&["name"], some(&["name"]), &t), e::edit_missing_pk("public.users", &s(&["id"])));
         assert_eq!(ro(&["id", "upper"], vec![Some("id".into()), None], &t), e::edit_computed("upper"));
         assert_eq!(ro(&["id", "id"], some(&["id", "id"]), &t), e::edit_duplicate("id"));
         assert_eq!(ro(&["id", "name", "n2"], some(&["id", "name", "name"]), &t), e::edit_duplicate("name"));
@@ -346,14 +609,14 @@ mod tests {
         assert_eq!(ro(&["id"], some(&["id"]), &v), e::edit_not_table("public.users", "view"));
         // A composite key needs all its columns
         let c = table(&["a", "b", "x"], &["a", "b"]);
-        assert_eq!(ro(&["a", "x"], some(&["a", "x"]), &c), e::edit_missing_pk(&s(&["a", "b"])));
+        assert_eq!(ro(&["a", "x"], some(&["a", "x"]), &c), e::edit_missing_pk("public.users", &s(&["a", "b"])));
         assert!(matches!(decide(&c, &s(&["b", "x", "a"]), &some(&["b", "x", "a"])), Editable::Table(_)));
     }
 
     #[test]
     fn mysql_lines_items_up_with_the_table() {
         let t = table(&["id", "Name", "email"], &["id"]);
-        let q = |sql: &str| one_table_select(sql, MY).unwrap().items;
+        let q = |sql: &str| one(sql, MY).items;
         assert_eq!(mysql_sources(&q("select * from users"), &s(&["id", "Name", "email"]), &t), Ok(some(&["id", "Name", "email"])));
         // Case-insensitive names give the table's spelling; aliases are checked against the server's names
         assert_eq!(mysql_sources(&q("select NAME as n, ID from users"), &s(&["n", "ID"]), &t), Ok(some(&["Name", "id"])));
@@ -364,12 +627,127 @@ mod tests {
         assert_eq!(mysql_sources(&q("select id from users"), &s(&["id", "x"]), &t), Err(e::EDIT_UNMATCHED.into()));
         assert_eq!(mysql_sources(&q("select id as a from users"), &s(&["b"]), &t), Err(e::EDIT_UNMATCHED.into()));
         // A string right after a word is a literal with a prefix (N'…' national, _utf8mb4'…' charset), not a column with an alias
-        let col_n = Item::Column { name: "n".into(), alias: Some("zzz".into()) };
+        let col_n = Item::Column { of: None, name: "n".into(), alias: Some("zzz".into()) };
         assert_eq!(q("select id, N'zzz' from users"), vec![col("id"), Item::Other]);
         assert_eq!(q("select id, n'zzz' from users"), vec![col("id"), Item::Other]);
         assert_eq!(q("select id, _utf8mb4'zzz' from users"), vec![col("id"), Item::Other]);
         assert_eq!(q("select id, _utf8mb4 'zzz' from users"), vec![col("id"), Item::Other]);
         assert_eq!(q("select id, n 'zzz' from users"), vec![col("id"), col_n]);
+    }
+
+    /// The voc / users tables of #102: voc (idx, user_idx, status), users (idx, role, status)
+    fn voc_users() -> [Option<Vec<String>>; 2] {
+        [Some(s(&["idx", "user_idx", "status"])), Some(s(&["idx", "role", "status"]))]
+    }
+    fn src(from: usize, c: &str) -> Source {
+        Source::Col { from, column: c.into() }
+    }
+
+    #[test]
+    fn align_lines_a_join_up() {
+        let shape = |q: &str, k| select_shape(q, k).unwrap();
+        let cols = voc_users();
+        let names = |v: Vec<(Source, Option<String>)>| v.into_iter().map(|x| x.1).collect::<Vec<_>>();
+        // `*`: each table's columns in turn; duplicate names (idx, status) come apart by their place
+        let q = shape("select * from voc vo left join users pu on vo.user_idx = pu.idx", PG);
+        let a = align(&q, &cols, PG, 6).unwrap();
+        assert_eq!(a.iter().map(|x| x.0.clone()).collect::<Vec<_>>(), [src(0, "idx"), src(0, "user_idx"), src(0, "status"), src(1, "idx"), src(1, "role"), src(1, "status")]);
+        assert_eq!(names(a), [Some("idx".to_string()), Some("user_idx".into()), Some("status".into()), Some("idx".into()), Some("role".into()), Some("status".into())]);
+        // alias.*, qualified and bare columns (role is only in users), aliases swapping the names, expressions
+        let q = shape("select pu.*, vo.status as role, role as status, upper(vo.status), user_idx from voc vo join users pu on true", MY);
+        let a = align(&q, &cols, MY, 7).unwrap();
+        assert_eq!(a.iter().map(|x| x.0.clone()).collect::<Vec<_>>(), [src(1, "idx"), src(1, "role"), src(1, "status"), src(0, "status"), src(1, "role"), Source::Computed, src(0, "user_idx")]);
+        assert_eq!(a[3].1.as_deref(), Some("role"));
+        // A bare column both tables have, or none: not known (the server would refuse the first)
+        let q = shape("select status, nope, x.idx from voc join users on true", PG);
+        let a = align(&q, &cols, PG, 3).unwrap();
+        assert!(a.iter().all(|x| x.0 == Source::Unknown(e::EDIT_UNMATCHED.into())), "{a:?}");
+        // MySQL names ignore case; PostgreSQL's are as the server read them
+        let q = shape("select VO.IDX from voc vo join users pu on true", MY);
+        assert_eq!(align(&q, &cols, MY, 1).unwrap()[0].0, src(0, "idx"));
+        // Self-join: each occurrence by its alias, `*` by its place
+        let tt = [Some(s(&["id", "parent", "name"])), Some(s(&["id", "parent", "name"]))];
+        let q = shape("select b.name, a.id, b.id, a.name from t a join t b on a.parent = b.id", PG);
+        assert_eq!(align(&q, &tt, PG, 4).unwrap().into_iter().map(|x| x.0).collect::<Vec<_>>(), [src(1, "name"), src(0, "id"), src(1, "id"), src(0, "name")]);
+        let q = shape("select * from t a join t b on a.parent = b.id", PG);
+        assert_eq!(align(&q, &tt, PG, 6).unwrap()[3].0, src(1, "id"));
+        // Can't be lined up: * with USING, a table whose columns aren't known, a count the server disagrees with
+        assert_eq!(align(&shape("select * from voc join users using (idx)", PG), &cols, PG, 5), None);
+        assert!(align(&shape("select users.* from voc join users using (idx)", PG), &cols, PG, 3).is_some());
+        assert_eq!(align(&shape("select * from voc join users on true", PG), &[cols[0].clone(), None], PG, 6), None);
+        assert_eq!(align(&shape("select * from voc join users on true", PG), &cols, PG, 5), None);
+        // Two occurrences with the same name and no alias: alias.column can't tell them apart
+        let q = shape("select t.id from s1.t join s2.t on true", PG);
+        assert_eq!(align(&q, &tt, PG, 1).unwrap()[0].0, Source::Unknown(e::EDIT_UNMATCHED.into()));
+    }
+
+    fn join_ro(e: &Editable) -> &str {
+        match e {
+            Editable::ReadOnly(why) => why,
+            other => panic!("{other:?}"),
+        }
+    }
+    fn to(table: usize, c: &str) -> ColumnEdit {
+        ColumnEdit::To { table, column: c.into() }
+    }
+    fn ro(why: String) -> ColumnEdit {
+        ColumnEdit::ReadOnly { read_only: why }
+    }
+
+    #[test]
+    fn decide_join_per_table() {
+        let voc = named("voc", &["idx", "user_idx", "status"], &["idx"]);
+        let users = named("users", &["idx", "role", "status"], &["idx"]);
+        let result = s(&["idx", "user_idx", "status", "idx", "role", "status"]);
+        let all = vec![src(0, "idx"), src(0, "user_idx"), src(0, "status"), src(1, "idx"), src(1, "role"), src(1, "status")];
+        let jt = |t: &str, at: usize| JoinTable { schema: "public".into(), table: t.into(), pk: s(&["idx"]), pk_at: vec![at] };
+        // Both keys in the result: each column to its own table, duplicate names apart by origin
+        let r = decide_join(&[Ok(voc.clone()), Ok(users.clone())], &result, &all);
+        assert_eq!(r, Editable::Join(JoinEdit { tables: vec![jt("voc", 0), jt("users", 3)], columns: vec![to(0, "idx"), to(0, "user_idx"), to(0, "status"), to(1, "idx"), to(1, "role"), to(1, "status")] }));
+        // The users key missing: only voc's columns, users' say why
+        let r = decide_join(&[Ok(voc.clone()), Ok(users.clone())], &s(&["idx", "role"]), &[src(0, "idx"), src(1, "role")]);
+        let missing = e::edit_missing_pk("public.users", &s(&["idx"]));
+        assert_eq!(r, Editable::Join(JoinEdit { tables: vec![jt("voc", 0)], columns: vec![to(0, "idx"), ro(missing.clone())] }));
+        // Neither key: read-only, saying why for the first column
+        let r = decide_join(&[Ok(voc.clone()), Ok(users.clone())], &s(&["status", "role"]), &[src(0, "status"), src(1, "role")]);
+        assert_eq!(join_ro(&r), e::edit_missing_pk("public.voc", &s(&["idx"])));
+        // A view, a table without a key, a temporary table (Err), computed and unknown columns
+        let v = TableInfo { not_table: Some("view"), ..users.clone() };
+        let r = decide_join(&[Ok(voc.clone()), Ok(v)], &s(&["idx", "role", "n", "x"]), &[src(0, "idx"), src(1, "role"), Source::Computed, Source::Unknown("why".into())]);
+        let Editable::Join(j) = r else { panic!() };
+        assert_eq!(j.columns[1..], [ro(e::edit_not_table("public.users", "view")), ro(e::edit_computed("n")), ro("why".into())]);
+        let nopk = named("users", &["idx", "role"], &[]);
+        let Editable::Join(j) = decide_join(&[Ok(voc.clone()), Ok(nopk)], &s(&["idx", "role"]), &[src(0, "idx"), src(1, "role")]) else { panic!() };
+        assert_eq!(j.columns[1], ro(e::edit_no_pk("public.users")));
+        let Editable::Join(j) = decide_join(&[Ok(voc.clone()), Err("temp".into())], &s(&["idx", "role"]), &[src(0, "idx"), src(1, "role")]) else { panic!() };
+        assert_eq!(j.columns[1], ro("temp".into()));
+        // The same column twice: both cells read-only, the key still finds the row
+        let Editable::Join(j) = decide_join(&[Ok(voc.clone()), Ok(users.clone())], &s(&["idx", "status", "s2", "idx"]), &[src(0, "idx"), src(0, "status"), src(0, "status"), src(1, "idx")]) else { panic!() };
+        assert_eq!(j.columns, [to(0, "idx"), ro(e::edit_duplicate("status")), ro(e::edit_duplicate("status")), to(1, "idx")]);
+        // Self-join: each occurrence by its own key
+        let t = named("t", &["id", "name"], &["id"]);
+        let Editable::Join(j) = decide_join(&[Ok(t.clone()), Ok(t.clone())], &s(&["name", "id", "id", "name"]), &[src(1, "name"), src(0, "id"), src(1, "id"), src(0, "name")]) else { panic!() };
+        assert_eq!(j.tables.iter().map(|t| t.pk_at.clone()).collect::<Vec<_>>(), [vec![1], vec![2]]);
+        assert_eq!(j.columns, [to(1, "name"), to(0, "id"), to(1, "id"), to(0, "name")]);
+        // A composite key needs all its columns
+        let c = named("c", &["a", "b", "x"], &["a", "b"]);
+        let Editable::Join(j) = decide_join(&[Ok(voc), Ok(c)], &s(&["idx", "b", "x", "a"]), &[src(0, "idx"), src(1, "b"), src(1, "x"), src(1, "a")]) else { panic!() };
+        assert_eq!(j.tables[1].pk_at, [3, 1]);
+    }
+
+    #[test]
+    fn join_cell_on_the_outer_side_is_read_only() {
+        let j = JoinEdit {
+            tables: vec![JoinTable { schema: "crm".into(), table: "voc".into(), pk: s(&["idx"]), pk_at: vec![0] }, JoinTable { schema: "public".into(), table: "users".into(), pk: s(&["idx"]), pk_at: vec![2] }],
+            columns: vec![to(0, "idx"), to(0, "status"), to(1, "idx"), to(1, "role"), ro("why".into())],
+        };
+        // No users row matched (LEFT JOIN): its key is NULL there
+        let row_null = |i: usize| i >= 2;
+        assert_eq!(j.cell(1, row_null).map(|(t, c)| (t.table.as_str(), c)), Ok(("voc", "status")));
+        assert_eq!(j.cell(3, row_null).unwrap_err(), e::edit_no_row("public.users"));
+        assert_eq!(j.cell(3, |_| false).map(|(t, c)| (t.table.as_str(), c)), Ok(("users", "role")));
+        assert_eq!(j.cell(4, |_| false).unwrap_err(), "why");
+        assert_eq!(j.cell(9, |_| false).unwrap_err(), e::EDIT_UNMATCHED);
     }
 
     #[test]
@@ -383,5 +761,10 @@ mod tests {
         assert_eq!(serde_json::to_value(R { e: Some(Editable::Table(t)) }).unwrap(), serde_json::json!({"edit": {"schema": "s", "table": "t", "pk": ["id"], "columns": ["id"]}}));
         assert_eq!(serde_json::to_value(R { e: Some(Editable::ReadOnly("why".into())) }).unwrap(), serde_json::json!({"readOnlyReason": "why"}));
         assert_eq!(serde_json::to_value(R { e: None }).unwrap(), serde_json::json!({}));
+        let j = JoinEdit { tables: vec![JoinTable { schema: "s".into(), table: "t".into(), pk: s(&["id"]), pk_at: vec![0] }], columns: vec![to(0, "id"), ro("why".into())] };
+        assert_eq!(
+            serde_json::to_value(R { e: Some(Editable::Join(j)) }).unwrap(),
+            serde_json::json!({"editJoin": {"tables": [{"schema": "s", "table": "t", "pk": ["id"], "pkAt": [0]}], "columns": [{"table": 0, "column": "id"}, {"readOnly": "why"}]}})
+        );
     }
 }

@@ -14,17 +14,17 @@ The AI client (and the model behind it) is **not** trusted. Neither is the data 
 
 Each data source has an MCP setting (Off / Read / Read & write). The server is started either read-only (the default) or with `--allow-write`.
 
-Only `qurry-mcp` 0.2.13 or newer reads the MCP setting. An older `qurry-mcp` or `dbtool-mcp` shares every data source, Production included. The GUI doesn't update it: after updating, run `brew upgrade qurry` or `qurry-tui --update` (check with `qurry-tui --version`), then restart the AI client so it starts the new `qurry-mcp`.
+Only `qurry-mcp` 0.2.13 or newer reads the MCP setting. An older `qurry-mcp` or `dbtool-mcp` shares every data source, Production included. The GUI doesn't update it: after updating, run `brew upgrade qurry` or `qurry-tui --update` (check with `qurry-tui --version`), then restart the AI client so it starts the new `qurry-mcp`. Keeping Production data sources at Read takes `qurry-mcp` 0.3.2 or newer: an older one still runs `execute` on a Production source saved as Read & write until you save that source again (Qurry then saves it as Read).
 
 | MCP setting | Without `--allow-write` | With `--allow-write` |
 |---|---|---|
 | **Off** | Nothing. Not listed; its password is never read and no connection is opened (also when the client asks for it by name or id) | Same |
 | **Read** | Browse and read: databases, schemas, objects, columns, DDL, object search, `query`, `explain`, `full_text_search`, Redis keys and values, RAG search, `export_csv` | Same |
-| **Read & write** | Same as Read | Also `execute` — unless the data source is **Read-only**, which keeps it at Read |
-| *(not set: made before the setting existed)* | Read, or **Off** if it is a Production data source | Read & write, or **Off** if it is a Production data source |
+| **Read & write** | Same as Read | Also `execute` — unless the data source is **Read-only** or **Production**, which keep it at Read |
+| *(not set: made before the setting existed)* | Read, or **Off** if it is a Production data source | Read & write (Read if Read-only), or **Off** if it is a Production data source |
 
 - New data sources start **Off** (GUI and TUI), and so does a copy of a data source. Any value other than `off` / `read` / `write` in the config file counts as Off.
-- **Production data sources are Off until you choose Read or Read & write for them.** This is only the default for a data source that never had an MCP setting: turning Production on later doesn't change a setting you already chose, so set it to Off yourself.
+- **Production data sources are Off until you choose Read for them, and never written.** This is only the default for a data source that never had an MCP setting: turning Production on later doesn't change a setting you already chose, so set it to Off yourself.
 - A visible data source exposes every database and schema its database user can see. The Schemas tab only decides which databases `search_objects` looks through; it is not a limit on `query`.
 - `list_data_sources` shows the host, port, user name and SSH user; passwords never (a password inside a URI such as `mongodb://user:pass@host` is removed).
 - `export_csv` writes only new files in `~/Downloads/qurry-exports`, named by the client without folders, and never overwrites one.
@@ -44,9 +44,9 @@ The full list is in [MCP server › How read-only is enforced](mcp.md). These ch
 
 ## Writes (`--allow-write`)
 
-`execute` is listed only when the server runs with `--allow-write`, and it runs only on data sources set to Read & write that are not Read-only. It takes an allow-list: one `INSERT`, or `UPDATE` / `DELETE` with a `WHERE` per item, and the MongoDB, vector database and Redis equivalents. DDL, `TRUNCATE`, `MERGE`, scripts and drops are refused. PostgreSQL / MySQL run each item as a prepared statement, so the server refuses a second statement hidden in one item.
+`execute` is listed only when the server runs with `--allow-write`, and it runs only on data sources set to Read & write that are neither Read-only nor Production. It takes an allow-list: one `INSERT`, or `UPDATE` / `DELETE` with a `WHERE` per item, and the MongoDB, vector database and Redis equivalents. DDL, `TRUNCATE`, `MERGE`, scripts and drops are refused. PostgreSQL / MySQL run each item as a prepared statement, so the server refuses a second statement hidden in one item.
 
-On a Production data source, a change from `execute` is recorded in the Production log before it runs, with undo SQL for simple `UPDATE` / `DELETE` ([Safety](safety.md)). But nobody confirms it: the row-count question the app asks needs a person.
+A Production data source never takes `execute`, whatever its MCP setting: the row-count question the app asks before a change needs a person, and an AI tool would skip it. Change production data in Qurry yourself.
 
 The `WHERE` rule only prevents accidents. `WHERE 1=1` still changes every row.
 

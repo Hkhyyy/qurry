@@ -1,4 +1,4 @@
-import { ConnectionView, dialectOf } from "../../lib/api";
+import { ConnectionView, dialectOf, redisDb, targetId } from "../../lib/api";
 import type { WorkspaceInfo } from "../../components/WorkspaceBar";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes } from "../../lib/panes";
 import { buildTab, sqlOf } from "../tabs/ops";
@@ -46,10 +46,19 @@ const buildLayout = (ws: any, conns: ConnectionView[]): WsLayout => {
   const okPane = (p: any): boolean => p && (p.t === "leaf" ? Number.isInteger(p.g) && p.g >= 0 && p.g < MAX_PANES : p.t === "split" && okPane(p.a) && okPane(p.b));
   const pane0: Pane = okPane(ws.panes) ? ws.panes : leaf(0);
   const ls0 = leaves(pane0);
+  // One Redis tab per data source (before 0.3.2 one per database): a saved later one moves the first to its database, and its index
+  // points at that tab, so the last database picked comes back and nothing saved is dropped
+  const redisTabs = new Map<string, Tab>();
   const built: (Tab | null)[] = ws.tabs.map((x: any) => {
     const c = conns.find((cc) => cc.id === x.connId);
     // Also restore DBA report, diagram, compare and RAG tabs (they load themselves when first shown)
     if (!c || !["console", "table", "ddl", "redis", "dba", "erd", "migrate", "rag"].includes(x.kind)) return null;
+    const kept = x.kind === "redis" ? redisTabs.get(c.id) : undefined;
+    if (kept) {
+      const database = redisDb(x.database);
+      Object.assign(kept, { database, target: targetId(c.id, database), title: `${c.name} [${database}]`, redisKey: x.redisKey });
+      return kept;
+    }
     const group = ls0.includes(x.group) ? x.group : ls0[0];
     let tableSql: string | undefined;
     if (x.kind === "table" && x.edit) {
@@ -57,9 +66,11 @@ const buildLayout = (ws: any, conns: ConnectionView[]): WsLayout => {
       tableSql = `SELECT * FROM ${q(x.edit.schema)}.${q(x.edit.table)}${x.where ? ` WHERE ${x.where}` : ""}${x.orderBy ? ` ORDER BY ${x.orderBy}` : ""};`;
     }
     const t = buildTab(c, x.kind, { sql: x.kind === "table" ? tableSql : x.sql, database: x.database, tableSql, edit: x.edit ? { ...x.edit, pk: [] } : undefined, where: x.where, orderBy: x.orderBy, objKind: typeof x.objKind === "string" ? x.objKind : undefined, ddlOf: typeof x.ddlOf?.schema === "string" && typeof x.ddlOf?.name === "string" ? { schema: x.ddlOf.schema, name: x.ddlOf.name } : undefined }, group, x.title);
-    return { ...t, pinned: x.pinned, redisKey: x.redisKey, dbaReport: x.dbaReport, erdSchemas: x.erdSchemas, stale: x.kind !== "ddl" };
+    const tab: Tab = { ...t, pinned: x.pinned, redisKey: x.redisKey, dbaReport: x.dbaReport, erdSchemas: x.erdSchemas, stale: x.kind !== "ddl" };
+    if (x.kind === "redis") redisTabs.set(c.id, tab);
+    return tab;
   });
-  const ts = built.filter((t): t is Tab => !!t);
+  const ts = [...new Set(built.filter((t): t is Tab => !!t))];
   if (!ts.length) return emptyLayout();
   const pane = prunePanes(pane0, new Set(ts.map((t) => t.group)));
   const ls = leaves(pane);

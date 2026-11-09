@@ -224,6 +224,8 @@ pub struct MySession {
     /// A change ran in the open transaction (audit::is_change, as the Production log has it): a transaction opened by BEGIN or
     /// guessed after a SELECT in Manual mode has none, so ending it saves nothing
     pub changed: bool,
+    /// Production (Session::set_reads_outside_tx): in Manual mode a plain read before the transaction is open runs as in Auto
+    pub(crate) reads_outside_tx: bool,
     /// How the last statement ended the open transaction, when it did by itself (audit::IMPLICIT_COMMIT or audit::ENDED_UNKNOWN):
     /// not a COMMIT / ROLLBACK, a deadlock in a row change or a lost connection
     pub ended: Option<&'static str>,
@@ -237,7 +239,7 @@ impl MySession {
     pub async fn open(p: &MySqlPool) -> AppResult<Self> {
         let mut conn = p.acquire().await?;
         let id: u64 = sqlx::query_scalar("select connection_id()").fetch_one(&mut *conn).await?;
-        let mut s = Self { conn, id: id as i64, manual: false, in_tx: false, changed: false, ended: None, probe: true, more: None };
+        let mut s = Self { conn, id: id as i64, manual: false, in_tx: false, changed: false, reads_outside_tx: false, ended: None, probe: true, more: None };
         // Best effort: a MySQL-protocol server without transactions (ClickHouse, older StarRocks / Doris) still opens, without the probe
         let began = s.conn.execute("START TRANSACTION").await.is_ok();
         s.probe = began && s.tx_open().await != Some(false);
@@ -249,6 +251,19 @@ impl MySession {
 
     pub async fn ping(&mut self) {
         let _ = self.conn.execute("select 1").await;
+    }
+
+    /// Session::check. A statement that runs nothing, not the protocol's ping: sqlx reads past a statement's answer that was left
+    /// unread when its caller gave up waiting (the check's time limit), but not past a ping's, which the next statement would take
+    /// for its own answer. So a session whose check was slow is still usable
+    pub(crate) async fn check(&mut self) -> AppResult<()> {
+        self.conn.execute("DO 0").await?;
+        Ok(())
+    }
+
+    /// Session::abandon
+    pub(crate) fn abandon(&mut self) {
+        self.conn.close_on_drop();
     }
 
     pub fn close_cursor(&mut self) {
@@ -359,6 +374,39 @@ impl MySession {
     }
 
     pub async fn run(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
+        // Production: autocommit=0 opens a transaction for a plain read too; it runs in a read-only one of its own instead, ended
+        // with it, as in Auto (Session::set_reads_outside_tx). Read-only: a function in it that writes is refused, not committed
+        let read_first = self.reading_first() && crate::session::plain_read(sql, crate::store::DbKind::Mysql) && self.begin_read().await;
+        let mut r = self.run_inner(sql, limit).await;
+        if !read_first {
+            return r;
+        }
+        self.end_read().await;
+        if let Ok(q) = &mut r {
+            q.in_transaction = self.in_tx;
+        }
+        r.map_err(crate::session::read_first_refused)
+    }
+
+    /// Manual mode on Production with no transaction open yet (Session::set_reads_outside_tx)
+    fn reading_first(&self) -> bool {
+        self.manual && !self.in_tx && self.reads_outside_tx
+    }
+
+    /// The read-only transaction of a read outside the user's (reading_first). false: the server has none (the read then opens the
+    /// user's, as autocommit=0 does)
+    async fn begin_read(&mut self) -> bool {
+        self.conn.execute("START TRANSACTION READ ONLY").await.is_ok()
+    }
+
+    /// End the transaction of a read outside the user's (begin_read), with its snapshot and metadata locks
+    async fn end_read(&mut self) {
+        if self.conn.execute("COMMIT").await.is_ok() {
+            (self.in_tx, self.changed) = (false, false);
+        }
+    }
+
+    async fn run_inner(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         self.more = None;
         self.ended = None;
         if !self.in_tx {
@@ -506,7 +554,16 @@ impl MySession {
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
         let Some((sql, offset)) = self.more.clone() else { return Err(AppError::Msg("No more rows".into())) };
         let paged = format!("SELECT * FROM ({sql}) AS dbtool_page LIMIT {limit} OFFSET {offset}");
-        let mut r = run_on(&mut self.conn, &paged, limit).await?;
+        // The page of a read outside the user's transaction (reading_first) runs as the read did
+        let read_first = self.reading_first() && self.begin_read().await;
+        let r = run_on(&mut self.conn, &paged, limit).await;
+        let mut r = match read_first {
+            true => {
+                self.end_read().await;
+                r.map_err(crate::session::read_first_refused)?
+            }
+            false => r?,
+        };
         r.truncated = r.rows.len() >= limit;
         self.more = if r.truncated { Some((sql, offset + limit)) } else { None };
         r.in_transaction = self.in_tx;
@@ -718,19 +775,56 @@ pub async fn object_ddl(p: &MySqlPool, schema: &str, name: &str, kind: &str) -> 
 }
 
 pub async fn completion_meta(p: &MySqlPool) -> AppResult<Vec<CompletionTable>> {
-    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(&format!(
         "select cast(table_schema as char), cast(table_name as char), cast(column_name as char), cast(column_type as char) \
-         from information_schema.columns where table_schema = database() order by table_name, ordinal_position limit 30000",
-    )
+         from information_schema.columns where table_schema = database() order by table_name, ordinal_position limit {}",
+        qurry_shared::complete::COLUMN_LIMIT
+    ))
     .fetch_all(p)
     .await?;
     let mut out: Vec<CompletionTable> = Vec::new();
     for (schema, name, col, ty) in rows {
         match out.last_mut() {
             Some(t) if t.schema == schema && t.name == name => t.columns.push((col, ty)),
-            _ => out.push(CompletionTable { schema, name, columns: vec![(col, ty)] }),
+            _ => out.push(CompletionTable { schema, name, columns: vec![(col, ty)], ..Default::default() }),
         }
     }
+    // Foreign keys (FK-aware joins): one row per column, in key order
+    let fks: Vec<(String, String, String, String, String, String, String)> = sqlx::query_as(
+        "select cast(table_schema as char), cast(table_name as char), cast(constraint_name as char), cast(column_name as char), \
+           cast(referenced_table_schema as char), cast(referenced_table_name as char), cast(referenced_column_name as char) \
+         from information_schema.key_column_usage where table_schema = database() and referenced_table_name is not null \
+         order by table_name, constraint_name, ordinal_position limit 20000",
+    )
+    .fetch_all(p)
+    .await?;
+    // Tables by (schema, name): thousands of tables and FK rows are matched without a scan per row
+    let at: std::collections::HashMap<(String, String), usize> = out.iter().enumerate().map(|(i, t)| ((t.schema.clone(), t.name.clone()), i)).collect();
+    let mut last: Option<(String, String, String)> = None;
+    for (schema, name, constraint, col, ref_schema, ref_table, ref_col) in fks {
+        let Some(&i) = at.get(&(schema.clone(), name.clone())) else { continue };
+        let t = &mut out[i];
+        let key = Some((schema, name, constraint));
+        match t.fks.last_mut() {
+            Some(fk) if last == key => {
+                fk.columns.push(col);
+                fk.ref_columns.push(ref_col);
+            }
+            _ => t.fks.push(qurry_shared::complete::ForeignKey { columns: vec![col], ref_schema, ref_table, ref_columns: vec![ref_col] }),
+        }
+        last = key;
+    }
+    // Stored functions with their parameters, for completion and signature help
+    let fns: Vec<(String, String, String, String)> = sqlx::query_as(
+        "select cast(r.routine_schema as char), cast(r.routine_name as char), \
+           cast(coalesce((select group_concat(concat(x.parameter_name, ' ', x.dtd_identifier) order by x.ordinal_position separator ', ') \
+             from information_schema.parameters x where x.specific_schema = r.routine_schema and x.specific_name = r.specific_name and x.ordinal_position > 0), '') as char), \
+           cast(coalesce(r.dtd_identifier, '') as char) \
+         from information_schema.routines r where r.routine_schema = database() and r.routine_type = 'FUNCTION' order by 2 limit 5000",
+    )
+    .fetch_all(p)
+    .await?;
+    out.extend(fns.into_iter().map(|(schema, name, args, returns)| CompletionTable { schema, name, routine: Some(qurry_shared::complete::Routine { args, returns }), ..Default::default() }));
     Ok(out)
 }
 

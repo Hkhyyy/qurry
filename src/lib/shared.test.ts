@@ -12,6 +12,22 @@ describe("shared wasm", () => {
     expect(shared().commitFailedTitle("Session closed")).toBe("Commit failed");
   });
 
+  it("finds a failed statement's error spot as a UTF-16 offset (PostgreSQL counts characters; an emoji is two units here)", () => {
+    const sql = "select '😀', x fro t";
+    expect(shared().errorPosition('syntax error at or near "t" (position 19)', sql)).toBe(sql.lastIndexOf("t"));
+    const my = "1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'fro t' at line 2";
+    expect(shared().errorPosition(my, "select 1,\n  x fro t")).toBe("select 1,\n  x ".length);
+    expect(shared().errorPosition('relation "t" does not exist', "select * from t")).toBeUndefined();
+    expect(shared().withoutPosition('relation "t" does not exist (position 15)')).toBe('relation "t" does not exist');
+  });
+
+  it("Redis Terminal key names: the typed key first, quoted when it has spaces or quotes; unknown key counts show the name only", () => {
+    expect(shared().redisKeyChoices("user:1", ["user:10", "user:1"]).map((c) => c.label)).toEqual(["user:1", "user:10"]);
+    expect(shared().redisKeyChoices("user:1", ["user:1"])).toEqual([]);
+    expect(shared().redisKeyChoices("us", ["user 1"])).toEqual([{ label: "user 1", insert: '"user 1"' }]);
+    expect(shared().redisDbLabel("db0", -1)).toBe("db0");
+  });
+
   it("words a failed load-more as the TUI does", () => {
     expect(shared().moreRowsFailed("Session closed")).toBe("Couldn't load more rows: Session closed");
   });
@@ -61,7 +77,7 @@ describe("shared wasm", () => {
     const caret = text.indexOf("이름") + 1;
     const mid = idx.suggestFilter("public", "users", false, text, caret, "", false, false);
     expect([mid.from, labels(mid)]).toEqual([text.indexOf("이름"), ["이름"]]);
-    expect(labels(idx.suggestFilter("public", "users", true, "id de", 5, "", false, false))).toEqual(["delete", "desc"]);
+    expect(labels(idx.suggestFilter("public", "users", true, "id de", 5, "", false, false))).toEqual(["desc", "delete"]);
     expect(idx.suggestFilter("public", "users", false, "user_name like 'us", 18, "", false, false).items).toEqual([]);
     // ⌃Space at an empty word lists the table's columns first
     expect(labels(idx.suggestFilter("public", "users", false, "", 0, "", false, true)).slice(0, 3)).toEqual(["id", "user_name", "이름"]);

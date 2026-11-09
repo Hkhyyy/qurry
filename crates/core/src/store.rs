@@ -1,13 +1,15 @@
 //! Connection settings store (JSON file). Passwords go in the encrypted file in secrets.rs.
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
+use qurry_shared::theme::{self, CustomTheme, ThemeSettings};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::{fs, path::PathBuf};
+use std::{fs, path::Path, path::PathBuf};
 
 /// User keyboard shortcut settings: action id → key list (only those differing from the defaults)
 pub type Keymap = BTreeMap<String, Vec<String>>;
 
 pub use qurry_shared::kind::DbKind;
+pub use crate::import::{ImportPlan, ImportRow};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -119,6 +121,10 @@ pub struct ConnOptions {
     /// Production: statements that change data show the affected row count and ask for confirmation
     #[serde(default)]
     pub confirm_changes: bool,
+    /// Production: consoles start in Manual transaction mode (#106). None = on: sources saved before this, and by older apps that
+    /// drop the field, get it too
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub production_manual: Option<bool>,
     /// A remote MySQL with no SSL setting may connect in plain text if it can't do TLS (old servers · trusted networks).
     /// This and mcp are also saved in connection-access.json, which wins over connections.json (Store::list)
     #[serde(default)]
@@ -208,6 +214,24 @@ fn default_ssh_port() -> u16 {
 }
 
 impl ConnectionConfig {
+    /// Whether its consoles can be in Manual transaction mode (Session::set_manual): PostgreSQL and MySQL. Redis and the driver
+    /// plugins refuse it, so their consoles always start in Auto
+    pub fn supports_manual(&self) -> bool {
+        matches!(self.kind, DbKind::Postgres | DbKind::Mysql)
+    }
+
+    /// Whether a new console starts in Manual transaction mode: the source's Transaction control, or Production with
+    /// production_manual on (the default). The GUI has the same rule (src/features/tabs/ops.ts startsManual)
+    pub fn starts_manual(&self) -> bool {
+        (self.supports_manual() && self.options.tx_manual) || self.production_starts_manual()
+    }
+
+    /// Manual only because it is Production (#106): the console says so the first time (errors::PRODUCTION_MANUAL)
+    pub fn production_starts_manual(&self) -> bool {
+        let o = &self.options;
+        self.supports_manual() && !o.tx_manual && o.confirm_changes && o.production_manual != Some(false)
+    }
+
     pub fn active_ssl(&self) -> Option<&SslConfig> {
         self.ssl.as_ref().filter(|s| s.enabled)
     }
@@ -295,7 +319,7 @@ impl McpAccess {
 
 impl ConnectionConfig {
     /// MCP exposure. Old sources without a setting are hidden if Production, otherwise as before (read, write with --allow-write).
-    /// Read-only Data Sources have no write
+    /// Read-only and Production Data Sources have no write: an AI tool's change would skip the confirm a person gets there
     pub fn mcp_access(&self, allow_write: bool) -> McpAccess {
         let a = match self.options.mcp.as_deref() {
             Some("off") => McpAccess::Off,
@@ -306,7 +330,7 @@ impl ConnectionConfig {
             None if self.options.confirm_changes => McpAccess::Off,
             None => McpAccess::Write,
         };
-        if a == McpAccess::Write && (!allow_write || self.read_only) { McpAccess::Read } else { a }
+        if a == McpAccess::Write && (!allow_write || self.read_only || self.options.confirm_changes) { McpAccess::Read } else { a }
     }
 }
 
@@ -347,7 +371,12 @@ pub struct ExportFile {
 
 pub struct Store {
     path: PathBuf,
+    /// Temporary data sources (`qurry-tui postgres://…`): listed and found like saved ones, but only in this process. Never written
+    /// to connections.json, so the GUI, other TUIs and the MCP server never see them
+    temporary: std::sync::Mutex<Vec<ConnectionConfig>>,
 }
+
+pub const TEMPORARY_NOT_SAVED: &str = "This data source comes from the qurry-tui command line: it is temporary, so it isn't saved and its form can't change it. To keep it, add a data source with these settings (n in the explorer).";
 
 /// Per-source settings that older apps (0.2.12 and before) don't know. They are kept in connection-access.json too (by connection id),
 /// because an older app saving connections.json drops fields it doesn't know — an MCP Off source would be shared again.
@@ -361,14 +390,53 @@ struct Access {
     allow_plaintext: bool,
 }
 
+/// The table a table tab shows, which its column widths are kept for (settings.json "columnWidths"): data source id, database
+/// (empty: the source's default, which the store names), schema, table
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TableRef {
+    pub source: String,
+    pub database: String,
+    pub schema: String,
+    pub table: String,
+}
+
+impl TableRef {
+    /// A saved "columnWidths" entry is this table's
+    fn is(&self, e: &serde_json::Value) -> bool {
+        let f = |k: &str| e.get(k).and_then(|v| v.as_str());
+        f("source") == Some(&self.source) && f("database") == Some(&self.database) && f("schema") == Some(&self.schema) && f("table") == Some(&self.table)
+    }
+}
+
+/// A source whose saved passwords an import deletes: (id, DB password, SSH secret)
+type Forget = (String, bool, bool);
+
 impl Store {
     pub fn new(dir: PathBuf) -> Self {
         Self {
             path: dir.join("connections.json"),
+            temporary: Default::default(),
         }
     }
 
+    /// Saved sources, then the temporary ones of this process
     pub fn list(&self) -> AppResult<Vec<ConnectionConfig>> {
+        let mut all = self.saved()?;
+        all.extend(self.temporary.lock().unwrap().iter().cloned());
+        Ok(all)
+    }
+
+    /// A data source only for this process (Store::temporary)
+    pub fn add_temporary(&self, config: ConnectionConfig) {
+        self.temporary.lock().unwrap().push(config);
+    }
+
+    pub fn is_temporary(&self, id: &str) -> bool {
+        self.temporary.lock().unwrap().iter().any(|c| c.id == id)
+    }
+
+    /// What connections.json (and its side files) hold
+    fn saved(&self) -> AppResult<Vec<ConnectionConfig>> {
         if !self.path.exists() {
             return Ok(Vec::new());
         }
@@ -424,6 +492,7 @@ impl Store {
     }
 
     pub fn save(&self, config: &ConnectionConfig) -> AppResult<()> {
+        self.refuse_temporary(&config.id)?;
         self.update(|all| {
             match all.iter_mut().find(|c| c.id == config.id) {
                 Some(existing) => *existing = config.clone(),
@@ -434,13 +503,22 @@ impl Store {
     }
 
     /// Change part of one source (scope, color …) under the lock, so another app's change to it in between isn't reverted. None if it doesn't exist
+    /// A temporary source is changed in memory only
     pub fn modify<T>(&self, id: &str, f: impl FnOnce(&mut ConnectionConfig) -> AppResult<T>) -> AppResult<Option<T>> {
+        if let Some(c) = self.temporary.lock().unwrap().iter_mut().find(|c| c.id == id) {
+            return f(c).map(Some);
+        }
         self.update(|all| all.iter_mut().find(|c| c.id == id).map(f).transpose())
+    }
+
+    fn refuse_temporary(&self, id: &str) -> AppResult<()> {
+        if self.is_temporary(id) { Err(crate::error::AppError::Msg(TEMPORARY_NOT_SAVED.into())) } else { Ok(()) }
     }
 
     /// Save a whole source, deciding against the saved one under the lock: `f` gets what is saved now (None for a new source)
     /// and the config to save, and may refuse (nothing is written then)
     pub fn save_with(&self, mut config: ConnectionConfig, f: impl FnOnce(Option<&ConnectionConfig>, &mut ConnectionConfig) -> AppResult<()>) -> AppResult<ConnectionConfig> {
+        self.refuse_temporary(&config.id)?;
         self.update(|all| {
             let i = all.iter().position(|c| c.id == config.id);
             f(i.map(|i| &all[i]), &mut config)?;
@@ -453,6 +531,10 @@ impl Store {
     }
 
     pub fn delete(&self, id: &str) -> AppResult<()> {
+        if self.is_temporary(id) {
+            self.temporary.lock().unwrap().retain(|c| c.id != id);
+            return Ok(());
+        }
         self.update(|all| {
             all.retain(|c| c.id != id);
             Ok(())
@@ -475,40 +557,41 @@ impl Store {
         }
         let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.path.with_extension("json.lock"))?;
         lock.lock()?;
-        f(self.list()?)
+        f(self.saved()?)
     }
 
     pub fn export_to(&self, path: &std::path::Path) -> AppResult<usize> {
-        let connections = self.list()?;
+        let connections = self.saved()?;
         let n = connections.len();
         let file = ExportFile { app: "dbtool".into(), version: 1, connections };
         crate::secrets::write_private(path, serde_json::to_string_pretty(&file)?.as_bytes())?;
         Ok(n)
     }
 
-    /// Overwrite the same id, add new ids. Returns: (added, updated)
-    fn read_import(path: &std::path::Path) -> AppResult<Vec<ConnectionConfig>> {
-        let text = fs::read_to_string(path)?;
-        Ok(match serde_json::from_str::<ExportFile>(&text) {
-            Ok(f) => f.connections,
-            Err(_) => serde_json::from_str(&text)?,
+    /// What importing `path` would do (Qurry export, DataGrip / IntelliJ, DBeaver: crate::import::read). `from` names it in the
+    /// question (a found location's label), otherwise it's described from the path
+    pub fn import_plan(&self, path: &std::path::Path, home: &std::path::Path, from: Option<&str>) -> AppResult<ImportPlan> {
+        let all = self.list()?;
+        let shown = crate::import::shown(path, home);
+        Ok(match crate::import::read(path, home)? {
+            crate::import::Read::Foreign(sources) => crate::import::foreign_plan(&from.map(str::to_string).unwrap_or_else(|| crate::import::describe(path, home)), &shown, &all, sources),
+            crate::import::Read::Qurry(incoming) => Self::qurry_plan(from.unwrap_or("a Qurry export"), &shown, &all, incoming),
         })
     }
 
-    /// What changes before importing (a file from someone else can turn off Read-only or add SQL to run on connect)
-    pub fn import_preview(&self, path: &std::path::Path) -> AppResult<Vec<String>> {
-        let all = self.list()?;
-        let mut out = vec![];
-        for c in Self::read_import(path)? {
+    /// A Qurry export: what changes before importing (a file from someone else can turn off Read-only or add SQL to run on connect)
+    fn qurry_plan(from: &str, shown: &str, all: &[ConnectionConfig], incoming: Vec<ConnectionConfig>) -> ImportPlan {
+        let mut rows = vec![];
+        for c in &incoming {
+            let kind = crate::import::kind_name(c.kind, "");
             let script = |c: &ConnectionConfig| c.options.startup_script.trim().to_string();
             match all.iter().find(|e| !c.id.is_empty() && e.id == c.id) {
                 None => {
-                    let mut line = format!("+ add \"{}\" ({}@{}:{})", c.name, c.user, c.host, c.port);
                     let mut notes = vec![];
-                    if !script(&c).is_empty() {
+                    if !script(c).is_empty() {
                         notes.push("runs a startup script on connect".to_string());
                     }
-                    // What the import will really allow (unset becomes Off, see import_from)
+                    // What the import will really allow (unset becomes Off, see merge_import)
                     let mut as_saved = c.clone();
                     as_saved.options.mcp.get_or_insert_with(|| "off".into());
                     match as_saved.mcp_access(true) {
@@ -525,10 +608,8 @@ impl Store {
                     if c.options.oracle_client.as_deref().is_some_and(|p| !p.trim().is_empty()) {
                         notes.push("loads Oracle client libraries from a folder".into());
                     }
-                    if !notes.is_empty() {
-                        line += &format!(" — {}", notes.join(", "));
-                    }
-                    out.push(line);
+                    let (value, tone) = if notes.is_empty() { ("password on connect".to_string(), None) } else { (notes.join(", "), Some("warn")) };
+                    rows.push(ImportRow::new(format!("+ add \"{}\" ({})", c.name, crate::import::server(c)), kind, value, tone, true));
                 }
                 Some(e) => {
                     let mut ch = vec![];
@@ -549,7 +630,7 @@ impl Store {
                         ch.push(format!("SSL {} → {}", a.mode(), b.mode()));
                     }
                     let files = |x: &ConnectionConfig| x.ssl.as_ref().map(|s| (s.ca_file.clone(), s.cert_file.clone(), s.key_file.clone()));
-                    if files(e) != files(&c) {
+                    if files(e) != files(c) {
                         ch.push("changes the SSL certificate files".into());
                     }
                     if e.redis.as_ref().map(|r| (&r.mode, &r.nodes, &r.sentinel_master)) != c.redis.as_ref().map(|r| (&r.mode, &r.nodes, &r.sentinel_master)) {
@@ -569,7 +650,7 @@ impl Store {
                     if e.mcp_access(true) < as_saved.mcp_access(true) {
                         ch.push("shares more with MCP (AI tools)".into());
                     }
-                    if Self::import_moves_server(e, &c) && e.password_saved {
+                    if Self::import_moves_server(e, c) && e.password_saved {
                         ch.push("the saved password will be removed and asked again".into());
                     }
                     if e.active_ssh().map(|s| (&s.host, s.port)) != c.active_ssh().map(|s| (&s.host, s.port)) {
@@ -578,22 +659,40 @@ impl Store {
                     if e.active_ssm() != c.active_ssm() {
                         ch.push("changes the AWS SSM tunnel".into());
                     }
-                    if script(e) != script(&c) {
+                    if script(e) != script(c) {
                         ch.push("changes the startup script".into());
                     }
-                    out.push(format!("~ update \"{}\"{}", e.name, if ch.is_empty() { String::new() } else { format!(": {}", ch.join(", ")) }));
+                    let note = if ch.is_empty() { kind } else { format!("{kind} · {}", ch.join(", ")) };
+                    let tone = (!ch.is_empty()).then_some("warn");
+                    rows.push(ImportRow::new(format!("~ update \"{}\"", e.name), note, "update".into(), tone, true));
                 }
             }
         }
-        Ok(out)
+        let added = rows.iter().filter(|r| r.text.starts_with('+')).count();
+        let updated = rows.len() - added;
+        let message = if rows.is_empty() {
+            format!("Nothing to import: {from} has no data sources.\n{shown}")
+        } else {
+            // An update keeps the saved password unless its row says it will be removed
+            let pw = match (added, updated) {
+                (_, 0) => "Passwords aren't in the file: each asks on its first connect.",
+                (0, _) => "Passwords aren't in the file: an updated data source keeps its saved password unless its row says otherwise.",
+                _ => "Passwords aren't in the file: new data sources ask on their first connect, updated ones keep their saved password unless their row says otherwise.",
+            };
+            format!("Import these data sources from {from}?\n{shown}\n\n{added} to add, {updated} to update. {pw}")
+        };
+        ImportPlan { title: crate::import::TITLE.into(), message: crate::import::clean_message(message), importable: rows.len(), rows, configs: incoming.into_iter().map(Some).collect() }
     }
 
+    /// Import the checked rows of `plan` (`picked[i]` for row i; missing = checked). Sources from another tool that Qurry has
+    /// meanwhile got (another app imported them) are left out.
     /// (added, changed, sources whose passwords to delete: (id, DB password, SSH secret)). The saved flags follow the current values, not the file.
     /// `forget` deletes those passwords before the store is written (under its lock): if it fails, nothing is imported — otherwise the store would
     /// say "no password" (or allow plain text) while the old password stayed in the file
-    pub fn import_from(&self, path: &std::path::Path, forget: impl FnOnce(&[(String, bool, bool)]) -> AppResult<()>) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
-        let incoming = Self::read_import(path)?;
+    pub fn import_apply(&self, plan: &ImportPlan, picked: &[bool], forget: impl FnOnce(&[Forget]) -> AppResult<()>) -> AppResult<(usize, usize, Vec<Forget>)> {
+        let chosen: Vec<ConnectionConfig> = plan.configs.iter().enumerate().filter(|(i, _)| picked.get(*i).copied().unwrap_or(true)).filter_map(|(_, c)| c.clone()).collect();
         self.update(|all| {
+            let incoming = chosen.into_iter().filter(|c| !c.id.is_empty() || !all.iter().any(|e| crate::import::same_source(e, c))).collect();
             let r = Self::merge_import(all, incoming)?;
             forget(&r.2)?;
             Ok(r)
@@ -606,7 +705,7 @@ impl Store {
         !e.same_server(c) || (!e.options.allow_plaintext && c.options.allow_plaintext)
     }
 
-    fn merge_import(all: &mut Vec<ConnectionConfig>, incoming: Vec<ConnectionConfig>) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
+    fn merge_import(all: &mut Vec<ConnectionConfig>, incoming: Vec<ConnectionConfig>) -> AppResult<(usize, usize, Vec<Forget>)> {
         let (mut added, mut updated, mut forget) = (0, 0, vec![]);
         for mut c in incoming {
             if c.id.is_empty() {
@@ -704,6 +803,15 @@ impl Store {
         self.set_setting("updateChannel", serde_json::to_value(channel)?)
     }
 
+    /// Keyword case as you type and in Reformat Code, for the GUI console and the TUI editor (Off unless picked; an unknown value is Off too)
+    pub fn keyword_case(&self) -> crate::format::KeywordCase {
+        self.settings().remove("keywordCase").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+    }
+
+    pub fn set_keyword_case(&self, case: crate::format::KeywordCase) -> AppResult<()> {
+        self.set_setting("keywordCase", serde_json::to_value(case)?)
+    }
+
     /// Grid alignment per value class: only the classes the user changed (GUI Settings › Appearance › Alignment; the TUI reads it)
     pub fn grid_align(&self) -> crate::format::Alignments {
         self.settings().get("gridAlign").map(crate::format::alignments).unwrap_or_default()
@@ -722,13 +830,138 @@ impl Store {
         Ok(next)
     }
 
-    /// The TUI's color theme ("auto" · "dark" · "light"; the GUI keeps its own). None when unset or not text
-    pub fn tui_theme(&self) -> Option<String> {
-        self.settings().remove("tuiTheme").and_then(|v| v.as_str().map(String::from))
+    /// The settings.json "columnWidths" entries: one per table that has set widths
+    fn column_width_entries(&self) -> Vec<serde_json::Value> {
+        match self.settings().remove("columnWidths") {
+            Some(serde_json::Value::Array(v)) => v,
+            _ => vec![],
+        }
     }
 
-    pub fn set_tui_theme(&self, theme: &str) -> AppResult<()> {
-        self.set_setting("tuiTheme", theme.into())
+    /// `t` with its database named: a tab on the source's default database may name none (the GUI's), or the default (the TUI's)
+    fn table_ref(&self, t: &TableRef) -> TableRef {
+        match self.get(&t.source) {
+            Ok(Some(c)) if t.database.trim().is_empty() => TableRef { database: crate::sql::default_db(&c), ..t.clone() },
+            _ => t.clone(),
+        }
+    }
+
+    /// The widths a user gave a table tab's columns (GUI and TUI), empty when none; the others keep their computed widths
+    pub fn column_widths(&self, t: &TableRef) -> crate::format::ColumnWidths {
+        let t = self.table_ref(t);
+        self.column_width_entries().iter().find(|e| t.is(e)).and_then(|e| e.get("widths")).map(crate::format::column_widths).unwrap_or_default()
+    }
+
+    /// Set some of a table's column widths, on what the file holds now (the GUI and the TUI may both have changed it); returns what is saved.
+    /// A width of 0 forgets that column's (it goes back to its computed width: a second fit's way back)
+    pub fn set_column_widths(&self, t: &TableRef, widths: &crate::format::ColumnWidths) -> AppResult<crate::format::ColumnWidths> {
+        let mut next = self.column_widths(t);
+        for (c, &w) in widths {
+            if w == 0 {
+                next.remove(c);
+            } else {
+                next.insert(c.clone(), crate::format::column_width(w.into(), 0));
+            }
+        }
+        self.save_column_widths(t, &next)?;
+        Ok(next)
+    }
+
+    /// Reset Widths: the table's columns go back to their computed widths
+    pub fn reset_column_widths(&self, t: &TableRef) -> AppResult<()> {
+        self.save_column_widths(t, &Default::default())
+    }
+
+    fn save_column_widths(&self, t: &TableRef, widths: &crate::format::ColumnWidths) -> AppResult<()> {
+        let t = self.table_ref(t);
+        let mut all = self.column_width_entries();
+        all.retain(|e| !t.is(e));
+        if !widths.is_empty() {
+            all.push(serde_json::json!({ "source": t.source, "database": t.database, "schema": t.schema, "table": t.table, "widths": widths }));
+        }
+        self.set_setting("columnWidths", all.into())
+    }
+
+    /// The theme settings the GUI and the TUI share: "theme" (a theme id or "system"), "themeSync" and "customThemes". Before
+    /// 0.3.2 only the TUI kept its theme here ("tuiTheme": auto · dark · light, auto being Sync with OS); it stands in until a
+    /// theme is picked. A custom theme this version can't read is left out
+    pub fn theme_settings(&self) -> ThemeSettings {
+        let mut all = self.settings();
+        let str_of = |v: Option<serde_json::Value>| v.and_then(|v| v.as_str().map(String::from));
+        let theme = str_of(all.remove("theme")).or_else(|| str_of(all.remove("tuiTheme")).map(|t| if t == "auto" { theme::SYSTEM.into() } else { t }));
+        let sync = all.remove("themeSync").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        let custom = match all.remove("customThemes") {
+            Some(serde_json::Value::Array(v)) => v.into_iter().filter_map(|t| serde_json::from_value::<CustomTheme>(t).ok()).filter(|t| theme::check(t).is_ok()).collect(),
+            _ => vec![],
+        };
+        ThemeSettings { theme, sync, custom }
+    }
+
+    /// Pick a theme for both apps: a built-in or custom theme id, or "system"
+    pub fn set_theme(&self, id: &str) -> AppResult<()> {
+        if id != theme::SYSTEM && self.theme_settings().find(id).is_none() {
+            return Err(AppError::Msg(format!("There is no theme \"{id}\"")));
+        }
+        self.set_setting("theme", id.into())
+    }
+
+    /// Sync with OS: the themes for a dark and a light appearance
+    pub fn set_theme_sync(&self, sync: &theme::ThemeSync) -> AppResult<()> {
+        let s = self.theme_settings();
+        if let Some(id) = [&sync.dark, &sync.light].into_iter().find(|id| s.find(id).is_none()) {
+            return Err(AppError::Msg(format!("There is no theme \"{id}\"")));
+        }
+        self.set_setting("themeSync", serde_json::to_value(sync)?)
+    }
+
+    /// Add a custom theme (an empty id gets a new one) or replace the one with its id, after checking it: a known base, known
+    /// colors, #rrggbb only. Returns the saved theme
+    pub fn save_custom_theme(&self, t: &CustomTheme) -> AppResult<CustomTheme> {
+        theme::check(t).map_err(AppError::Msg)?;
+        let mut t = CustomTheme { name: t.name.trim().to_string(), ..t.clone() };
+        let mut list = self.theme_settings().custom;
+        if t.id.is_empty() {
+            t.id = (1..).map(|n| format!("custom-{n}")).find(|id| !list.iter().any(|c| &c.id == id)).unwrap_or_default();
+        } else if !t.id.starts_with("custom-") {
+            return Err(AppError::Msg(format!("A custom theme's id starts with \"custom-\", not \"{}\"", t.id)));
+        }
+        match list.iter_mut().find(|c| c.id == t.id) {
+            Some(c) => *c = t.clone(),
+            None => list.push(t.clone()),
+        }
+        self.set_setting("customThemes", serde_json::to_value(&list)?)?;
+        Ok(t)
+    }
+
+    /// Delete a custom theme; where it is picked (the theme, or a Sync with OS side) its base takes its place
+    pub fn delete_custom_theme(&self, id: &str) -> AppResult<()> {
+        let s = self.theme_settings();
+        let Some(gone) = s.custom.iter().find(|c| c.id == id) else { return Ok(()) };
+        let list: Vec<_> = s.custom.iter().filter(|c| c.id != id).collect();
+        self.set_setting("customThemes", serde_json::to_value(&list)?)?;
+        if s.theme.as_deref() == Some(id) {
+            self.set_setting("theme", gone.base.clone().into())?;
+        }
+        if s.sync.dark == id || s.sync.light == id {
+            let side = |v: &String| if v == id { gone.base.clone() } else { v.clone() };
+            self.set_setting("themeSync", serde_json::to_value(theme::ThemeSync { dark: side(&s.sync.dark), light: side(&s.sync.light) })?)?;
+        }
+        Ok(())
+    }
+
+    /// Settings › Appearance › Theme › Import…: the file read and checked (a large one is refused unread), not saved yet
+    pub fn read_theme_file(&self, path: &Path) -> AppResult<CustomTheme> {
+        let size = fs::metadata(path)?.len();
+        if size > theme::FILE_MAX as u64 {
+            return Err(AppError::Msg(format!("Not a Qurry theme: the file is {} KB, a theme file is at most {} KB", size.div_ceil(1024), theme::FILE_MAX / 1024)));
+        }
+        theme::parse_file(&fs::read_to_string(path)?).map_err(AppError::Msg)
+    }
+
+    /// Export…: the theme as a file (its name, base and changed colors)
+    pub fn write_theme_file(&self, path: &Path, t: &CustomTheme) -> AppResult<()> {
+        theme::check(t).map_err(AppError::Msg)?;
+        Ok(fs::write(path, theme::file_text(t))?)
     }
 
     /// Change one key of settings.json, keeping the others
@@ -786,6 +1019,71 @@ mod tests {
         assert_eq!(saved, serde_json::json!({ "updateChannel": "beta", "later": 1 }));
     }
 
+    /// Theme, Sync with OS and custom themes round trip through settings.json for both apps; the TUI's older "tuiTheme" stands in
+    /// until a theme is picked; deleting the picked custom theme leaves its base picked; theme files are checked
+    #[test]
+    fn theme_settings_round_trip() {
+        use qurry_shared::theme::{ThemeSync, SYSTEM};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let path = dir.path().join("cfg/settings.json");
+        assert_eq!(store.theme_settings(), ThemeSettings::default());
+        fs::create_dir_all(dir.path().join("cfg")).unwrap();
+        fs::write(&path, r#"{"tuiTheme": "auto", "later": 1}"#).unwrap();
+        assert_eq!(store.theme_settings().theme.as_deref(), Some(SYSTEM), "the TUI's Auto is Sync with OS");
+        store.set_theme("dracula").unwrap();
+        assert!(store.set_theme("monokai").unwrap_err().to_string().contains("no theme"));
+        let mine = CustomTheme { id: String::new(), name: " Night ".into(), base: "dracula".into(), colors: [("bg".into(), "#101010".into())].into() };
+        let saved = store.save_custom_theme(&mine).unwrap();
+        assert_eq!((saved.id.as_str(), saved.name.as_str()), ("custom-1", "Night"));
+        assert_eq!(store.save_custom_theme(&mine).unwrap().id, "custom-2", "Save as new theme twice: two themes");
+        store.save_custom_theme(&CustomTheme { name: "Night 2".into(), ..saved.clone() }).unwrap();
+        assert!(store.save_custom_theme(&CustomTheme { colors: [("bg".into(), "#10101".into())].into(), ..mine.clone() }).is_err());
+        assert!(store.save_custom_theme(&CustomTheme { id: "dark".into(), ..mine.clone() }).is_err(), "not over a built-in id");
+        store.set_theme("custom-1").unwrap();
+        store.set_theme_sync(&ThemeSync { dark: "custom-1".into(), light: "solarized-light".into() }).unwrap();
+        assert!(store.set_theme_sync(&ThemeSync { dark: "custom-9".into(), light: "light".into() }).is_err());
+        let next = Store::new(dir.path().join("cfg")).theme_settings();
+        assert_eq!(next.theme.as_deref(), Some("custom-1"));
+        assert_eq!(next.sync, ThemeSync { dark: "custom-1".into(), light: "solarized-light".into() });
+        assert_eq!(next.custom.iter().map(|c| (c.id.as_str(), c.name.as_str())).collect::<Vec<_>>(), [("custom-1", "Night 2"), ("custom-2", "Night")]);
+        assert_eq!(next.resolve("dark", true).color("bg"), "#101010");
+        let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["later"], 1, "other settings are kept");
+        store.delete_custom_theme("custom-1").unwrap();
+        let s = store.theme_settings();
+        assert_eq!((s.theme.as_deref(), s.sync.dark.as_str(), s.custom.len()), (Some("dracula"), "dracula", 1));
+        // Theme files: written and read back; a bad or large file is refused with why
+        let file = dir.path().join("t.json");
+        store.write_theme_file(&file, &s.custom[0]).unwrap();
+        assert_eq!(store.read_theme_file(&file).unwrap().name, "Night");
+        fs::write(&file, "x".repeat(theme::FILE_MAX + 1)).unwrap();
+        assert!(store.read_theme_file(&file).unwrap_err().to_string().contains("at most 16 KB"));
+        fs::write(&file, r##"{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"bg": "#12"}}"##).unwrap();
+        assert!(store.read_theme_file(&file).unwrap_err().to_string().contains("#rrggbb"));
+    }
+
+    /// Keyword case: Off until picked, saved as "keywordCase" next to the other settings, read back by another app (GUI ↔ TUI);
+    /// a value this version doesn't know is Off
+    #[test]
+    fn keyword_case_setting() {
+        use crate::format::KeywordCase;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        assert_eq!(store.keyword_case(), KeywordCase::Off);
+        store.set_update_channel(crate::update::Channel::Beta).unwrap();
+        store.set_keyword_case(KeywordCase::Lower).unwrap();
+        let other = Store::new(dir.path().join("cfg"));
+        assert_eq!(other.keyword_case(), KeywordCase::Lower);
+        assert_eq!(other.update_channel(), crate::update::Channel::Beta);
+        other.set_keyword_case(KeywordCase::Upper).unwrap();
+        assert_eq!(store.keyword_case(), KeywordCase::Upper);
+        let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(dir.path().join("cfg/settings.json")).unwrap()).unwrap();
+        assert_eq!(saved["keywordCase"], "upper");
+        fs::write(dir.path().join("cfg/settings.json"), r#"{"keywordCase": "title"}"#).unwrap();
+        assert_eq!(store.keyword_case(), KeywordCase::Off);
+    }
+
     /// Grid alignment: defaults until a class is changed, other settings kept, a value this version doesn't know skipped; a change
     /// keeps what another app saved meanwhile, and the default drops the override
     #[test]
@@ -807,6 +1105,46 @@ mod tests {
         let path = dir.path().join("cfg/settings.json");
         fs::write(&path, r#"{"gridAlign": {"null": "left", "number": "justify"}}"#).unwrap();
         assert_eq!(store.grid_align(), Alignments::from([(ValueClass::Null, Align::Left)]));
+    }
+
+    /// Column widths per table: none until set, merged with what another app saved meanwhile, kept in range, other tables and
+    /// settings untouched; Reset Widths removes the table's entry
+    #[test]
+    fn column_widths_setting() {
+        use crate::format::ColumnWidths;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let t = |table: &str| TableRef { source: "pg".into(), database: "shop".into(), schema: "public".into(), table: table.into() };
+        assert!(store.column_widths(&t("orders")).is_empty());
+        store.set_update_channel(crate::update::Channel::Beta).unwrap();
+        assert_eq!(store.set_column_widths(&t("orders"), &ColumnWidths::from([("memo".into(), 53)])).unwrap(), ColumnWidths::from([("memo".into(), 53)]));
+        store.set_column_widths(&t("users"), &ColumnWidths::from([("name".into(), 9000)])).unwrap();
+        // Another app (the TUI) widened order_no meanwhile: setting memo keeps it
+        Store::new(dir.path().join("cfg")).set_column_widths(&t("orders"), &ColumnWidths::from([("order_no".into(), 20)])).unwrap();
+        let both = ColumnWidths::from([("memo".into(), 28), ("order_no".into(), 20)]);
+        assert_eq!(store.set_column_widths(&t("orders"), &ColumnWidths::from([("memo".into(), 28)])).unwrap(), both);
+        assert_eq!(store.column_widths(&t("orders")), both);
+        // 0 forgets one column's width (a second fit), the others stay
+        assert_eq!(store.set_column_widths(&t("orders"), &ColumnWidths::from([("memo".into(), 0)])).unwrap(), ColumnWidths::from([("order_no".into(), 20)]));
+        store.set_column_widths(&t("orders"), &ColumnWidths::from([("memo".into(), 28)])).unwrap();
+        assert_eq!(store.column_widths(&t("users")), ColumnWidths::from([("name".into(), crate::format::COLUMN_WIDTH_MAX)]));
+        let other_db = TableRef { database: "postgres".into(), ..t("orders") };
+        assert!(store.column_widths(&other_db).is_empty(), "another database's table of the same name keeps its own widths");
+        // A tab naming no database is on the source's default (the GUI's tab on the default keeps none)
+        let pg: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "pg", "name": "pg", "kind": "postgres", "host": "h", "port": 5432, "user": "u", "database": "shop" })).unwrap();
+        store.save(&pg).unwrap();
+        assert_eq!(store.column_widths(&TableRef { database: String::new(), ..t("orders") }), both);
+        store.reset_column_widths(&t("orders")).unwrap();
+        assert!(store.column_widths(&t("orders")).is_empty());
+        assert_eq!(store.column_widths(&t("users")).len(), 1);
+        assert_eq!(store.update_channel(), crate::update::Channel::Beta);
+        // A file an older or broken app wrote: what can't be read is skipped
+        fs::write(dir.path().join("cfg/settings.json"), r#"{"columnWidths": [{"source": "pg"}, 3, {"source": "pg", "database": "shop", "schema": "public", "table": "orders", "widths": {"memo": "x", "id": 6}}]}"#).unwrap();
+        assert_eq!(store.column_widths(&t("orders")), ColumnWidths::from([("id".into(), 6)]));
+        fs::write(dir.path().join("cfg/settings.json"), r#"{"columnWidths": {"not": "a list"}}"#).unwrap();
+        assert!(store.column_widths(&t("orders")).is_empty());
+        store.set_column_widths(&t("orders"), &ColumnWidths::from([("id".into(), 6)])).unwrap();
+        assert_eq!(store.column_widths(&t("orders")).len(), 1);
     }
 
     #[test]
@@ -882,7 +1220,10 @@ mod tests {
         // Production stays hidden until set
         c.options.confirm_changes = true;
         assert_eq!(c.mcp_access(true), McpAccess::Off);
+        // Production: never write, even set to write and run with --allow-write
         c.options.mcp = Some("write".into());
+        assert_eq!(c.mcp_access(true), McpAccess::Read);
+        c.options.confirm_changes = false;
         assert_eq!(c.mcp_access(true), McpAccess::Write);
         assert_eq!(c.mcp_access(false), McpAccess::Read);
         c.read_only = true;
@@ -929,6 +1270,42 @@ mod tests {
         }
     }
 
+    /// Production consoles start in Manual by default (#106), but only where a session can be in Manual: a Redis or driver plugin
+    /// console that asked for it would refuse every statement
+    #[test]
+    fn production_starts_manual_where_manual_works() {
+        let mut c = conn("p", "prod");
+        c.options.confirm_changes = true;
+        for kind in [DbKind::Postgres, DbKind::Mysql] {
+            c.kind = kind;
+            assert!(c.starts_manual() && c.production_starts_manual(), "{kind:?}");
+        }
+        for kind in [DbKind::Redis, DbKind::Sqlite, DbKind::Mssql, DbKind::Oracle, DbKind::Clickhouse, DbKind::Duckdb] {
+            c.kind = kind;
+            c.options.tx_manual = false;
+            assert!(!c.starts_manual() && !c.production_starts_manual(), "{kind:?}");
+            c.options.tx_manual = true;
+            assert!(!c.starts_manual(), "{kind:?}");
+        }
+        c.kind = DbKind::Postgres;
+        assert!(c.starts_manual() && !c.production_starts_manual(), "the source's own Transaction control");
+        c.options.tx_manual = false;
+        c.options.production_manual = Some(false);
+        assert!(!c.starts_manual());
+    }
+
+    /// Import a whole file, as the confirm with every row checked
+    fn import_all(s: &Store, file: &std::path::Path) -> (usize, usize, Vec<Forget>) {
+        let plan = s.import_plan(file, std::path::Path::new("/nonexistent-home"), None).unwrap();
+        s.import_apply(&plan, &[], |_| Ok(())).unwrap()
+    }
+
+    /// The confirm's rows as text
+    fn preview(s: &Store, file: &std::path::Path) -> String {
+        let plan = s.import_plan(file, std::path::Path::new("/nonexistent-home"), None).unwrap();
+        plan.rows.iter().map(|r| format!("{} {} {}", r.text, r.note, r.value)).collect::<Vec<_>>().join("\n")
+    }
+
     #[test]
     fn export_import_roundtrip() {
         let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
@@ -941,7 +1318,7 @@ mod tests {
 
         let b = Store::new(base.join("b"));
         b.save(&conn("2", "old name")).unwrap();
-        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (1, 1, vec![]));
+        assert_eq!(import_all(&b, &file), (1, 1, vec![]));
         // Newly imported sources get MCP Off (unless the file sets it)
         assert_eq!(b.get("1").unwrap().unwrap().options.mcp.as_deref(), Some("off"));
         let names: Vec<_> = b.list().unwrap().into_iter().map(|c| c.name).collect();
@@ -964,9 +1341,9 @@ mod tests {
         theirs.ssl = None;
         let file = base.join("in.json");
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
-        let p = b.import_preview(&file).unwrap().join("\n");
+        let p = preview(&b, &file);
         assert!(p.contains("attacker.example") && p.contains("SSL OFF") && p.contains("password will be removed"), "{p}");
-        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![("2".to_string(), true, false)]));
+        assert_eq!(import_all(&b, &file), (0, 1, vec![("2".to_string(), true, false)]));
         assert!(!b.get("2").unwrap().unwrap().password_saved);
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -984,16 +1361,16 @@ mod tests {
         theirs.options.allow_plaintext = true;
         let file = base.join("in.json");
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
-        let p = b.import_preview(&file).unwrap().join("\n");
+        let p = preview(&b, &file);
         assert!(p.contains("unencrypted") && p.contains("password will be removed and asked again"), "{p}");
-        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![("4".to_string(), true, false)]));
+        assert_eq!(import_all(&b, &file), (0, 1, vec![("4".to_string(), true, false)]));
         let got = b.get("4").unwrap().unwrap();
         assert!(got.options.allow_plaintext && !got.password_saved);
         // Already allowed: importing the same setting keeps it
         let mut again = got.clone();
         again.password_saved = true;
         b.save(&again).unwrap();
-        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![]));
+        assert_eq!(import_all(&b, &file), (0, 1, vec![]));
         assert!(b.get("4").unwrap().unwrap().password_saved);
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1011,9 +1388,12 @@ mod tests {
         theirs.options.allow_plaintext = true;
         let file = base.join("in.json");
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
-        let p = b.import_preview(&file).unwrap().join("\n");
+        let p = preview(&b, &file);
         assert!(p.contains("unencrypted") && !p.contains("MCP"), "{p}");
-        b.import_from(&file, |_| Ok(())).unwrap();
+        // An update keeps the saved password: the question doesn't say it's asked again
+        let m = b.import_plan(&file, std::path::Path::new("/nonexistent-home"), None).unwrap().message;
+        assert!(m.ends_with("0 to add, 1 to update. Passwords aren't in the file: an updated data source keeps its saved password unless its row says otherwise."), "{m}");
+        import_all(&b, &file);
         assert_eq!(b.get("3").unwrap().unwrap().mcp_access(true), McpAccess::Off);
         let _ = std::fs::remove_dir_all(&base);
     }

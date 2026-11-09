@@ -80,6 +80,42 @@ pub fn more_rows_failed(msg: &str) -> String {
     qurry_shared::errors::more_rows_failed(msg)
 }
 
+/// Where a failed statement's error points in `sql` (the text sent), as a UTF-16 offset, or undefined when the error doesn't say
+#[wasm_bindgen(js_name = errorPosition)]
+pub fn error_position(msg: &str, sql: &str) -> Option<usize> {
+    qurry_shared::errors::error_position(msg, sql).map(|b| sql[..b].encode_utf16().count())
+}
+
+/// A failed statement's error without the position the core adds to it, for its mark's hover (the mark shows the spot)
+#[wasm_bindgen(js_name = withoutPosition)]
+pub fn without_position(msg: &str) -> String {
+    qurry_shared::errors::without_position(msg).to_string()
+}
+
+/// The result grid's shown columns ("cols 3–8 of 14"), or undefined when every column fits (the TUI's words)
+#[wasm_bindgen(js_name = shownCols)]
+pub fn shown_cols(first: usize, last: usize, total: usize) -> Option<String> {
+    qurry_shared::format::shown_cols(first, last, total)
+}
+
+/// A join result's cell on the outer side where no row of `table` matched: why it is read-only (the TUI's words)
+#[wasm_bindgen(js_name = editNoRow)]
+pub fn edit_no_row(table: &str) -> String {
+    qurry_shared::errors::edit_no_row(table)
+}
+
+/// Why Add / Delete / Clone Row are greyed out on a join result (the TUI's words)
+#[wasm_bindgen(js_name = editJoinRows)]
+pub fn edit_join_rows() -> String {
+    qurry_shared::errors::EDIT_JOIN_ROWS.into()
+}
+
+/// What a Production console that starts in Manual mode says the first time (the TUI's words)
+#[wasm_bindgen(js_name = productionManual)]
+pub fn production_manual() -> String {
+    qurry_shared::errors::PRODUCTION_MANUAL.into()
+}
+
 /// Title of the notice for a failed Commit: "Commit outcome unknown" when the connection was lost during it, else "Commit failed"
 #[wasm_bindgen(js_name = commitFailedTitle)]
 pub fn commit_failed_title(msg: &str) -> String {
@@ -316,6 +352,19 @@ impl CompletionIndex {
         Ok(serde_wasm_bindgen::to_value(&complete::hint_at(&self.meta, &at.statement(text, mysql), at.head(text, mysql), db, mysql))?)
     }
 
+    /// The function call around the caret (a UTF-16 offset into the console): {signatures: [{label, params}], active}, or undefined
+    #[wasm_bindgen(js_name = signatureAt)]
+    pub fn signature_at(&self, text: &str, caret: usize, mysql: bool) -> Result<JsValue, JsError> {
+        let (stmt, c) = complete::at_caret(text, byte_offset(text, caret), kind(mysql));
+        Ok(serde_wasm_bindgen::to_value(&complete::signature(&self.meta, &stmt, c, mysql))?)
+    }
+
+    /// Tables and columns of the console's statements that their scope lacks (complete::script_marks):
+    /// [{start, end, message, fixes}], start and end UTF-16 offsets into `text`
+    pub fn marks(&self, text: &str, db: &str, mysql: bool) -> Result<JsValue, JsError> {
+        Ok(serde_wasm_bindgen::to_value(&utf16_marks(text, complete::script_marks(&self.meta, text, kind(mysql), db)))?)
+    }
+
     /// What meta.hints returned for `hint` → candidates. as_pairs = keys were asked, none came, so these are @> conditions
     /// replacing the operator (and a closing quote right after the caret)
     #[wasm_bindgen(js_name = hintItems)]
@@ -351,10 +400,56 @@ pub fn pairs_insert(value: &str, op: &str) -> String {
     complete::pairs_insert(value, op)
 }
 
+/// A quote / bracket edit (qurry_shared::pairs::Edit) in UTF-16 code units: replace start..end of the text with `insert`, then
+/// select selStart..selEnd of the new text
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairEdit {
+    start: usize,
+    end: usize,
+    insert: String,
+    sel_start: usize,
+    sel_end: usize,
+}
+
+/// What a key does to quotes and brackets in a field outside Monaco (the table tab's WHERE / ORDER BY): `key` is the typed
+/// character or "Backspace", start..end the selection (UTF-16). Undefined: the key edits as usual
+#[wasm_bindgen(js_name = pairEdit)]
+pub fn pair_edit(text: &str, start: usize, end: usize, key: &str, kind: JsValue) -> Result<JsValue, JsError> {
+    let kind = parse_kind(kind)?;
+    let (a, b) = (byte_offset(text, start), byte_offset(text, end));
+    let mut chars = key.chars();
+    let e = match (chars.next(), chars.next()) {
+        _ if key == "Backspace" && a == b => qurry_shared::pairs::backspace(text, a, kind),
+        (Some(ch), None) => qurry_shared::pairs::typed(text, (a, b), ch, kind),
+        _ => None,
+    };
+    let Some(e) = e else { return Ok(JsValue::UNDEFINED) };
+    let new = format!("{}{}{}", &text[..e.start], e.insert, &text[e.end..]);
+    let u16_at = |t: &str, b: usize| t[..b].encode_utf16().count();
+    to(&PairEdit { start: u16_at(text, e.start), end: u16_at(text, e.end), insert: e.insert, sel_start: u16_at(&new, e.sel.0), sel_end: u16_at(&new, e.sel.1) })
+}
+
+/// The quotes and brackets left open, and closing brackets without an opener (qurry_shared::pairs::unbalanced):
+/// [{start, end, message}] in UTF-16 code units, in text order
+#[wasm_bindgen]
+pub fn unbalanced(text: &str, kind: JsValue) -> Result<JsValue, JsError> {
+    #[derive(Serialize)]
+    struct Mark {
+        start: usize,
+        end: usize,
+        message: String,
+    }
+    let v = qurry_shared::pairs::unbalanced(text, parse_kind(kind)?);
+    let r = utf16_ranges(text, &v.iter().map(|u| (u.start, u.end)).collect::<Vec<_>>());
+    to(&v.into_iter().zip(r).map(|(u, [start, end])| Mark { start, end, message: u.message }).collect::<Vec<_>>())
+}
+
 /// The range and the leading candidates (the statement's columns), and what the rest comes from
 fn suggestions(m: &complete::Meta, text: &str, caret: usize, db: &str, mysql: bool) -> (Suggestions, Option<complete::Rest>) {
     let at = Caret::new(text, caret);
-    let (n, items, rest) = complete::suggest_lead(m, &at.statement(text, mysql), at.before, db, mysql, Options::GUI);
+    let (stmt, c) = complete::at_caret(text, at.at, kind(mysql));
+    let (n, items, rest) = complete::suggest_lead(m, &stmt, c, db, mysql, Options::GUI);
     let end = at.column();
     (Suggestions { start_column: end - utf16_tail(at.before, n), end_column: end, items }, rest)
 }
@@ -384,18 +479,32 @@ impl<'a> Caret<'a> {
 
     /// The statement the caret is in (as the TUI passes it): an alias of another statement in the console doesn't resolve here
     fn statement(&self, text: &str, mysql: bool) -> String {
-        qurry_shared::sql::statement_at(text, self.at, if mysql { DbKind::Mysql } else { DbKind::Postgres }).unwrap_or_default()
+        qurry_shared::sql::statement_at(text, self.at, kind(mysql)).unwrap_or_default()
     }
 
     /// The caret's statement up to the caret (what hint_at reads the clause from)
     fn head<'t>(&self, text: &'t str, mysql: bool) -> &'t str {
-        qurry_shared::sql::statement_head(text, self.at, if mysql { DbKind::Mysql } else { DbKind::Postgres })
+        qurry_shared::sql::statement_head(text, self.at, kind(mysql))
     }
 
     /// Monaco column of the caret (1-based, UTF-16)
     fn column(&self) -> usize {
         self.before.encode_utf16().count() + 1
     }
+}
+
+/// Marks with UTF-16 offsets instead of byte offsets
+fn utf16_marks(text: &str, mut v: Vec<complete::Mark>) -> Vec<complete::Mark> {
+    let ranges: Vec<(usize, usize)> = v.iter().map(|m| (m.start, m.end)).collect();
+    for (m, [a, b]) in v.iter_mut().zip(utf16_ranges(text, &ranges)) {
+        (m.start, m.end) = (a, b);
+    }
+    v
+}
+
+/// The SQL dialect completion reads (MySQL, or PostgreSQL for everything else)
+fn kind(mysql: bool) -> DbKind {
+    if mysql { DbKind::Mysql } else { DbKind::Postgres }
 }
 
 /// UTF-16 length of the last `chars` characters of `s`
@@ -416,6 +525,65 @@ pub fn is_time_type(type_name: &str) -> bool {
 pub fn frac_width(values: JsValue) -> Result<usize, JsError> {
     let v: Vec<String> = serde_wasm_bindgen::from_value(values)?;
     Ok(qurry_shared::format::frac_width(v.iter().map(String::as_str)))
+}
+
+/// A set column width (characters) moved by `steps` narrow (-) / widen (+) steps, kept in range (the TUI's < > =)
+#[wasm_bindgen(js_name = columnWidth)]
+pub fn column_width(width: f64, steps: f64) -> u16 {
+    qurry_shared::format::column_width(width.round() as i64, steps as i64)
+}
+
+/// Fit: the characters the widest of `values` takes, East Asian wide characters and emoji counting 2 (the TUI's rule)
+#[wasm_bindgen(js_name = textWidth)]
+pub fn text_width(values: JsValue) -> Result<usize, JsError> {
+    let v: Vec<String> = serde_wasm_bindgen::from_value(values)?;
+    Ok(v.iter().map(|s| qurry_shared::format::text_width(s)).max().unwrap_or(0))
+}
+
+/// The keys a result's columns keep their set widths under (a repeated name gets its occurrence: `id#2`)
+#[wasm_bindgen(js_name = columnKeys)]
+pub fn column_keys(names: JsValue) -> Result<JsValue, JsError> {
+    let v: Vec<String> = serde_wasm_bindgen::from_value(names)?;
+    to(&qurry_shared::format::column_keys(v.iter().map(String::as_str)))
+}
+
+#[derive(Serialize)]
+struct Reformatted {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+/// Reformat Code (⌘⌥l): the selection (`sel_start` < `sel_end`, UTF-16) or the statement at `caret`, keywords in `case`
+/// ("off" | "upper" | "lower"); { start, end, text } with UTF-16 offsets, or undefined when it changes nothing
+#[wasm_bindgen]
+pub fn reformat(text: &str, sel_start: usize, sel_end: usize, caret: usize, kind: JsValue, case: JsValue) -> Result<JsValue, JsError> {
+    let sel = (sel_start < sel_end).then(|| (byte_offset(text, sel_start), byte_offset(text, sel_end)));
+    let r = qurry_shared::format::reformat(text, sel, byte_offset(text, caret), parse_kind(kind)?, from(case)?);
+    match r {
+        Some(r) => {
+            let [[start, end]] = utf16_ranges(text, &[(r.start, r.end)])[..] else { unreachable!() };
+            to(&Reformatted { start, end, text: r.text })
+        }
+        None => Ok(JsValue::UNDEFINED),
+    }
+}
+
+#[derive(Serialize)]
+struct Cased {
+    start: usize,
+    text: String,
+}
+
+/// Keyword case as you type: `end` (UTF-16) is where the character just typed sits; { start, text } replaces the keyword it ends
+/// (`text[start..end]`), or undefined when there is none to change
+#[wasm_bindgen(js_name = keywordCaseAt)]
+pub fn keyword_case_at(text: &str, end: usize, kind: JsValue, case: JsValue) -> Result<JsValue, JsError> {
+    match qurry_shared::format::keyword_case_at(text, byte_offset(text, end), parse_kind(kind)?, from(case)?) {
+        // Keywords are ASCII: as many UTF-16 units as bytes
+        Some((_, cased)) => to(&Cased { start: end - cased.len(), text: cased }),
+        None => Ok(JsValue::UNDEFINED),
+    }
 }
 
 /// 03:19:15 → 03:19:15.000000 (`width` fractional digits)
@@ -520,6 +688,45 @@ pub fn key_tree(keys: JsValue, opts: JsValue) -> Result<JsValue, JsError> {
     Ok(serde_wasm_bindgen::to_value(&qurry_shared::keytree::key_tree(&keys, serde_wasm_bindgen::from_value(opts)?))?)
 }
 
+/// Redis Terminal: for the text before the caret, the commands the word can become (with arguments, summary, read/write), whether
+/// it is a key name (completed from a bounded SCAN) and the arguments still to type (qurry_shared::redis_cmd::assist)
+#[wasm_bindgen(js_name = redisAssist)]
+pub fn redis_assist(before: &str) -> Result<JsValue, JsError> {
+    to(&qurry_shared::redis_cmd::assist(before))
+}
+
+/// Redis Terminal: what `HELP <command>` prints (from the bundled command table), or undefined when the line isn't a HELP
+#[wasm_bindgen(js_name = redisHelp)]
+pub fn redis_help(line: &str) -> Option<String> {
+    qurry_shared::redis_cmd::help(line)
+}
+
+/// Redis Terminal: the key names listed for the typed prefix ([{label, insert}], the typed key first, `insert` quoted as
+/// redis-cli reads it) from a bounded SCAN's names
+#[wasm_bindgen(js_name = redisKeyChoices)]
+pub fn redis_key_choices(prefix: &str, names: Vec<String>) -> Result<JsValue, JsError> {
+    to(&qurry_shared::redis_cmd::key_choices(prefix, &names))
+}
+
+/// Redis database picker: "db0 · 1,500 keys", the name alone when the count is unknown (the TUI's words)
+#[wasm_bindgen(js_name = redisDbLabel)]
+pub fn redis_db_label(name: &str, keys: f64) -> String {
+    qurry_shared::redis_cmd::db_label(name, keys as i64)
+}
+
+/// Redis key list: a key's TTL ("1d 4h"), "—" without expiry (the TUI's words)
+#[wasm_bindgen(js_name = redisTtl)]
+pub fn redis_ttl(ms: f64) -> String {
+    qurry_shared::redis_cmd::ttl_label(ms as i64)
+}
+
+/// Redis Terminal: the reply of the line as a table ({heads, rows}: a hash as field / value …), or undefined to print it as redis-cli does
+#[wasm_bindgen(js_name = redisReplyTable)]
+pub fn redis_reply_table(line: &str, reply: JsValue) -> Result<JsValue, JsError> {
+    let reply: Value = serde_wasm_bindgen::from_value(reply)?;
+    to(&qurry_shared::redis_cmd::reply_table(line, &reply))
+}
+
 /// Table column for each file column ("" = skip); `table` null is a new table (the file's names)
 #[wasm_bindgen(js_name = autoMap)]
 pub fn auto_map(file: JsValue, table: JsValue) -> Result<JsValue, JsError> {
@@ -613,6 +820,25 @@ fn byte_offset(text: &str, utf16: usize) -> usize {
     text.len()
 }
 
+/// Theme editor: the tokens whose contrast pair a palette ({token: "#rrggbb"}) doesn't meet ([{token, fg, bg, ratio, min}])
+#[wasm_bindgen(js_name = themeWarnings)]
+pub fn theme_warnings(colors: JsValue) -> Result<JsValue, JsError> {
+    to(&qurry_shared::theme::warnings(&from(colors)?))
+}
+
+/// A theme file's text → {id: "", name, base, colors} (colors a plain object), or the error saying why it is refused
+#[wasm_bindgen(js_name = parseThemeFile)]
+pub fn parse_theme_file(text: &str) -> Result<JsValue, JsError> {
+    let t = qurry_shared::theme::parse_file(text).map_err(|e| JsError::new(&e))?;
+    Ok(t.serialize(&serde_wasm_bindgen::Serializer::json_compatible())?)
+}
+
+/// The file Export… writes for a custom theme
+#[wasm_bindgen(js_name = themeFileText)]
+pub fn theme_file_text(theme: JsValue) -> Result<String, JsError> {
+    Ok(qurry_shared::theme::file_text(&from(theme)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,7 +876,7 @@ mod tests {
     }
 
     fn index() -> complete::Meta {
-        let t = |s: &str, n: &str, cols: &[(&str, &str)]| complete::CompletionTable { schema: s.into(), name: n.into(), columns: cols.iter().map(|(c, ty)| (c.to_string(), ty.to_string())).collect() };
+        let t = |s: &str, n: &str, cols: &[(&str, &str)]| complete::CompletionTable { schema: s.into(), name: n.into(), columns: cols.iter().map(|(c, ty)| (c.to_string(), ty.to_string())).collect(), ..Default::default() };
         complete::Meta::new(vec![t("sales", "주문", &[("번호", "int4"), ("상태", "text")]), t("public", "😀 emoji", &[("값", "text")]), t("public", "orders", &[("reasons", "jsonb")])])
     }
 
@@ -674,6 +900,17 @@ mod tests {
         let (t, c) = caret("select 주.번‸ from sales.주문 주");
         let (s, _) = suggestions(&m, &t, c, "", false);
         assert_eq!(((s.start_column, s.end_column), s.items.len()), ((10, 11), 2));
+    }
+
+    /// A mark's range is UTF-16 offsets into the console (😀 is two units), as Monaco's getPositionAt reads them
+    #[test]
+    fn marks_are_utf16_offsets() {
+        let m = index();
+        let t = "select '😀', 상태x from sales.주문";
+        let v = utf16_marks(t, complete::script_marks(&m, t, DbKind::Postgres, ""));
+        let units: Vec<u16> = t.encode_utf16().collect();
+        assert_eq!(v.iter().map(|x| String::from_utf16(&units[x.start..x.end]).unwrap()).collect::<Vec<_>>(), ["상태x"]);
+        assert_eq!(v[0].fixes, ["상태"]);
     }
 
     #[test]

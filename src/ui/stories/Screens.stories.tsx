@@ -7,6 +7,7 @@ import { monaco } from "../../lib/monaco";
 import App from "../../App";
 import { SettingsDialog } from "../../features/settings/SettingsDialog";
 import { setFont } from "../../lib/prefs";
+import { saveCustomTheme, setThemeSync } from "../../lib/theme";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
 import { ConsolePane, SPLITTER_FAILED, type OutputLine } from "../../components/ConsolePane";
@@ -32,6 +33,8 @@ import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Trans
 import { UpdateDialog } from "../../components/UpdateDialog";
 import { WorkspaceBar } from "../../components/WorkspaceBar";
 import { StatusBar } from "../../features/settings/StatusBar";
+import { useConnActions } from "../../features/conns/useConnActions";
+import { ConfirmHost, Menu, Text } from "..";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
@@ -115,10 +118,72 @@ export const SettingsFontsCustom: S = {
   },
 };
 
+/** Settings › Appearance › Theme with Sync with OS on: a dark and a light theme of the user's choice (here One Dark and Solarized Light),
+ *  shared with the TUI, which picks between them by its terminal's background */
+export const SettingsThemeSync: S = {
+  name: "Settings — Theme: Sync with OS",
+  render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await setThemeSync({ dark: "one-dark", light: "solarized-light" });
+    await userEvent.click(await body.findByRole("checkbox", { name: "Sync with OS" }));
+  },
+};
+/** Settings › Appearance › Theme › Edit Colors…: a custom theme from any built-in (or custom) one. Basic colors, the rest under "Advanced
+ *  colors"; a picker and the hex per color, ↺ back to the base's. The whole window draws the colors being edited, the preview shows every
+ *  state, and pointing at a color's name outlines what draws it (here Comment, set too dark: its contrast warning shows next to it and in
+ *  the header, and it is saved with the warning if asked, never changed). Import… / Export… read and write a small JSON file */
+export const SettingsThemeEditor: S = {
+  name: "Settings — Theme editor",
+  render: () => <SettingsDialog initialPage="theme" onClose={noop} onUpdate={noop} onChannel={noop} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.selectOptions(await body.findByRole("combobox", { name: "Based on" }), "dracula");
+    const hex = await body.findByRole("textbox", { name: "Comment hex" });
+    await userEvent.clear(hex);
+    await userEvent.type(hex, "#3d4053");
+    await userEvent.type(await body.findByRole("textbox", { name: "Theme name" }), "Dracula (mine)");
+    await userEvent.hover(canvasElement.ownerDocument.querySelector('[data-token="comment"] .theme-token-label')!);
+  },
+};
+/** Quick Switch Theme (⌃`, as DataGrip's): the built-in themes, custom ones (marked), Sync with OS with its pair, and Edit Colors… */
+export const QuickSwitchTheme: S = {
+  name: "Quick Switch Theme",
+  render: () => <App />,
+  play: async ({ canvasElement }) => {
+    await saveCustomTheme({ id: "", name: "Night shift", base: "dracula", colors: { bg: "#1d1e26", accent: "#9580ff" } }).catch(() => {});
+    const body = within(canvasElement.ownerDocument.body);
+    await body.findAllByText("[DEV] shop_app");
+    fireEvent.keyDown(canvasElement.ownerDocument.body, { key: "`", code: "Backquote", ctrlKey: true });
+  },
+};
+
 /** Settings › Keymap: every menu, toolbar and Find Action command by scope (Global, Database Explorer, Query Console, Data Grid), "none" where it has no key yet */
 export const SettingsKeymap: S = { name: "Settings — Keymap", render: () => <SettingsDialog initialPage="keymap" onClose={noop} onUpdate={noop} onChannel={noop} /> };
 
 export const NewDataSource: S = { name: "Data Source — new", render: () => <ConnectionDialog onClose={noop} onSaved={noop} /> };
+/** A new data source's Schemas tab lists its databases with the form's settings before it is saved (as Test Connection connects) */
+export const NewDataSourceSchemas: S = {
+  name: "Data Source — new, Schemas tab",
+  render: () => <ConnectionDialog onClose={noop} onSaved={noop} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(body.getByRole("tab", { name: /^Schemas/ }));
+    await userEvent.click((await body.findByText("shop_app_test")).closest("label")!);
+  },
+};
+/** …while it connects through an AWS SSM instance that doesn't answer: the elapsed time and Cancel Listing (Esc) */
+export const NewDataSourceSchemasConnecting: S = {
+  name: "Data Source — new, Schemas tab connecting",
+  render: () => <ConnectionDialog onClose={noop} onSaved={noop} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(body.getByRole("tab", { name: /SSH\/SSL/ }));
+    await userEvent.selectOptions(body.getByRole("combobox", { name: "Tunnel" }), "ssm");
+    await userEvent.type(body.getByRole("textbox", { name: "Instance id" }), "i-00000000000000000");
+    await userEvent.click(body.getByRole("tab", { name: /^Schemas/ }));
+  },
+};
 export const EditDataSource: S = { name: "Data Source — edit (SSH)", render: () => <ConnectionDialog edit={{ ...PROD, ssh: { enabled: true, host: "bastion.example.com", port: 22, user: "ec2-user", auth: "key", keyPath: "~/.ssh/id_ed25519" } } as ConnectionView} onClose={noop} onSaved={noop} /> };
 /** SSH/SSL tab with Tunnel = AWS SSM: profile · region · instance id. Test Connection answers "(via AWS SSM i-…)" */
 export const EditDataSourceSsm: S = {
@@ -230,6 +295,37 @@ export const TableFilterCompletion: S = {
   },
 };
 
+/** The WHERE field pairs quotes and brackets as the console does (and the TUI's w / o inputs): typed `name in ('a` reads `name in ('a')` */
+export const TableFilterPairs: S = {
+  name: "Table data — WHERE quotes and brackets",
+  render: () => (
+    <Frame h={360}>
+      <TableEditor
+        where=""
+        orderBy=""
+        running={false}
+        error={null}
+        result={users}
+        query="SELECT * FROM public.users"
+        loadingMore={false}
+        dialect={dialectOf("postgres")}
+        onApply={noop}
+        onCancel={noop}
+        onFetchMore={noop}
+        onSubmit={async () => {}}
+        onExportCsv={noop}
+        onDdl={noop}
+        onCopyQueryToConsole={noop}
+      />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    const field = await within(canvasElement).findByRole<HTMLInputElement>("combobox", { name: "WHERE" });
+    await userEvent.type(field, "user_name in ('a', 'b");
+    await waitFor(() => expect(field.value).toBe("user_name in ('a', 'b')"));
+  },
+};
+
 export const Chart: S = { name: "Result Chart", render: () => <Frame><ResultChart result={sales} /></Frame> };
 export const Grid: S = {
   name: "Result Grid",
@@ -237,6 +333,37 @@ export const Grid: S = {
     <Frame>
       <ResultGrid result={sales} running={false} loadingMore={false} query="select region, month, orders, revenue from sales" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
     </Frame>
+  ),
+};
+
+/** Column widths (#109): drag a header's right edge, double-click it to fit, right-click a header for Fit Column / Fit All Columns /
+ * Reset Widths, ⌃⌥← / ⌃⌥→ on the current column. memo is longer than its computed width (cut with …); Fit on receiver_name counts
+ * each Hangul character as 2, as the TUI draws it, so the whole name shows */
+const orders: QueryResult = {
+  columns: [
+    { name: "idx", typeName: "INT8" },
+    { name: "order_no", typeName: "VARCHAR" },
+    { name: "receiver_name", typeName: "VARCHAR" },
+    { name: "memo", typeName: "TEXT" },
+    { name: "created_at", typeName: "TIMESTAMPTZ" },
+  ],
+  rows: [
+    [486, "O-20261101", "김현교", "first order after the promotion; the customer asked for a call before delivery, then changed the address twice and asked for gift wrap", "2026-11-01 10:10:00 +09:00"],
+    [487, "O-20261102", "이수진", null, "2026-11-02 10:11:00 +09:00"],
+    [488, "O-20261103", "박민수 (배송 전 전화 요청, 경비실 보관)", "refund requested", "2026-11-03 10:12:00 +09:00"],
+    [489, "O-20261104", "최지우", "gift wrap", "2026-11-04 10:13:00 +09:00"],
+  ],
+  rowsAffected: 0,
+  truncated: false,
+  elapsedMs: 3,
+  hasResultSet: true,
+};
+export const GridColumnWidths: S = {
+  name: "Result Grid — column widths (try it)",
+  render: () => (
+    <div style={{ position: "relative", height: 220, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid result={orders} widthsOf="story-orders" running={false} loadingMore={false} query="select * from orders" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    </div>
   ),
 };
 
@@ -274,7 +401,8 @@ export const GridShort: S = {
   ),
 };
 
-/** Loading more rows (infinite scroll, #94): nothing on the grid (no row is covered); the status bar shows it as it shows a run, ■ cancels */
+/** Loading more rows (infinite scroll, #94): nothing on the grid (no row is covered); the toolbar's ↻ is ■ (cancels the fetch, the rows stay),
+ * the status bar shows it as it shows a run (✕ on hover cancels too) */
 export const GridLoadingMore: S = {
   name: "Result Grid — loading more rows",
   render: () => (
@@ -282,7 +410,7 @@ export const GridLoadingMore: S = {
       <div style={{ position: "relative", flex: 1 }}>
         <ResultGrid result={{ ...mixed, truncated: true }} running={false} loadingMore query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
       </div>
-      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading more rows", since: Date.now() - 1200 }} readOnly={false} onUpdate={noop} jobs={[]} />
+      <StatusBar status="" busy={{ label: "Loading more rows", since: Date.now() - 1200, onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} widgets={{ pos: "Row 3, Col 5" }} />
     </div>
   ),
 };
@@ -471,12 +599,12 @@ export const DbaStale: S = {
 };
 export const Migrate: S = { name: "Compare & Migrate", render: () => <Frame h={600}><MigrateView conns={CONNS} initialConnId="dev" onOpenConsole={noop} onStatus={noop} /></Frame> };
 export const Rag: S = { name: "AI Search (RAG)", render: () => <Frame h={600}><RagView conns={CONNS} runJob={async (_l, run) => run("job")} onStatus={noop} /></Frame> };
-/** ⌘↩ at startup while the WebAssembly module loads: shown like a run in the status bar, ■ (or ⌘F2) drops it */
+/** ⌘↩ at startup while the WebAssembly module loads: shown like a run in the status bar; the toolbar's ■, the ✕ on hover or ⌘F2 drops it */
 export const ConsoleSplitterLoading: S = {
   name: "Console — loading the statement splitter",
   render: () => (
     <div style={{ width: 760, border: "1px solid var(--ui-border)" }}>
-      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading the statement splitter", since: Date.now() }} readOnly={false} onUpdate={noop} jobs={[]} />
+      <StatusBar status="" busy={{ label: "Loading the statement splitter", since: Date.now(), onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} />
     </div>
   ),
 };
@@ -519,6 +647,95 @@ export const ConsoleStatementsPopup: S = {
     await waitFor(() => expect(canvasElement.querySelector(".stmt-preview")).not.toBeNull(), { timeout: 10000 });
   },
 };
+/** The shared completion engine in the console (mock metadata: orders.user_id → users.id, the user function order_total): an
+ * unknown column underlined (⌥↩ lists the closest names) and signature help inside a call's parentheses */
+export const ConsoleAssist: S = {
+  name: "Console — unknown name and signature help",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane
+        tabId="story-assist" target="dev" initialSql={"select nme, order_total(id, ) from orders o\njoin users u on o.user_id = u.id;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
+        dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
+        output={[]} txManual={false} inTx={false}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
+      />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    const ed = await waitFor(() => monaco.editor.getEditors().find((e) => canvasElement.contains(e.getContainerDomNode())) ?? Promise.reject(new Error("no editor yet")));
+    await waitFor(() => expect(canvasElement.querySelector(".squiggly-warning")).not.toBeNull(), { timeout: 10000 });
+    ed.focus();
+    // Inside order_total( id, ‸): its second parameter
+    ed.setPosition({ lineNumber: 1, column: "select nme, order_total(id, ".length + 1 });
+    ed.trigger("story", "editor.action.triggerParameterHints", null);
+    await waitFor(() => expect(document.querySelector(".parameter-hints-widget .parameter.active")?.textContent).toBe("with_tax boolean"), { timeout: 10000 });
+  },
+};
+/** A bracket left open: an error marker from it to the end of its line (hover: "Unclosed '('"), as the TUI underlines it */
+export const ConsoleUnclosedBracket: S = {
+  name: "Console — unclosed bracket",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane
+        tabId="story-unclosed" target="dev" initialSql={"select user_id, count(*\n  from payment\n where card_brand in ('VISA', 'MASTER')\n group by 1;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
+        dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
+        output={[]} txManual={false} inTx={false}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
+      />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    await waitFor(() => expect(canvasElement.querySelector(".squiggly-error")).not.toBeNull(), { timeout: 10000 });
+  },
+};
+/** The story's console editor (Monaco), once it is there */
+const storyEditor = (canvasElement: HTMLElement) => waitFor(() => monaco.editor.getEditors().find((e) => canvasElement.contains(e.getContainerDomNode())) ?? Promise.reject(new Error("no editor yet")));
+/** ⌘↩ inside a subquery (DataGrip): the popup offers it after the whole statement, innermost first; the editor highlights exactly it */
+export const ConsoleRunSubquery: S = {
+  name: "Console — run a subquery (⌘↩)",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane {...consoleProps} tabId="story-subquery" results={[]} activeResult="output" initialSql={"select 1;\nselect * from orders\nwhere user_id in (select id from users where n > (select avg(n) from users));"} />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    const ed = await storyEditor(canvasElement);
+    ed.focus();
+    ed.setPosition({ lineNumber: 3, column: 60 });
+    ed.trigger("story", "dbtool.run", null);
+    const chooser = await waitFor(() => canvasElement.querySelector<HTMLElement>(".stmt-chooser") ?? Promise.reject(new Error("no popup yet")), { timeout: 10000 });
+    fireEvent.keyDown(chooser, { key: "ArrowDown" });
+    await waitFor(() => expect(canvasElement.querySelector(".stmt-preview")).not.toBeNull(), { timeout: 10000 });
+  },
+};
+/** A failed statement after the first: its error marked where the server points (its own marker, the message on hover with the
+ * way out); Output keeps it, an edit or the next run clears the mark */
+export const ConsoleRunError: S = {
+  name: "Console — run error marked",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane
+        {...consoleProps} tabId="story-run-error" results={[]} activeResult="output" initialSql={"select 1;\nselect id, n\n  from no_such_table\n where n > 1;"}
+        output={[
+          { ts: "10:24:01", text: "[DEV] shop_app> select id, n\n  from no_such_table\n where n > 1", level: "sql" },
+          { ts: "10:24:01", text: 'ERROR: relation "no_such_table" does not exist (position 21)', level: "error" },
+        ]}
+        onExecute={(_stmts, _explain, mark) => mark?.(0, { state: "error", out: "story", ts: "2026-11-07 10:24:01", text: 'ERROR: relation "no_such_table" does not exist', at: 20 })}
+      />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    // Run the second statement (selected, so it runs without asking); the story's onExecute fails it at PostgreSQL's position 21
+    const ed = await storyEditor(canvasElement);
+    ed.focus();
+    ed.setSelection(new monaco.Range(2, 1, 4, 13));
+    ed.trigger("story", "dbtool.run", null);
+    await waitFor(() => expect(canvasElement.querySelector(".squiggly-error")).not.toBeNull(), { timeout: 10000 });
+    ed.setPosition({ lineNumber: 3, column: 8 });
+  },
+};
 /** A script's Output longer than the pane: it follows the newest line while scrolled to the bottom; scrolled up, it stays put */
 export const ConsoleLongOutput: S = {
   name: "Console — long Output",
@@ -555,6 +772,31 @@ const consoleProps = {
   onChange: noop, onExecute: noop, onCancel: noop, onSetActiveResult: noop, onPin: noop, onCloseResult: noop, onFetchMore: noop, onSubmit: async () => {}, onExport: noop, onHistory: noop,
   onTxMode: noop, onCommit: noop, onRollback: noop, onLoadDbs: noop, onLoadSchemas: noop, onSwitchDb: noop, onSwitchSchema: noop, registerApi: noop, onClearOutput: noop, onError: noop, onLoadingChange: noop,
 };
+/** One toggling button per toolbar (#107): the console's ▶ is ■ in the same spot while it runs a statement (not for a result's
+ * load-more); a grid's ↻ is ■ during each of its loads (a run, the load-more on scroll), and that ■ cancels only the fetch in flight */
+function RunStopToolbars() {
+  const label = (t: string) => <Text size="sm" tone="muted">{t}</Text>;
+  // The grid fills a positioned box (as in a tab); a console needs room for its toolbar and a line of its editor
+  const box = (h: number, child: React.ReactNode) => <div style={{ position: "relative", height: h, border: "1px solid var(--ui-border)" }}>{child}</div>;
+  const grid = (running: boolean, loadingMore: boolean) =>
+    box(110, <ResultGrid result={{ ...mixed, truncated: true }} running={running} loadingMore={loadingMore} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: 12 }}>
+      {label("Console — idle: ▶ Execute (⌘↩)")}
+      {box(130, <ConsolePane {...consoleProps} tabId="story-idle" initialSql="select * from orders;" activeResult="output" results={[]} />)}
+      {label("Console — running: ■ Cancel (⌘F2) in the same spot")}
+      {box(130, <ConsolePane {...consoleProps} tabId="story-running" initialSql="select pg_sleep(5);" activeResult="output" results={[]} running />)}
+      {label("Grid — idle: ↻ Reload Page (⌘r)")}
+      {grid(false, false)}
+      {label("Grid — loading (a run): ■ Cancel (⌘F2)")}
+      {grid(true, false)}
+      {label("Grid — loading more on scroll: ■ cancels the fetch, the rows stay")}
+      {grid(false, true)}
+    </div>
+  );
+}
+export const ToolbarsRunStop: S = { name: "Toolbars — run and stop", render: () => <RunStopToolbars /> };
+export const ToolbarsRunStopLight: S = { name: "Toolbars — run and stop, light", globals: { theme: "light" }, render: () => <RunStopToolbars /> };
 export const ConsoleEditableResult: S = {
   name: "Console — editable result (pending edit)",
   render: () => (
@@ -575,19 +817,67 @@ export const ConsoleEditableResult: S = {
     await userEvent.type(input, "Lee{Enter}");
   },
 };
-/** A join: read-only, the greyed-out edit buttons say why (QueryResult.readOnlyReason) */
+/** Read-only: the greyed-out edit buttons say why (QueryResult.readOnlyReason; here the key isn't in the result) */
 export const ConsoleReadOnlyResult: S = {
   name: "Console — read-only result (reason)",
   render: () => {
-    const { edit: _, ...joined } = consoleUsers;
-    const sql = "select u.id, u.name, o.total from users u join orders o on o.user_id = u.id";
+    const { edit: _, ...rest } = consoleUsers;
+    const sql = "select name, email from users";
     return (
       <Frame h={420}>
         <ConsolePane {...consoleProps} initialSql={sql + ";"} activeResult="r1"
-          results={[{ id: "r1", title: "Result 1", sql, kind: "result", result: { ...joined, readOnlyReason: "Read-only: the columns come from more than one table." }, pinned: false }]} />
+          results={[{ id: "r1", title: "Result 1", sql, kind: "result", result: { ...rest, readOnlyReason: "Read-only: the result doesn't include the primary key of public.users (id)." }, pinned: false }]} />
       </Frame>
     );
   },
+};
+/** #102's join (QueryResult.editJoin): each table's cells by its own key, one users edit pending. idx and status come twice, each
+ *  from its table; the computed column is dimmed with 🔒 and says why on hover; voc 2 has no user, so that side's cells say why on
+ *  hover; Add / Delete Row are greyed out (rows aren't one table's) */
+const vocJoin: QueryResult = {
+  columns: ["idx", "user_idx", "status", "idx", "role", "status", "shout"].map((name, i) => ({ name, typeName: [0, 1, 3].includes(i) ? "INT8" : "VARCHAR" })),
+  rows: [[1, 10, "open", 10, "member", "active", "MEMBER"], [2, 99, "new", null, null, null, null], [3, 11, "closed", 11, "admin", "active", "ADMIN"]],
+  rowsAffected: 0, truncated: false, elapsedMs: 6, hasResultSet: true,
+  editJoin: {
+    tables: [{ schema: "crm", table: "voc", pk: ["idx"], pkAt: [0] }, { schema: "public", table: "users", pk: ["idx"], pkAt: [3] }],
+    columns: [{ table: 0, column: "idx" }, { table: 0, column: "user_idx" }, { table: 0, column: "status" }, { table: 1, column: "idx" }, { table: 1, column: "role" }, { table: 1, column: "status" }, { readOnly: "Read-only: shout is computed, not a column of the table." }],
+  },
+};
+const vocSql = "select vo.*, pu.idx, pu.role, pu.status, upper(pu.role) as shout from crm.voc vo left join users pu on vo.user_idx = pu.idx";
+export const ConsoleJoinResult: S = {
+  name: "Console — join result, edited per table",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane {...consoleProps} initialSql={vocSql + ";"} activeResult="r1" results={[{ id: "r1", title: "Result 1", sql: vocSql, kind: "result", result: vocJoin, pinned: false }]} />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await waitFor(() => {
+      if (!canvasElement.querySelector(".monaco-editor .view-lines")) throw new Error("editor not mounted yet");
+    });
+    await userEvent.dblClick(await c.findByText("member"));
+    const input = await c.findByDisplayValue("member");
+    await userEvent.clear(input);
+    await userEvent.type(input, "admin{Enter}");
+  },
+};
+/** A Production console (#106): it starts in Tx: Manual and says so once in Output; a change ran, so the transaction is pending (the
+ *  red badge beside Commit / Roll back); left unused, the backend's reminder came (Output, the badge's "idle" and its hover) */
+const prodReminder = 'A transaction on Production "[PROD] shop_app" has been open for 5 min without a statement: its changes aren\'t saved and the rows it changed stay locked. Commit or Roll back. The server ends it after 10 min idle (idle_in_transaction_session_timeout), and rolls it back.';
+export const ConsoleProductionTransaction: S = {
+  name: "Console — Production transaction pending, idle reminder",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane {...consoleProps} connName="[PROD] shop_app" production txManual inTx txIdle={prodReminder} initialSql="update users set role = 'admin' where idx = 10;" activeResult="output" results={[]}
+        output={[
+          { ts: "2026-11-07 10:00:00", level: "info", text: "Production: this console starts in Tx: Manual, so changes stay pending until you Commit or Roll back. To start them in Auto, turn off \"Production: start consoles in Manual transaction mode\" for this data source (GUI: Data Source Properties › Options · TUI: the data source form, \"Production Manual\")." },
+          { ts: "2026-11-07 10:00:12", level: "sql", text: "[PROD] shop_app> update users set role = 'admin' where idx = 10;" },
+          { ts: "2026-11-07 10:00:12", level: "info", text: "1 row affected in 4 ms" },
+          { ts: "2026-11-07 10:05:15", level: "warn", text: prodReminder },
+        ]} />
+    </Frame>
+  ),
 };
 /** A console after its runs: each executed statement is marked on its first line (✓ done, ✗ failed, spinning while it runs; all three
  * shown together here). Hover a mark for when it ran and its result or error; click it for its line in Output */
@@ -628,13 +918,44 @@ function ConsoleMarks() {
   );
 }
 export const ConsoleGutterMarks: S = { name: "Console — gutter marks", render: () => <ConsoleMarks /> };
-export const Redis: S = {
-  name: "Redis Browser",
-  render: () => (
-    <Frame h={600}>
-      <RedisBrowser target="rd" connName="[Redis] cache" database="0" dbList={["db0", "db3"]} readOnly={false} onSwitchDb={noop} onLoadDbs={noop} onStatus={noop} />
-    </Frame>
-  ),
+/** One Redis tab per data source (#108): the database picker (db0 · 7 keys) and key filter on top, folder counts beside the name, TTLs only for keys */
+const RedisTab = () => (
+  <Frame h={600}>
+    <RedisBrowser target="rd" connId="rd" connName="[Redis] cache" database="db0" readOnly={false} production={false} onSwitchDb={noop} onStatus={noop} />
+  </Frame>
+);
+export const Redis: S = { name: "Redis Browser", render: RedisTab };
+/** Managed Redis (ElastiCache, Memorystore …) refuses CONFIG: the Config tab is greyed out; hover it for why and where the settings are */
+export const RedisManaged: S = {
+  name: "Redis Browser — managed Redis (Config greyed out)",
+  beforeEach: () => {
+    (globalThis as any).__mockRedis = { managed: true };
+    return () => delete (globalThis as any).__mockRedis;
+  },
+  render: RedisTab,
+};
+/** Terminal: a hash as a field / value table, HELP from the bundled command table, completion with argument hints */
+export const RedisTerminal: S = {
+  name: "Redis Browser — Terminal",
+  render: RedisTab,
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(await c.findByRole("tab", { name: "Terminal" }));
+    const input = await c.findByRole("textbox", { name: "Redis command" });
+    await userEvent.type(input, "HGETALL user:1{Escape}{Enter}");
+    await userEvent.type(input, "HELP HGET{Enter}");
+    await userEvent.type(input, "HG");
+  },
+};
+/** Terminal key names from a bounded SCAN: the key typed out comes first, and ↩ runs the line unless ↑↓ moved to another key (⇥ picks) */
+export const RedisTerminalKeys: S = {
+  name: "Redis Browser — Terminal key names",
+  render: RedisTab,
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(await c.findByRole("tab", { name: "Terminal" }));
+    await userEvent.type(await c.findByRole("textbox", { name: "Redis command" }), "HGETALL user:1");
+  },
 };
 const WS_NAMES = ["Default", "Reports", "Billing", "Analytics", "Ops", "Support", "Growth", "Search", "Mobile", "Payments"];
 /** The rail at a fixed window height: n workspaces, the 2nd current. Keymap and Settings stay at the bottom while the list scrolls */
@@ -661,15 +982,79 @@ export const Workspaces: S = { name: "Workspace rail", render: () => <Rail n={2}
 export const WorkspacesMany: S = { name: "Workspace rail — 30 workspaces (list scrolls, footer stays)", render: () => <Rail n={30} /> };
 export const WorkspacesLight: S = { name: "Workspace rail — light", globals: { theme: "light" }, render: () => <Rail n={30} /> };
 export const WorkspacesHc: S = { name: "Workspace rail — high contrast", globals: { theme: "hc" }, render: () => <Rail n={30} /> };
-/** Status bar: run · cancel, status text, transfers, update badge, read-only, caret, encoding (Settings and Keymap moved to the workspace rail).
- * While the focused tab runs or loads more rows, the running indicator (bar · what · elapsed) takes the status text's place; ■ cancels it */
+/** Status bar, information only (#107): status text, transfers, update badge, read-only, the focused grid's shown columns, the focused
+ * editor's (Ln, Col) or grid's (Row, Col) position, encoding. While the focused tab runs or loads more rows, the running indicator
+ * (bar · what · elapsed) takes the status text's place; hovering it shows ✕, which cancels (shown hovered in the last two) */
 export const StatusBarStory: S = {
   name: "Status bar",
   render: () => (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <StatusBar run={{ canRun: true, running: false, onRun: noop, onCancel: noop }} status="1 statement executed in 12 ms" readOnly update="0.3.1" onUpdate={noop} jobs={[]} />
-      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Executing", since: Date.now() - 3400 }} readOnly={false} onUpdate={noop} jobs={[]} />
-      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading more rows", since: Date.now() - 800 }} readOnly={false} onUpdate={noop} jobs={[]} />
+      <style>{".sb-hovered .rb-cancel { visibility: visible; }"}</style>
+      <StatusBar status="1 statement executed in 12 ms" readOnly update="0.3.1" onUpdate={noop} jobs={[]} widgets={{ pos: "Ln 2, Col 11" }} />
+      <StatusBar status="1 statement executed in 12 ms" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ pos: "Ln 2, Col 11 (8 chars)" }} />
+      <StatusBar status="3000+ rows retrieved" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ cols: "cols 3–8 of 14", pos: "Row 3, Col 5" }} />
+      <StatusBar status="Table users opened" readOnly={false} onUpdate={noop} jobs={[]} />
+      <div className="sb-hovered">
+        <StatusBar status="" busy={{ label: "Executing", since: Date.now() - 3400, onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} widgets={{ pos: "Ln 2, Col 11" }} />
+      </div>
+      <div className="sb-hovered">
+        <StatusBar status="" busy={{ label: "Loading more rows", since: Date.now() - 800, onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} widgets={{ cols: "cols 3–8 of 14", pos: "Row 3, Col 5" }} />
+      </div>
     </div>
   ),
+};
+export const StatusBarLight: S = { ...StatusBarStory, name: "Status bar — light", globals: { theme: "light" } };
+
+// ───────── Import Data Sources (#63): the real flow on the mock backend ─────────
+/** Explorer ⋮ › Import Data Sources ▸ (opened by hovering it): the locations found, newest IDE version first, the count, the path as the
+ * tooltip; then File… and Folder… (the native pickers pick one or the other) */
+function ImportMenu() {
+  const a = useConnActions({ conns: CONNS, refresh: async () => {}, setStatus: noop });
+  return (
+    <div style={{ position: "relative", height: 260, width: 640 }}>
+      <span className="menu-anchor" style={{ position: "absolute", left: 220, top: 8 }}>
+        <Menu items={[{ label: "Export Data Sources…", action: noop }, { label: "Import Data Sources", submenu: a.importItems() }]} onClose={noop} />
+      </span>
+    </div>
+  );
+}
+export const ImportSubmenu: S = {
+  name: "Import Data Sources ▸ (explorer ⋮)",
+  render: () => <ImportMenu />,
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await waitFor(async () => {
+      await userEvent.hover(c.getByText("Import Data Sources"));
+      await expect(c.getByText("DataGrip 2025.2 · global  (7)")).toBeTruthy();
+    });
+  },
+};
+
+/** The import confirm: one row per source, a checkbox on each added row (unchecked = left out), skipped rows with the reason;
+ * Import N counts the checked rows and is disabled at 0 */
+function ImportFlow({ from }: { from: { path: string } | { folder: boolean } }) {
+  const a = useConnActions({ conns: CONNS, refresh: async () => {}, setStatus: noop });
+  useEffect(() => void a.importFrom(from), []);
+  return <ConfirmHost />;
+}
+const DG = "/Users/me/Library/Application Support/JetBrains/DataGrip2025.2/options";
+export const ImportPreview: S = { name: "Import Data Sources — preview with checkboxes", render: () => <ImportFlow from={{ path: DG }} /> };
+export const ImportPreviewLight: S = { name: "Import Data Sources — preview (light)", globals: { theme: "light" }, render: () => <ImportFlow from={{ path: DG }} /> };
+/** Every source skipped: a notice (OK only) with the rows */
+export const ImportNothing: S = {
+  name: "Import Data Sources — nothing importable (notice)",
+  render: () => {
+    (window as any).__mockImportAllSkipped = true;
+    useEffect(() => () => void ((window as any).__mockImportAllSkipped = false), []);
+    return <ImportFlow from={{ path: DG }} />;
+  },
+};
+/** A file that can't be parsed: where, and that nothing was imported */
+export const ImportError: S = {
+  name: "Import Data Sources — a file that can't be read",
+  render: () => {
+    (window as any).__mockImportPick = "broken";
+    useEffect(() => () => void ((window as any).__mockImportPick = undefined), []);
+    return <ImportFlow from={{ folder: false }} />;
+  },
 };

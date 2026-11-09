@@ -1,0 +1,10 @@
+{
+	"folders": {},
+	"connections": {
+		"postgres-jdbc-1": {
+			"provider": "postgresql",
+			"name": "half"
+			"configuration": { "host": "half.internal" }
+		}
+	}
+}

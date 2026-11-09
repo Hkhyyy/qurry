@@ -3,7 +3,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, ConnectionView, defaultDbOf, dialectOf, meta, targetId } from "../../lib/api";
 import { askText } from "../../lib/dialogs";
 import { leaf, leaves, MAX_PANES, Pane, splitPane } from "../../lib/panes";
-import { connTabVars, type Theme } from "../../lib/theme";
+import { connTabVars } from "../../lib/theme";
 import { ConsoleEditor } from "../../components/ConsoleEditor";
 import { ConsolePane } from "../../components/ConsolePane";
 import { DbaReport } from "../../components/DbaReport";
@@ -37,7 +37,6 @@ const tabDatabase = (t: { database?: string }, c?: ConnectionView) => t.database
 
 type Deps = {
   conns: ConnectionView[];
-  theme: Theme;
   setStatus: (s: string) => void;
   groupActive: (g: Group) => Tab | null;
   labelOf: (t: Tab) => string;
@@ -51,7 +50,7 @@ type Deps = {
 
 /** The editor groups (split panes): their tab strips, what each tab shows, the tab menu, splitting and tab drag and drop */
 export function useEditorGroups({
-  conns, theme, setStatus, groupActive, labelOf, setTabMenu, setMaximized, activate, addTab, openConsole, openTable, openTableTab, openDdl, ragInit, runJob, exportCsv, moveToWs, dbCache, schemaCache, executeConsole, cancel, fetchMoreEntry, setTxMode, txEnd, loadDbList, loadSchemaList, switchDatabase, switchSchema, log, reconnectAfterTls, setPendingRuns, applyTableFilter, fetchMore, submitEdits, focusTableGrid,
+  conns, setStatus, groupActive, labelOf, setTabMenu, setMaximized, activate, addTab, openConsole, openTable, openTableTab, openDdl, ragInit, runJob, exportCsv, moveToWs, dbCache, schemaCache, executeConsole, cancel, fetchMoreEntry, setTxMode, txEnd, loadDbList, loadSchemaList, switchDatabase, switchSchema, log, reconnectAfterTls, setPendingRuns, applyTableFilter, fetchMore, submitEdits, focusTableGrid,
 }: Deps) {
   const tabs = useTabsStore((s) => s.tabs);
   const panes = useTabsStore((s) => s.panes);
@@ -318,7 +317,7 @@ export function useEditorGroups({
                   else closeTabs([t.id]);
                 }}
                 className={(t.id === dragId ? "dragging" : "") + (dropHint?.zone === "tabs" && dropHint.g === g && dropHint.beforeId === t.id ? " drop-before" : "")}
-                style={connTabVars(color, theme)}
+                style={connTabVars(color)}
                 draggable
                 onDragStart={(e) => {
                   e.dataTransfer.setData("text/plain", t.id);
@@ -417,6 +416,8 @@ export function useEditorGroups({
                     output={t.output}
                     txManual={t.txManual}
                     inTx={t.inTx}
+                    production={!!c?.options?.confirmChanges}
+                    txIdle={t.txIdle}
                     onChange={(sql) => liveSql.set(t.id, sql)}
                     onExecute={(stmts, explain, mark) => executeConsole(t.id, stmts, explain, mark)}
                     onCancel={() => cancel(t)}
@@ -529,12 +530,12 @@ export function useEditorGroups({
                 <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
                   <RedisBrowser
                     target={t.target}
+                    connId={t.connId}
                     connName={c?.name ?? ""}
                     database={t.database ?? "db0"}
-                    dbList={dbCache[t.connId] ?? []}
                     readOnly={!!c?.readOnly}
+                    production={!!c?.options?.confirmChanges}
                     initialKey={t.redisKey}
-                    onLoadDbs={() => loadDbList(t.connId)}
                     onSwitchDb={(db) => c && patch(t.id, { database: db, target: targetId(c.id, db), title: `${c.name} [${db}]`, redisKey: undefined })}
                     onStatus={setStatus}
                   />
@@ -558,6 +559,7 @@ export function useEditorGroups({
                   readOnly={!!conns.find((x) => x.id === t.connId)?.readOnly}
                   dialect={dialectOf(conns.find((x) => x.id === t.connId)?.kind)}
                   loadingMore={t.loadingMore}
+                  table={t.edit && { source: t.connId, database: t.database ?? "", schema: t.edit.schema, table: t.edit.table }}
                   completion={t.edit && { target: t.target, schema: t.edit.schema, table: t.edit.table, db: tabDatabase(t, conns.find((x) => x.id === t.connId)), mysql: conns.find((x) => x.id === t.connId)?.kind === "mysql" }}
                   onApply={(w, o) => applyTableFilter(t, w, o)}
                   onCancel={() => cancel(t)}
@@ -615,6 +617,7 @@ export function useEditorGroups({
                   database={tabDatabase(t, conns.find((x) => x.id === t.connId))}
                   initialSql={t.sql}
                   language={dialectOf(conns.find((x) => x.id === t.connId)?.kind).monaco}
+                  kind={dialectOf(conns.find((x) => x.id === t.connId)?.kind).quoting}
                   readOnly
                   onChange={() => {}}
                   onRun={() => {}}

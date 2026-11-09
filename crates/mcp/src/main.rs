@@ -1,7 +1,7 @@
 //! Qurry MCP server (stdio, JSON-RPC 2.0). Uses the same engine (qurry-core) and the same Data Sources as the GUI·TUI.
 //!
 //! Read-only by default: PG/MySQL run a single statement inside a READ ONLY transaction, Redis allows read commands only.
-//! `--allow-write` adds the `execute` tool (a Data Source's Read-only setting is still honored).
+//! `--allow-write` adds the `execute` tool (Read-only and Production Data Sources still never take it).
 //! MCP exposure is set per Data Source (Options › MCP: Off / Read / Read & write — store::McpAccess). Hidden sources are not listed and cannot be connected to.
 use qurry_core::app::{AppState, ConnectionView};
 use qurry_core::db::QueryResult;
@@ -355,7 +355,13 @@ impl Server {
             "execute" if self.allow_write => {
                 let (t, kind, _, access) = self.target(a).await?;
                 if access != McpAccess::Write {
-                    return Err("This data source is read-only for MCP (Qurry: data source › Options › MCP: Read & write)".into());
+                    let id = self.resolve(a).await?.0;
+                    let (ro, prod) = self.sources().await?.iter().find(|c| c.config.id == id).map_or((false, false), |c| (c.config.read_only, c.config.options.confirm_changes));
+                    return Err(match (ro, prod) {
+                        (true, _) => "MCP never writes to a Read-only data source; change it in Qurry".into(),
+                        (_, true) => "MCP never writes to a Production data source (the app asks a person to confirm changes there); change it in Qurry".into(),
+                        _ => "This data source is read-only for MCP (Qurry: data source › Options › MCP: Read & write)".into(),
+                    });
                 }
                 let stmts: Vec<String> = a.get("statements").and_then(|v| v.as_array()).ok_or("statements is required")?.iter().filter_map(|x| x.as_str().map(String::from)).collect();
                 if stmts.is_empty() {
@@ -569,7 +575,7 @@ mod tests {
             serde_json::from_value(json!({ "id": id, "name": name, "kind": "postgres", "host": "db.internal", "port": 5432, "user": "admin" })).unwrap();
         config.options.mcp = mcp.map(String::from);
         config.options.confirm_changes = production;
-        ConnectionView { config, has_password: true, connected: false }
+        ConnectionView { config, has_password: true, connected: false, temporary: false }
     }
 
     #[test]
@@ -608,6 +614,51 @@ mod tests {
             let e = server.call("semantic_search", &search(w)).await.unwrap_err();
             assert!(e.contains("not found"), "{w}: {e}");
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A source behind AWS SSM, through the core tests' fake aws (crates/core/tests/fake_aws.py) on PATH. Its session stops
+    /// forwarding while the CLI runs on (sleep, a network change, the AWS side): the next query opens the tunnel again and answers,
+    /// without restarting the server.
+    /// Run on its own (it changes PATH): QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres cargo test -p qurry-mcp query_recovers -- --ignored
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore]
+    async fn query_recovers_from_a_dead_ssm_tunnel() {
+        use std::os::unix::fs::PermissionsExt;
+        let pg = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG=host:port:user:db");
+        let pg: Vec<&str> = pg.split(':').collect();
+        let dir = std::env::temp_dir().join(format!("qurry-mcp-ssm-{}-{}", std::process::id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()));
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let python = std::env::split_paths(&path).map(|d| d.join("python3")).find(|p| p.is_file()).expect("python3 on PATH");
+        let fake = include_str!("../../core/tests/fake_aws.py").replace("@MODE@", "ok").replacen("/usr/bin/env python3", &python.to_string_lossy(), 1);
+        std::fs::write(bin.join("aws"), fake).unwrap();
+        std::fs::set_permissions(bin.join("aws"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        unsafe { std::env::set_var("PATH", std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&path))).unwrap()) };
+
+        let mut state = qurry_core::open_state(Some(dir.join("config"))).unwrap();
+        state.mcp = true;
+        let mut c = source("ssm", "Behind SSM", Some("read"), false).config;
+        (c.host, c.port, c.user, c.database) = (pg[0].into(), pg[1].parse().unwrap(), pg[2].into(), pg[3].into());
+        c.ssm = Some(qurry_core::store::SsmConfig { enabled: true, profile: "dev".into(), region: "ap-northeast-2".into(), target: "i-0123456789abcdef0".into() });
+        state.store.save(&c).unwrap();
+        let server = Server { state: Arc::new(state), allow_write: false };
+        let q = json!({ "data_source": "Behind SSM", "sql": "select 1 as one" });
+        let starts = || std::fs::read_to_string(bin.join("starts")).unwrap().lines().count();
+        assert_eq!(server.call("query", &q).await.expect("connects")["rows"][0][0], json!(1));
+        assert_eq!(starts(), 1);
+
+        // The session dies; the CLI and its plugin run on and accept connections (the fake's dead-<plugin pid>)
+        let pids = std::fs::read_to_string(bin.join("pids")).unwrap();
+        std::fs::write(bin.join(format!("dead-{}", pids.split_whitespace().nth(1).unwrap())), "").unwrap();
+        let t = std::time::Instant::now();
+        let r = server.call("query", &q).await.expect("the same server answers again");
+        assert_eq!(r["rows"][0][0], json!(1));
+        assert!(t.elapsed() < std::time::Duration::from_secs(14), "one timeout, a new session and a connect: {:?}", t.elapsed());
+        assert_eq!(starts(), 2, "a new session");
+        server.state.disconnect("ssm".into()).await.unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }
 

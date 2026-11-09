@@ -69,7 +69,7 @@ test("console result with many columns: header stays on the scroller's top edge 
   await expect.poll(async () => (await geometry(page)).bodyTop).toBeGreaterThan(0);
   await expectAligned(page);
   const before = await geometry(page);
-  const head = (await work(page).locator(".grid-head").boundingBox())!;
+  const head = (await work(page).locator(".grid-head-wrap").boundingBox())!;
   await page.mouse.move(head.x + head.width / 2, head.y + head.height / 2);
   await page.mouse.wheel(200, 400);
   await expect.poll(async () => (await geometry(page)).bodyTop).toBeGreaterThan(before.bodyTop);
@@ -90,7 +90,7 @@ test("header click selects the column and keeps the keyboard on the grid", async
   await expect.poll(async () => (await geometry(page)).bodyTop).toBeGreaterThan(0);
   await expectAligned(page);
   const cell = (await work(page).locator(".cell.active").boundingBox())!;
-  const head = (await work(page).locator(".grid-head").boundingBox())!;
+  const head = (await work(page).locator(".grid-head-wrap").boundingBox())!;
   const body = (await work(page).locator(".grid-scroll").boundingBox())!;
   expect(cell.y).toBeGreaterThanOrEqual(head.y + head.height);
   expect(cell.y + cell.height).toBeLessThanOrEqual(body.y + body.height);
@@ -105,7 +105,7 @@ const SHORT = { width: 760, height: 400 };
 /** Points across the header strip and its top edge where a row is what's painted (hit testing follows painting and clipping) */
 const rowsOverHeader = (page: Page) =>
   work(page)
-    .locator(".grid-head")
+    .locator(".grid-head-wrap")
     .evaluate((head) => {
       const b = head.getBoundingClientRect();
       const out: string[] = [];
@@ -121,7 +121,7 @@ const rowsOverHeader = (page: Page) =>
 async function expectNoStrip(page: Page) {
   const toolbarToHead = () =>
     work(page)
-      .locator(".grid-head")
+      .locator(".grid-head-wrap")
       .evaluate((head) => head.getBoundingClientRect().top - head.closest(".grid-split")!.previousElementSibling!.getBoundingClientRect().bottom);
   for (const [top, left] of [[0, 0], [2000, 0], [2000, 400], [0, 1e6], [37, 123]]) {
     await scrollBody(page, top, left);

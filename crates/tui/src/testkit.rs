@@ -28,7 +28,9 @@ impl Harness {
         let dir = std::env::temp_dir().join(format!("qurry-tui-test-{}", uuid::Uuid::new_v4()));
         let state = Arc::new(qurry_core::open_state(Some(dir.clone())).unwrap());
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let app = App::new(state, tx);
+        let mut app = App::new(state, tx);
+        // Import Data Sources never reads the real DataGrip / DBeaver settings in a test
+        app.import_home = dir.join("home");
         let mut h = Harness { app, rx, _dir: TempDir(dir) };
         h.settle().await;
         h
@@ -126,18 +128,8 @@ impl Harness {
     /// Open a Redis key browser tab filled with a key list, without a DB
     pub fn redis_tab(&mut self, keys: &[&str]) -> u64 {
         let r = crate::app::RedisTab {
-            pattern: "*".into(),
             keys: keys.iter().map(|k| qurry_core::redisdb::KeyRow { key: k.to_string(), ty: "string".into(), ttl: -1 }).collect(),
-            cursor: "0".into(),
-            sel: 0,
-            off: 0,
-            open: Default::default(),
-            detail: None,
-            text: None,
-            value: None,
-            focus_value: false,
-            scanning: false,
-            want: None,
+            ..crate::app::RedisTab::new("", None)
         };
         self.app.push_tab("test", "db0".into(), "redis".into(), TabKind::Redis(r))
     }

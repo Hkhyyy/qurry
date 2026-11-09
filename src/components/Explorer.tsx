@@ -19,12 +19,14 @@ interface Props {
   onAddExisting?: (id: string) => void;
   onRefresh: () => void;
   onExport: () => void;
-  onImport: () => void;
+  /** The Import Data Sources submenu, and a call to look for the locations again when the ⋮ menu opens */
+  importItems: () => MenuEntry[];
+  onImportOpen: () => void;
   /** The workspace shown: only its explorer tells onSelect (each workspace keeps its own explorer, hidden ones mounted) */
   shown: boolean;
   /** info: the node the keys act on (the last clicked); all: every selected node */
   onSelect: (info: NodeInfo | null, all: NodeInfo[]) => void;
-  onActivate: (info: NodeInfo) => void;
+  onActivate: (info: NodeInfo, click?: boolean) => void;
   /** A line for the status bar (a key that doesn't work on the selected nodes) */
   onStatus: (text: string) => void;
   /** The node's context menu; with several selected nodes (all), for all of them */
@@ -101,7 +103,7 @@ export function Explorer(p: Props) {
     { label: `${showSystem ? "✓ " : "　"}Show System Schemas`, ...cmd("tree.showSystem"), action: () => setShowSystem((v) => !v) },
     { separator: true },
     { label: "Export Data Sources…", ...cmd("ds.export"), action: p.onExport },
-    { label: "Import Data Sources…", ...cmd("ds.import"), action: p.onImport },
+    { label: "Import Data Sources", submenu: p.importItems() },
   ];
   const onTreeKey = (e: React.KeyboardEvent) => {
     // A control inside the tree (Allow unencrypted, Install driver, an input) keeps its own keys: Enter presses the button
@@ -209,7 +211,7 @@ export function Explorer(p: Props) {
           <IconButton size="sm"
             title="Add Data Source"
             onMouseDown={(e) => e.stopPropagation()}
-            onClick={() => (p.others?.length ? setAddMenu((m) => !m) : p.onAdd())}
+            onClick={() => (addMenu || p.onImportOpen(), setAddMenu((m) => !m))}
           >
             <IcPlus />
           </IconButton>
@@ -218,9 +220,11 @@ export function Explorer(p: Props) {
               onClose={() => setAddMenu(false)}
               items={[
                 { label: "New Data Source…", ...cmd("tree.newDs"), action: p.onAdd },
-                { separator: true },
-                { heading: "Add to this workspace:" },
-                ...(p.others ?? []).map((c) => ({ label: c.name, action: () => p.onAddExisting?.(c.id) })),
+                // DataGrip / IntelliJ / DBeaver data sources, as the ⋮ menu has it
+                { label: "Import Data Sources", submenu: p.importItems() },
+                ...(p.others?.length
+                  ? [{ separator: true } as const, { heading: "Add to this workspace:" }, ...p.others.map((c) => ({ label: c.name, action: () => p.onAddExisting?.(c.id) }))]
+                  : []),
               ]}
             />
           )}
@@ -235,7 +239,7 @@ export function Explorer(p: Props) {
           <IconButton size="sm"
             title="More"
             onMouseDown={(e) => e.stopPropagation()}
-            onClick={() => setMore((m) => !m)}
+            onClick={() => (more || p.onImportOpen(), setMore((m) => !m))}
           >
             <IcMoreV />
           </IconButton>
@@ -258,6 +262,14 @@ export function Explorer(p: Props) {
               No data sources.
               <br />
               <a onClick={p.onAdd}>＋ New data source</a>
+              <br />
+              <a
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => (p.onImportOpen(), setAddMenu(true))}
+                title="From DataGrip / IntelliJ or DBeaver on this computer, or a file"
+              >
+                Import data sources…
+              </a>
               {!!p.others?.length && (
                 <>
                   <br />
