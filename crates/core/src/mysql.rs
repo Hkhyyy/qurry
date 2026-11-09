@@ -617,9 +617,9 @@ pub async fn list_objects(p: &MySqlPool, schema: &str) -> AppResult<SchemaObject
 }
 
 pub async fn table_detail(p: &MySqlPool, schema: &str, table: &str) -> AppResult<TableDetail> {
-    let cols: Vec<(String, String, String, Option<String>, Option<String>, String)> = sqlx::query_as(
+    let cols: Vec<(String, String, String, Option<String>, Option<String>, String, Option<String>)> = sqlx::query_as(
         "select cast(column_name as char), cast(column_type as char), cast(is_nullable as char), cast(column_default as char), \
-           cast(nullif(column_comment, '') as char), cast(column_key as char) \
+           cast(nullif(column_comment, '') as char), cast(column_key as char), cast(character_set_name as char) \
          from information_schema.columns where table_schema = ? and table_name = ? order by ordinal_position",
     )
     .bind(schema)
@@ -628,7 +628,7 @@ pub async fn table_detail(p: &MySqlPool, schema: &str, table: &str) -> AppResult
     .await?;
     let columns = cols
         .into_iter()
-        .map(|(name, data_type, nullable, default_value, comment, key)| ColumnMeta { name, data_type, nullable: nullable == "YES", default_value, comment, is_pk: key == "PRI" })
+        .map(|(name, data_type, nullable, default_value, comment, key, charset)| ColumnMeta { name, data_type, nullable: nullable == "YES", default_value, comment, is_pk: key == "PRI", charset })
         .collect();
     // Key parts joined with a real tab character (not '\\t', which NO_BACKSLASH_ESCAPES reads as two characters). A functional
     // key part (MySQL 8.0.13+) has no column_name but its expression, written as in CREATE INDEX; a server without the
@@ -1055,6 +1055,11 @@ mod tests {
         let d2 = crate::meta::table_detail(&pool, "shop", "orders").await.unwrap();
         assert!(d2.indexes.iter().any(|i| i.name == "uq_customer" && i.is_unique));
         assert_eq!(d2.columns.iter().find(|c| c.name == "customer").unwrap().comment.as_deref(), Some("고객"));
+        // A text column's character set, for the status bar's Size (its limit in bytes); none for a number
+        let col = |n: &str| d2.columns.iter().find(|c| c.name == n).unwrap();
+        assert_eq!((col("customer").data_type.as_str(), col("customer").charset.as_deref()), ("varchar(50)", Some("utf8mb4")));
+        assert_eq!(col("amount").charset, None);
+        assert_eq!(crate::statusbar::limit(crate::store::DbKind::Mysql, &col("customer").data_type, col("customer").charset.as_deref()).unwrap().1, "up to 50 chars (200 bytes in utf8mb4)");
         let ddl = crate::meta::object_ddl(&pool, "shop", "orders", "table").await.unwrap();
         assert!(ddl.starts_with("CREATE TABLE `orders`"), "{ddl}");
         let pddl = crate::meta::object_ddl(&pool, "shop", "add_qty", "routine").await.unwrap();

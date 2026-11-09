@@ -111,7 +111,7 @@ pub fn body(t: &crate::app::TextTab, width: usize) -> Text<'_> {
 #[cfg(test)]
 pub fn sample() -> TableStructure {
     use qurry_core::meta::{ColumnMeta, ConstraintMeta, IndexMeta, TableDetail};
-    let col = |name: &str, ty: &str, nullable: bool, default: Option<&str>, comment: Option<&str>, pk: bool| ColumnMeta { name: name.into(), data_type: ty.into(), nullable, default_value: default.map(String::from), comment: comment.map(String::from), is_pk: pk };
+    let col = |name: &str, ty: &str, nullable: bool, default: Option<&str>, comment: Option<&str>, pk: bool| ColumnMeta { name: name.into(), data_type: ty.into(), nullable, default_value: default.map(String::from), comment: comment.map(String::from), is_pk: pk, charset: None };
     let fk = |name: &str, table: &str, cols: &str, ref_table: &str, del: &str| ForeignKeyMeta { name: name.into(), schema: "public".into(), table: table.into(), columns: vec![cols.into()], ref_schema: "public".into(), ref_table: ref_table.into(), ref_columns: vec!["id".into()], on_update: "NO ACTION".into(), on_delete: del.into() };
     TableStructure {
         detail: TableDetail {

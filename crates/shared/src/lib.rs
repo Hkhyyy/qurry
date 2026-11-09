@@ -21,6 +21,7 @@ pub mod redis_cmd;
 pub mod scope;
 pub mod result_edit;
 pub mod sql;
+pub mod statusbar;
 pub mod theme;
 pub mod value;
 

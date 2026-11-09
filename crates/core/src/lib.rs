@@ -57,7 +57,7 @@ pub mod workspaces;
 /// Console autocompletion rules (one copy, also the GUI's through WASM)
 pub use qurry_shared::complete;
 /// Grid and search helpers shared with the GUI through WASM (time fractions, tab labels, extractors, fuzzy scores, key folders, auto-map)
-pub use qurry_shared::{automap, extract, format, fuzzy, keytree, labels, theme};
+pub use qurry_shared::{automap, extract, format, fuzzy, keytree, labels, statusbar, theme};
 
 /// Same config folder as the Tauri app (shares the Data Source list·encrypted passwords)
 /// macOS: ~/Library/Application Support/com.hyunkyo.dbtool

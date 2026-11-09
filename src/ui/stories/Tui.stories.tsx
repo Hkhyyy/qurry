@@ -37,6 +37,11 @@ export const ScreenConsoleUnclosed = { ...by("Console: unclosed bracket"), name:
 export const ScreenConsoleRunSubquery = { ...by("Console: run a subquery"), name: "Screen · Console: run a subquery (F5)" };
 export const ScreenConsoleRunError = { ...by("Console: run error"), name: "Screen · Console: run error" };
 export const ScreenGridMarked = { ...by("Grid: marked rows"), name: "Screen · Grid: marked rows (m)" };
+// Status line items (#132): the GUI status bar's items after the key hints, Position in the corner
+export const ScreenStatusSelection = { ...by("Status line: selection items"), name: "Screen · Status line: selection items (marked rows)" };
+export const ScreenStatusSize = { ...by("Status line: Size"), name: "Screen · Status line: Size" };
+export const ScreenStatusItems = { ...by("Status bar items checklist"), name: "Screen · Status bar items checklist (⌃k)" };
+export const ScreenStatusNarrow = { ...by("Status line: narrow"), name: "Small · Status line: narrow (80 columns)" };
 export const ScreenChart = { ...by("Chart"), name: "Screen · Chart" };
 export const ScreenGridLoadingMore = { ...by("Grid: loading more"), name: "Screen · Grid: loading more" };
 export const ScreenGridLoadingMoreNoColor = { ...by("Grid: loading more, NO_COLOR"), name: "Screen · Grid: loading more, NO_COLOR" };

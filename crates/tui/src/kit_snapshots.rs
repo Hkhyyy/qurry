@@ -844,6 +844,32 @@ async fn all_scenes() -> Vec<Value> {
     h.key("m");
     h.key("Up");
     scenes.push(app_scene(&mut h, "Grid: marked rows", "m adds the current row to the selection or takes it out (the GUI's ⌘-click on a row number): marked rows look selected, their numbers reversed; y copies and d deletes them all, Esc clears them", 120, 22));
+    // Status line items (#132): the marked rows are the selection, over the cursor's column; then one cell's Size; the checklist
+    {
+        use qurry_core::statusbar::{ColumnType, Item};
+        for i in [Item::NotNull, Item::Sum, Item::Avg, Item::Min, Item::Max] {
+            h.app.status_items = h.app.state.store.set_status_bar_item(i, true).unwrap();
+        }
+        h.key("Right");
+        h.key("Right");
+        scenes.push(app_scene(&mut h, "Status line: selection items", "Not null, Sum, Avg, Min and Max turned on (⌃k › Status Bar Items…), cursor on amount: over the marked rows' amount; Position says which rows and the column", 120, 22));
+        h.key("Esc");
+        h.key("Right");
+        let target = h.app.tabs[h.app.active].target.clone();
+        h.app.table_cols.insert((target.clone(), "public".into(), "payment".into()), Some(vec![("card_brand".into(), ColumnType { data_type: "character varying(16)".into(), charset: None })]));
+        h.app.status_items = h.app.state.store.set_status_bar_item(Item::Size, true).unwrap();
+        h.app.status = "4 rows".into();
+        scenes.push(app_scene(&mut h, "Status line: Size", "Size turned on, nothing marked: Position is the cursor's cell, Size its bytes and the column's declared limit (from the table's metadata)", 120, 22));
+        scenes.push(app_scene(&mut h, "Status line: narrow", "80 columns, every item on: the screen's key hints go first, then the global ones but ⌃k actions, then the items (the limit, Max, Min …); Position stays", 80, 22));
+        h.app.palette_status_items(0);
+        scenes.push(app_scene(&mut h, "Status bar items checklist", "⌃k › Status Bar Items…: the GUI's status bar checklist (shared through settings.json); Enter or Space toggles and it stays open, the line below follows", 120, 22));
+        h.app.popup = None;
+        h.app.table_cols.clear();
+        h.app.status_items = h.app.state.store.reset_status_bar_items().unwrap();
+        h.key("Left");
+        h.key("Left");
+        h.key("Left");
+    }
     h.key("Esc");
     let g = h.app.grid_mut().unwrap();
     (g.row, g.col) = at;

@@ -31,7 +31,8 @@ async fn keys_resize_the_current_column_and_save_it_for_the_table() {
     h.key("Right");
     // Computed: the longest value, up to 40 cells (+1)
     assert_eq!(widths(&h)[2], 41);
-    let s = h.screen(140, 12);
+    // Wide enough for the key bar beside the status line's items (Position: the key hints go first when narrow)
+    let s = h.screen(170, 12);
     assert!(s.contains("< > = width"), "the key bar shows the keys:\n{s}");
     assert!(!s.contains(MEMO), "cut while computed:\n{s}");
 

@@ -77,6 +77,7 @@ impl App {
         tt.error = None;
         let order = tt.order.trim().to_string();
         let (session, schema, table) = (tt.session.clone(), tt.schema.clone(), tt.table.clone());
+        let (t_target, t_schema, t_table) = (target.clone(), schema.clone(), table.clone());
         let st = self.state.clone();
         self.spawn(
             async move {
@@ -84,11 +85,16 @@ impl App {
                 let (cols, r) = tokio::join!(st.table_detail(target.clone(), schema, table), st.run_query(target, sqls, Some(500), Some(session)));
                 let cols = cols.map(|d| d.columns).unwrap_or_default();
                 let pk = cols.iter().filter(|c| c.is_pk).map(|c| c.name.clone()).collect::<Vec<_>>();
-                let cols: Vec<(String, String)> = cols.into_iter().map(|c| (c.name, c.data_type)).collect();
+                let types = super::status_items::column_types(cols);
                 let r = r.map_err(err);
-                (pk, cols, r)
+                (pk, types, r)
             },
-            move |a, (pk, cols, r)| {
+            move |a, (pk, types, r)| {
+                // The status line's Size reads the column types from here (none when the metadata couldn't be read: asked again then)
+                if !types.is_empty() {
+                    a.table_cols.insert((t_target, t_schema, t_table), Some(types.clone()));
+                }
+                let cols: Vec<(String, String)> = types.into_iter().map(|(n, t)| (n, t.data_type)).collect();
                 // A table opened from the search cache was just connected: sync the explorer display
                 let conn = a.tab_mut(id).map(|t| t.conn.clone()).unwrap_or_default();
                 let tls_err = r.as_ref().err().cloned();

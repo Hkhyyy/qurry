@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { sharedOr, type Align, type Alignments, type KeywordCase, type ValueClass } from "./shared";
+import { sharedOr, type Align, type Alignments, type KeywordCase, type StatusItemId, type ValueClass } from "./shared";
 import type { DataFormat } from "./transfer";
 import type { CustomTheme, ThemeSettings, ThemeSync } from "./theme";
 
@@ -220,6 +220,10 @@ export const api = {
   /** Grid alignment per value class: only the classes the user changed. Kept in the config folder, shared with the TUI */
   gridAlign: () => invoke<Alignments>("grid_align"),
   setGridAlign: (cls: ValueClass, align: Align) => invoke<Alignments>("set_grid_align", { class: cls, align }),
+  /** Status bar items on (settings.json, shared with the TUI); each change returns what is saved */
+  statusBarItems: () => invoke<StatusItemId[]>("status_bar_items"),
+  setStatusBarItem: (item: StatusItemId, on: boolean) => invoke<StatusItemId[]>("set_status_bar_item", { item, on }),
+  resetStatusBarItems: () => invoke<StatusItemId[]>("reset_status_bar_items"),
   /** Keyword case as you type and in Reformat Code (settings.json, shared with the TUI) */
   keywordCase: () => invoke<KeywordCase>("keyword_case"),
   setKeywordCase: (keywordCase: KeywordCase) => invoke<void>("set_keyword_case", { case: keywordCase }),
@@ -311,7 +315,7 @@ export interface SchemaInfo { name: string; isSystem: boolean }
 export interface RelationInfo { name: string; kind: "table" | "partitioned" | "view" | "matview" | "foreign" | "sequence" | "key"; comment: string | null; rowEstimate: number | null }
 export interface RoutineInfo { name: string; args: string; returns: string | null; kind: string }
 export interface SchemaObjects { relations: RelationInfo[]; routines: RoutineInfo[] }
-export interface ColumnMeta { name: string; dataType: string; nullable: boolean; defaultValue: string | null; comment: string | null; isPk: boolean }
+export interface ColumnMeta { name: string; dataType: string; nullable: boolean; defaultValue: string | null; comment: string | null; isPk: boolean; /** MySQL: a text column's character set */ charset?: string }
 export interface IndexMeta { name: string; definition: string; isUnique: boolean; isPrimary: boolean; columns: string[] }
 export interface ConstraintMeta { name: string; kind: "p" | "f" | "u" | "c"; definition: string }
 export interface TableDetail { columns: ColumnMeta[]; indexes: IndexMeta[]; constraints: ConstraintMeta[] }

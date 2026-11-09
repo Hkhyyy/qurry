@@ -181,6 +181,7 @@ impl Backend for PgPool {
                     default_value,
                     comment,
                     is_pk,
+                    charset: None,
                 })
                 .collect(),
             indexes: idx

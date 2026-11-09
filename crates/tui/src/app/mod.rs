@@ -24,6 +24,7 @@ mod redis;
 mod reformat;
 mod run;
 mod splits;
+mod status_items;
 mod tables;
 mod tabs;
 
@@ -486,6 +487,8 @@ pub enum PAction {
     AlignClass(qurry_core::format::ValueClass),
     /// Grid alignment: where a value class sits, picked
     Align(qurry_core::format::ValueClass, qurry_core::format::Align),
+    /// Status bar items: one toggled (None: Restore defaults)
+    StatusItem(Option<qurry_core::statusbar::Item>),
     /// Theme picked
     Theme(String),
     /// Import Data Sources: a location found (its path)
@@ -712,6 +715,7 @@ pub enum Action {
     PasswordKey,
     KeywordCase,
     GridAlign,
+    StatusBarItems,
     Theme,
     CheckUpdate,
     UpdateChannel,
@@ -865,6 +869,10 @@ pub struct App {
     pub align: qurry_core::format::Alignments,
     /// Keyword case as you type and in Reformat Code, shared with the GUI's Settings › Appearance › Keyword case (settings.json, read at startup and by ⌃k › Keyword Case…)
     pub keyword_case: qurry_core::format::KeywordCase,
+    /// The status line's items for a grid, shared with the GUI's status bar (settings.json, read at startup and by ⌃k › Status Bar Items…)
+    pub status_items: Vec<qurry_core::statusbar::Item>,
+    /// Tables' column types for the Size item, by (target, schema, table)
+    pub table_cols: HashMap<(String, String, String), status_items::TableCols>,
     /// The last frame was the 'terminal too small' message: keys and clicks would act on a screen that isn't drawn
     pub too_small: bool,
     /// Tests only (testkit): answers console statements and the Production row counts instead of the database
@@ -904,6 +912,8 @@ impl App {
         let themes = state.store.theme_settings();
         let mut a = App {
             keyword_case: state.store.keyword_case(),
+            status_items: state.store.status_bar_items(),
+            table_cols: HashMap::new(),
             align,
             hits: Hits::default(),
             state,
