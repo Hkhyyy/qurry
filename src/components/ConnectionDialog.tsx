@@ -285,7 +285,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
                 </>
               )}
               <label>User</label>
-              <TextInput value={cfg.user} placeholder={cfg.kind === "redis" ? "(optional, ACL user)" : cfg.kind === "milvus" ? "(optional — empty: the password is an API key)" : ""} onChange={(e) => set("user", e.target.value)} />
+              <TextInput aria-label="User" value={cfg.user} placeholder={cfg.kind === "redis" ? "(optional, ACL user)" : cfg.kind === "milvus" ? "(optional — empty: the password is an API key)" : ""} onChange={(e) => set("user", e.target.value)} />
               <label>
                 <Named info={["Saved passwords are encrypted in secrets.json; its key is in the config folder or in the system keychain (Settings › Passwords)."]}>
                   {cfg.kind === "qdrant" || cfg.kind === "chroma" ? "API key" : "Password"}
@@ -609,6 +609,26 @@ export function ColorSwatches({ value, onChange, custom }: { value: string | nul
 type Scope = NonNullable<ConnectionConfig["scope"]>;
 
 /** The form's settings, for listing a data source that isn't saved yet */
+/**
+ * What a new source's form still lacks before its databases can be listed (tab · field), in order. A half-filled form isn't
+ * connected: the server would only answer with an error for the empty field
+ */
+export function missingForListing(c: ConnectionConfig): [string, string][] {
+  const out: [string, string][] = [];
+  if (isFileKind(c.kind)) {
+    if (!c.database.trim()) out.push(["General", "File"]);
+    return out;
+  }
+  if (!c.host.trim()) out.push(["General", "Host"]);
+  if (["postgres", "mysql", "mssql", "oracle"].includes(c.kind) && !c.user.trim()) out.push(["General", "User"]);
+  if (c.ssh?.enabled) {
+    if (!c.ssh.host.trim()) out.push(["SSH/SSL", "SSH host"]);
+    if (!c.ssh.user.trim()) out.push(["SSH/SSL", "SSH user"]);
+  }
+  if (c.ssm?.enabled && !c.ssm.target.trim()) out.push(["SSH/SSL", "Instance"]);
+  return out;
+}
+
 interface FormSettings {
   config: ConnectionConfig;
   password?: string;
@@ -634,11 +654,14 @@ function SchemasTab({ connId, form, cancelRef, onAllowPlaintext, kind, defaultDb
   const expanding = useRef(new Set<string>());
   useEffect(() => () => expanding.current.forEach((id) => void api.cancelTest(id)), []);
 
+  const missing = connId ? [] : missingForListing(form.config);
+  const ready = missing.length === 0;
   useEffect(() => {
     if (connId) {
       meta.databases(connId).then(setDbs, (e) => setErr(String(e)));
       return;
     }
+    if (!ready) return;
     // Cancel, Esc, leaving the tab and closing the dialog stop the connect, and with it its SSH / AWS SSM tunnel
     const id = crypto.randomUUID();
     let running = true;
@@ -654,7 +677,7 @@ function SchemasTab({ connId, form, cancelRef, onAllowPlaintext, kind, defaultDb
       (e) => running && (done(), setErr(String(e))),
     );
     return () => void (running && stop());
-  }, [connId, attempt, cancelRef]);
+  }, [connId, attempt, cancelRef, ready]);
 
   // Try Again, Cancel and the list replace the button that had focus: keep focus in the dialog, so Esc still stops or closes
   useEffect(() => {
@@ -668,6 +691,12 @@ function SchemasTab({ connId, form, cancelRef, onAllowPlaintext, kind, defaultDb
   );
 
   function body() {
+    if (!ready) {
+      // Not an error: a new source isn't filled in yet. Say what's left, by tab
+      const tabs = [...new Set(missing.map(([t]) => t))];
+      const list = tabs.map((t) => `${missing.filter(([x]) => x === t).map(([, f]) => f).join(" and ")} on the ${t} tab`).join(", ");
+      return <EmptyState>Fill in {list} to list the databases here.</EmptyState>;
+    }
     if (err && !connId) {
       // Fixed where Test Connection fixes them: say so (the TLS opt-in is offered right here, as under a failed test)
       const fixedByTest = err.includes("Unknown SSH host key") ? "trust the SSH host key" : err.includes(DRIVER_MISSING) ? "install the driver" : null;
