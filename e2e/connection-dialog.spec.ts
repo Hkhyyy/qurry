@@ -184,11 +184,37 @@ async function newSource(page: import("@playwright/test").Page) {
   return d;
 }
 
+// A half-filled new source isn't connected (the server would only answer with an error): the tab says what's left, then lists
+test("Schemas tab of a new data source that isn't filled in says what's missing and doesn't connect", async ({ page }) => {
+  await page.evaluate(() => {
+    const w = window as any;
+    const orig = w.__TAURI_INTERNALS__.invoke;
+    w.__lists = 0;
+    w.__TAURI_INTERNALS__.invoke = (cmd: string, args: unknown) => (cmd === "form_databases" && w.__lists++, orig(cmd, args));
+  });
+  const d = await newSource(page);
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  // The form starts on localhost: the user is what's left
+  await expect(d.getByText("Fill in User on the General tab to list the databases here.")).toBeVisible();
+  await expect(d.locator(".ui-notice.tone-danger")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__lists)).toBe(0);
+  // Filled in: listed when the tab is shown again
+  await d.getByRole("tab", { name: "General" }).click();
+  await d.getByPlaceholder("user@localhost").fill("orders");
+  await d.locator(".ui-row").filter({ hasText: "Port" }).getByRole("textbox").first().fill("orders-db.example.com");
+  await d.getByRole("textbox", { name: "User", exact: true }).fill("app");
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  await expect(d.locator(".scope-list").getByRole("checkbox", { name: "All databases", exact: true })).toBeChecked();
+  // (twice in development: React's StrictMode mounts the tab twice, the first one is cancelled)
+  expect(await page.evaluate(() => (window as any).__lists)).toBeGreaterThan(0);
+});
+
 // DataGrip lists a new data source's databases and schemas with the form's settings, before it is saved (as Test Connection connects)
 test("Schemas tab of a new data source lists with the form's settings; the scope is saved with OK", async ({ page }) => {
   const d = await newSource(page);
   await d.getByPlaceholder("user@localhost").fill("orders");
   await d.locator(".ui-row").filter({ hasText: "Port" }).getByRole("textbox").first().fill("orders-db.example.com");
+  await d.getByRole("textbox", { name: "User", exact: true }).fill("app");
   await d.getByRole("tab", { name: /^Schemas/ }).click();
   const box = (name: string) => d.locator(".scope-list").getByRole("checkbox", { name, exact: true });
   await expect(box("All databases")).toBeChecked();
@@ -214,6 +240,7 @@ test("Schemas tab of a new data source lists with the form's settings; the scope
 
 test("Schemas tab of a new data source: a failed connect says why and tries again with the dialog's settings then", async ({ page }) => {
   const d = await newSource(page);
+  await d.getByRole("textbox", { name: "User", exact: true }).fill("app");
   // The mock's server without TLS: refused until Allow unencrypted is ticked
   await d.locator(".ui-row").filter({ hasText: "Port" }).getByRole("textbox").first().fill("10.0.0.12");
   const size = await d.boundingBox();
@@ -253,6 +280,7 @@ test("Schemas tab of a new data source: a failed connect says why and tries agai
 
 test("Schemas tab of a new data source: a slow connect shows the time and Cancel Listing (or Esc) stops it", async ({ page }) => {
   const d = await newSource(page);
+  await d.getByRole("textbox", { name: "User", exact: true }).fill("app");
   const size = await d.boundingBox();
   // An AWS SSM instance that never connects: elapsed time, Esc and Cancel Listing stop it and keep the dialog
   await d.getByRole("tab", { name: /SSH\/SSL/ }).click();
