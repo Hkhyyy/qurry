@@ -65,27 +65,47 @@ pub async fn test_ssh(state: State<'_, AppState>, config: ConnectionConfig, ssh_
     cancellable_test(test_id, state.test_ssh(config, ssh_secret)).await
 }
 
-/// Running Test Connections by the dialog's test id, for cancel_test
-static TESTS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Notify>>>> = std::sync::LazyLock::new(Default::default);
+/// Running Test Connections by the dialog's test id, for cancel_test, and the ids cancelled before their test started
+#[derive(Default)]
+struct Tests {
+    running: std::collections::HashMap<String, std::sync::Arc<tokio::sync::Notify>>,
+    cancelled: std::collections::HashMap<String, std::time::Instant>,
+}
+static TESTS: std::sync::LazyLock<std::sync::Mutex<Tests>> = std::sync::LazyLock::new(Default::default);
+/// How long a cancel waits for its test to start (IPC calls can arrive out of order); then it is forgotten
+const CANCEL_KEPT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Runs a test that cancel_test can stop: the test is dropped, and with it its SSH / AWS SSM tunnel (an SSM session can take 30s)
 async fn cancellable_test<T>(id: Option<String>, test: impl std::future::Future<Output = AppResult<T>>) -> AppResult<T> {
     let Some(id) = id else { return test.await };
     let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
-    TESTS.lock().unwrap().insert(id.clone(), cancel.clone());
+    {
+        let mut all = TESTS.lock().unwrap();
+        // Cancelled before it got here: it never starts
+        if all.cancelled.remove(&id).is_some() {
+            return Err(crate::error::AppError::Msg("Test cancelled".into()));
+        }
+        all.running.insert(id.clone(), cancel.clone());
+    }
     let r = tokio::select! {
         r = test => r,
         _ = cancel.notified() => Err(crate::error::AppError::Msg("Test cancelled".into())),
     };
-    TESTS.lock().unwrap().remove(&id);
+    TESTS.lock().unwrap().running.remove(&id);
     r
 }
 
 #[tauri::command]
 pub fn cancel_test(test_id: String) {
-    if let Some(c) = TESTS.lock().unwrap().remove(&test_id) {
+    let mut all = TESTS.lock().unwrap();
+    match all.running.remove(&test_id) {
         // notify_one keeps the wake-up if the test isn't waiting yet
-        c.notify_one();
+        Some(c) => c.notify_one(),
+        // Not started yet, or already done: kept for a while for a test that starts after it (old ones are dropped here)
+        None => {
+            all.cancelled.retain(|_, at| at.elapsed() < CANCEL_KEPT);
+            all.cancelled.insert(test_id, std::time::Instant::now());
+        }
     }
 }
 
@@ -960,8 +980,20 @@ mod ipc_tests {
         let e = run.await.unwrap().unwrap_err().to_string();
         assert_eq!(e, "Test cancelled");
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
-        assert!(TESTS.lock().unwrap().is_empty());
-        cancel_test("unknown".into());
+        assert!(!TESTS.lock().unwrap().running.contains_key("t1"));
+    }
+
+    /// A cancel that arrives before its test registered (IPC calls can overtake each other) still stops it, at once; an old one is forgotten
+    #[tokio::test]
+    async fn a_cancel_before_the_test_starts_stops_it() {
+        cancel_test("early".into());
+        let e = cancellable_test(Some("early".into()), std::future::pending::<AppResult<String>>()).await.unwrap_err().to_string();
+        assert_eq!(e, "Test cancelled");
+        assert!(!TESTS.lock().unwrap().cancelled.contains_key("early"), "used once");
+        TESTS.lock().unwrap().cancelled.insert("old".into(), std::time::Instant::now() - CANCEL_KEPT);
+        cancel_test("late".into());
+        let all = TESTS.lock().unwrap();
+        assert!(!all.cancelled.contains_key("old") && all.cancelled.contains_key("late"));
     }
 
     /// Call commands with the same JSON the frontend sends.

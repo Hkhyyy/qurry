@@ -1337,9 +1337,17 @@ impl AppState {
         })
     }
 
+    /// Connect to list the databases or schemas of a form's data source (form_databases): read-only, so a SQLite / DuckDB file that
+    /// isn't there fails ("unable to open database file") instead of being created. An empty path is an in-memory database, which
+    /// can't open read-only
+    async fn connect_form_to_list(&self, mut config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<(Pool, Option<crate::tunnel::Tunnel>)> {
+        config.read_only = !(config.kind.is_file() && config.database.trim().is_empty());
+        self.connect_form(&config, password, ssh_secret).await
+    }
+
     /// The Schemas tab of a data source that isn't saved yet: its databases, read with the form's settings (as Test Connection connects)
     pub async fn form_databases(&self, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<Vec<String>> {
-        let (pool, tunnel) = self.connect_form(&config, password, ssh_secret).await?;
+        let (pool, tunnel) = self.connect_form_to_list(config, password, ssh_secret).await?;
         let r = crate::meta::list_databases(&pool).await;
         pool.close().await;
         drop(tunnel);
@@ -1352,7 +1360,7 @@ impl AppState {
         if !config.kind.is_file() {
             config.database = database;
         }
-        let (pool, tunnel) = self.connect_form(&config, password, ssh_secret).await?;
+        let (pool, tunnel) = self.connect_form_to_list(config, password, ssh_secret).await?;
         let r = crate::meta::list_schemas(&pool).await;
         pool.close().await;
         drop(tunnel);
@@ -3280,6 +3288,26 @@ pub(crate) mod tests {
         let sch = st.form_schemas(cfg.clone(), password, None, cfg.database.clone()).await.unwrap();
         assert!(!sch.is_empty());
         assert!(st.pools.read().await.is_empty() && st.store.list().unwrap().is_empty(), "nothing kept or saved");
+    }
+
+    /// Listing a new SQLite data source never creates its file: a path that isn't there fails, an existing file lists.
+    /// cargo build -p qurry-driver-sqlite && cargo test -p qurry-core form_listing_never_creates -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn form_listing_never_creates_a_file_db() {
+        assert!(crate::plugin::driver_path("sqlite").is_some(), "build the driver first: cargo build -p qurry-driver-sqlite");
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let path = dir.path().join("missing.db");
+        let c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "f", "kind": "sqlite", "host": "", "port": 0, "user": "", "database": &path })).unwrap();
+        let e = st.form_databases(c.clone(), None, None).await.unwrap_err().to_string();
+        assert!(e.contains("unable to open database file"), "{e}");
+        let e = st.form_schemas(c.clone(), None, None, "main".into()).await.err().unwrap().to_string();
+        assert!(e.contains("unable to open database file"), "{e}");
+        assert!(!path.exists(), "the file was created");
+        // An empty file is an empty SQLite database
+        std::fs::write(&path, b"").unwrap();
+        assert!(!st.form_databases(c, None, None).await.unwrap().is_empty());
     }
 
     #[tokio::test]

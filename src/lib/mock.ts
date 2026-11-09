@@ -132,6 +132,8 @@ const saveWidths = (all: Record<string, Record<string, number>>) => localStorage
 let updateChecked = false;
 /** A delayed load-more in flight (__mockFetchMoreDelay): cancel_query makes it fail as the server does */
 let cancelMore: (() => void) | null = null;
+/** The last id save_connection gave a new data source (never reused, also after a delete) */
+let newIds = 0;
 /** Test Connections waiting for cancel_test, by test id */
 const testsRunning: Record<string, () => void> = {};
 // Import Data Sources (core import.rs): the locations found and a preview in the core's words
@@ -410,7 +412,10 @@ const handlers: Record<string, (a: any) => unknown> = {
     await handlers.test_connection(a);
     return a.config.kind === "mysql" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"];
   },
-  form_schemas: (a: any) => (a.config.kind === "mysql" ? [{ name: a.database, isSystem: false }] : [{ name: "public", isSystem: false }, { name: "billing", isSystem: false }, { name: "pg_catalog", isSystem: true }]),
+  form_schemas: (a: any) => {
+    if (a.database === (globalThis as any).__mockDbRefuse) throw `permission denied for database "${a.database}"`;
+    return a.config.kind === "mysql" ? [{ name: a.database, isSystem: false }] : [{ name: "public", isSystem: false }, { name: "billing", isSystem: false }, { name: "pg_catalog", isSystem: true }];
+  },
   cancel_test: (a: any) => {
     testsRunning[a.testId]?.();
     delete testsRunning[a.testId];
@@ -434,7 +439,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     if (i >= 0) (conns as any)[i] = { ...conns[i], ...a.config };
     // A new data source gets its id here, as in the core
     if (!a.config.id) {
-      const saved = { ...a.config, id: `new${conns.length}`, hasPassword: !!a.password, connected: false };
+      const saved = { ...a.config, id: `new${++newIds}`, hasPassword: !!a.password, connected: false };
       (conns as any[]).push(saved);
       return saved;
     }

@@ -170,7 +170,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     tab === "options"
       ? "Changes apply on the next connection (the data source is reconnected on OK)."
       : tab === "schemas"
-      ? `${edit ? "" : "Listed with the settings above; nothing is saved until OK. "}Only checked databases and schemas are shown in the Database Explorer. Nothing checked = show all.`
+      ? `${edit ? "" : "Listed with this dialog's settings; nothing is saved until OK. "}Only checked databases and schemas are shown in the Database Explorer. Nothing checked = show all.`
       : tab === "ssh" && tunnel === "ssm"
       ? "The database host/port on the General tab are reached from the instance (e.g. an RDS endpoint). Test Connection starts a session and connects through it."
       : tab === "ssh"
@@ -422,6 +422,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           connId={edit?.id}
           form={{ config: cfg, password, sshSecret }}
           cancelRef={cancelListing}
+          onAllowPlaintext={() => setOpt("allowPlaintext", true)}
           kind={cfg.kind}
           defaultDb={defaultDbOf(cfg)}
           scope={cfg.scope ?? {}}
@@ -584,15 +585,20 @@ interface FormSettings {
  * Schemas tab of DataGrip Data Source properties: choose which DBs and schemas show in the tree. A saved source lists through its
  * saved settings; a new one connects with the form's settings, as Test Connection does, and keeps nothing (DataGrip does the same)
  */
-function SchemasTab({ connId, form, cancelRef, kind, defaultDb, scope, onChange }: { connId?: string; form: FormSettings; cancelRef: { current: (() => void) | null }; kind: DbKind; defaultDb: string; scope: Scope; onChange: (s: Scope) => void }) {
+function SchemasTab({ connId, form, cancelRef, onAllowPlaintext, kind, defaultDb, scope, onChange }: { connId?: string; form: FormSettings; cancelRef: { current: (() => void) | null }; onAllowPlaintext: () => void; kind: DbKind; defaultDb: string; scope: Scope; onChange: (s: Scope) => void }) {
   const [dbs, setDbs] = useState<string[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [schemas, setSchemas] = useState<Record<string, SchemaInfo[] | "loading">>({});
+  const [schemas, setSchemas] = useState<Record<string, SchemaInfo[] | "loading" | { error: string }>>({});
   const [openDb, setOpenDb] = useState<string | null>(null);
-  // The settings as they are when the tab opens (they are edited on the other tabs, which unmount this one); ticking a box changes only the scope
-  const formAt = useRef(form);
+  // The dialog's settings now: Try Again and expanding a database use them as they are then (Allow unencrypted, a fix made after an error)
+  const formNow = useRef(form);
+  formNow.current = form;
   const [attempt, setAttempt] = useState(0);
+  const retry = () => (setErr(null), setAttempt((n) => n + 1));
   const wrap = useRef<HTMLDivElement>(null);
+  // Schemas being listed for an expanded database (a new source: each connects on its own), stopped when the tab or the dialog closes
+  const expanding = useRef(new Set<string>());
+  useEffect(() => () => expanding.current.forEach((id) => void api.cancelTest(id)), []);
 
   useEffect(() => {
     if (connId) {
@@ -608,7 +614,7 @@ function SchemasTab({ connId, form, cancelRef, kind, defaultDb, scope, onChange 
     };
     const stop = () => (done(), void api.cancelTest(id));
     cancelRef.current = () => (stop(), setErr("Cancelled."));
-    const f = formAt.current;
+    const f = formNow.current;
     api.formDatabases(f.config, f.password, f.sshSecret, id).then(
       (v) => running && (done(), setDbs(v)),
       (e) => running && (done(), setErr(String(e))),
@@ -628,20 +634,26 @@ function SchemasTab({ connId, form, cancelRef, kind, defaultDb, scope, onChange 
   );
 
   function body() {
-    if (err && !connId)
+    if (err && !connId) {
+      // Fixed where Test Connection fixes them: say so (the TLS opt-in is offered right here, as under a failed test)
+      const fixedByTest = err.includes("Unknown SSH host key") ? "trust the SSH host key" : err.includes(DRIVER_MISSING) ? "install the driver" : null;
+      const cfg = formNow.current.config;
       return (
         <>
           <Notice tone="danger">{"✕ " + err}</Notice>
+          {fixedByTest && <Text as="div" tone="muted">Test Connection offers to {fixedByTest}; then Try Again.</Text>}
+          {needsTlsOptIn(err) && <TlsOptIn host={cfg.host} production={!!cfg.options?.confirmChanges} inDialog onAllow={async () => (onAllowPlaintext(), retry())} />}
           <div className="ui-row conn-test-actions">
-            <Button onClick={() => (setErr(null), setAttempt((n) => n + 1))}>Try Again</Button>
+            <Button onClick={retry}>Try Again</Button>
           </div>
         </>
       );
+    }
     if (err) return <Notice tone="danger">{err}</Notice>;
     if (!dbs && !connId)
       return (
-        <EmptyState action={<Button onClick={() => cancelRef.current?.()}>Cancel</Button>}>
-          <TestElapsed label="Connecting with the settings above…" />
+        <EmptyState action={<Button onClick={() => cancelRef.current?.()}>Cancel Listing</Button>}>
+          <TestElapsed label="Connecting with this dialog's settings…" />
         </EmptyState>
       );
     if (!dbs) return <EmptyState>Loading databases…</EmptyState>;
@@ -657,13 +669,19 @@ function SchemasTab({ connId, form, cancelRef, kind, defaultDb, scope, onChange 
     };
     const loadSchemas = (db: string) => {
       setOpenDb(openDb === db ? null : db);
-      if (schemas[db]) return;
+      // Listed or listing: kept. Failed: expanding again tries again
+      const cur = schemas[db];
+      if (cur === "loading" || Array.isArray(cur)) return;
       setSchemas((s) => ({ ...s, [db]: "loading" }));
-      const f = formAt.current;
-      (connId ? meta.schemas(targetId(connId, db)) : api.formSchemas(f.config, db, f.password, f.sshSecret)).then(
-        (list) => setSchemas((s) => ({ ...s, [db]: list.filter((x) => !x.isSystem) })),
-        () => setSchemas((s) => ({ ...s, [db]: [] })),
-      );
+      const id = crypto.randomUUID();
+      const f = formNow.current;
+      if (!connId) expanding.current.add(id);
+      (connId ? meta.schemas(targetId(connId, db)) : api.formSchemas(f.config, db, f.password, f.sshSecret, id))
+        .then(
+          (list) => setSchemas((s) => ({ ...s, [db]: list.filter((x) => !x.isSystem) })),
+          (e) => setSchemas((s) => ({ ...s, [db]: { error: String(e) } })),
+        )
+        .finally(() => expanding.current.delete(id));
     };
     const schList = (db: string) => (scope.schemas?.[db]?.length ? scope.schemas[db] : [SCOPE_ALL]);
     const toggleSchema = (db: string, name: string) => {
@@ -695,6 +713,7 @@ function SchemasTab({ connId, form, cancelRef, kind, defaultDb, scope, onChange 
               {openDb === db && (
                 <div className="scope-children">
                   {sch === "loading" && <Text as="div" tone="muted">Loading…</Text>}
+                  {sch && typeof sch === "object" && "error" in sch && <Text as="div" tone="danger">{sch.error}</Text>}
                   {Array.isArray(sch) &&
                     sch.map((x) => (
                       <label key={x.name} className="scope-row">

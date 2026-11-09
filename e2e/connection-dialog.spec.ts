@@ -193,7 +193,7 @@ test("Schemas tab of a new data source lists with the form's settings; the scope
   const box = (name: string) => d.locator(".scope-list").getByRole("checkbox", { name, exact: true });
   await expect(box("All databases")).toBeChecked();
   await expect(d.getByText("Save the data source first")).toHaveCount(0);
-  await expect(d.getByText("Listed with the settings above; nothing is saved until OK.")).toBeVisible();
+  await expect(d.getByText("Listed with this dialog's settings; nothing is saved until OK.")).toBeVisible();
   await box("shop_app_test").click();
   const row = d.locator(".scope-row", { has: page.getByRole("checkbox", { name: "shop_app", exact: true }) });
   await row.locator(".twisty").click();
@@ -212,34 +212,60 @@ test("Schemas tab of a new data source lists with the form's settings; the scope
   await expect(d.getByText("nothing is saved until OK")).toHaveCount(0);
 });
 
-test("Schemas tab of a new data source: a failed connect says why and tries again; a slow one shows the time and can be cancelled", async ({ page }) => {
+test("Schemas tab of a new data source: a failed connect says why and tries again with the dialog's settings then", async ({ page }) => {
   const d = await newSource(page);
   // The mock's server without TLS: refused until Allow unencrypted is ticked
   await d.locator(".ui-row").filter({ hasText: "Port" }).getByRole("textbox").first().fill("10.0.0.12");
   const size = await d.boundingBox();
   await d.getByRole("tab", { name: /^Schemas/ }).click();
+  const list = d.locator(".scope-list");
   await expect(d.locator(".ui-notice.tone-danger")).toContainText("✕ ");
-  await expect(d.locator(".scope-list")).toHaveCount(0);
+  await expect(list).toHaveCount(0);
   expect(await d.boundingBox(), "the dialog keeps its size").toEqual(size);
   await d.getByRole("button", { name: "Try Again" }).click();
   await expect(d.getByRole("button", { name: "Try Again" })).toBeVisible();
+
+  // Fixed through Test Connection's Allow unencrypted: Try Again uses the dialog's settings as they are now
+  await d.getByRole("button", { name: "Test Connection" }).click();
+  await d.getByRole("button", { name: "Allow unencrypted for this data source" }).last().click();
+  await expect(d.getByText(/^✓ /)).toBeVisible();
+  await d.getByRole("button", { name: "Try Again" }).click();
+  await expect(list.getByRole("checkbox", { name: "shop_app", exact: true })).toBeVisible();
+
+  // Or right under the Schemas error: it ticks the setting in the form and lists again
   await d.getByRole("tab", { name: "Options" }).click();
   await d.getByText("Allow unencrypted connection").click();
   await d.getByRole("tab", { name: /^Schemas/ }).click();
-  await expect(d.locator(".scope-list").getByRole("checkbox", { name: "shop_app", exact: true })).toBeVisible();
+  await expect(list).toHaveCount(0);
+  await d.locator(".ui-modal-body").getByRole("button", { name: "Allow unencrypted for this data source" }).first().click();
+  await expect(list.getByRole("checkbox", { name: "shop_app", exact: true })).toBeVisible();
 
-  // An AWS SSM instance that never connects: elapsed time, Esc and Cancel stop it and keep the dialog
+  // A database whose schemas can't be listed says why in its place; expanding it again tries again
+  await page.evaluate(() => ((window as any).__mockDbRefuse = "shop_app_test"));
+  const row = d.locator(".scope-row", { has: page.getByRole("checkbox", { name: "shop_app_test", exact: true }) });
+  await row.locator(".twisty").click();
+  await expect(d.locator(".scope-children")).toHaveText('permission denied for database "shop_app_test"');
+  await row.locator(".twisty").click();
+  await page.evaluate(() => delete (window as any).__mockDbRefuse);
+  await row.locator(".twisty").click();
+  await expect(list.getByRole("checkbox", { name: "billing", exact: true })).toBeVisible();
+});
+
+test("Schemas tab of a new data source: a slow connect shows the time and Cancel Listing (or Esc) stops it", async ({ page }) => {
+  const d = await newSource(page);
+  const size = await d.boundingBox();
+  // An AWS SSM instance that never connects: elapsed time, Esc and Cancel Listing stop it and keep the dialog
   await d.getByRole("tab", { name: /SSH\/SSL/ }).click();
   await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssm");
   await d.getByRole("textbox", { name: "Instance id" }).fill("i-00000000000000000");
   await d.getByRole("tab", { name: /^Schemas/ }).click();
-  await expect(d.getByRole("status")).toContainText(/Connecting with the settings above… \d+\.\d s/);
+  await expect(d.getByRole("status")).toContainText(/Connecting with this dialog's settings… \d+\.\d s/);
   expect(await d.boundingBox(), "the dialog keeps its size while connecting").toEqual(size);
   await page.keyboard.press("Escape");
   await expect(d.getByText("✕ Cancelled.")).toBeVisible();
   await d.getByRole("button", { name: "Try Again" }).click();
   await expect(d.getByRole("status")).toBeVisible();
-  await d.locator(".ui-empty").getByRole("button", { name: "Cancel" }).click();
+  await d.getByRole("button", { name: "Cancel Listing" }).click();
   await expect(d.getByText("✕ Cancelled.")).toBeVisible();
   await expect(dialog(page)).toHaveCount(1);
   await page.keyboard.press("Escape");

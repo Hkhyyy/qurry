@@ -172,7 +172,7 @@ export const NewDataSourceSchemas: S = {
     await userEvent.click((await body.findByText("shop_app_test")).closest("label")!);
   },
 };
-/** …while it connects through an AWS SSM instance that doesn't answer: the elapsed time and Cancel (Esc) */
+/** …while it connects through an AWS SSM instance that doesn't answer: the elapsed time and Cancel Listing (Esc) */
 export const NewDataSourceSchemasConnecting: S = {
   name: "Data Source — new, Schemas tab connecting",
   render: () => <ConnectionDialog onClose={noop} onSaved={noop} />,
