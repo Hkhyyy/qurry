@@ -24,7 +24,13 @@ test("after `join <table>` ⌃Space offers the ON condition from the foreign key
 
 test("a statement start lists statement keywords, not the previous statement's columns; `upd` writes its template, ⇥ goes from placeholder to placeholder", async ({ page }) => {
   await typeSql(page, "select * from orders");
-  await page.keyboard.press("Escape");
+  // The list for `orders` may open after a first ⎋ on a slow machine (CI): Enter would pick from it instead of starting a line.
+  // ⎋ until the list stays closed for a moment
+  await expect(async () => {
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    expect(await suggestions(page).count()).toBe(0);
+  }).toPass();
   await page.keyboard.press("Enter");
   await page.keyboard.type("se");
   await expect(suggestions(page).first()).toBeVisible();
