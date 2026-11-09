@@ -536,25 +536,34 @@ pub(crate) mod tests {
         (dir, t.expect("fake tunnel"))
     }
 
+    /// The plugin's pid. The plugin may say the port is open before its CLI has written the pid (a loaded runner), so wait for it
+    fn plugin_pid(dir: &Path) -> String {
+        for _ in 0..100 {
+            let pids = std::fs::read_to_string(dir.join("pids")).unwrap_or_default();
+            if let Some(p) = pids.split_whitespace().nth(1) {
+                return p.to_string();
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("a running plugin");
+    }
+
     /// The fake's session stops forwarding while its CLI and plugin run on and accept connections (FAKE: dead-<plugin pid>)
     pub(crate) fn stop_forwarding(dir: &Path) {
-        let pids = std::fs::read_to_string(dir.join("pids")).unwrap();
-        let plugin = pids.split_whitespace().nth(1).expect("a running plugin");
+        let plugin = plugin_pid(dir);
         std::fs::write(dir.join(format!("dead-{plugin}")), "").unwrap();
     }
 
     /// The fake's connections open now stall (nothing goes either way) until release_forwarding, while new ones go through: a
     /// session that is slow, not gone, through a tunnel that works (FAKE: hold-<plugin pid>)
     pub(crate) fn hold_forwarding(dir: &Path) {
-        let pids = std::fs::read_to_string(dir.join("pids")).unwrap();
-        let plugin = pids.split_whitespace().nth(1).expect("a running plugin");
+        let plugin = plugin_pid(dir);
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
         std::fs::write(dir.join(format!("hold-{plugin}")), now.to_string()).unwrap();
     }
 
     pub(crate) fn release_forwarding(dir: &Path) {
-        let pids = std::fs::read_to_string(dir.join("pids")).unwrap();
-        let plugin = pids.split_whitespace().nth(1).expect("a running plugin");
+        let plugin = plugin_pid(dir);
         std::fs::remove_file(dir.join(format!("hold-{plugin}"))).unwrap();
     }
 
