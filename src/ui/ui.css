@@ -118,6 +118,8 @@
 .ui-field-label { color: var(--ui-text-muted); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A field's content is always beside its label: a second row of controls (Theme's Sync with OS pickers) doesn't drop into the label column */
 .ui-field > :not(.ui-field-label) { grid-column: 2; }
+/* A field of several rows (group: Alignment, Theme with Sync with OS, Status bar) puts its name beside the first row, not the middle */
+.ui-field[role="group"] > .ui-field-label { align-self: start; line-height: var(--ui-h-md); }
 .ui-field-hint { grid-column: 2; font-size: var(--ui-fs-sm); color: var(--ui-text-muted); }
 .ui-field-error { grid-column: 2; font-size: var(--ui-fs-sm); color: var(--ui-danger); }
 .ui-input, .ui-select {

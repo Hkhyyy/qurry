@@ -444,7 +444,8 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .align-grid { display: grid; grid-template-columns: 110px 120px; gap: var(--ui-sp-2) var(--ui-sp-3); align-items: center; }
 .align-label { font-size: var(--ui-fs-sm); }
 .align-label.custom { color: var(--ok); }
-.sb-field { display: grid; grid-template-columns: 96px 1fr; gap: var(--ui-sp-2) var(--ui-sp-3); align-items: center; }
+/* Rows as tall as a control row, so the field's name lines up with the first one (as Alignment's) */
+.sb-field { display: grid; grid-template-columns: 96px 1fr; grid-auto-rows: minmax(var(--ui-h-md), auto); gap: 0 var(--ui-sp-3); align-items: center; }
 .sb-field-label { font-size: var(--ui-fs-sm); color: var(--ui-text-muted); }
 .sb-field-row { display: flex; flex-wrap: wrap; gap: var(--ui-sp-1) var(--ui-sp-5); }
 /* Settings › Appearance › Theme: Sync with OS's two themes; the theme editor (features/settings/ThemeEditor.tsx) and its preview */
