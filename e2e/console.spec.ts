@@ -150,6 +150,23 @@ test("MySQL: `--` greys out as a comment only where the server reads one (`selec
   await expect.poll(italic).toBe("-- note");
 });
 
+test("statement words are keywords in both grammars (pgsql knew only reserved words: UPDATE, SET, INSERT … were plain names)", async ({ page }) => {
+  // The words drawn in WHERE's color (a keyword's)
+  const keywords = () =>
+    editor(page).locator(".view-line span span").evaluateAll((els) => {
+      const where = els.find((e) => e.textContent === "WHERE");
+      return where ? els.filter((e) => getComputedStyle(e).color === getComputedStyle(where).color).map((e) => e.textContent!.trim()) : [];
+    });
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  for (const conn of ["[DEV] shop_app", "[MySQL] shop"]) {
+    if (conn !== "[DEV] shop_app") await openConsole(page, conn);
+    await typeSql(page, "UPDATE users SET a = 1 WHERE id = 9; BEGIN; COMMIT");
+    await page.keyboard.press("Escape");
+    await expect.poll(keywords).toEqual(["UPDATE", "SET", "WHERE", "BEGIN", "COMMIT"]);
+  }
+});
+
 test("a run shows in the status bar (bar · Executing… · elapsed) for the focused tab only; hovering it shows ✕, which cancels it (#107)", async ({ page }) => {
   const bar = page.locator(".statusbar .running-bar");
   const x = bar.getByRole("button", { name: "Cancel (⌘F2)" });

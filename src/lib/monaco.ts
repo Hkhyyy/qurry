@@ -4,6 +4,7 @@ import "monaco-editor/editor/editor.main";
 import "monaco-editor/languages/definitions/pgsql/register";
 import "monaco-editor/languages/definitions/mysql/register";
 import { language as mysqlLanguage } from "monaco-editor/languages/definitions/mysql/mysql";
+import { language as pgsqlLanguage } from "monaco-editor/languages/definitions/pgsql/pgsql";
 import "monaco-editor/languages/definitions/redis/register";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import JsonWorker from "monaco-editor/language/json/json.worker?worker";
@@ -26,7 +27,18 @@ const comments = [
   [/#+.*/, "comment"],
   [/\/\*/, { token: "comment.quote", next: "@comment" }],
 ];
-monaco.languages.setMonarchTokensProvider("mysql", { ...mysqlLanguage, tokenizer: { ...mysqlLanguage.tokenizer, comments } } as monaco.languages.IMonarchLanguage);
+/**
+ * The built-in grammars know only part of the words a statement is made of: pgsql only PostgreSQL's reserved words (no UPDATE, SET,
+ * INSERT, DELETE, VALUES, ALTER, DROP, BEGIN …), mysql no BEGIN, COMMIT, ROLLBACK, TRUNCATE … Those showed as plain names
+ */
+const COMMON_KEYWORDS = `SELECT INSERT UPDATE DELETE MERGE SET VALUES INTO FROM WHERE JOIN LEFT RIGHT INNER OUTER FULL CROSS NATURAL ON USING AS BY ORDER
+  GROUP HAVING LIMIT OFFSET FETCH RETURNING WITH RECURSIVE UNION INTERSECT EXCEPT ALL DISTINCT CREATE ALTER DROP TRUNCATE RENAME TO ADD COLUMN
+  TABLE VIEW MATERIALIZED INDEX UNIQUE SCHEMA DATABASE FUNCTION PROCEDURE TRIGGER SEQUENCE TYPE EXTENSION IF EXISTS NOT REPLACE CASCADE RESTRICT
+  BEGIN START TRANSACTION COMMIT ROLLBACK SAVEPOINT RELEASE EXPLAIN ANALYZE VACUUM COPY SHOW CALL DO CONFLICT NOTHING GRANT REVOKE
+  NULLS FIRST LAST OVER PARTITION FILTER WINDOW ROWS RANGE PRECEDING FOLLOWING UNBOUNDED CURRENT ROW INTERVAL ESCAPE LATERAL`.split(/\s+/);
+const withKeywords = (words: string[]) => [...new Set([...words, ...COMMON_KEYWORDS])];
+monaco.languages.setMonarchTokensProvider("pgsql", { ...pgsqlLanguage, keywords: withKeywords(pgsqlLanguage.keywords) } as monaco.languages.IMonarchLanguage);
+monaco.languages.setMonarchTokensProvider("mysql", { ...mysqlLanguage, keywords: withKeywords(mysqlLanguage.keywords), tokenizer: { ...mysqlLanguage.tokenizer, comments } } as monaco.languages.IMonarchLanguage);
 
 // One Monaco theme, redefined from the theme drawn whenever it changes (lib/theme.ts monacoThemeData)
 onTheme((t) => {
