@@ -243,7 +243,8 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(row.fit(app.tree.hoff, inner.width as usize));
     }
     if vis.is_empty() {
-        lines.push(Line::from(muted("No data sources. Press n to add one.")));
+        lines.push(Line::from(muted("No data sources. Press n to add one,")));
+        lines.push(Line::from(muted(format!("or {} › Import Data Sources… (DataGrip, DBeaver).", app.keys.label(crate::app::Action::Palette)))));
     }
     // Horizontal scroll (Shift+←/→, trackpad left/right) is already done by fit_spans
     f.render_widget(Paragraph::new(lines), inner);

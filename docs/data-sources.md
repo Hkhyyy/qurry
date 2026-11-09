@@ -37,7 +37,7 @@ Connection options:
 
 **Export Data Sources…** (explorer ⋮ menu, Find Action) writes every data source to a JSON file, without passwords. **Import Data Sources** reads that file back, or the data sources of DataGrip / IntelliJ IDEA and DBeaver:
 
-- **GUI**: explorer ⋮ › **Import Data Sources ▸** lists the locations found on this computer, newest IDE version first, each with how many data sources it has (the path is the tooltip). Below them, **File…** and **Folder…** open the system picker (it picks a file or a folder, not both). Find Action (`⇧⌘A`) lists the same as *Import Data Sources: …*.
+- **GUI**: explorer ⋮ (or **+**) › **Import Data Sources ▸** (an empty explorer has an *Import data sources…* link too) lists the locations found on this computer, newest IDE version first, each with how many data sources it has (the path is the tooltip). Below them, **File…** and **Folder…** open the system picker (it picks a file or a folder, not both). Find Action (`⇧⌘A`) lists the same as *Import Data Sources: …*.
 - **TUI**: `⌃k` › **Import Data Sources…** lists the same locations, then **File or folder…**, which asks for a path (`~` is your home folder).
 
 The format is detected from what you pick: a Qurry export; `dataSources.xml` or `dataSources.local.xml`; a project folder or its `.idea`; an IDE options folder; DBeaver's `data-sources.json` (or `data-sources-*.json`); a `.dbeaver` folder, a DBeaver project or its workspace folder. A folder with `qurry-datasources.json` in it reads that export.

@@ -12,6 +12,13 @@ async function openSubmenu(page: Page) {
   await menuItem(page, "Import Data Sources").hover();
 }
 
+test("the explorer's + offers New Data Source… and Import Data Sources ▸ (as ⋮ does)", async ({ page }) => {
+  await page.locator(".ws-explorer.on").getByTitle("Add Data Source").click();
+  await expect(menuItem(page, "New Data Source…")).toBeVisible();
+  await menuItem(page, "Import Data Sources").hover();
+  await expect(menuItem(page, DG)).toBeVisible();
+});
+
 test("the submenu lists the locations found, then File… and Folder…", async ({ page }) => {
   await openSubmenu(page);
   const sub = page.locator(".ui-menu.sub");

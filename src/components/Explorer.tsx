@@ -211,7 +211,7 @@ export function Explorer(p: Props) {
           <IconButton size="sm"
             title="Add Data Source"
             onMouseDown={(e) => e.stopPropagation()}
-            onClick={() => (p.others?.length ? setAddMenu((m) => !m) : p.onAdd())}
+            onClick={() => (addMenu || p.onImportOpen(), setAddMenu((m) => !m))}
           >
             <IcPlus />
           </IconButton>
@@ -220,9 +220,11 @@ export function Explorer(p: Props) {
               onClose={() => setAddMenu(false)}
               items={[
                 { label: "New Data Source…", ...cmd("tree.newDs"), action: p.onAdd },
-                { separator: true },
-                { heading: "Add to this workspace:" },
-                ...(p.others ?? []).map((c) => ({ label: c.name, action: () => p.onAddExisting?.(c.id) })),
+                // DataGrip / IntelliJ / DBeaver data sources, as the ⋮ menu has it
+                { label: "Import Data Sources", submenu: p.importItems() },
+                ...(p.others?.length
+                  ? [{ separator: true } as const, { heading: "Add to this workspace:" }, ...p.others.map((c) => ({ label: c.name, action: () => p.onAddExisting?.(c.id) }))]
+                  : []),
               ]}
             />
           )}
@@ -260,6 +262,14 @@ export function Explorer(p: Props) {
               No data sources.
               <br />
               <a onClick={p.onAdd}>＋ New data source</a>
+              <br />
+              <a
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => (p.onImportOpen(), setAddMenu(true))}
+                title="From DataGrip / IntelliJ or DBeaver on this computer, or a file"
+              >
+                Import data sources…
+              </a>
               {!!p.others?.length && (
                 <>
                   <br />

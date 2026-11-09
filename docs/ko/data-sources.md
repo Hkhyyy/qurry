@@ -37,7 +37,7 @@ Qurry 가 다루는 데이터베이스, 연결 방법 (SSH, AWS SSM, SSL, 옵션
 
 **Export Data Sources…** (탐색기 ⋮ 메뉴, Find Action) 는 모든 Data Source 를 비밀번호 없이 JSON 파일로 저장합니다. **Import Data Sources** 는 그 파일이나, DataGrip / IntelliJ IDEA · DBeaver 의 Data Source 를 읽어 옵니다:
 
-- **GUI**: 탐색기 ⋮ › **Import Data Sources ▸** 에 이 컴퓨터에서 찾은 위치가 최신 IDE 버전부터, 들어 있는 Data Source 수와 함께 나옵니다 (경로는 툴팁). 그 아래 **File…** · **Folder…** 는 시스템 선택 창을 엽니다 (파일이나 폴더 중 하나를 고르는 창). Find Action (`⇧⌘A`) 에도 *Import Data Sources: …* 로 같은 목록이 있습니다.
+- **GUI**: 탐색기 ⋮ (또는 **+**) › **Import Data Sources ▸** (Data Source 가 없는 탐색기에는 *Import data sources…* 링크도 있습니다) 에 이 컴퓨터에서 찾은 위치가 최신 IDE 버전부터, 들어 있는 Data Source 수와 함께 나옵니다 (경로는 툴팁). 그 아래 **File…** · **Folder…** 는 시스템 선택 창을 엽니다 (파일이나 폴더 중 하나를 고르는 창). Find Action (`⇧⌘A`) 에도 *Import Data Sources: …* 로 같은 목록이 있습니다.
 - **TUI**: `⌃k` › **Import Data Sources…** 에 같은 위치가 나오고, 마지막의 **File or folder…** 는 경로를 입력받습니다 (`~` 는 홈 폴더).
 
 형식은 고른 것으로 알아냅니다: Qurry 내보내기 파일, `dataSources.xml` · `dataSources.local.xml`, 프로젝트 폴더나 그 `.idea`, IDE options 폴더, DBeaver 의 `data-sources.json` (`data-sources-*.json`), `.dbeaver` 폴더 · DBeaver 프로젝트 · workspace 폴더. 폴더 안에 `qurry-datasources.json` 이 있으면 그 내보내기 파일을 읽습니다.
