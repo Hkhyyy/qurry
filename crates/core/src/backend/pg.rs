@@ -824,7 +824,7 @@ async fn begin_read_only(pool: &PgPool) -> AppResult<sqlx::Transaction<'static, 
 pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16) -> AppResult<PgPool> {
     let (opts, pgpass_note) = options(cfg, password, host, port)?;
     // sqlx sends TimeZone=UTC as a startup parameter, so change it with SET right after connecting
-    let tz = cfg.options.time_zone.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(|t| t.replace('\'', "''"));
+    let tz = cfg.options.time_zone.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(set_time_zone);
     let script = cfg.options.startup_script.trim().to_string();
     PgPoolOptions::new()
         // Each console/table tab uses one dedicated connection. Connections open only when needed, so just keep the cap generous
@@ -836,7 +836,7 @@ pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host
             let tz = tz.clone();
             Box::pin(async move {
                 if let Some(tz) = tz {
-                    conn.execute(format!("set time zone '{tz}'").as_str()).await?;
+                    conn.execute(tz.as_str()).await?;
                 }
                 if !script.is_empty() {
                     conn.execute(sqlx::raw_sql(&script)).await?;
@@ -855,6 +855,20 @@ pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host
             }
             _ => e.into(),
         })
+}
+
+/// The Time zone option as a SET. An offset (`+09:00`, `-5`, `+0530`) is hours east of UTC, as in MySQL and ISO 8601: PostgreSQL
+/// would read the text '+09:00' as a POSIX zone, 9 hours west
+fn set_time_zone(tz: &str) -> String {
+    let offset = tz.strip_prefix(['+', '-']).and_then(|rest| {
+        let (h, m) = rest.split_once(':').unwrap_or(if rest.len() == 4 { rest.split_at(2) } else { (rest, "00") });
+        let ok = (1..=2).contains(&h.len()) && m.len() == 2 && h.bytes().chain(m.bytes()).all(|b| b.is_ascii_digit());
+        ok.then(|| format!("{}{h:0>2}:{m}", &tz[..1]))
+    });
+    match offset {
+        Some(o) => format!("set time zone interval '{o}' hour to minute"),
+        None => format!("set time zone '{}'", tz.replace('\'', "''")),
+    }
 }
 
 const PGPASSWORD_NOT_USED: &str = "PGPASSWORD isn't sent to a saved data source (only to a qurry-tui URL's server): save the password in the data source, or add a line for it to ~/.pgpass (chmod 600).";
@@ -926,6 +940,21 @@ fn options(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An offset in the Time zone option is hours east (as MySQL and ISO 8601 read it), set as an interval; a name is quoted
+    #[test]
+    fn time_zone_option() {
+        let iv = |o: &str| format!("set time zone interval '{o}' hour to minute");
+        assert_eq!(set_time_zone("+09:00"), iv("+09:00"));
+        assert_eq!(set_time_zone("+9"), iv("+09:00"));
+        assert_eq!(set_time_zone("-0530"), iv("-05:30"));
+        assert_eq!(set_time_zone("-5:30"), iv("-05:30"));
+        assert_eq!(set_time_zone("Asia/Seoul"), "set time zone 'Asia/Seoul'");
+        assert_eq!(set_time_zone("UTC"), "set time zone 'UTC'");
+        assert_eq!(set_time_zone("x'; drop table t; --"), "set time zone 'x''; drop table t; --'");
+        assert_eq!(set_time_zone("+09:00'"), "set time zone '+09:00'''", "not an offset: quoted as text");
+        assert_eq!(set_time_zone("+123"), "set time zone '+123'");
+    }
 
     /// The TLS mode is always set from the data source, never left to PGSSLMODE in the environment (sqlx reads it): a URL's
     /// sslmode=disable or prefer isn't turned into a certificate check, and a remote server without SSL settings still needs TLS
