@@ -319,7 +319,7 @@ impl McpAccess {
 
 impl ConnectionConfig {
     /// MCP exposure. Old sources without a setting are hidden if Production, otherwise as before (read, write with --allow-write).
-    /// Read-only Data Sources have no write
+    /// Read-only and Production Data Sources have no write: an AI tool's change would skip the confirm a person gets there
     pub fn mcp_access(&self, allow_write: bool) -> McpAccess {
         let a = match self.options.mcp.as_deref() {
             Some("off") => McpAccess::Off,
@@ -330,7 +330,7 @@ impl ConnectionConfig {
             None if self.options.confirm_changes => McpAccess::Off,
             None => McpAccess::Write,
         };
-        if a == McpAccess::Write && (!allow_write || self.read_only) { McpAccess::Read } else { a }
+        if a == McpAccess::Write && (!allow_write || self.read_only || self.options.confirm_changes) { McpAccess::Read } else { a }
     }
 }
 
@@ -1210,7 +1210,10 @@ mod tests {
         // Production stays hidden until set
         c.options.confirm_changes = true;
         assert_eq!(c.mcp_access(true), McpAccess::Off);
+        // Production: never write, even set to write and run with --allow-write
         c.options.mcp = Some("write".into());
+        assert_eq!(c.mcp_access(true), McpAccess::Read);
+        c.options.confirm_changes = false;
         assert_eq!(c.mcp_access(true), McpAccess::Write);
         assert_eq!(c.mcp_access(false), McpAccess::Read);
         c.read_only = true;

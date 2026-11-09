@@ -14,17 +14,17 @@ AI 클라이언트 (와 그 뒤의 모델) 는 믿지 **않습니다**. 읽어 �
 
 Data Source 마다 MCP 설정 (Off / Read / Read & write) 이 있습니다. 서버는 읽기 전용 (기본) 이거나 `--allow-write` 로 띄웁니다.
 
-MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mcp` 나 `dbtool-mcp` 는 Production 을 포함해 모든 Data Source 를 내보입니다. GUI 를 업데이트해도 이건 바뀌지 않으니, 업데이트한 뒤 `brew upgrade qurry` 나 `qurry-tui --update` 를 실행하고 (`qurry-tui --version` 으로 확인), AI 클라이언트를 다시 시작해 새 `qurry-mcp` 를 띄우게 하세요.
+MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mcp` 나 `dbtool-mcp` 는 Production 을 포함해 모든 Data Source 를 내보입니다. GUI 를 업데이트해도 이건 바뀌지 않으니, 업데이트한 뒤 `brew upgrade qurry` 나 `qurry-tui --update` 를 실행하고 (`qurry-tui --version` 으로 확인), AI 클라이언트를 다시 시작해 새 `qurry-mcp` 를 띄우게 하세요. Production Data Source 를 Read 에 묶어 두는 것은 `qurry-mcp` 0.3.2 이상입니다: 그보다 옛 버전은 Read & write 로 저장된 Production Data Source 에 그 Data Source 를 다시 저장하기 전까지 (그때 Read 로 저장됨) `execute` 를 실행합니다.
 
 | MCP 설정 | `--allow-write` 없이 | `--allow-write` 로 |
 |---|---|---|
 | **Off** | 아무것도. 목록에 없고, 비밀번호를 읽지도 접속하지도 않습니다 (클라이언트가 이름이나 id 로 직접 요청해도) | 같음 |
 | **Read** | 둘러보기와 읽기: 데이터베이스, 스키마, 객체, 컬럼, DDL, 객체 검색, `query`, `explain`, `full_text_search`, Redis 키와 값, RAG 검색, `export_csv` | 같음 |
-| **Read & write** | Read 와 같음 | `execute` 도 — 단 Data Source 가 **읽기 전용** 이면 Read 에 머뭅니다 |
-| *(설정 없음: 이 설정이 생기기 전에 만든 것)* | Read, Production Data Source 면 **Off** | Read & write, Production Data Source 면 **Off** |
+| **Read & write** | Read 와 같음 | `execute` 도 — 단 Data Source 가 **읽기 전용** 이거나 **Production** 이면 Read 에 머뭅니다 |
+| *(설정 없음: 이 설정이 생기기 전에 만든 것)* | Read, Production Data Source 면 **Off** | Read & write (읽기 전용이면 Read), Production Data Source 면 **Off** |
 
 - 새 Data Source 는 **Off** 로 시작합니다 (GUI · TUI). Data Source 를 복사한 것도 마찬가지입니다. 설정 파일에 `off` / `read` / `write` 가 아닌 값이 있으면 Off 로 봅니다.
-- **Production Data Source 는 Read 나 Read & write 를 골라 주기 전까지 Off 입니다.** 이건 MCP 설정을 한 번도 정하지 않은 Data Source 의 기본값일 뿐입니다: 나중에 Production 을 켜도 이미 고른 설정은 바뀌지 않으니, Off 는 직접 골라 주세요.
+- **Production Data Source 는 Read 를 골라 주기 전까지 Off 이고, 쓰기는 늘 막혀 있습니다.** 이건 MCP 설정을 한 번도 정하지 않은 Data Source 의 기본값일 뿐입니다: 나중에 Production 을 켜도 이미 고른 설정은 바뀌지 않으니, Off 는 직접 골라 주세요.
 - 보이는 Data Source 는 그 DB 사용자가 볼 수 있는 모든 데이터베이스와 스키마를 내보입니다. Schemas 탭은 `search_objects` 가 어느 데이터베이스를 뒤질지만 정할 뿐, `query` 를 막지 않습니다.
 - `list_data_sources` 는 호스트, 포트, 사용자 이름, SSH 사용자를 보여 줍니다. 비밀번호는 절대 보이지 않습니다 (`mongodb://user:pass@host` 처럼 URI 안의 비밀번호도 지웁니다).
 - `export_csv` 는 `~/Downloads/qurry-exports` 에 새 파일만 씁니다. 이름은 클라이언트가 폴더 없이 정하고, 있는 파일을 덮어쓰지 않습니다.
@@ -44,9 +44,9 @@ MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mc
 
 ## 쓰기 (`--allow-write`)
 
-`execute` 는 서버를 `--allow-write` 로 띄웠을 때만 목록에 나오고, Read & write 이면서 읽기 전용이 아닌 Data Source 에서만 실행됩니다. 허용 목록만 받습니다: 항목마다 `INSERT` 하나, 또는 `WHERE` 가 있는 `UPDATE` / `DELETE`, 그리고 MongoDB · 벡터 DB · Redis 의 같은 것들. DDL, `TRUNCATE`, `MERGE`, 스크립트, 삭제 (drop) 는 거부합니다. PostgreSQL / MySQL 은 항목마다 prepared statement 로 실행하므로, 한 항목에 숨겨 넣은 두 번째 문장은 서버가 거부합니다.
+`execute` 는 서버를 `--allow-write` 로 띄웠을 때만 목록에 나오고, Read & write 이면서 읽기 전용도 Production 도 아닌 Data Source 에서만 실행됩니다. 허용 목록만 받습니다: 항목마다 `INSERT` 하나, 또는 `WHERE` 가 있는 `UPDATE` / `DELETE`, 그리고 MongoDB · 벡터 DB · Redis 의 같은 것들. DDL, `TRUNCATE`, `MERGE`, 스크립트, 삭제 (drop) 는 거부합니다. PostgreSQL / MySQL 은 항목마다 prepared statement 로 실행하므로, 한 항목에 숨겨 넣은 두 번째 문장은 서버가 거부합니다.
 
-Production Data Source 에서는 `execute` 의 변경도 실행 전에 운영 작업 기록에 남고, 단순한 `UPDATE` / `DELETE` 에는 되돌리기 SQL 도 남습니다 ([안전장치](safety.md)). 하지만 아무도 확인하지 않습니다: 앱이 묻는 바뀔 행 수 확인은 사람이 있어야 합니다.
+Production Data Source 는 MCP 설정과 상관없이 `execute` 를 받지 않습니다: 앱이 변경 전에 묻는 바뀔 행 수 확인은 사람이 있어야 하고, AI 도구는 그걸 건너뛰기 때문입니다. 운영 데이터는 Qurry 에서 직접 바꾸세요.
 
 `WHERE` 규칙은 실수만 막습니다. `WHERE 1=1` 은 여전히 모든 행을 바꿉니다.
 

@@ -255,7 +255,8 @@ impl App {
         c.options.production_manual = if v("Production Manual") == "on" { None } else { Some(false) };
         c.options.allow_plaintext = v("Allow unencrypted") == "on";
         // Save the shown value as is (leaving it unset would reopen it automatically after turning Production off)
-        c.options.mcp = Some(v("MCP"));
+        // Read-only and Production sources have no MCP write (ConnectionConfig::mcp_access): saved as read
+        c.options.mcp = Some(if v("MCP") == "write" && (c.read_only || c.options.confirm_changes) { "read".into() } else { v("MCP") });
         // custom = a color outside the presets picked in the GUI: leave it
         match v("Color").as_str() {
             "custom" => {}

@@ -1,7 +1,7 @@
 //! Qurry MCP server (stdio, JSON-RPC 2.0). Uses the same engine (qurry-core) and the same Data Sources as the GUI·TUI.
 //!
 //! Read-only by default: PG/MySQL run a single statement inside a READ ONLY transaction, Redis allows read commands only.
-//! `--allow-write` adds the `execute` tool (a Data Source's Read-only setting is still honored).
+//! `--allow-write` adds the `execute` tool (Read-only and Production Data Sources still never take it).
 //! MCP exposure is set per Data Source (Options › MCP: Off / Read / Read & write — store::McpAccess). Hidden sources are not listed and cannot be connected to.
 use qurry_core::app::{AppState, ConnectionView};
 use qurry_core::db::QueryResult;
@@ -355,7 +355,13 @@ impl Server {
             "execute" if self.allow_write => {
                 let (t, kind, _, access) = self.target(a).await?;
                 if access != McpAccess::Write {
-                    return Err("This data source is read-only for MCP (Qurry: data source › Options › MCP: Read & write)".into());
+                    let id = self.resolve(a).await?.0;
+                    let (ro, prod) = self.sources().await?.iter().find(|c| c.config.id == id).map_or((false, false), |c| (c.config.read_only, c.config.options.confirm_changes));
+                    return Err(match (ro, prod) {
+                        (true, _) => "MCP never writes to a Read-only data source; change it in Qurry".into(),
+                        (_, true) => "MCP never writes to a Production data source (the app asks a person to confirm changes there); change it in Qurry".into(),
+                        _ => "This data source is read-only for MCP (Qurry: data source › Options › MCP: Read & write)".into(),
+                    });
                 }
                 let stmts: Vec<String> = a.get("statements").and_then(|v| v.as_array()).ok_or("statements is required")?.iter().filter_map(|x| x.as_str().map(String::from)).collect();
                 if stmts.is_empty() {

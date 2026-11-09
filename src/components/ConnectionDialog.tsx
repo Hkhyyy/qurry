@@ -92,7 +92,10 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   // MCP for older sources that never set it: behavior at the time the dialog opened (hidden if Production). Editing doesn't change this value
   const [legacyMcp] = useState<"off" | "write">(() => (edit?.options?.confirmChanges ? "off" : edit ? "write" : "off"));
   // A value core doesn't know ("On", a typo) means off there, so show and save it as off
-  const mcpValue: "off" | "read" | "write" = opt.mcp == null ? legacyMcp : ["off", "read", "write"].includes(opt.mcp) ? opt.mcp : "off";
+  const mcpSet: "off" | "read" | "write" = opt.mcp == null ? legacyMcp : ["off", "read", "write"].includes(opt.mcp) ? opt.mcp : "off";
+  // Read-only and Production sources have no MCP write (core: ConnectionConfig::mcp_access): ticking either shows and saves Read
+  const noMcpWrite = !!cfg.readOnly || !!opt.confirmChanges;
+  const mcpValue = mcpSet === "write" && noMcpWrite ? "read" : mcpSet;
   // Newly enabled SSL is require: verifying needs a CA the built-in list knows (AWS RDS, a company CA, a server behind an SSH tunnel need a CA file)
   const ssl: SslConfig = cfg.ssl ?? { enabled: false, mode: "require", caFile: "", certFile: "", keyFile: "" };
   const setSsl = <K extends keyof SslConfig>(k: K, v: SslConfig[K]) => setCfg((c) => ({ ...c, ssl: { ...ssl, ...(c.ssl ?? {}), [k]: v } }));
@@ -445,7 +448,9 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
             <Select value={mcpValue} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])} title="What qurry-mcp (Claude Code and other AI tools) may do with this data source. For Read, connect with a read-only database user.">
               <option value="off">Off — not listed, no connection</option>
               <option value="read">Read</option>
-              <option value="write" disabled={!!cfg.readOnly}>Read &amp; write (when qurry-mcp runs with --allow-write)</option>
+              <option value="write" disabled={noMcpWrite} title={noMcpWrite ? `Not for a ${cfg.readOnly ? "Read-only" : "Production"} data source` : undefined}>
+                Read &amp; write (when qurry-mcp runs with --allow-write)
+              </option>
             </Select>
           </div>
           <label>Transaction control</label>
