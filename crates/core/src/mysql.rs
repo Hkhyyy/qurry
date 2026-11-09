@@ -29,8 +29,9 @@ pub(crate) fn columns_of(row: &MySqlRow) -> Vec<ColumnInfo> {
     row.columns().iter().map(|c| ColumnInfo { name: c.name().to_string(), type_name: c.type_info().name().to_string() }).collect()
 }
 
-/// Text protocol value → JSON
-pub(crate) fn value(row: &MySqlRow, i: usize) -> Value {
+/// A row's value → JSON. `binary`: the row came over the prepared protocol (the read-only path), where numbers, dates and times
+/// come as binary fields instead of text
+pub(crate) fn value(row: &MySqlRow, i: usize, binary: bool) -> Value {
     let raw = match row.try_get_raw(i) {
         Ok(r) => r,
         Err(_) => return Value::Null,
@@ -43,8 +44,10 @@ pub(crate) fn value(row: &MySqlRow, i: usize) -> Value {
         Ok(b) => b,
         Err(_) => return Value::Null,
     };
-    let binary = ty.contains("BLOB") || ty.contains("BINARY") || ty == "GEOMETRY";
-    if binary {
+    if binary && let Some(v) = binary_value(&ty, bytes) {
+        return v;
+    }
+    if ty.contains("BLOB") || ty.contains("BINARY") || ty == "GEOMETRY" {
         let hex: String = bytes.iter().take(64).map(|x| format!("{x:02X}")).collect();
         return Value::from(format!("0x{hex}{}", if bytes.len() > 64 { "…" } else { "" }));
     }
@@ -64,6 +67,53 @@ pub(crate) fn value(row: &MySqlRow, i: usize) -> Value {
             Value::from(n)
         }
         _ => Value::from(s.as_ref()),
+    }
+}
+
+/// A prepared protocol value → the same JSON as the text protocol's (`value`): integers and floats as numbers, DATE / DATETIME /
+/// TIMESTAMP (already in the session's time_zone, as the server sends them) and TIME as text. A fraction shows its digits up to
+/// the last non-zero one (the column's precision isn't known here). None: the bytes are the text already (decimals, strings)
+fn binary_value(ty: &str, b: &[u8]) -> Option<Value> {
+    let le = |n: usize| b.get(..n).map(|x| x.iter().rev().fold(0u64, |a, &v| a << 8 | v as u64));
+    let int = |n: usize| -> Option<Value> {
+        let u = le(n)?;
+        if ty.ends_with("UNSIGNED") {
+            return Some(if u <= 1 << 53 { Value::from(u) } else { Value::from(u.to_string()) });
+        }
+        let shift = 64 - 8 * n as u32;
+        Some(int_value(((u << shift) as i64) >> shift))
+    };
+    let float = |f: String| Some(f.parse::<f64>().ok().filter(|f| f.is_finite()).map(Value::from).unwrap_or(Value::from(f)));
+    let frac = |micro: u64| if micro == 0 { String::new() } else { format!(".{micro:06}").trim_end_matches('0').to_string() };
+    let at = |i: usize| b.get(i).copied().unwrap_or(0);
+    match ty {
+        "BOOLEAN" => Some(Value::from(*b.first()? == 1)),
+        "TINYINT" | "TINYINT UNSIGNED" => int(1),
+        "SMALLINT" | "SMALLINT UNSIGNED" | "YEAR" => int(2),
+        "MEDIUMINT" | "MEDIUMINT UNSIGNED" | "INT" | "INTEGER" | "INT UNSIGNED" => int(4),
+        "BIGINT" | "BIGINT UNSIGNED" => int(8),
+        "FLOAT" => float(f32::from_le_bytes(b.get(..4)?.try_into().ok()?).to_string()),
+        "DOUBLE" => float(f64::from_le_bytes(b.get(..8)?.try_into().ok()?).to_string()),
+        // length, year (u16), month, day [, hour, minute, second [, microseconds (u32)]]
+        "DATE" | "DATETIME" | "TIMESTAMP" => {
+            let len = *b.first()? as usize;
+            let year = u16::from_le_bytes([at(1), at(2)]);
+            let date = format!("{year:04}-{:02}-{:02}", at(3), at(4));
+            if ty == "DATE" {
+                return Some(Value::from(date));
+            }
+            let micro = if len >= 11 { b.get(8..12).map_or(0, |x| u32::from_le_bytes(x.try_into().unwrap_or_default())) } else { 0 };
+            Some(Value::from(format!("{date} {:02}:{:02}:{:02}{}", at(5), at(6), at(7), frac(micro.into()))))
+        }
+        // length, negative, days (u32), hour, minute, second [, microseconds (u32)]
+        "TIME" => {
+            let len = *b.first()? as usize;
+            let days = b.get(2..6).map_or(0, |x| u32::from_le_bytes(x.try_into().unwrap_or_default()));
+            let micro = if len >= 12 { b.get(9..13).map_or(0, |x| u32::from_le_bytes(x.try_into().unwrap_or_default())) } else { 0 };
+            let sign = if at(1) == 1 { "-" } else { "" };
+            Some(Value::from(format!("{sign}{:02}:{:02}:{:02}{}", u64::from(days) * 24 + u64::from(at(6)), at(7), at(8), frac(micro.into()))))
+        }
+        _ => None,
     }
 }
 
@@ -101,7 +151,7 @@ async fn run_on_with(conn: &mut sqlx::MySqlConnection, sql: &str, limit: usize, 
                         truncated = true;
                         continue; // Must consume up to the next result/OK packet to reuse the connection
                     }
-                    rows.push((0..row.len()).map(|i| value(&row, i)).collect());
+                    rows.push((0..row.len()).map(|i| value(&row, i, prepared)).collect());
                 }
             }
         }
@@ -126,7 +176,7 @@ pub async fn export_on(conn: &mut sqlx::MySqlConnection, sql: &str, out: &mut cr
             let names: Vec<String> = row.columns().iter().map(|c| c.name().to_string()).collect();
             out.header(&names).await?;
         }
-        let vals: Vec<serde_json::Value> = (0..row.len()).map(|i| value(&row, i)).collect();
+        let vals: Vec<serde_json::Value> = (0..row.len()).map(|i| value(&row, i, prepared)).collect();
         out.row(&vals).await?;
     }
     Ok(())
@@ -532,7 +582,7 @@ impl MySession {
         let q = |s: &str| qurry_shared::sql::quote_ident(crate::store::DbKind::Mysql, s);
         let sql = format!("SHOW CREATE TABLE {}.{}", q(db), q(table));
         let row = sqlx::query(&sql).persistent(false).fetch_one(&mut *self.conn).await.ok()?;
-        let ddl = value(&row, 1);
+        let ddl = value(&row, 1, true);
         let ddl = ddl.as_str()?;
         Some(ddl.trim_start().to_ascii_uppercase().starts_with("CREATE TEMPORARY TABLE"))
     }
@@ -1112,6 +1162,74 @@ mod tests {
         assert_eq!(tz.rows[0][0], "+09:00");
         let e = rp.run_query("update orders set memo = 'z' where id = 1", 1).await;
         assert!(e.is_err() && format!("{}", e.unwrap_err()).to_lowercase().contains("read only"));
+    }
+
+    /// TIMESTAMP shows in the session's time_zone (the server converts it: sqlx starts each session at +00:00, the Time zone option
+    /// sets another; `SET time_zone` in a console applies to that console), DATETIME as stored; the console's text protocol, MCP's
+    /// prepared one and CSV export give the same text (#133)
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_timestamp_session_zone() {
+        let Some((cfg, pw)) = server() else { return };
+        let at = |tz: Option<&str>| {
+            let mut c = cfg.clone();
+            c.options.time_zone = tz.map(String::from);
+            c
+        };
+        let utc = crate::db::connect(&at(None), Some(pw.as_str())).await.unwrap();
+        utc.run_query("drop table if exists qurry_tz", 1).await.unwrap();
+        utc.run_query("create table qurry_tz (ts timestamp(6) null, dt datetime null)", 1).await.unwrap();
+        utc.run_query("insert into qurry_tz values ('2026-11-09 04:00:00.123456', '2026-11-09 04:00:00')", 1).await.unwrap();
+        let q = "select ts, dt from qurry_tz";
+        let row = |ts: &str| vec![Value::from(ts), Value::from("2026-11-09 04:00:00")];
+        for (tz, ts) in [(None, "2026-11-09 04:00:00.123456"), (Some("+09:00"), "2026-11-09 13:00:00.123456"), (Some("Asia/Seoul"), "2026-11-09 13:00:00.123456")] {
+            let pool = crate::db::connect(&at(tz), Some(pw.as_str())).await.unwrap();
+            assert_eq!(pool.run_query(q, 10).await.unwrap().rows[0], row(ts), "{tz:?}");
+            let crate::db::Pool::My(p) = &pool else { unreachable!() };
+            assert_eq!(crate::backend::Backend::run_read_only(p, q, 10).await.unwrap().rows[0], row(ts), "{tz:?}: MCP's read-only path");
+            let path = std::env::temp_dir().join(format!("qurry_mytz_{}.csv", std::process::id()));
+            pool.export_csv(q, &path).await.unwrap();
+            let csv = std::fs::read_to_string(&path).unwrap();
+            let _ = std::fs::remove_file(&path);
+            assert_eq!(csv.lines().nth(1), Some(format!("{ts},2026-11-09 04:00:00").as_str()), "{tz:?}");
+        }
+        let mut s = crate::session::Session::open(&utc).await.unwrap();
+        s.run("set time_zone = '+09:00'", 1).await.unwrap();
+        assert_eq!(s.run(q, 10).await.unwrap().rows[0], row("2026-11-09 13:00:00.123456"));
+        s.discard().await;
+        utc.run_query("drop table qurry_tz", 1).await.unwrap();
+    }
+
+    /// MCP's read-only path (prepared protocol: numbers, dates and times come as binary fields) gives the same values as the console's
+    /// text protocol; it used to show their raw bytes
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_prepared_values_match_text() {
+        let Some((cfg, pw)) = server() else { return };
+        let pool = crate::db::connect(&cfg, Some(pw.as_str())).await.unwrap();
+        let crate::db::Pool::My(p) = &pool else { unreachable!() };
+        pool.run_query("drop table if exists qurry_bin", 1).await.unwrap();
+        pool.run_query(
+            "create table qurry_bin (b tinyint(1), t tinyint, tu tinyint unsigned, s smallint, m mediumint, i int, iu int unsigned, g bigint, gu bigint unsigned, \
+             y year, f float, d double, n decimal(6,2), dt date, tm time(6), tn time, ts timestamp null, dtm datetime(6), z datetime, v varchar(5), j json, bt bit(3))",
+            1,
+        )
+        .await
+        .unwrap();
+        pool.run_query(
+            "insert into qurry_bin values (1, -5, 250, -300, -70000, -2000000000, 4000000000, -9007199254740993, 18446744073709551615, \
+             2026, 0.1, 2.5e-300, -12.50, '2026-11-09', '-838:59:58.123456', '27:00:01', '2026-11-09 04:00:00', '1000-01-01 00:00:00.000001', '2026-11-09 00:00:00', 'x', '{\"k\": 1}', b'101'), \
+             (2, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null, null, null, null, null, null, null, null, null, null, null)",
+            1,
+        )
+        .await
+        .unwrap();
+        let q = "select * from qurry_bin order by b";
+        let text = pool.run_query(q, 10).await.unwrap().rows;
+        let prepared = crate::backend::Backend::run_read_only(p, q, 10).await.unwrap().rows;
+        pool.run_query("drop table qurry_bin", 1).await.unwrap();
+        assert_eq!(prepared, text);
+        assert_eq!(text[0][16], Value::from("2026-11-09 04:00:00"));
     }
 
     #[tokio::test]
