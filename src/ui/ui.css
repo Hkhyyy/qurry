@@ -315,7 +315,13 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 
 /* ── About (ⓘ): Named · InfoTip ── */
 .ui-named { display: inline-flex; align-items: center; gap: var(--ui-sp-2); max-width: 100%; vertical-align: middle; }
-.ui-info-btn { width: 18px; height: 18px; }
+/* Wraps or ends with … as its container does (labels don't wrap, hints do) */
+.ui-named-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* 18px everywhere, toolbars included (.ui-toolbar .ui-icon-btn) */
+.ui-icon-btn.ui-info-btn { width: 18px; height: 18px; flex: none; }
+/* In a toolbar the next control keeps its distance from the ⓘ, as the ⓘ keeps its own from the name */
+.ui-toolbar > .ui-named { margin-right: var(--ui-sp-3); }
 .ui-info-btn[aria-expanded="true"] { color: var(--ui-accent); }
 /* Above any dialog it is opened from */
-.ui-menu.ui-info-pop { z-index: calc(var(--ui-z-dialog) + 1); display: flex; flex-direction: column; gap: var(--ui-sp-2); width: 340px; max-width: calc(100vw - 16px); padding: var(--ui-sp-3) var(--ui-sp-4); font-size: var(--ui-fs-sm); line-height: 1.5; white-space: normal; text-align: left; }
+.ui-menu.ui-info-pop { z-index: calc(var(--ui-z-dialog) + 1); width: 340px; max-width: calc(100vw - 16px); padding: var(--ui-sp-3) var(--ui-sp-4); font-size: var(--ui-fs-sm); line-height: 1.5; white-space: normal; text-align: left; }
+.ui-info-text { display: flex; flex-direction: column; gap: var(--ui-sp-2); }

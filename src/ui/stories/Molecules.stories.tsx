@@ -51,7 +51,6 @@ export const Fields: S = {
   },
 };
 
-/** SearchField is a TextInput: no autocorrect or spell check (see GUI/1 Atoms › Inputs) */
 /** One rule: the ⓘ right after the name it explains (a field's label, a checkbox beside its text, a hint line), the same gap and popover.
  *  Click, Space or Enter opens it; Esc, a click outside or a scroll closes it */
 export const About: S = {
@@ -123,6 +122,7 @@ export const InfoTipOpen: S = {
   },
 };
 
+/** SearchField is a TextInput: no autocorrect or spell check (see GUI/1 Atoms › Inputs) */
 export const SearchAndTabs: S = {
   name: "SearchField · Tabs · SectionTitle",
   render: function Render() {

@@ -72,8 +72,9 @@ export function ProductionLog({ connId, onOpenUndo, onClose }: { connId: string 
       footer={
         <>
           <span className="ui-modal-foot-hint">
+            Changes run on Production data sources ·{" "}
             <Named about="undo" info={["Undo is kept for simple UPDATE / DELETE (up to 1,000 rows)."]}>
-              Changes run on Production data sources
+              Undo
             </Named>
           </span>
           <Button onClick={onClose}>Close</Button>

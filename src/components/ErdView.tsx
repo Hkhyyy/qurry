@@ -141,7 +141,7 @@ export function ErdView(p: { target: string; schemas: string[]; visible: boolean
       <Toolbar className="dba-bar erd-bar">
         <Text tone="muted" className="dba-help">
           <Named about="the diagram" info={["Drag tables to move them, the wheel zooms, dragging the background pans.", "Double-click a table to open it."]}>
-            {p.schemas.join(", ")} — {data.tables.length} tables, {data.relations.length} foreign keys
+            {`${p.schemas.join(", ")} — ${data.tables.length} tables, ${data.relations.length} foreign keys`}
           </Named>
         </Text>
         <Spacer />

@@ -212,9 +212,14 @@ export function CopyRowsDialog({ source, schema, table, conn, conns, onDone, onC
           <Text tone="muted">No other {conn.kind === "mysql" ? "MySQL" : "PostgreSQL"} data source — add one to copy into</Text>
         )}
       </Field>
-      <Checkbox checked={mask} onChange={setMask}>
-        Mask personal data (email, phone, people's names, address, ID / card numbers, passwords, birth dates, IP)
-      </Checkbox>
+      <Named
+        about="masking"
+        info={["Masked values are md5-based, so the same value always masks the same way.", "That hides values, it doesn't protect them: anyone with a list of likely values (emails, phone numbers) can find the original by hashing the list."]}
+      >
+        <Checkbox checked={mask} onChange={setMask}>
+          Mask personal data (email, phone, people's names, address, ID / card numbers, passwords, birth dates, IP)
+        </Checkbox>
+      </Named>
       {err && <Notice tone="danger">{err}</Notice>}
       {plan && (
         <>
@@ -249,11 +254,7 @@ export function CopyRowsDialog({ source, schema, table, conn, conns, onDone, onC
               </tbody>
             </Table>
           </div>
-          <Hint>
-            <Named about="copying rows" info={["Masked values are md5-based, so the same value always masks the same way."]}>
-              The tables must already exist in the target (Compare Schemas makes the DDL).
-            </Named>
-          </Hint>
+          <Hint>The tables must already exist in the target (Compare Schemas makes the DDL).</Hint>
         </>
       )}
     </Modal>

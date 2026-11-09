@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button, Checkbox, ColorPicker, EmptyState, FormGrid, FormSection, Hint, Modal, Named, Notice, Select, Spacer, Tabs, Text, TextArea, TextInput, TlsOptIn } from "../ui";
 import { needsTlsOptIn } from "./TlsFix";
@@ -185,6 +185,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           info: ["Host keys are checked against ~/.ssh/known_hosts.", "The SSH host may be a ~/.ssh/config Host (HostName, User, Port, IdentityFile, ProxyJump).", "With no private key or password, ssh-agent is used."],
         }
       : null;
+  const ids = useId();
+  const pwLabel = cfg.kind === "qdrant" || cfg.kind === "chroma" ? "API key" : "Password";
   const port = (v: number, on: (n: number) => void, fallback: number, disabled?: boolean) => <TextInput className="w-port" disabled={disabled} value={v} onChange={(e) => on(Number(e.target.value) || fallback)} />;
 
   return (
@@ -288,12 +290,11 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
               )}
               <label>User</label>
               <TextInput aria-label="User" value={cfg.user} placeholder={cfg.kind === "redis" ? "(optional, ACL user)" : cfg.kind === "milvus" ? "(optional — empty: the password is an API key)" : ""} onChange={(e) => set("user", e.target.value)} />
-              <label>
-                <Named info={["Saved passwords are encrypted in secrets.json; its key is in the config folder or in the system keychain (Settings › Passwords)."]}>
-                  {cfg.kind === "qdrant" || cfg.kind === "chroma" ? "API key" : "Password"}
-                </Named>
+              {/* htmlFor and aria-label: a click on the name focuses the field, and the field's name leaves out the ⓘ */}
+              <label htmlFor={`${ids}-pw`}>
+                <Named info={["Saved passwords are encrypted in secrets.json; its key is in the config folder or in the system keychain (Settings › Passwords)."]}>{pwLabel}</Named>
               </label>
-              <TextInput type="password" value={password ?? ""} placeholder={edit?.hasPassword ? "<saved — leave empty to keep>" : ""} onChange={(e) => setPassword(e.target.value)} />
+              <TextInput id={`${ids}-pw`} aria-label={pwLabel} type="password" value={password ?? ""} placeholder={edit?.hasPassword ? "<saved — leave empty to keep>" : ""} onChange={(e) => setPassword(e.target.value)} />
             </>
           )}
           {cfg.kind === "redis" && (
@@ -487,11 +488,11 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
               </div>
             </>
           )}
-          <label>
+          <label htmlFor={`${ids}-mcp`}>
             <Named info={["What qurry-mcp (Claude Code and other AI tools) may do with this data source.", "For Read, connect with a read-only database user."]}>MCP (AI tools)</Named>
           </label>
           <div className="ui-row">
-            <Select aria-label="MCP (AI tools)" value={mcpValue} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])}>
+            <Select id={`${ids}-mcp`} aria-label="MCP (AI tools)" value={mcpValue} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])}>
               <option value="off">Off — not listed, no connection</option>
               <option value="read">Read</option>
               <option value="write" disabled={noMcpWrite} title={noMcpWrite ? `Not for a ${cfg.readOnly ? "Read-only" : "Production"} data source` : undefined}>

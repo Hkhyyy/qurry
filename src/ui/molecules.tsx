@@ -10,14 +10,19 @@ import { Chevron, IcInfo } from "./icons";
 import { placePopup } from "./popup";
 
 // ───────── About (ⓘ) ─────────
+/** The open ⓘ's close: opening another one closes it (one explanation at a time) */
+let closeOpenTip: (() => void) | null = null;
+
 /**
  * ⓘ button with what a name means: click, Space or Enter toggles a small popover (the menu surface) under it, kept inside the
- * window. Esc closes the popover only (not the dialog around it) and puts focus back on the ⓘ; a click outside or a scroll closes it
+ * window. Esc closes the popover only (not the dialog around it) and puts focus back on the ⓘ; a click outside, a scroll or
+ * opening another ⓘ closes it. A span with the button role, not a <button>: a <button> inside a <label> (a Field's) would be
+ * the label's control, so a click on the name would open the ⓘ instead of focusing the field
  */
 export function InfoTip({ about, info }: { about: string; info: ReactNode[] }) {
   const [open, setOpen] = useState(false);
   const [at, setAt] = useState<{ left: number; top: number } | null>(null);
-  const btn = useRef<HTMLButtonElement>(null);
+  const btn = useRef<HTMLSpanElement>(null);
   const pop = useRef<HTMLDivElement>(null);
   const id = useId();
   // Placed once its size is known (hidden until then)
@@ -28,6 +33,9 @@ export function InfoTip({ about, info }: { about: string; info: ReactNode[] }) {
   }, [open]);
   useEffect(() => {
     if (!open) return;
+    const close = () => setOpen(false);
+    closeOpenTip?.();
+    closeOpenTip = close;
     const outside = (e: Event) => !pop.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node);
     const down = (e: globalThis.MouseEvent) => outside(e) && setOpen(false);
     const scroll = (e: Event) => outside(e) && setOpen(false);
@@ -47,29 +55,42 @@ export function InfoTip({ about, info }: { about: string; info: ReactNode[] }) {
       window.removeEventListener("keydown", key, true);
       window.removeEventListener("scroll", scroll, true);
       window.removeEventListener("resize", scroll);
+      if (closeOpenTip === close) closeOpenTip = null;
     };
   }, [open]);
   return (
     <>
-      <button
+      <span
         ref={btn}
-        type="button"
+        role="button"
+        tabIndex={0}
         className="ui-icon-btn ui-info-btn"
         aria-label={`About ${about}`}
         title={`About ${about}`}
         aria-expanded={open}
         aria-controls={open ? id : undefined}
-        // Inside a <label> (a Field's): don't also activate its control
+        // Its text (not the note, whose name is "About …"): read out with the ⓘ while it is open
+        aria-describedby={open ? `${id}-text` : undefined}
+        // Inside a <label>: don't also activate its control
         onClick={(e) => (e.preventDefault(), setOpen((o) => !o))}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          // Not the dialog's Enter (OK, Open Undo …) and no page scroll on Space
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
       >
         <IcInfo />
-      </button>
+      </span>
       {open &&
         createPortal(
           <div ref={pop} id={id} role="note" aria-label={`About ${about}`} className="ui-menu ui-info-pop" style={at ?? { left: 0, top: 0, visibility: "hidden" }}>
-            {info.map((l, i) => (
-              <div key={i}>{l}</div>
-            ))}
+            <div id={`${id}-text`} className="ui-info-text">
+              {info.map((l, i) => (
+                <div key={i}>{l}</div>
+              ))}
+            </div>
           </div>,
           document.body,
         )}
@@ -85,7 +106,8 @@ export function Named({ children, about, info }: { children: ReactNode; about?: 
   if (!info?.length) return <>{children}</>;
   return (
     <span className="ui-named">
-      {children}
+      {/* A text name shrinks with … in a narrow label column; the ⓘ never does */}
+      {typeof children === "string" ? <span className="ui-named-text">{children}</span> : children}
       <InfoTip about={about ?? (typeof children === "string" ? children : "")} info={info} />
     </span>
   );

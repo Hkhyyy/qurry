@@ -172,8 +172,8 @@ export function ImportDialog({ target, schema, table, onImport, onClose }: {
       )}
       {file && (
         <Hint>
-          <Named about="importing" info={["Empty cells are imported as NULL.", "Everything goes in one transaction."]}>
-            If a row fails, nothing is imported.
+          <Named about="importing" info={["Everything goes in one transaction."]}>
+            Empty cells become NULL; if a row fails, nothing is imported.
           </Named>
         </Hint>
       )}

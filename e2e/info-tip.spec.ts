@@ -1,4 +1,14 @@
-import { dialog, expect, openApp, test, treeNode } from "./app";
+import type { Locator } from "@playwright/test";
+import { dialog, expect, openApp, test, treeItem, treeNode, work } from "./app";
+
+/** The ⓘ's size and its gap to what comes before it (the name) */
+async function placement(about: Locator) {
+  return about.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const prev = el.previousElementSibling!.getBoundingClientRect();
+    return { width: r.width, height: r.height, gap: Math.round(r.left - prev.right) };
+  });
+}
 
 test.beforeEach(async ({ page }) => openApp(page));
 
@@ -66,4 +76,50 @@ test("ⓘ beside a checkbox doesn't toggle it; Allow unencrypted warns while tic
   await plain.check();
   await expect(warning).toBeVisible();
   await expect(d.getByText("Applied on OK: the data source reconnects.")).toBeVisible();
+});
+
+test("a click on a field's name focuses the field and opens no ⓘ", async ({ page }) => {
+  await page.keyboard.press("Meta+Comma");
+  const d = dialog(page);
+  await d.locator(".ui-field-label", { hasText: "Keyword case" }).getByText("Keyword case").click();
+  await expect(d.getByRole("combobox", { name: "Keyword case" })).toBeFocused();
+  await expect(page.getByRole("note")).toHaveCount(0);
+  expect(await placement(d.getByRole("button", { name: "About Keyword case" }))).toEqual({ width: 18, height: 18, gap: 4 });
+  await page.keyboard.press("Escape");
+
+  await treeNode(page, "[DEV] shop_app").click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^Properties/ }).click();
+  await d.locator("label", { hasText: "Password" }).getByText("Password", { exact: true }).click();
+  await expect(d.getByLabel("Password", { exact: true })).toBeFocused();
+  await expect(page.getByRole("note")).toHaveCount(0);
+  await d.getByRole("tab", { name: "Options" }).click();
+  await d.locator("label", { hasText: "MCP (AI tools)" }).getByText("MCP (AI tools)", { exact: true }).click();
+  await expect(d.getByRole("combobox", { name: "MCP (AI tools)" })).toBeFocused();
+  await expect(page.getByRole("note")).toHaveCount(0);
+});
+
+test("one ⓘ open at a time; the open one describes its ⓘ", async ({ page }) => {
+  await page.keyboard.press("Meta+Comma");
+  const d = dialog(page);
+  const channel = d.getByRole("button", { name: "About Channel" });
+  await channel.focus();
+  await page.keyboard.press("Enter");
+  await expect(channel).toHaveAccessibleDescription(/Stable: releases made from a version tag/);
+  const kc = d.getByRole("button", { name: "About Keyword case" });
+  await kc.focus();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("note")).toHaveCount(1);
+  await expect(page.getByRole("note", { name: "About Keyword case" })).toBeVisible();
+  await expect(channel).toHaveAttribute("aria-expanded", "false");
+});
+
+test("in a toolbar the ⓘ is the same size and as near its name as in a dialog", async ({ page }) => {
+  await treeItem(page, "db0 7").dblclick();
+  const about = work(page).getByRole("button", { name: "About key patterns" });
+  expect(await placement(about)).toEqual({ width: 18, height: 18, gap: 4 });
+  // The next control is further from the ⓘ than the ⓘ is from the filter
+  const after = await about.evaluate((el) => Math.round(el.parentElement!.nextElementSibling!.getBoundingClientRect().left - el.getBoundingClientRect().right));
+  expect(after).toBeGreaterThan(4);
+  await about.click();
+  await expect(page.getByRole("note", { name: "About key patterns" })).toContainText("SCAN MATCH pattern");
 });
