@@ -8,9 +8,12 @@ import { dialog, expect, openApp, openConsole, openInTheme, test, typeSql, work 
 
 const rgb = (h: string) => `rgb(${[1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(", ")})`;
 const theme = (id: string) => TABLE.themes.find((t) => t.id === id)!;
-/** What the window draws: its background, the explorer's panel, data-theme */
+/** What the window draws: its background, the explorer's panel (null until it is rendered, so a poll right after a reload retries), data-theme */
 const drawn = (page: Page) =>
-  page.evaluate(() => ({ bg: getComputedStyle(document.documentElement).backgroundColor, panel: getComputedStyle(document.querySelector(".panel")!).backgroundColor, kind: document.documentElement.dataset.theme }));
+  page.evaluate(() => {
+    const panel = document.querySelector(".panel");
+    return { bg: getComputedStyle(document.documentElement).backgroundColor, panel: panel && getComputedStyle(panel).backgroundColor, kind: document.documentElement.dataset.theme };
+  });
 const saved = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem("mock-themeSettings") ?? "null"));
 const settings = async (page: Page) => {
   await page.keyboard.press("Meta+Comma");
