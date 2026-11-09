@@ -180,7 +180,10 @@ impl Pool {
 }
 
 /// Run one statement on an already acquired connection (transaction). With 0 rows the columns come from describe
-pub(crate) async fn run_pg_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> AppResult<QueryResult> {
+/// `pool`: where to read the session's time zone for timestamptz when the result is cut off at `limit` (a connection of the same
+/// pool has the same zone, and reading it on `conn` would first wait for the rest of the result); None reads it on `conn` (a
+/// transaction that ends right after reads the rest anyway)
+pub(crate) async fn run_pg_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize, pool: Option<&PgPool>) -> AppResult<QueryResult> {
     let start = Instant::now();
     let mut columns = Vec::new();
     let mut rows: Vec<PgRow> = Vec::new();
@@ -210,7 +213,11 @@ pub(crate) async fn run_pg_on(conn: &mut sqlx::PgConnection, sql: &str, limit: u
             }
         }
     }
-    let rows = pg_values(conn, &columns, &rows, &mut None).await;
+    let mut zone = None;
+    if let Some(p) = pool.filter(|_| truncated && columns.iter().any(|c| zoned(&c.type_name))) {
+        zone = pool_zone(p).await;
+    }
+    let rows = pg_values(conn, &columns, &rows, &mut zone).await;
     // With 0 rows the column info is unknown, so fill it in with describe.
     if !has_result_set {
         if let Ok(desc) = conn.describe(sql).await {
@@ -263,15 +270,18 @@ pub async fn run_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> A
     Ok(QueryResult { columns, rows, rows_affected: 0, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set: true, in_transaction: false, warning: None, editable: None })
 }
 
-/// Export on an already acquired connection (possibly a read-only transaction)
-pub async fn export_pg_on(conn: &mut sqlx::PgConnection, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
-    // Read before the rows stream in (the connection is busy until they all have)
-    let zone = pg_zone(conn).await.unwrap_or(Zone::UTC);
+/// Export on an already acquired connection of `pool` (possibly a read-only transaction). The time zone for timestamptz is read
+/// on another connection of the pool (same after_connect settings), when the first row has such a column: `conn` is busy streaming
+pub async fn export_pg_on(conn: &mut sqlx::PgConnection, pool: &PgPool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
+    let mut zone = Zone::UTC;
     let mut stream = sqlx::query(sql).persistent(false).fetch(&mut *conn);
     while let Some(row) = stream.try_next().await? {
         if !out.has_header() {
             let names: Vec<String> = row.columns().iter().map(|c| c.name().to_string()).collect();
             out.header(&names).await?;
+            if row.columns().iter().any(|c| zoned(c.type_info().name())) {
+                zone = pool_zone(pool).await.unwrap_or(Zone::UTC);
+            }
         }
         let vals: Vec<Value> = (0..row.len()).map(|i| pg_value(&row, i, &zone)).collect();
         out.row(&vals).await?;
@@ -326,12 +336,17 @@ fn zoned(ty: &str) -> bool {
 /// The session's time zone: its TimeZone setting, and the offset the server says it has now (for a setting the tz database here
 /// doesn't name, such as `+09:00`). None when it couldn't be read
 pub(crate) async fn pg_zone(conn: &mut sqlx::PgConnection) -> Option<Zone> {
-    let (name, now): (String, i32) = sqlx::query_as("select current_setting('TimeZone'), extract(timezone from now())::int4")
+    let (name, now): (String, i32) = sqlx::query_as("select pg_catalog.current_setting('TimeZone'), extract(timezone from pg_catalog.now())::int4")
         .persistent(false)
         .fetch_one(conn)
         .await
         .ok()?;
     Some(Zone::new(&name, now))
+}
+
+/// The time zone of the pool's sessions, read on a connection of its own
+async fn pool_zone(pool: &PgPool) -> Option<Zone> {
+    pg_zone(&mut *pool.acquire().await.ok()?).await
 }
 
 /// Rows read on `conn` → values. The session's time zone is read (once, into `zone`) only when a column is timestamptz, after
@@ -774,6 +789,79 @@ mod tests {
         assert_eq!(shown("select array['2026-11-09 04:00:00+00']::timestamptz[]").await, Some(Value::from("{\"2026-11-09 04:00:00 +00:00\"}")));
         shown("reset time zone").await;
         assert_eq!(shown(ts).await, Some(Value::from("2026-11-09 04:00:00 +00:00")));
+        c.discard().await;
+    }
+
+    /// The Time zone option is never SQL: a name is bound, also for a role with standard_conforming_strings = off (where `\'` doesn't
+    /// end a string, so quoting by doubling quotes could be escaped)
+    #[tokio::test]
+    #[ignore]
+    async fn pg_time_zone_option_is_not_sql() {
+        let Some(s) = crate::testenv::pg() else { return };
+        let admin = connect(&s.cfg, s.password.as_deref()).await.expect("connect");
+        let pw = s.password.clone().unwrap_or_else(|| "qurry_tz_pw".into());
+        for q in ["drop table if exists public.qurry_tz_pwn".to_string(), "drop role if exists qurry_tz_scs".into(), format!("create role qurry_tz_scs login password '{pw}'"), "grant create on schema public to qurry_tz_scs".into(), "alter role qurry_tz_scs set standard_conforming_strings = off".into()] {
+            admin.run_query(&q, 1).await.unwrap();
+        }
+        let mut cfg = s.cfg.clone();
+        cfg.user = "qurry_tz_scs".into();
+        cfg.options.time_zone = Some(r"Asia/Seoul\'; create table public.qurry_tz_pwn(); --".into());
+        let r = match connect(&cfg, Some(&pw)).await {
+            Ok(p) => p.run_query("select 1", 1).await.map(|_| ()),
+            Err(e) => Err(e),
+        };
+        assert!(r.is_err(), "not a time zone");
+        cfg.options.time_zone = Some("Asia/Seoul".into());
+        let p = connect(&cfg, Some(&pw)).await.unwrap();
+        let row = p.run_query("select current_setting('TimeZone'), current_setting('standard_conforming_strings')", 1).await.unwrap().rows;
+        assert_eq!(row[0], vec![Value::from("Asia/Seoul"), Value::from("off")]);
+        p.close().await;
+        let made = admin.run_query("select to_regclass('public.qurry_tz_pwn') is not null", 1).await.unwrap().rows;
+        admin.run_query("revoke create on schema public from qurry_tz_scs", 1).await.unwrap();
+        admin.run_query("drop role qurry_tz_scs", 1).await.unwrap();
+        assert_eq!(made[0][0], Value::from(false), "the option's text ran as SQL");
+    }
+
+    /// A result cut off at the row limit doesn't wait for the rest of it to read the time zone: the pool reads it on another
+    /// connection, a console before the statement (#133). Loose: compared with the same rows as numbers
+    #[tokio::test]
+    #[ignore]
+    async fn pg_cut_off_timestamptz_returns_at_once() {
+        let Some(s) = crate::testenv::pg() else { return };
+        let pool = connect(&s.cfg, s.password.as_deref()).await.expect("connect");
+        let rows = |e: &str| format!("select {e} from generate_series(1, 3000000) g");
+        let (num, tz) = (rows("g::int8"), rows("'2026-01-01'::timestamptz + g * interval '1 second'"));
+        let timed = async |r: AppResult<QueryResult>| {
+            let r = r.unwrap();
+            assert!(r.truncated && r.rows.len() == 500);
+            r.elapsed_ms
+        };
+        // Each on a pool of its own, closed after: a cut-off result is read to its end when its connection goes back to the pool,
+        // which would slow the next query in this test's runtime
+        let once = async |q: &str| {
+            let p = connect(&s.cfg, s.password.as_deref()).await.expect("connect");
+            let t = Instant::now();
+            timed(p.run_query(q, 500).await).await;
+            let d = t.elapsed();
+            p.close().await;
+            d
+        };
+        let base = once(&num).await;
+        let zoned = once(&tz).await;
+        assert!(zoned < base * 2 + Duration::from_millis(100), "pool: {zoned:?} vs {base:?} without timestamptz");
+        // A console's statement DECLARE can't take (a data-modifying WITH) runs without a cursor
+        let mut c = crate::session::Session::open(&pool).await.unwrap();
+        c.run("create temp table qurry_none (x int)", 1).await.unwrap();
+        let direct = |q: &str| format!("with d as (delete from qurry_none returning x) {q}");
+        let t = Instant::now();
+        assert!(c.run(&direct(&num), 500).await.unwrap().truncated);
+        let base = t.elapsed();
+        c.run("select 1", 1).await.unwrap();
+        let t = Instant::now();
+        let r = c.run(&direct(&tz), 500).await.unwrap();
+        let zoned = t.elapsed();
+        assert!(r.truncated && r.rows[0][0] == "2026-01-01 00:00:01 +00:00", "{:?}", r.rows[0]);
+        assert!(zoned < base * 2 + Duration::from_millis(100), "console: {zoned:?} vs {base:?} without timestamptz");
         c.discard().await;
     }
 

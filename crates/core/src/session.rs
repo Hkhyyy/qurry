@@ -45,9 +45,10 @@ pub struct PgSession {
     idle_closed: bool,
     /// Rows read through the cursor for the current result (OFFSET when reopening)
     fetched: usize,
-    /// The session's time zone for timestamptz (db::pg_values): read at the first such result, again after a statement that may
-    /// change it (zone_may_change)
+    /// The session's time zone for timestamptz (db::pg_values): read once, again after a statement that may change it (zone_change)
     zone: Option<crate::zone::Zone>,
+    /// Such a statement ran since the transaction began: its end may change the zone back
+    zone_set: bool,
 }
 
 /// Why loading more needs a new session: saving the source's settings, Disconnect and the idle drop close the tab sessions (app::drop_pool)
@@ -107,14 +108,14 @@ pub(crate) fn chains(s: &str) -> bool {
     matches!(words.get(after..), Some(["and", "chain", ..]))
 }
 
-/// Whether a statement may change the session's TimeZone: `SET [LOCAL] TIME ZONE`, `SET timezone`, `set_config('TimeZone', …)`,
-/// `RESET`, `DISCARD ALL`, the end of a transaction (a SET LOCAL, or a SET it rolls back), a procedure or DO block. Words in a
-/// comment or a string count too: the zone is then only read again
-fn zone_may_change(sql: &str) -> bool {
+/// How a statement may change the session's TimeZone: (sets: `SET [LOCAL] TIME ZONE`, `SET timezone`, `set_config('TimeZone', …)`,
+/// `RESET`, `DISCARD ALL`, a procedure or DO block; ends: the end of a transaction, which undoes a SET LOCAL or a rolled-back SET).
+/// Words in a comment or a string count too: the zone is then only read again
+fn zone_change(sql: &str) -> (bool, bool) {
     let s = strip_comments_lead(sql);
     let word = s.split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("");
-    ["rollback", "commit", "end", "abort", "call", "do", "execute"].contains(&word)
-        || ["zone", "set_config", "reset", "discard"].iter().any(|k| s.contains(k))
+    let sets = ["call", "do", "execute"].contains(&word) || ["zone", "set_config", "reset", "discard"].iter().any(|k| s.contains(k));
+    (sets, ["rollback", "commit", "end", "abort"].contains(&word))
 }
 
 pub fn is_select_like(sql: &str) -> bool {
@@ -160,7 +161,7 @@ impl PgSession {
     pub async fn open(pool: &PgPool) -> AppResult<Self> {
         let mut conn = pool.acquire().await?;
         let pid: i32 = sqlx::query_scalar("select pg_backend_pid()").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), origins: Vec::new(), manual: false, in_tx: false, changed: false, reads_outside_tx: false, cursor_used: Instant::now(), idle_closed: false, fetched: 0, zone: None })
+        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), origins: Vec::new(), manual: false, in_tx: false, changed: false, reads_outside_tx: false, cursor_used: Instant::now(), idle_closed: false, fetched: 0, zone: None, zone_set: false })
     }
 
     /// keep-alive: so idle session connections are not dropped
@@ -239,15 +240,21 @@ impl PgSession {
         let r = self.conn.execute("COMMIT").await;
         // A failed COMMIT (e.g. a deferred foreign key) ends the transaction too: PostgreSQL rolls it back
         self.in_tx = false;
-        // A SET LOCAL TIME ZONE (or a rolled-back SET) ends with it
-        self.zone = None;
+        self.zone_tx_ended();
         r?;
         Ok(())
     }
 
+    /// A SET LOCAL TIME ZONE (or a SET the rollback undoes) ends with the transaction
+    fn zone_tx_ended(&mut self) {
+        if std::mem::take(&mut self.zone_set) {
+            self.zone = None;
+        }
+    }
+
     pub async fn rollback_tx(&mut self) -> AppResult<()> {
         self.close_cursor().await;
-        self.zone = None;
+        self.zone_tx_ended();
         self.conn.execute("ROLLBACK").await?;
         self.in_tx = false;
         Ok(())
@@ -294,13 +301,17 @@ impl PgSession {
         // Production: a plain read doesn't open the Manual transaction (Session::set_reads_outside_tx)
         let read_first = self.reading_first() && plain_read(sql, crate::store::DbKind::Postgres);
         // Before (its own rows, e.g. `select set_config('TimeZone', …), now()`, read it anew) and after (a SET has no rows)
-        let rezone = zone_may_change(sql);
-        if rezone {
+        let (sets, ends) = zone_change(sql);
+        if sets || (ends && self.zone_set) {
             self.zone = None;
         }
         let mut r = self.run_inner(sql, limit, read_first).await;
-        if rezone {
-            self.zone = None;
+        if sets {
+            (self.zone, self.zone_set) = (None, true);
+        }
+        // ROLLBACK TO SAVEPOINT keeps the transaction (and a SET LOCAL before the savepoint)
+        if ends && !strip_comments_lead(sql).starts_with("rollback to") {
+            self.zone_tx_ended();
         }
         if let Ok(q) = &mut r {
             q.in_transaction = self.in_tx;
@@ -378,6 +389,10 @@ impl PgSession {
     }
 
     async fn run_direct(&mut self, sql: &str, limit: usize, start: Instant) -> AppResult<QueryResult> {
+        // Read the zone before, once: after a result cut off at `limit`, the connection first waits for the rest of it
+        if self.zone.is_none() && zone_change(sql) == (false, false) {
+            self.zone = crate::db::pg_zone(&mut self.conn).await;
+        }
         run_direct_on(&mut self.conn, sql, limit, start, &mut self.zone).await
     }
 

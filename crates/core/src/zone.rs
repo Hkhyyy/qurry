@@ -40,25 +40,27 @@ impl Zone {
     }
 }
 
-/// The tz database's rules for `name`, read once per name. Only a zone name (`Asia/Seoul`, `UTC`, `EST5EDT`) is looked up, never a
-/// path out of the database's folder
+/// The tz database's rules for `name`, read once per zone (only zones found are kept, so the cache holds at most the database's
+/// zones). Only a zone name (`Asia/Seoul`, `UTC`, `EST5EDT`) is looked up, never a path out of the database's folder, nor
+/// `localtime` (this computer's zone, not the server's)
 fn rules(name: &str) -> Option<Arc<tz::TimeZone>> {
     let plain = name.len() <= 64
+        && !name.eq_ignore_ascii_case("localtime")
         && name.split('/').all(|p| !p.is_empty() && !p.starts_with('.') && p.chars().all(|c| c.is_ascii_alphanumeric() || "_-+".contains(c)));
     if !plain {
         return None;
     }
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<Arc<tz::TimeZone>>>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<tz::TimeZone>>>> = OnceLock::new();
     let mut cache = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
-    cache
-        .entry(name.to_string())
-        .or_insert_with(|| {
-            let path = std::path::Path::new(ZONEINFO).join(name);
-            // A TZif file is a few KB: anything else there (a folder, a large file) is not one
-            std::fs::metadata(&path).ok().filter(|m| m.is_file() && m.len() < 1 << 20)?;
-            tz::TimeZone::from_tz_data(&std::fs::read(&path).ok()?).ok().map(Arc::new)
-        })
-        .clone()
+    if let Some(z) = cache.get(name) {
+        return Some(z.clone());
+    }
+    let path = std::path::Path::new(ZONEINFO).join(name);
+    // A TZif file is a few KB: anything else there (a folder, a large file) is not one
+    std::fs::metadata(&path).ok().filter(|m| m.is_file() && m.len() < 1 << 20)?;
+    let z = Arc::new(tz::TimeZone::from_tz_data(&std::fs::read(&path).ok()?).ok()?);
+    cache.insert(name.to_string(), z.clone());
+    Some(z)
 }
 
 #[cfg(test)]
@@ -89,6 +91,9 @@ mod tests {
             assert!(rules(bad).is_none(), "{bad:?}");
         }
         assert!(rules("zone.tab").is_none(), "a file there that isn't a zone");
+        // The server's `localtime` is the server's zone, not this computer's: the server's offset
+        assert!(rules("localtime").is_none() && rules("LocalTime").is_none());
+        assert!(matches!(Zone::new("localtime", 3600), Zone::Fixed(3600)));
     }
 
     /// The zone's own offset at each moment, across a DST change (needs /usr/share/zoneinfo, as on macOS and Linux)
