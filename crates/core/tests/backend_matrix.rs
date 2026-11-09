@@ -1187,7 +1187,9 @@ async fn console_join_edit_cases(st: &AppState, s: &str, kind: DbKind) {
     // An edit of users.role changes exactly that one users row (Auto mode: committed at once)
     let up = join_update(&r, kind, 0, 4, "admin").unwrap();
     assert!(up.contains("users") && up.ends_with(&format!("WHERE {} = 10", qurry_shared::sql::quote_ident(kind, "idx"))), "{up}");
-    assert_eq!(st.submit_edits(ID.into(), Some(tab.into()), vec![up]).await.unwrap().rows, 1);
+    assert_eq!(st.submit_edits(ID.into(), Some(tab.into()), vec![up.clone()]).await.unwrap().rows, 1);
+    // In the query history, as a console's run
+    assert!(st.history.list(None, "", 50).iter().any(|h| h.sql == up), "{up}");
     assert_eq!(one_value(st, &format!("select role from {s}.users where idx = 10")).await, json!("admin"));
     assert_eq!(one_value(st, &format!("select role from {s}.users where idx = 11")).await, json!("admin"));
     assert_eq!(one_value(st, &format!("select status from {s}.voc where idx = 1")).await, json!("open"));

@@ -1792,8 +1792,22 @@ impl AppState {
     /// A result grid's edits, of a table tab and a console result alike: each UPDATE / DELETE must change exactly one row, or none
     /// of them is saved. tab = the console the result is in: in Manual mode or with a transaction open, they run in its transaction
     /// and stay pending until Commit / Roll back (#106; Session::submit); otherwise, and for a table tab, in a transaction of
-    /// their own (execute_batch). The read-only check and the Production log are the same either way
+    /// their own (execute_batch). The read-only check and the Production log are the same either way. Statements that ran go into the
+    /// query history, as a console's runs do (GUI and TUI alike)
     pub async fn submit_edits(&self, id: String, tab_id: Option<String>, statements: Vec<String>) -> AppResult<BatchResult> {
+        let r = self.submit_edits_now(id.clone(), tab_id, statements.clone()).await;
+        if r.is_ok() {
+            let (conn, db) = split_target(&id);
+            for st in &statements {
+                if let Err(e) = self.history.add(conn, db, st) {
+                    crate::log!("[qurry] history: {e}");
+                }
+            }
+        }
+        r
+    }
+
+    async fn submit_edits_now(&self, id: String, tab_id: Option<String>, statements: Vec<String>) -> AppResult<BatchResult> {
         let manual = tab_id.as_ref().is_some_and(|t| self.tab_manual.lock().unwrap().get(t).copied().unwrap_or(false));
         let tab = match tab_id {
             Some(t) if manual || self.tx_state(t.clone()).await => t,

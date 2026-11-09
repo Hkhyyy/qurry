@@ -22,6 +22,7 @@ What changed in each Qurry version, for people who use it. The format follows [K
 
 ### Changed
 
+- **Grid edits go into the query history** (GUI, TUI): what Submit ran from a result or a table tab (a join's per-table `UPDATE`s too) is listed in Query History like a console's run.
 - **Completion offers only the words that can come next** after a keyword with a fixed follower (GUI, TUI): `left j` lists `join` (not `json_agg` …), `order` → `by`, `is` → `null` / `not null` …, `insert` → `into`, `union` → `select` / `all` / `distinct` ([Console completion](docs/database-tools.md#console-completion-postgresql-mysql)).
 - **MCP never writes to a Production data source**: Read & write is greyed out for Production (as for Read-only) in the GUI, the TUI form saves it as read, and `qurry-mcp --allow-write` keeps such a source at Read even if its settings say write. An AI tool's change would skip the row-count confirm the app asks a person ([MCP server](docs/mcp.md)).
 - **Completion lists in a new order**: at a statement start only statement keywords and templates come (typing `se` on a new line lists `select` and `set`, no longer the columns of the statement above), columns only where a column fits and only from the caret's statement, and functions come right after the columns. To see a column where none is listed, type the clause first (`select`, `where`, `on` …) or press `⌃Space` after it. In the TUI, `⌥↩` on an underlined unknown name now lists its fixes; anywhere else it still runs (`F5` and `⌃↩` always do).

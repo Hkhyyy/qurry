@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, expect, openApp, openConsole, runAll, status, test, treeNode, typeSql, work } from "./app";
+import { dialog, editor, expect, openApp, openConsole, runAll, status, test, treeNode, typeSql, work } from "./app";
 
 // Console results that come from one table with its key are edited like a table tab (#86), a join per table (#102). The mock's
 // backend gives `select * from users` an edit target, the voc / users join per-table targets and other joins a reason
@@ -86,6 +86,11 @@ test("a join edits per table: each table's row by its own key, read-only columns
     tabId: expect.any(String),
     statements: ["UPDATE public.users SET role = 'admin' WHERE idx = '10';", "UPDATE crm.voc SET status = 'seen' WHERE idx = '2';"],
   });
+  // What ran is in the query history, as a console's run (Browse Query History)
+  await editor(page).click();
+  await page.keyboard.press("Meta+Alt+KeyE");
+  await expect(dialog(page)).toContainText("UPDATE public.users SET role = 'admin' WHERE idx = '10';");
+  await expect(dialog(page)).toContainText("UPDATE crm.voc SET status = 'seen' WHERE idx = '2';");
 });
 
 test("on a Production data source Submit asks first, listing the statements; Cancel saves nothing", async ({ page }) => {

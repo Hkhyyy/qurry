@@ -454,7 +454,12 @@ const handlers: Record<string, (a: any) => unknown> = {
   cancel_query: () => (cancelMore?.(), (cancelMore = null), true),
   close_session: () => null,
   // A console in Manual mode keeps them pending (tx_state)
-  submit_edits: (a: any) => ({ rows: a.statements.length }),
+  // As the core: what ran goes into the query history
+  submit_edits: (a: any) => {
+    const [connId, database] = String(a.id).split("::");
+    for (const sql of a.statements) historyAdded.unshift({ id: `ha${historyAdded.length}`, connId, database: database || undefined, sql, ts: Date.now() });
+    return { rows: a.statements.length };
+  },
   load_keymap: () => ({}),
   load_workspace: () => JSON.parse(localStorage.getItem("mock-ws") ?? "null"),
   save_workspace: (a: any) => (localStorage.setItem("mock-ws", JSON.stringify(a.ws)), null),
