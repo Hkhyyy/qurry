@@ -5133,7 +5133,7 @@ name = "qurry-core"
 version = "0.3.1"
 dependencies = [
  "aes-gcm 0.10.3",
- "base64 0.22.1",
+ "base64 0.23.1",
  "calamine",
  "chrono",
  "csv",
@@ -5295,7 +5295,7 @@ dependencies = [
 name = "qurry-tui"
 version = "0.3.1"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "crossterm",
  "futures",
  "minisign-verify 0.2.5",

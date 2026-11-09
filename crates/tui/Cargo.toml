@@ -22,5 +22,5 @@ futures = "0.3"
 uuid = { version = "1", features = ["v4"] }
 unicode-width = "0.2"
 minisign-verify = "0.2"
-base64 = "0.22"
+base64 = "0.23"
 sha2 = "0.10"
