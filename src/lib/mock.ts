@@ -405,6 +405,12 @@ const handlers: Record<string, (a: any) => unknown> = {
         ? `PostgreSQL 16.11  (via AWS SSM ${a.config.ssm.target})`
         : "PostgreSQL 16.11  (via SSH ec2-user@bastion.example.com)";
   },
+  // Schemas tab of a new data source: connects as test_connection does (its failures, and the instance that never connects)
+  form_databases: async (a: any) => {
+    await handlers.test_connection(a);
+    return a.config.kind === "mysql" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"];
+  },
+  form_schemas: (a: any) => (a.config.kind === "mysql" ? [{ name: a.database, isSystem: false }] : [{ name: "public", isSystem: false }, { name: "billing", isSystem: false }, { name: "pg_catalog", isSystem: true }]),
   cancel_test: (a: any) => {
     testsRunning[a.testId]?.();
     delete testsRunning[a.testId];
@@ -426,6 +432,12 @@ const handlers: Record<string, (a: any) => unknown> = {
     tls.saves++;
     const i = conns.findIndex((c: any) => c.id === a.config.id);
     if (i >= 0) (conns as any)[i] = { ...conns[i], ...a.config };
+    // A new data source gets its id here, as in the core
+    if (!a.config.id) {
+      const saved = { ...a.config, id: `new${conns.length}`, hasPassword: !!a.password, connected: false };
+      (conns as any[]).push(saved);
+      return saved;
+    }
     return a.config;
   },
   set_connection_color: (a: any) => {

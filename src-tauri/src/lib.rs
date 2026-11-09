@@ -94,6 +94,8 @@ pub fn run() {
             commands::allow_plaintext,
             commands::delete_connection,
             commands::test_connection,
+            commands::form_databases,
+            commands::form_schemas,
             commands::test_ssh,
             commands::cancel_test,
             commands::connect,

@@ -47,6 +47,18 @@ pub async fn test_connection(state: State<'_, AppState>, config: ConnectionConfi
     cancellable_test(test_id, state.test_connection(config, password, ssh_secret)).await
 }
 
+/// Schemas tab of a data source that isn't saved yet: its databases, listed with the form's settings (as test_connection connects)
+#[tauri::command]
+pub async fn form_databases(state: State<'_, AppState>, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>, test_id: Option<String>) -> AppResult<Vec<String>> {
+    cancellable_test(test_id, state.form_databases(config, password, ssh_secret)).await
+}
+
+/// The schemas of one database of a data source that isn't saved yet
+#[tauri::command]
+pub async fn form_schemas(state: State<'_, AppState>, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>, database: String, test_id: Option<String>) -> AppResult<Vec<crate::meta::SchemaInfo>> {
+    cancellable_test(test_id, state.form_schemas(config, password, ssh_secret, database)).await
+}
+
 /// Test Connection on the SSH/SSL tab: checks the SSH login only.
 #[tauri::command]
 pub async fn test_ssh(state: State<'_, AppState>, config: ConnectionConfig, ssh_secret: Option<String>, test_id: Option<String>) -> AppResult<String> {
@@ -57,7 +69,7 @@ pub async fn test_ssh(state: State<'_, AppState>, config: ConnectionConfig, ssh_
 static TESTS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Notify>>>> = std::sync::LazyLock::new(Default::default);
 
 /// Runs a test that cancel_test can stop: the test is dropped, and with it its SSH / AWS SSM tunnel (an SSM session can take 30s)
-async fn cancellable_test(id: Option<String>, test: impl std::future::Future<Output = AppResult<String>>) -> AppResult<String> {
+async fn cancellable_test<T>(id: Option<String>, test: impl std::future::Future<Output = AppResult<T>>) -> AppResult<T> {
     let Some(id) = id else { return test.await };
     let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
     TESTS.lock().unwrap().insert(id.clone(), cancel.clone());

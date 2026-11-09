@@ -1303,19 +1303,25 @@ impl AppState {
         }
     }
 
-    /// Test the connection without saving. If `password` is None, use the saved password (only when it is the same server as the saved settings).
-    pub async fn test_connection(&self, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<String> {
+    /// Connect with a form's settings that aren't saved (Test Connection, the Schemas tab of a new data source): no pool or tunnel is
+    /// kept, the caller closes both. If `password` is None, use the saved password (only when it is the same server as the saved settings).
+    async fn connect_form(&self, config: &ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<(Pool, Option<crate::tunnel::Tunnel>)> {
         let password = match password {
             Some(p) => Some(p),
-            None if !config.id.is_empty() => self.saved_password_for(&config)?,
+            None if !config.id.is_empty() => self.saved_password_for(config)?,
             None => None,
         };
         let ssh_secret = match ssh_secret {
             Some(p) => Some(p),
-            None if !config.id.is_empty() && config.active_ssh().is_some() => self.saved_ssh_secret_for(&config)?,
+            None if !config.id.is_empty() && config.active_ssh().is_some() => self.saved_ssh_secret_for(config)?,
             None => None,
         };
-        let (pool, tunnel) = connect_config(&config, password.as_deref(), ssh_secret.as_deref()).await?;
+        connect_config(config, password.as_deref(), ssh_secret.as_deref()).await
+    }
+
+    /// Test the connection without saving. If `password` is None, use the saved password (only when it is the same server as the saved settings).
+    pub async fn test_connection(&self, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<String> {
+        let (pool, tunnel) = self.connect_form(&config, password, ssh_secret).await?;
         let version = pool.server_version().await;
         let plain = dispatch!(pool, b => b.plaintext_note(&config).await);
         pool.close().await;
@@ -1329,6 +1335,28 @@ impl AppState {
             let notes: Vec<String> = db::version_note(config.kind, &v).into_iter().chain(plain).collect();
             if notes.is_empty() { format!("{v}{via}") } else { format!("{v}{via}\n{}", notes.join("\n")) }
         })
+    }
+
+    /// The Schemas tab of a data source that isn't saved yet: its databases, read with the form's settings (as Test Connection connects)
+    pub async fn form_databases(&self, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<Vec<String>> {
+        let (pool, tunnel) = self.connect_form(&config, password, ssh_secret).await?;
+        let r = crate::meta::list_databases(&pool).await;
+        pool.close().await;
+        drop(tunnel);
+        r
+    }
+
+    /// The schemas of one database of a data source that isn't saved yet (form_databases)
+    pub async fn form_schemas(&self, mut config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>, database: String) -> AppResult<Vec<crate::meta::SchemaInfo>> {
+        // For file DBs (SQLite, DuckDB) database is the file path (open_pool)
+        if !config.kind.is_file() {
+            config.database = database;
+        }
+        let (pool, tunnel) = self.connect_form(&config, password, ssh_secret).await?;
+        let r = crate::meta::list_schemas(&pool).await;
+        pool.close().await;
+        drop(tunnel);
+        r
     }
 
     /// Test Connection on the SSH/SSL tab: checks only the SSH login.
@@ -3197,5 +3225,47 @@ pub(crate) mod tests {
         for t in ["tx", "dev", "kept", "auto"] {
             st.close_session(t.into()).await.unwrap();
         }
+    }
+
+    /// The Schemas tab of a new data source lists with the form's settings, connecting as Test Connection does: the same errors
+    /// (here both tunnels turned on, refused before connecting), and nothing kept (no pool, no tunnel)
+    #[tokio::test]
+    async fn form_listing_connects_like_test_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "a", "kind": "postgres", "host": "db.internal", "port": 5432, "user": "u",
+            "ssh": { "enabled": true, "host": "bastion", "user": "me" }, "ssm": { "enabled": true, "profile": "", "region": "", "target": "i-1" } })).unwrap();
+        c.id = String::new();
+        let test = st.test_connection(c.clone(), Some("pw".into()), None).await.unwrap_err().to_string();
+        assert!(test.contains("choose one"), "{test}");
+        assert_eq!(st.form_databases(c.clone(), Some("pw".into()), None).await.unwrap_err().to_string(), test);
+        assert_eq!(st.form_schemas(c, Some("pw".into()), None, "other".into()).await.err().unwrap().to_string(), test);
+        assert!(st.pools.read().await.is_empty() && st.tunnels.read().await.is_empty() && st.store.list().unwrap().is_empty());
+    }
+
+    /// Real servers: the databases and a database's schemas of a data source that isn't saved, and no pool kept.
+    /// QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres QURRY_TEST_MY=127.0.0.1:13306:root:dbtool:shop cargo test -p qurry-core form_listing -- --ignored
+    async fn form_listing(kind: crate::store::DbKind) {
+        let Some(crate::testenv::Server { mut cfg, password }) = crate::testenv::server(kind) else { return };
+        cfg.id = String::new();
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let dbs = st.form_databases(cfg.clone(), password.clone(), None).await.unwrap();
+        assert!(dbs.contains(&cfg.database), "{dbs:?}");
+        let sch = st.form_schemas(cfg.clone(), password, None, cfg.database.clone()).await.unwrap();
+        assert!(!sch.is_empty());
+        assert!(st.pools.read().await.is_empty() && st.store.list().unwrap().is_empty(), "nothing kept or saved");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn form_listing_pg() {
+        form_listing(crate::store::DbKind::Postgres).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn form_listing_mysql() {
+        form_listing(crate::store::DbKind::Mysql).await;
     }
 }

@@ -162,6 +162,28 @@ export const QuickSwitchTheme: S = {
 export const SettingsKeymap: S = { name: "Settings — Keymap", render: () => <SettingsDialog initialPage="keymap" onClose={noop} onUpdate={noop} onChannel={noop} /> };
 
 export const NewDataSource: S = { name: "Data Source — new", render: () => <ConnectionDialog onClose={noop} onSaved={noop} /> };
+/** A new data source's Schemas tab lists its databases with the form's settings before it is saved (as Test Connection connects) */
+export const NewDataSourceSchemas: S = {
+  name: "Data Source — new, Schemas tab",
+  render: () => <ConnectionDialog onClose={noop} onSaved={noop} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(body.getByRole("tab", { name: /^Schemas/ }));
+    await userEvent.click((await body.findByText("shop_app_test")).closest("label")!);
+  },
+};
+/** …while it connects through an AWS SSM instance that doesn't answer: the elapsed time and Cancel (Esc) */
+export const NewDataSourceSchemasConnecting: S = {
+  name: "Data Source — new, Schemas tab connecting",
+  render: () => <ConnectionDialog onClose={noop} onSaved={noop} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(body.getByRole("tab", { name: /SSH\/SSL/ }));
+    await userEvent.selectOptions(body.getByRole("combobox", { name: "Tunnel" }), "ssm");
+    await userEvent.type(body.getByRole("textbox", { name: "Instance id" }), "i-00000000000000000");
+    await userEvent.click(body.getByRole("tab", { name: /^Schemas/ }));
+  },
+};
 export const EditDataSource: S = { name: "Data Source — edit (SSH)", render: () => <ConnectionDialog edit={{ ...PROD, ssh: { enabled: true, host: "bastion.example.com", port: 22, user: "ec2-user", auth: "key", keyPath: "~/.ssh/id_ed25519" } } as ConnectionView} onClose={noop} onSaved={noop} /> };
 /** SSH/SSL tab with Tunnel = AWS SSM: profile · region · instance id. Test Connection answers "(via AWS SSM i-…)" */
 export const EditDataSourceSsm: S = {

@@ -260,6 +260,11 @@ export const api = {
     invoke<string>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null, testId: testId ?? null }),
   testSsh: (config: ConnectionConfig, sshSecret?: string, testId?: string) => invoke<string>("test_ssh", { config, sshSecret: sshSecret ?? null, testId: testId ?? null }),
   cancelTest: (testId: string) => invoke<void>("cancel_test", { testId }),
+  /** Schemas tab of a data source that isn't saved yet: listed with the form's settings, connecting as testConnection does (cancelTest(testId) stops it) */
+  formDatabases: (config: ConnectionConfig, password?: string, sshSecret?: string, testId?: string) =>
+    invoke<string[]>("form_databases", { config, password: password ?? null, sshSecret: sshSecret ?? null, testId: testId ?? null }),
+  formSchemas: (config: ConnectionConfig, database: string, password?: string, sshSecret?: string) =>
+    invoke<SchemaInfo[]>("form_schemas", { config, database, password: password ?? null, sshSecret: sshSecret ?? null, testId: null }),
   connect: (id: string) => invoke<string>("connect", { id }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   runQuery: (id: string, sql: string, tabId?: string, limit = 500) => invoke<QueryResult>("run_query", { id, sql, limit, tabId: tabId ?? null }),

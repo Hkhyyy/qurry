@@ -175,3 +175,73 @@ test("Schemas tab: unchecking one database or schema under All keeps the others;
   await box("billing").click();
   await expect(row).toContainText("all schemas");
 });
+
+async function newSource(page: import("@playwright/test").Page) {
+  await page.locator(".ws-explorer.on").getByTitle("Add Data Source").click();
+  await page.getByRole("menuitem", { name: "New Data Source…" }).click();
+  const d = dialog(page);
+  await expect(d.locator(".ui-modal-title")).toHaveText("New Data Source");
+  return d;
+}
+
+// DataGrip lists a new data source's databases and schemas with the form's settings, before it is saved (as Test Connection connects)
+test("Schemas tab of a new data source lists with the form's settings; the scope is saved with OK", async ({ page }) => {
+  const d = await newSource(page);
+  await d.getByPlaceholder("user@localhost").fill("orders");
+  await d.locator(".ui-row").filter({ hasText: "Port" }).getByRole("textbox").first().fill("orders-db.example.com");
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  const box = (name: string) => d.locator(".scope-list").getByRole("checkbox", { name, exact: true });
+  await expect(box("All databases")).toBeChecked();
+  await expect(d.getByText("Save the data source first")).toHaveCount(0);
+  await expect(d.getByText("Listed with the settings above; nothing is saved until OK.")).toBeVisible();
+  await box("shop_app_test").click();
+  const row = d.locator(".scope-row", { has: page.getByRole("checkbox", { name: "shop_app", exact: true }) });
+  await row.locator(".twisty").click();
+  await box("billing").click();
+  await expect(row).toContainText("1 schemas");
+  await d.getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+
+  // Saved with the source: Properties shows the same choice, listed through the saved source
+  await treeNode(page, "orders").click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^Properties/ }).click();
+  await d.getByRole("tab", { name: "Schemas ●" }).click();
+  await expect(box("shop_app_test")).not.toBeChecked();
+  await expect(box("postgres")).toBeChecked();
+  await expect(row).toContainText("1 schemas");
+  await expect(d.getByText("nothing is saved until OK")).toHaveCount(0);
+});
+
+test("Schemas tab of a new data source: a failed connect says why and tries again; a slow one shows the time and can be cancelled", async ({ page }) => {
+  const d = await newSource(page);
+  // The mock's server without TLS: refused until Allow unencrypted is ticked
+  await d.locator(".ui-row").filter({ hasText: "Port" }).getByRole("textbox").first().fill("10.0.0.12");
+  const size = await d.boundingBox();
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  await expect(d.locator(".ui-notice.tone-danger")).toContainText("✕ ");
+  await expect(d.locator(".scope-list")).toHaveCount(0);
+  expect(await d.boundingBox(), "the dialog keeps its size").toEqual(size);
+  await d.getByRole("button", { name: "Try Again" }).click();
+  await expect(d.getByRole("button", { name: "Try Again" })).toBeVisible();
+  await d.getByRole("tab", { name: "Options" }).click();
+  await d.getByText("Allow unencrypted connection").click();
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  await expect(d.locator(".scope-list").getByRole("checkbox", { name: "shop_app", exact: true })).toBeVisible();
+
+  // An AWS SSM instance that never connects: elapsed time, Esc and Cancel stop it and keep the dialog
+  await d.getByRole("tab", { name: /SSH\/SSL/ }).click();
+  await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssm");
+  await d.getByRole("textbox", { name: "Instance id" }).fill("i-00000000000000000");
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  await expect(d.getByRole("status")).toContainText(/Connecting with the settings above… \d+\.\d s/);
+  expect(await d.boundingBox(), "the dialog keeps its size while connecting").toEqual(size);
+  await page.keyboard.press("Escape");
+  await expect(d.getByText("✕ Cancelled.")).toBeVisible();
+  await d.getByRole("button", { name: "Try Again" }).click();
+  await expect(d.getByRole("status")).toBeVisible();
+  await d.locator(".ui-empty").getByRole("button", { name: "Cancel" }).click();
+  await expect(d.getByText("✕ Cancelled.")).toBeVisible();
+  await expect(dialog(page)).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+});

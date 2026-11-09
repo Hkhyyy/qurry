@@ -964,6 +964,9 @@ pub(crate) mod tests {
         let msg = st.test_connection(c.clone(), None, None).await.expect("test via ssm");
         assert!(msg.starts_with("PostgreSQL") && msg.contains("(via AWS SSM i-0123456789abcdef0)"), "{msg}");
         gone(fake.path()).await;
+        // The Schemas tab of the unsaved source lists through a session of its own, ended after
+        assert!(st.form_databases(c.clone(), None, None).await.expect("databases via ssm").contains(&pg.database));
+        gone(fake.path()).await;
         let saved = st.save_connection(c, None, None).await.unwrap();
         st.connect(saved.id.clone()).await.expect("connect via ssm");
         let r = st.run_query(saved.id.clone(), "select count(*) from generate_series(1, 1000)".into(), Some(10), None).await.unwrap();

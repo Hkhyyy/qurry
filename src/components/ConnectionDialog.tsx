@@ -17,7 +17,7 @@ const EMPTY_SSH: SshConfig = { enabled: false, host: "", port: 22, user: "", aut
 const EMPTY_SSM: SsmConfig = { enabled: false, profile: "", region: "", target: "" };
 
 /** "Testing… 12.3 s" while a Test Connection runs (an AWS SSM session can take up to 30 s) */
-function TestElapsed() {
+function TestElapsed({ label = "Testing…" }: { label?: string }) {
   const [start] = useState(Date.now);
   const [now, setNow] = useState(start);
   useEffect(() => {
@@ -27,7 +27,7 @@ function TestElapsed() {
   return (
     <span role="status">
       <Text size="sm">
-        Testing… <b className="running-time">{elapsedText(now - start)}</b>
+        {label} <b className="running-time">{elapsedText(now - start)}</b>
       </Text>
     </span>
   );
@@ -52,6 +52,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const [testing, setTesting] = useState<string | null>(null);
   const testingRef = useRef<string | null>(null);
   useEffect(() => () => void (testingRef.current && api.cancelTest(testingRef.current)), []);
+  // A new data source's Schemas tab while it connects to list the databases: Esc stops that first, as it stops a test
+  const cancelListing = useRef<(() => void) | null>(null);
   // The Allow button under a failed test goes away when it tests again: focus moves to Test Connection first (the same button
   // becomes Cancel Test and back), so Escape cancels the test, then closes the dialog
   const testButton = useRef<HTMLButtonElement>(null);
@@ -168,7 +170,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     tab === "options"
       ? "Changes apply on the next connection (the data source is reconnected on OK)."
       : tab === "schemas"
-      ? "Only checked databases and schemas are shown in the Database Explorer. Nothing checked = show all."
+      ? `${edit ? "" : "Listed with the settings above; nothing is saved until OK. "}Only checked databases and schemas are shown in the Database Explorer. Nothing checked = show all.`
       : tab === "ssh" && tunnel === "ssm"
       ? "The database host/port on the General tab are reached from the instance (e.g. an RDS endpoint). Test Connection starts a session and connects through it."
       : tab === "ssh"
@@ -188,6 +190,9 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
         if (e.key === "Escape" && testing) {
           e.preventDefault();
           cancelTest();
+        } else if (e.key === "Escape" && cancelListing.current) {
+          e.preventDefault();
+          cancelListing.current();
         }
       }}
       footer={
@@ -412,7 +417,17 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
         </FormGrid>
       )}
 
-      {tab === "schemas" && <SchemasTab connId={edit?.id} kind={cfg.kind} defaultDb={defaultDbOf(cfg)} scope={cfg.scope ?? {}} onChange={(scope) => setCfg((c) => ({ ...c, scope }))} />}
+      {tab === "schemas" && (
+        <SchemasTab
+          connId={edit?.id}
+          form={{ config: cfg, password, sshSecret }}
+          cancelRef={cancelListing}
+          kind={cfg.kind}
+          defaultDb={defaultDbOf(cfg)}
+          scope={cfg.scope ?? {}}
+          onChange={(scope) => setCfg((c) => ({ ...c, scope }))}
+        />
+      )}
 
       {tab === "options" && (
         <FormGrid labelWidth={140}>
@@ -558,81 +573,140 @@ export function ColorSwatches({ value, onChange, custom }: { value: string | nul
 
 type Scope = NonNullable<ConnectionConfig["scope"]>;
 
-/** Schemas tab of DataGrip Data Source properties: choose which DBs and schemas show in the tree */
-function SchemasTab({ connId, kind, defaultDb, scope, onChange }: { connId?: string; kind: DbKind; defaultDb: string; scope: Scope; onChange: (s: Scope) => void }) {
+/** The form's settings, for listing a data source that isn't saved yet */
+interface FormSettings {
+  config: ConnectionConfig;
+  password?: string;
+  sshSecret?: string;
+}
+
+/**
+ * Schemas tab of DataGrip Data Source properties: choose which DBs and schemas show in the tree. A saved source lists through its
+ * saved settings; a new one connects with the form's settings, as Test Connection does, and keeps nothing (DataGrip does the same)
+ */
+function SchemasTab({ connId, form, cancelRef, kind, defaultDb, scope, onChange }: { connId?: string; form: FormSettings; cancelRef: { current: (() => void) | null }; kind: DbKind; defaultDb: string; scope: Scope; onChange: (s: Scope) => void }) {
   const [dbs, setDbs] = useState<string[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [schemas, setSchemas] = useState<Record<string, SchemaInfo[] | "loading">>({});
   const [openDb, setOpenDb] = useState<string | null>(null);
+  // The settings as they are when the tab opens (they are edited on the other tabs, which unmount this one); ticking a box changes only the scope
+  const formAt = useRef(form);
+  const [attempt, setAttempt] = useState(0);
+  const wrap = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!connId) return;
-    meta.databases(connId).then(setDbs, (e) => setErr(String(e)));
-  }, [connId]);
-
-  if (!connId) return <EmptyState>Save the data source first, then choose the databases and schemas to show.</EmptyState>;
-  if (err) return <Notice tone="danger">{err}</Notice>;
-  if (!dbs) return <EmptyState>Loading databases…</EmptyState>;
-
-  // Same rules as Manage Shown Schemas (ScopePopup): no filter = All, stored as no filter
-  const isAll = (v: string[]) => !v.length || (v.length === 1 && v[0] === SCOPE_ALL);
-  const selDbs = scope.databases?.length ? scope.databases : [SCOPE_ALL];
-  const allDbs = selDbs.includes(SCOPE_ALL);
-  const toggleDb = (db: string) => {
-    // System databases stay out of the list that replaces All, as in Manage Shown Schemas
-    const next = toggleScoped(selDbs, db, dbs.filter((d) => d === defaultDb || !isSystemDb(kind, d)), defaultDb);
-    onChange({ ...scope, databases: isAll(next) ? null : next });
-  };
-  const loadSchemas = (db: string) => {
-    setOpenDb(openDb === db ? null : db);
-    if (schemas[db]) return;
-    setSchemas((s) => ({ ...s, [db]: "loading" }));
-    meta.schemas(targetId(connId, db)).then(
-      (list) => setSchemas((s) => ({ ...s, [db]: list.filter((x) => !x.isSystem) })),
-      () => setSchemas((s) => ({ ...s, [db]: [] })),
+    if (connId) {
+      meta.databases(connId).then(setDbs, (e) => setErr(String(e)));
+      return;
+    }
+    // Cancel, Esc, leaving the tab and closing the dialog stop the connect, and with it its SSH / AWS SSM tunnel
+    const id = crypto.randomUUID();
+    let running = true;
+    const done = () => {
+      running = false;
+      cancelRef.current = null;
+    };
+    const stop = () => (done(), void api.cancelTest(id));
+    cancelRef.current = () => (stop(), setErr("Cancelled."));
+    const f = formAt.current;
+    api.formDatabases(f.config, f.password, f.sshSecret, id).then(
+      (v) => running && (done(), setDbs(v)),
+      (e) => running && (done(), setErr(String(e))),
     );
-  };
-  const schList = (db: string) => (scope.schemas?.[db]?.length ? scope.schemas[db] : [SCOPE_ALL]);
-  const toggleSchema = (db: string, name: string) => {
-    const sch = schemas[db];
-    const next = toggleScoped(schList(db), name, Array.isArray(sch) ? sch.map((x) => x.name) : [], "public");
-    const all = { ...(scope.schemas ?? {}) };
-    if (isAll(next)) delete all[db];
-    else all[db] = next;
-    onChange({ ...scope, schemas: all });
-  };
+    return () => void (running && stop());
+  }, [connId, attempt, cancelRef]);
+
+  // Try Again, Cancel and the list replace the button that had focus: keep focus in the dialog, so Esc still stops or closes
+  useEffect(() => {
+    if (document.activeElement === document.body) wrap.current?.querySelector<HTMLElement>("button, input")?.focus();
+  }, [dbs, err]);
 
   return (
-    <div className="scope-list">
-      <label className="scope-row all">
-        <input type="checkbox" checked={allDbs} onChange={() => toggleDb(SCOPE_ALL)} /> All databases
-      </label>
-      {dbs.map((db) => {
-        const sch = schemas[db];
-        const selSch = schList(db);
-        return (
-          <div key={db}>
-            <div className="scope-row">
-              <span className="twisty" onClick={() => loadSchemas(db)}>{openDb === db ? "▾" : "▸"}</span>
-              <label>
-                <input type="checkbox" checked={scopeChecked(selDbs, db, defaultDb)} onChange={() => toggleDb(db)} /> {db}
-              </label>
-              <Text tone="muted">{selSch.includes(SCOPE_ALL) ? "all schemas" : `${selSch.length} schemas`}</Text>
-            </div>
-            {openDb === db && (
-              <div className="scope-children">
-                {sch === "loading" && <Text as="div" tone="muted">Loading…</Text>}
-                {Array.isArray(sch) &&
-                  sch.map((x) => (
-                    <label key={x.name} className="scope-row">
-                      <input type="checkbox" checked={scopeChecked(selSch, x.name, "public")} onChange={() => toggleSchema(db, x.name)} /> {x.name}
-                    </label>
-                  ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
+    <div ref={wrap} style={{ display: "contents" }}>
+      {body()}
     </div>
   );
+
+  function body() {
+    if (err && !connId)
+      return (
+        <>
+          <Notice tone="danger">{"✕ " + err}</Notice>
+          <div className="ui-row conn-test-actions">
+            <Button onClick={() => (setErr(null), setAttempt((n) => n + 1))}>Try Again</Button>
+          </div>
+        </>
+      );
+    if (err) return <Notice tone="danger">{err}</Notice>;
+    if (!dbs && !connId)
+      return (
+        <EmptyState action={<Button onClick={() => cancelRef.current?.()}>Cancel</Button>}>
+          <TestElapsed label="Connecting with the settings above…" />
+        </EmptyState>
+      );
+    if (!dbs) return <EmptyState>Loading databases…</EmptyState>;
+
+    // Same rules as Manage Shown Schemas (ScopePopup): no filter = All, stored as no filter
+    const isAll = (v: string[]) => !v.length || (v.length === 1 && v[0] === SCOPE_ALL);
+    const selDbs = scope.databases?.length ? scope.databases : [SCOPE_ALL];
+    const allDbs = selDbs.includes(SCOPE_ALL);
+    const toggleDb = (db: string) => {
+      // System databases stay out of the list that replaces All, as in Manage Shown Schemas
+      const next = toggleScoped(selDbs, db, dbs.filter((d) => d === defaultDb || !isSystemDb(kind, d)), defaultDb);
+      onChange({ ...scope, databases: isAll(next) ? null : next });
+    };
+    const loadSchemas = (db: string) => {
+      setOpenDb(openDb === db ? null : db);
+      if (schemas[db]) return;
+      setSchemas((s) => ({ ...s, [db]: "loading" }));
+      const f = formAt.current;
+      (connId ? meta.schemas(targetId(connId, db)) : api.formSchemas(f.config, db, f.password, f.sshSecret)).then(
+        (list) => setSchemas((s) => ({ ...s, [db]: list.filter((x) => !x.isSystem) })),
+        () => setSchemas((s) => ({ ...s, [db]: [] })),
+      );
+    };
+    const schList = (db: string) => (scope.schemas?.[db]?.length ? scope.schemas[db] : [SCOPE_ALL]);
+    const toggleSchema = (db: string, name: string) => {
+      const sch = schemas[db];
+      const next = toggleScoped(schList(db), name, Array.isArray(sch) ? sch.map((x) => x.name) : [], "public");
+      const all = { ...(scope.schemas ?? {}) };
+      if (isAll(next)) delete all[db];
+      else all[db] = next;
+      onChange({ ...scope, schemas: all });
+    };
+
+    return (
+      <div className="scope-list">
+        <label className="scope-row all">
+          <input type="checkbox" checked={allDbs} onChange={() => toggleDb(SCOPE_ALL)} /> All databases
+        </label>
+        {dbs.map((db) => {
+          const sch = schemas[db];
+          const selSch = schList(db);
+          return (
+            <div key={db}>
+              <div className="scope-row">
+                <span className="twisty" onClick={() => loadSchemas(db)}>{openDb === db ? "▾" : "▸"}</span>
+                <label>
+                  <input type="checkbox" checked={scopeChecked(selDbs, db, defaultDb)} onChange={() => toggleDb(db)} /> {db}
+                </label>
+                <Text tone="muted">{selSch.includes(SCOPE_ALL) ? "all schemas" : `${selSch.length} schemas`}</Text>
+              </div>
+              {openDb === db && (
+                <div className="scope-children">
+                  {sch === "loading" && <Text as="div" tone="muted">Loading…</Text>}
+                  {Array.isArray(sch) &&
+                    sch.map((x) => (
+                      <label key={x.name} className="scope-row">
+                        <input type="checkbox" checked={scopeChecked(selSch, x.name, "public")} onChange={() => toggleSchema(db, x.name)} /> {x.name}
+                      </label>
+                    ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
 }
