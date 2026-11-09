@@ -102,7 +102,8 @@ test("a whole keyword or column closes the list, so ↩ applies (`is null` doesn
   const where = field(page, "WHERE");
   await where.click();
   await where.pressSequentially("user_name is nul");
-  await expect(rows(page)).toHaveText(["null", "nulls"]);
+  // After `is` only what can follow it (`nulls` can't)
+  await expect(rows(page)).toHaveText(["null"]);
   await where.pressSequentially("l");
   await expect(list(page)).toHaveCount(0);
   const sqls = await spyQueries(page);

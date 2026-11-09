@@ -510,10 +510,33 @@ enum Spot {
     OrderBy,
     /// Inside INSERT INTO t (…)
     InsertColumns,
-    /// Right after an operand, or `is`: keywords only
+    /// Right after an operand: keywords only
     AfterOperand,
+    /// After a keyword that only one of a few words can follow (`left` → join, `order` → by, `is` → null …): only those
+    Follows(&'static [&'static str]),
     /// Any other expression (WHERE, SET, HAVING, function arguments …)
     Expr,
+}
+
+/// The words that can come after `prev` (and `prev2` before it), when there are only a few: nothing else is offered there.
+/// `in_sources`: in a FROM / JOIN clause, where `left` / `right` start a join rather than a call
+fn follows(prev: &str, prev2: &str, in_sources: bool, mysql: bool) -> Option<&'static [&'static str]> {
+    Some(match prev {
+        "left" | "right" if in_sources => &["join", "outer join"],
+        "full" if in_sources && !mysql => &["join", "outer join"],
+        "inner" | "cross" | "outer" if in_sources => &["join"],
+        "natural" if in_sources => if mysql { &["join", "left join", "right join"] } else { &["join", "left join", "right join", "full join", "inner join"] },
+        "order" | "group" | "partition" => &["by"],
+        "not" if prev2 == "is" => &["null", "true", "false", "distinct from"],
+        "is" => &["null", "not null", "true", "false", "not", "distinct from"],
+        "nulls" => &["first", "last"],
+        "insert" => &["into"],
+        "delete" => &["from"],
+        "union" | "intersect" | "except" => &["select", "all", "distinct"],
+        "create" if prev2.is_empty() => &["table", "view", "index", "unique index", "schema", "database", "function", "procedure", "trigger", "sequence", "or replace"],
+        "alter" | "drop" if prev2.is_empty() => &["table", "view", "index", "schema", "database", "function", "procedure", "trigger", "sequence"],
+        _ => return None,
+    })
 }
 
 /// Words a statement can't end with: a word after them continues the statement
@@ -531,6 +554,7 @@ struct Caret {
     /// The `(` the caret is inside (in the caret's block), if any
     open: Option<usize>,
     spot: Spot,
+    mysql: bool,
 }
 
 impl Caret {
@@ -557,7 +581,7 @@ impl Caret {
                 back.push(i);
             }
         }
-        let mut c = Caret { sc, block, back, open, spot: Spot::Expr };
+        let mut c = Caret { sc, block, back, open, spot: Spot::Expr, mysql };
         c.spot = c.spot(text, start);
         c
     }
@@ -613,9 +637,13 @@ impl Caret {
             Some(K::Punct) => prev_word == ")",
             None => false,
         };
-        let after_is = prev_word == "is" || prev_word == "not" && self.word_at(1) == "is";
         let in_sources = clause.as_ref().is_some_and(|(_, w)| matches!(w.as_str(), "from" | "join" | "straight_join" | "update" | "into"));
-        if (operand || after_is) && !in_sources {
+        if prev_kind == Some(K::Word)
+            && let Some(words) = follows(&prev_word, &self.word_at(1), in_sources, self.mysql)
+        {
+            return Spot::Follows(words);
+        }
+        if operand && !in_sources {
             return Spot::AfterOperand;
         }
         let Some((ci, mut cw)) = clause else { return Spot::Expr };
@@ -939,6 +967,7 @@ pub fn suggest_lead(m: &Meta, text: &str, caret: usize, db: &str, mysql: bool, o
         Spot::Start => (n, vec![], rest(Kw::Statement, false, false, vec![])),
         Spot::StatementFirst => (n, vec![], rest(Kw::StatementFirst, false, false, vec![])),
         Spot::AfterOperand => (n, vec![], rest(Kw::StatementLast, false, false, vec![])),
+        Spot::Follows(words) => (n, words.iter().filter(|w| starts(w)).map(|w| Item::new(*w, "keyword", *w, ItemKind::Keyword)).collect(), None),
         Spot::TableRef { join } => {
             let mut lead: Vec<Item> = vec![];
             for b in c.sc.chain(c.block) {
@@ -1717,6 +1746,43 @@ mod tests {
         assert_eq!(labels(&v), ["user_name", "upper", "unnest", "users", "using", "union", "update"], "columns, functions, tables, keywords");
         let (_, v) = sg(&meta(), "select * from inv", "select * from inv", "app", false, TUI);
         assert_eq!(v[0].insert, "billing.invoices");
+    }
+
+    /// A keyword only a few words can follow offers just those: `left j` → join (no json_agg …), `order` → by, `is` → null …
+    #[test]
+    fn fixed_next_words_only() {
+        let m = meta();
+        let cases: [(&str, bool, &[&str]); 12] = [
+            ("select * from orders p left j", false, &["join"]),
+            ("select * from orders p left ", false, &["join", "outer join"]),
+            ("select * from orders p left outer ", false, &["join"]),
+            ("select * from orders p full ", true, &[]),
+            ("select * from users u inner ", false, &["join"]),
+            ("select * from users order ", false, &["by"]),
+            ("select count(*) from users group b", false, &["by"]),
+            ("select * from users where email is n", false, &["null", "not null", "not"]),
+            ("select * from users where email is not ", false, &["null", "true", "false", "distinct from"]),
+            ("insert ", false, &["into"]),
+            ("select 1 union ", false, &["select", "all", "distinct"]),
+            ("create t", false, &["table", "trigger"]),
+        ];
+        for (text, mysql, want) in cases {
+            let (_, v) = sg(&m, text, text, "app", mysql, TUI);
+            if want.is_empty() {
+                // MySQL has no FULL JOIN: `full` is a name there, so the usual candidates come
+                assert!(!v.is_empty() && !labels(&v).contains(&"outer join"), "{text:?}: {:?}", labels(&v));
+            } else {
+                assert_eq!(labels(&v), want, "{text:?}");
+            }
+            // The GUI (Monaco filters) gets the same few, not every function and keyword
+            let (_, g) = sg(&m, text, text, "app", mysql, Options::GUI);
+            if !want.is_empty() {
+                assert!(g.len() <= 11 && g.iter().all(|i| i.kind == ItemKind::Keyword), "{text:?}: {:?}", labels(&g));
+            }
+        }
+        // `left(` in a select list is a call, not a join
+        let (_, v) = sg(&m, "select left", "select left", "app", false, TUI);
+        assert!(!labels(&v).contains(&"outer join"));
     }
 
     #[test]
