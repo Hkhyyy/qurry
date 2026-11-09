@@ -79,8 +79,8 @@ test("AWS SSM: a local Host gets a hint on the General tab, not an error", async
 });
 
 test("AWS SSM: a long Test Connection error is scrolled into view in the fixed-size dialog", async ({ page }) => {
-  // Short enough that the error ends below the body (the SSM note is behind an ⓘ now, so the form is a line shorter)
-  await page.setViewportSize({ width: 1100, height: 670 });
+  // Short enough that the error ends below the body with macOS fonts
+  await page.setViewportSize({ width: 1100, height: 640 });
   await openProps(page);
   const d = dialog(page);
   await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssm");
@@ -98,8 +98,10 @@ test("AWS SSM: a long Test Connection error is scrolled into view in the fixed-s
       return !!n && !!b && n.y >= b.y && n.y + n.height <= b.y + b.height;
     }, { message: "the whole error, its last line included, is inside the dialog body" })
     .toBe(true);
-  // The body scrolled, but the tab strip stays pinned at its top: the labels are still shown, not only the active underline
-  expect(await body.evaluate((el) => el.scrollTop), "the body scrolled to show the error").toBeGreaterThan(0);
+  // Where the error didn't fit (it depends on the fonts: CI's Linux ones are shorter), the body scrolled to it; the tab strip stays
+  // pinned at its top either way: the labels are still shown, not only the active underline
+  const [overflows, scrolled] = await body.evaluate((el) => [el.scrollHeight > el.clientHeight + 1, el.scrollTop > 0]);
+  expect(scrolled, "the body scrolled to show the error").toBe(overflows);
   const tab = d.getByRole("tab", { name: /SSH\/SSL/ });
   const [t, b] = [await tab.boundingBox(), await body.boundingBox()];
   expect(t && b && t.y >= b.y && t.y + t.height <= b.y + b.height, "the SSH/SSL tab is inside the dialog body").toBe(true);
