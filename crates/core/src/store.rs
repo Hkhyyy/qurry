@@ -852,10 +852,17 @@ impl Store {
         self.column_width_entries().iter().find(|e| t.is(e)).and_then(|e| e.get("widths")).map(crate::format::column_widths).unwrap_or_default()
     }
 
-    /// Set some of a table's column widths, on what the file holds now (the GUI and the TUI may both have changed it); returns what is saved
+    /// Set some of a table's column widths, on what the file holds now (the GUI and the TUI may both have changed it); returns what is saved.
+    /// A width of 0 forgets that column's (it goes back to its computed width: a second fit's way back)
     pub fn set_column_widths(&self, t: &TableRef, widths: &crate::format::ColumnWidths) -> AppResult<crate::format::ColumnWidths> {
         let mut next = self.column_widths(t);
-        next.extend(widths.iter().map(|(c, &w)| (c.clone(), crate::format::column_width(w.into(), 0))));
+        for (c, &w) in widths {
+            if w == 0 {
+                next.remove(c);
+            } else {
+                next.insert(c.clone(), crate::format::column_width(w.into(), 0));
+            }
+        }
         self.save_column_widths(t, &next)?;
         Ok(next)
     }
@@ -1117,6 +1124,9 @@ mod tests {
         let both = ColumnWidths::from([("memo".into(), 28), ("order_no".into(), 20)]);
         assert_eq!(store.set_column_widths(&t("orders"), &ColumnWidths::from([("memo".into(), 28)])).unwrap(), both);
         assert_eq!(store.column_widths(&t("orders")), both);
+        // 0 forgets one column's width (a second fit), the others stay
+        assert_eq!(store.set_column_widths(&t("orders"), &ColumnWidths::from([("memo".into(), 0)])).unwrap(), ColumnWidths::from([("order_no".into(), 20)]));
+        store.set_column_widths(&t("orders"), &ColumnWidths::from([("memo".into(), 28)])).unwrap();
         assert_eq!(store.column_widths(&t("users")), ColumnWidths::from([("name".into(), crate::format::COLUMN_WIDTH_MAX)]));
         let other_db = TableRef { database: "postgres".into(), ..t("orders") };
         assert!(store.column_widths(&other_db).is_empty(), "another database's table of the same name keeps its own widths");

@@ -79,9 +79,12 @@ export function useColumnWidths(of: WidthsOf, onError: (msg: string) => void) {
     };
   }, [k]);
   const edited = () => edits.set(k, (edits.get(k) ?? 0) + 1);
+  /** `changes`: column key → characters; 0 forgets the column's width (back to the computed one) */
   const set = (changes: ColumnWidths, save = true) => {
     edited();
-    put(k, { ...(cache.get(k) ?? NONE), ...changes });
+    const next: ColumnWidths = { ...(cache.get(k) ?? NONE), ...changes };
+    for (const [c, w] of Object.entries(changes)) if (w === 0) delete next[c];
+    put(k, next);
     if (save && typeof of !== "string") api.setColumnWidths(of, changes).then((w) => put(k, w), (e) => onError(saveError(e)));
   };
   const reset = () => {

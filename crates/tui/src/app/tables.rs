@@ -369,6 +369,7 @@ impl App {
         self.status = match (how, changed.iter().next()) {
             (Resize::Reset, _) => "Column widths are the computed ones again".into(),
             (Resize::FitAll, _) => "Every column fits its content".into(),
+            (_, Some((_, 0))) => format!("{name}: its computed width again"),
             (_, Some((_, w))) => format!("{name}: {w} cells wide"),
             _ => String::new(),
         };

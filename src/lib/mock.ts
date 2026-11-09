@@ -764,7 +764,9 @@ const handlers: Record<string, (a: any) => unknown> = {
   set_column_widths: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
     const [all, k] = [columnWidths(), widthsKey(a.table)];
+    // 0 forgets a column's width
     all[k] = { ...all[k], ...Object.fromEntries(Object.entries(a.widths as Record<string, number>).map(([c, w]) => [c, Math.min(Math.max(Math.round(w), 3), 200)])) };
+    for (const [c, w] of Object.entries(a.widths as Record<string, number>)) if (w === 0) delete all[k][c];
     saveWidths(all);
     return all[k];
   },

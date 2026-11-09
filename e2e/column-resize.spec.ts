@@ -66,6 +66,17 @@ test("table tab: drag resizes, double-click fits (again: back); the width is kep
   expect(await width(header(page, "user_name"))).toBe(px(3));
 });
 
+test("double-click on a column without a set width, twice: fitted, then exactly its computed width again (not rounded to characters)", async ({ page }) => {
+  await openApp(page);
+  await openUsers(page);
+  for (const n of ["id", "user_name", "amount", "memo"]) {
+    const before = await width(header(page, n));
+    await header(page, n).locator(".col-resize").dblclick();
+    await header(page, n).locator(".col-resize").dblclick();
+    expect(await width(header(page, n)), n).toBe(before);
+  }
+});
+
 test("header menu: Fit Column, Fit All Columns, Reset Widths (back to the computed widths, also after a restart)", async ({ page }) => {
   await openApp(page);
   await openUsers(page);

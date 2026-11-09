@@ -28,7 +28,7 @@ pub struct Grid {
     pub widths: Vec<u16>,
     /// Widths the user set (< > =, or the GUI for a table tab) by column name (`id#2` for a name the result repeats), in cells (qurry_shared::format::ColumnWidths)
     pub user_widths: ColumnWidths,
-    /// A column's width before `=` fitted it, so `=` on the fitted column puts it back (the GUI's double-click on a header edge)
+    /// A column's set width before `=` fitted it (0: none, the computed one), so `=` on the fitted column puts it back (the GUI's double-click)
     before_fit: ColumnWidths,
     /// Fractional-second digits of time columns (aligned within a column, 0 = no alignment)
     pub(crate) frac: Vec<usize>,
@@ -184,27 +184,24 @@ impl Grid {
         column_width(name.max(body) as i64, 0)
     }
 
-    /// `=`: fit column `c`; on a column that already fits, back to its width before the fit (the computed one when that isn't known)
+    /// `=`: fit column `c`; on a column fitted to that width, back to the width it had set before (or none: its computed width).
+    /// Returns the column's key and its width to save, 0 to forget it (Store::set_column_widths)
     pub fn toggle_fit(&mut self, c: usize) -> (String, u16) {
         let key = self.width_keys().swap_remove(c);
         let fit = self.fit_width(c);
-        if self.widths[c] != fit {
-            self.before_fit.insert(key, self.widths[c]);
+        let set = self.user_widths.get(&key).copied();
+        if set != Some(fit) {
+            self.before_fit.insert(key, set.unwrap_or(0));
             return self.set_width(c, fit);
         }
-        let back = match self.before_fit.remove(&key) {
-            Some(w) => w,
-            None => {
-                let set = self.user_widths.remove(&key);
+        match self.before_fit.remove(&key).unwrap_or(0) {
+            0 => {
+                self.user_widths.remove(&key);
                 self.compute_widths();
-                let base = self.widths[c];
-                if let Some(w) = set {
-                    self.user_widths.insert(key, w);
-                }
-                base
+                (key, 0)
             }
-        };
-        self.set_width(c, back)
+            w => self.set_width(c, w),
+        }
     }
 
     /// Give column `c` the width `w` (in range); returns the width and its column's key, for saving
@@ -1048,13 +1045,19 @@ mod tests {
         let ty = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
         let mut g = Grid::new(QueryResult { columns: vec![ty("s", "TEXT")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         let computed = g.widths[0];
-        g.set_width(0, 5);
         let fit = g.fit_width(0);
+        // No set width: fit, then forget it (0 to save), the computed width again
+        assert_eq!(g.toggle_fit(0).1, fit);
+        assert_eq!(g.toggle_fit(0), ("s".to_string(), 0));
+        assert_eq!((g.widths[0], g.user_widths.len()), (computed, 0));
+        // A set width: fit, then that width again
+        g.set_width(0, 5);
         assert_eq!(g.toggle_fit(0).1, fit);
         assert_eq!(g.toggle_fit(0).1, 5);
         // Fitted without a known width before (a saved width): back to the computed one
         g.set_user_widths([("s".to_string(), fit)].into());
-        assert_eq!(g.toggle_fit(0).1, computed);
+        assert_eq!(g.toggle_fit(0).1, 0);
+        assert_eq!(g.widths[0], computed);
     }
     /// Shift+arrow range: rectangle, copy as TSV (values only), IN list only the selected cells (row tuples for multiple columns). Plain movement clears it
     #[test]

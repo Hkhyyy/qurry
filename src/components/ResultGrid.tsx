@@ -288,7 +288,7 @@ export function ResultGrid(p: Props) {
   /** Characters column i needs for its header and its longest cell as shown, over the rows loaded so far (DataGrip: Fit Column) */
   const fitOf = (i: number) => fitChars(headPx[i], Array.from({ length: rowCount }, (_, r) => shown(valueAt(r, i), i)), em);
   const fitColumn = (i: number) => userWidths.set({ [wkey[i]]: fitOf(i) });
-  /** A column's width before a double-click fitted it, so the next double-click on the fitted column puts it back (TUI: =) */
+  /** A column's set width before a double-click fitted it (0: none, the computed one), so the next double-click puts it back (TUI: =) */
   const beforeFit = useRef(new Map<string, number>());
   // A new result (or Reset Widths) starts without it, as the TUI's grid does
   useEffect(() => beforeFit.current.clear(), [result]);
@@ -297,12 +297,13 @@ export function ResultGrid(p: Props) {
     userWidths.reset();
   };
   const toggleFit = (i: number) => {
-    const [k, fit, now] = [wkey[i], fitOf(i), setOf(i) ?? toChars(widths[i], em)];
-    if (now === fit) {
-      userWidths.set({ [k]: beforeFit.current.get(k) ?? toChars(computed[i], em) });
+    const [k, fit] = [wkey[i], fitOf(i)];
+    // Back exactly: a width the column had, or none (its computed pixels; rounding them to characters could land on the fit again)
+    if (setOf(i) === fit) {
+      userWidths.set({ [k]: beforeFit.current.get(k) ?? 0 });
       beforeFit.current.delete(k);
     } else {
-      beforeFit.current.set(k, now);
+      beforeFit.current.set(k, setOf(i) ?? 0);
       userWidths.set({ [k]: fit });
     }
   };
