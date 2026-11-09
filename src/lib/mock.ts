@@ -809,7 +809,11 @@ const handlers: Record<string, (a: any) => unknown> = {
     if ((window as any).__mockChecksOff && !a.force) throw "Update checks are off";
     return (updateChecked = true), updateInfo();
   },
+  // Settings › Passwords: the key starts in the config folder
+  secret_key_location: () => secretKeyAt,
+  set_secret_key_location: (a: any) => (secretKeyAt = a.keychain ? "keychain" : "file"),
 };
+let secretKeyAt: "file" | "keychain" = "file";
 /** window.__mockNoUpdate: the channel offers nothing newer (e.g. the TUI switched it back to stable) */
 function updateInfo() {
   return {

@@ -3,7 +3,7 @@ import { ask } from "../lib/dialogs";
 import { Cell, dba, currentFirst, DbaReportInfo, Dialect, QueryResult } from "../lib/api";
 import { ResultGrid } from "./ResultGrid";
 import { sharedOr } from "../lib/shared";
-import { Button, Notice, Select, Text, Toolbar } from "../ui";
+import { Button, Named, Notice, Select, Toolbar } from "../ui";
 
 const empty: QueryResult = { columns: [], rows: [], rowsAffected: 0, truncated: false, elapsedMs: 0, hasResultSet: true };
 /** Reports that reload on their own (views of current state) */
@@ -140,17 +140,20 @@ export function DbaReport(p: {
   return (
     <div className="dba">
       <Toolbar className="dba-bar">
-        <Select className="dba-report" value={p.report} onChange={(e) => p.onReport(e.target.value, list.find((r) => r.id === e.target.value)?.title ?? e.target.value)}>
-          {groups.map(([g, rs]) => (
-            <optgroup key={g} label={g}>
-              {rs.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.title}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </Select>
+        {/* What the report shows, right after its name */}
+        <Named about={info?.title} info={info?.help ? [info.help] : undefined}>
+          <Select className="dba-report" value={p.report} onChange={(e) => p.onReport(e.target.value, list.find((r) => r.id === e.target.value)?.title ?? e.target.value)}>
+            {groups.map(([g, rs]) => (
+              <optgroup key={g} label={g}>
+                {rs.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.title}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </Select>
+        </Named>
         <Select className="dba-db" value={p.database} onFocus={loadDbs} onMouseDown={loadDbs} onChange={(e) => p.onDatabase(e.target.value)} disabled={p.fixedDb} title={p.fixedDb ? "This data source has one database" : dbsError ?? "Database the report runs on"}>
           {currentFirst(p.database, dbs).map((d) => (
             <option key={d} value={d} title={d}>{d || "(all schemas)"}</option>
@@ -164,7 +167,6 @@ export function DbaReport(p: {
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Auto-refresh (3s)
           </label>
         )}
-        <Text tone="muted" className="dba-help">{info?.help}</Text>
       </Toolbar>
       {/* Not an option: a native select is as wide as its longest option */}
       {dbsError && <Notice tone="warn" className="dba-dbs-error">{dbsError}</Notice>}

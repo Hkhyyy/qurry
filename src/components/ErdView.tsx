@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { erd, ErdRelation, ErdTable, saveFile } from "../lib/api";
 import { layout } from "../lib/erdLayout";
-import { Button, EmptyState, Notice, Spacer, Text, Toolbar } from "../ui";
+import { Button, EmptyState, Named, Notice, Spacer, Text, Toolbar } from "../ui";
 
 const ROW = 18;
 const HEAD = 26;
@@ -140,7 +140,9 @@ export function ErdView(p: { target: string; schemas: string[]; visible: boolean
     <div className="erd">
       <Toolbar className="dba-bar erd-bar">
         <Text tone="muted" className="dba-help">
-          {p.schemas.join(", ")} — {data.tables.length} tables, {data.relations.length} foreign keys · drag tables, wheel to zoom, drag the background to pan, double-click a table to open it
+          <Named about="the diagram" info={["Drag tables to move them, the wheel zooms, dragging the background pans.", "Double-click a table to open it."]}>
+            {p.schemas.join(", ")} — {data.tables.length} tables, {data.relations.length} foreign keys
+          </Named>
         </Text>
         <Spacer />
         <Button onClick={fit}>Fit</Button>

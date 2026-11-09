@@ -523,6 +523,8 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .redis-browser { height: 100%; display: flex; flex-direction: column; background: var(--bg); }
 .redis-browser > [data-panel-group] { flex: 1; min-height: 0; }
 .rd-pattern { flex: 1; min-width: 120px; font-family: 'JetBrains Mono', Menlo, monospace; }
+/* The filter and its ⓘ take the toolbar's spare width together */
+.ui-named:has(> .rd-pattern) { flex: 1; }
 .rd-keys { height: 100%; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
 .rd-keys-head { display: flex; padding: 4px 10px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border); }
 .rd-keys-head .grow, .rd-keys-foot .grow, .rd-keybar .grow, .rd-editor-bar .grow { flex: 1; }

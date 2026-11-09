@@ -215,7 +215,7 @@ function PasswordSettings() {
         {/* A warning before the move: shown while the key is still in the file */}
         {loc === "file" && (
           <Text size="sm" tone="warn">
-            Before moving the key to the keychain, update Qurry, qurry-tui and qurry-mcp: older versions can't read it there.
+            Update Qurry, qurry-tui and qurry-mcp before moving the key: older ones can't read it.
           </Text>
         )}
       </Field>

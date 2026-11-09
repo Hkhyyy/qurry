@@ -178,7 +178,7 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
         <Button size="sm" variant="link" onClick={onBack}>
           ‹ Appearance
         </Button>
-        <Named about="Theme colors" info={["Colors below the contrast minimum are saved with their warning, never changed.", "An invalid hex is not applied."]}>
+        <Named about="Theme colors" info={["Point at a color's name to see where it's used in the preview.", "Colors below the contrast minimum are saved with their warning, never changed.", "An invalid hex is not applied."]}>
           <b>Theme colors</b>
         </Named>
         <span className="muted">
@@ -207,9 +207,6 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
               )}
             </Select>
           </div>
-          <Text size="sm" tone="muted">
-            Point at a color's name to see where it's used in the preview.
-          </Text>
           <div className="theme-tokens">
             <div className="theme-group">Basic colors</div>
             {TOKENS.filter((t) => t.basic).map(row)}

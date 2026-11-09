@@ -259,8 +259,10 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
                   <Text tone="muted">✓ {KIND_LABEL[cfg.kind]} driver installed</Text>
                 ) : (
                   <>
-                    <Text tone="muted" truncate title="Downloaded from this version's GitHub release (signature checked)">
-                      Not installed — downloaded from this version's GitHub release (signature checked)
+                    <Text tone="muted">
+                      <Named about="the driver plugin" info={["Install downloads it from this version's GitHub release and checks its signature."]}>
+                        Not installed
+                      </Named>
                     </Text>
                     <Button size="sm" variant="primary" disabled={installing} onClick={installDriver}>
                       {installing ? "Installing…" : "Install"}

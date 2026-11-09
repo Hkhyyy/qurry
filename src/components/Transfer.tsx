@@ -250,10 +250,19 @@ export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: b
       />
       {!pg && (
         // Also for Data only: mysqldump --no-create-info still writes the routines, triggers and events, with their DEFINER=
-        <Checkbox checked={stripDefiners} onChange={setStripDefiners}>
-          <b>Leave out DEFINER= clauses</b>
-          <Text tone="muted"> for restoring into RDS and other managed services, where another user's DEFINER needs SUPER. The objects then belong to the user who restores them.</Text>
-        </Checkbox>
+        <div>
+          <Named about="Leave out DEFINER= clauses" info={["For restoring into RDS and other managed services, where another user's DEFINER needs SUPER."]}>
+            <Checkbox checked={stripDefiners} onChange={setStripDefiners}>
+              <b>Leave out DEFINER= clauses</b>
+            </Checkbox>
+          </Named>
+          {/* What the choice does, while it is on */}
+          {stripDefiners && (
+            <Text as="div" size="sm" tone="warn" className="ui-check-note">
+              The objects then belong to the user who restores them.
+            </Text>
+          )}
+        </div>
       )}
       <Hint>
         <Named about="backups" info={["The password is passed through the environment, not the command line."]}>

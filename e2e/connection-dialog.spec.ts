@@ -79,7 +79,8 @@ test("AWS SSM: a local Host gets a hint on the General tab, not an error", async
 });
 
 test("AWS SSM: a long Test Connection error is scrolled into view in the fixed-size dialog", async ({ page }) => {
-  await page.setViewportSize({ width: 1100, height: 700 });
+  // Short enough that the error ends below the body (the SSM note is behind an ⓘ now, so the form is a line shorter)
+  await page.setViewportSize({ width: 1100, height: 670 });
   await openProps(page);
   const d = dialog(page);
   await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssm");
@@ -139,7 +140,10 @@ test("AWS SSM: a Test Connection that keeps starting shows the elapsed time and 
   await expect(d.getByRole("button", { name: "Test SSH Connection" })).toBeEnabled();
   // An empty private key uses ssh-agent, then the ~/.ssh/config IdentityFile keys (core tunnel.rs)
   await expect(d.getByRole("textbox", { name: "Private key" })).toHaveAttribute("placeholder", /ssh-agent/);
-  await expect(d.getByText(/~\/\.ssh\/config Host/)).toBeVisible();
+  await expect(d.getByText("Host and port on General are reached from the SSH server.")).toBeVisible();
+  await d.getByRole("button", { name: "About SSH tunnels" }).click();
+  await expect(page.getByRole("note", { name: "About SSH tunnels" })).toContainText("~/.ssh/config Host");
+  await d.getByRole("button", { name: "About SSH tunnels" }).click();
   await page.waitForTimeout(300);
   await expect(d.getByText("Test cancelled")).toHaveCount(0);
   await expect(d.locator(".conn-test-actions")).toHaveCount(0);

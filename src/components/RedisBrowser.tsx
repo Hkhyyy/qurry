@@ -7,7 +7,7 @@ import { keyTree, parentPaths, visibleRows } from "../lib/keyTree";
 import { sharedOr, useSharedReady, type RedisAssist, type RedisReplyTable } from "../lib/shared";
 import { isRead } from "../lib/stmtKind";
 import { FolderIcon } from "../ui/icons";
-import { Badge, Button, EmptyState, FormGrid, IconButton, Modal, Notice, Select, Spacer, Table, Tabs, Td, Text, TextArea, TextInput, Th, ToolButton, Toolbar, TreeRow } from "../ui";
+import { Badge, Button, EmptyState, FormGrid, IconButton, Modal, Named, Notice, Select, Spacer, Table, Tabs, Td, Text, TextArea, TextInput, Th, ToolButton, Toolbar, TreeRow } from "../ui";
 
 const isMacOS = navigator.platform.toLowerCase().includes("mac");
 
@@ -190,19 +190,20 @@ export function RedisBrowser(p: Props) {
             </option>
           ))}
         </Select>
-        <TextInput
-          className="rd-pattern"
-          value={pattern}
-          spellCheck={false}
-          aria-label="Filter keys"
-          title="SCAN MATCH pattern: * any characters, ? one, [ab] a or b. Enter applies"
-          placeholder="Filter keys (pattern, e.g. prod:user:*)"
-          onChange={(e) => setPattern(e.target.value)}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Enter") scan(true);
-          }}
-        />
+        <Named about="key patterns" info={["SCAN MATCH pattern: * any characters, ? one, [ab] a or b.", "Enter applies it."]}>
+          <TextInput
+            className="rd-pattern"
+            value={pattern}
+            spellCheck={false}
+            aria-label="Filter keys"
+            placeholder="Filter keys (pattern, e.g. prod:user:*)"
+            onChange={(e) => setPattern(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") scan(true);
+            }}
+          />
+        </Named>
         <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} title="Filter by type">
           <option value="">All types</option>
           {TYPES.map((t) => (

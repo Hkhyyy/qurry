@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ask, askText } from "../lib/dialogs";
 import { ConnectionView, DataDiff, meta, migrate, Migration, SchemaChange, targetId } from "../lib/api";
-import { Button, Checkbox, CodeBlock, List, ListItem, Notice, Row, Select, Spacer, Table, Tabs, Td, Text, Th } from "../ui";
+import { Button, Checkbox, CodeBlock, List, ListItem, Named, Notice, Row, Select, Spacer, Table, Tabs, Td, Text, Th } from "../ui";
 
 /** Compare·migration target: Data Source · DB · schema (· table) */
 interface End {
@@ -181,10 +181,11 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
       {tab === "data" && (
         <>
           <Row className="mig-actions">
-            <Button variant="primary" disabled={busy || !ready(sc, src, true) || !ready(dc, dst, true)} onClick={() => run(async () => setData(await migrate.compareData(tid(sc, src), schemaOf(sc, src), src.table, tid(dc, dst), schemaOf(dc, dst), dst.table)))}>
-              {busy ? "Comparing…" : "Compare Rows"}
-            </Button>
-            <Text tone="muted">Rows are matched by the primary key; only columns both tables have are compared.</Text>
+            <Named about="Compare Rows" info={["Rows are matched by the primary key; only columns both tables have are compared."]}>
+              <Button variant="primary" disabled={busy || !ready(sc, src, true) || !ready(dc, dst, true)} onClick={() => run(async () => setData(await migrate.compareData(tid(sc, src), schemaOf(sc, src), src.table, tid(dc, dst), schemaOf(dc, dst), dst.table)))}>
+                {busy ? "Comparing…" : "Compare Rows"}
+              </Button>
+            </Named>
             <Spacer />
             <Button disabled={!data?.sql} onClick={() => dc && data && p.onOpenConsole(dc.id, dc.kind === "postgres" ? dst.db : undefined, data.sql)}>
               Open Sync SQL in Console
@@ -206,7 +207,13 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
         <>
           <Row className="mig-actions">
             <Button onClick={chooseDir}>{dir ? "Change Folder…" : "Choose Folder…"}</Button>
-            <Text tone="muted">{dir ?? "Files named V1__create_tables.sql, V2__add_index.sql … applied in order; applied ones are recorded in qurry_schema_history."}</Text>
+            <Text tone="muted">
+              {dir ?? (
+                <Named about="migration files" info={["Files named V1__create_tables.sql, V2__add_index.sql … are applied in order.", "Applied ones are recorded in qurry_schema_history."]}>
+                  No folder chosen
+                </Named>
+              )}
+            </Text>
             <Spacer />
             <Button disabled={!dir || busy} onClick={() => loadMigs()}>
               Refresh
