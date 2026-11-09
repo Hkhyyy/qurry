@@ -3,7 +3,7 @@ import { api } from "../../lib/api";
 import { ask } from "../../lib/dialogs";
 import { sharedOr, useSharedReady } from "../../lib/shared";
 import { BUILT_IN, SYSTEM, TOKENS, deleteCustomTheme, findTheme, previewTheme, saveCustomTheme, setThemePick, useThemeState, type CustomTheme, type Palette, type ThemeDef, type ThemeToken, type ThemeWarning } from "../../lib/theme";
-import { Button, cx, normalizeHex, Notice, Select, Text, TextInput } from "../../ui";
+import { Button, cx, Named, normalizeHex, Notice, Select, Text, TextInput } from "../../ui";
 import { ThemePreview } from "./ThemePreview";
 
 // Settings › Appearance › Theme › Edit Colors…: a custom theme made from any theme (a built-in one, or a custom one to change).
@@ -178,7 +178,9 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
         <Button size="sm" variant="link" onClick={onBack}>
           ‹ Appearance
         </Button>
-        <b>Theme colors</b>
+        <Named about="Theme colors" info={["Colors below the contrast minimum are saved with their warning, never changed.", "An invalid hex is not applied."]}>
+          <b>Theme colors</b>
+        </Named>
         <span className="muted">
           {changed.length} {changed.length === 1 ? "color" : "colors"} changed from {base.name}
           {warnings.length > 0 && <span className="theme-warn"> · ⚠ {warnings.length} below the contrast minimum</span>}
@@ -256,7 +258,7 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
                 Save as new theme
               </Button>
             </div>
-            {msg ? <Notice tone={msg.tone}>{msg.text}</Notice> : <Text size="sm" tone="muted">Colors below the contrast minimum are saved with their warning, never changed; an invalid hex is not applied.</Text>}
+            {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
           </div>
         </div>
         <div className="theme-editor-preview">

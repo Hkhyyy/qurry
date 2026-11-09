@@ -2,22 +2,109 @@
  * Molecules: a row · cell made of a few atoms — list row, detail row, menu item, form field, tab, hint, section title.
  * Spec in README.md
  */
-import { HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useState } from "react";
+import { HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Avatar, Badge, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
-import { Chevron } from "./icons";
+import { Chevron, IcInfo } from "./icons";
+import { placePopup } from "./popup";
+
+// ───────── About (ⓘ) ─────────
+/**
+ * ⓘ button with what a name means: click, Space or Enter toggles a small popover (the menu surface) under it, kept inside the
+ * window. Esc closes the popover only (not the dialog around it) and puts focus back on the ⓘ; a click outside or a scroll closes it
+ */
+export function InfoTip({ about, info }: { about: string; info: ReactNode[] }) {
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState<{ left: number; top: number } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const id = useId();
+  // Placed once its size is known (hidden until then)
+  useLayoutEffect(() => {
+    if (!open || !btn.current || !pop.current) return setAt(null);
+    const r = btn.current.getBoundingClientRect();
+    setAt(placePopup(r, pop.current.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }));
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (e: Event) => !pop.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node);
+    const down = (e: globalThis.MouseEvent) => outside(e) && setOpen(false);
+    const scroll = (e: Event) => outside(e) && setOpen(false);
+    const key = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(false);
+      btn.current?.focus();
+    };
+    window.addEventListener("mousedown", down, true);
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("scroll", scroll, true);
+    window.addEventListener("resize", scroll);
+    return () => {
+      window.removeEventListener("mousedown", down, true);
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("scroll", scroll, true);
+      window.removeEventListener("resize", scroll);
+    };
+  }, [open]);
+  return (
+    <>
+      <button
+        ref={btn}
+        type="button"
+        className="ui-icon-btn ui-info-btn"
+        aria-label={`About ${about}`}
+        title={`About ${about}`}
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        // Inside a <label> (a Field's): don't also activate its control
+        onClick={(e) => (e.preventDefault(), setOpen((o) => !o))}
+      >
+        <IcInfo />
+      </button>
+      {open &&
+        createPortal(
+          <div ref={pop} id={id} role="note" aria-label={`About ${about}`} className="ui-menu ui-info-pop" style={at ?? { left: 0, top: 0, visibility: "hidden" }}>
+            {info.map((l, i) => (
+              <div key={i}>{l}</div>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+/**
+ * A name and its ⓘ right after it, with the same gap everywhere: a field's label, a checkbox (the ⓘ beside it, not inside its
+ * label, so clicking the ⓘ doesn't tick it), a section title, a hint line. about = the name the ⓘ is announced with (default: the
+ * text itself). Without info it is just the name
+ */
+export function Named({ children, about, info }: { children: ReactNode; about?: string; info?: ReactNode[] }) {
+  if (!info?.length) return <>{children}</>;
+  return (
+    <span className="ui-named">
+      {children}
+      <InfoTip about={about ?? (typeof children === "string" ? children : "")} info={info} />
+    </span>
+  );
+}
 
 // ───────── Form ─────────
 /**
- * Label + field on one line. Hint · error below the field.
+ * Label + field on one line. Hint · error below the field; info = what the field means, behind an ⓘ after the label (Named).
  * group = several controls with their own labels: a div (role group), so a click on the field's label doesn't land in the first control
  */
-export function Field({ label, hint, error, children, className, group }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; children: ReactNode; className?: string; group?: boolean }) {
+export function Field({ label, hint, error, info, children, className, group }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; info?: ReactNode[]; children: ReactNode; className?: string; group?: boolean }) {
   const Tag = group ? "div" : "label";
+  const name = typeof label === "string" ? label : undefined;
   return (
-    <Tag className={cx("ui-field", className)} role={group ? "group" : undefined} aria-label={group && typeof label === "string" ? label : undefined}>
-      <span className="ui-field-label" title={typeof label === "string" ? label : undefined}>
-        {label}
+    <Tag className={cx("ui-field", className)} role={group ? "group" : undefined} aria-label={group ? name : undefined}>
+      <span className="ui-field-label" title={name}>
+        <Named about={name} info={info}>
+          {label}
+        </Named>
       </span>
       {children}
       {hint && <span className="ui-field-hint">{hint}</span>}

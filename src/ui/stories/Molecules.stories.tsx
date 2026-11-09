@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
-import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormSection, Hint, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow, TxPending } from "..";
+import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormGrid, FormSection, Hint, InfoTip, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Named, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow, TxPending } from "..";
 import { connTabVars } from "../../lib/theme";
 import { ConsoleIcon, DatabaseIcon, FolderIcon, PgIcon, ReportIcon, SchemaIcon, TabIcon, TableIcon } from "../icons";
 
@@ -52,6 +52,77 @@ export const Fields: S = {
 };
 
 /** SearchField is a TextInput: no autocorrect or spell check (see GUI/1 Atoms › Inputs) */
+/** One rule: the ⓘ right after the name it explains (a field's label, a checkbox beside its text, a hint line), the same gap and popover.
+ *  Click, Space or Enter opens it; Esc, a click outside or a scroll closes it */
+export const About: S = {
+  name: "Named · InfoTip (ⓘ)",
+  render: function Render() {
+    const [prod, setProd] = useState(true);
+    const [plain, setPlain] = useState(true);
+    return (
+      <div style={{ width: 520 }}>
+        <Field label="Keyword case" info={["Applies as you type in a console and in Reformat Code.", "Never inside strings, comments or quoted names.", "Shared with the TUI."]}>
+          <Select defaultValue="off">
+            <option value="off">Off</option>
+            <option value="upper">UPPER</option>
+          </Select>
+        </Field>
+        <Field label="Theme" group hint="Following the system: Dark now." info={["The TUI uses the same themes; the terminal's background picks dark or light."]}>
+          <Select aria-label="Theme" defaultValue="dark">
+            <option value="dark">Dark</option>
+          </Select>
+        </Field>
+        <FormGrid labelWidth={140}>
+          <span />
+          <Named about="Production: confirm changes" info={["Before UPDATE, DELETE or INSERT runs, shows how many rows will change and asks."]}>
+            <Checkbox checked={prod} onChange={setProd}>
+              Production: show affected rows and confirm changes
+            </Checkbox>
+          </Named>
+          <span />
+          <div>
+            <Named about="Allow unencrypted connection" info={["Without SSL settings Qurry requires TLS from remote servers."]}>
+              <Checkbox checked={plain} onChange={setPlain}>
+                Allow unencrypted connection
+              </Checkbox>
+            </Named>
+            {plain && (
+              <Text as="div" size="sm" tone="warn" className="ui-check-note">
+                Passwords and data can travel unencrypted to this server.
+              </Text>
+            )}
+          </div>
+          <label>
+            <Named info={["What qurry-mcp (Claude Code and other AI tools) may do with this data source."]}>MCP (AI tools)</Named>
+          </label>
+          <Select aria-label="MCP (AI tools)" defaultValue="read">
+            <option value="read">Read</option>
+          </Select>
+        </FormGrid>
+        <Hint>
+          <Named about="SSH tunnels" info={["Host keys are checked against ~/.ssh/known_hosts.", "With no private key or password, ssh-agent is used."]}>
+            Host and port on General are reached from the SSH server.
+          </Named>
+        </Hint>
+      </div>
+    );
+  },
+};
+
+/** The ⓘ alone, opened (its popover stays inside the window) */
+export const InfoTipOpen: S = {
+  name: "InfoTip — open",
+  render: () => (
+    <div style={{ display: "flex", justifyContent: "space-between", width: "100%" }}>
+      <Named info={["Stable: releases made from a version tag.", "Beta: also the pre-release built from every merge to main.", "Shared with the TUI."]}>Channel</Named>
+      <InfoTip about="the right edge" info={["Near the window's edge the popover moves left to stay inside."]} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    canvasElement.querySelector<HTMLButtonElement>('button[aria-label="About Channel"]')?.click();
+  },
+};
+
 export const SearchAndTabs: S = {
   name: "SearchField · Tabs · SectionTitle",
   render: function Render() {

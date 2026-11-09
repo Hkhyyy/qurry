@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Button, Checkbox, ColorPicker, EmptyState, FormGrid, FormSection, Hint, Modal, Notice, Select, Spacer, Tabs, Text, TextArea, TextInput, TlsOptIn } from "../ui";
+import { Button, Checkbox, ColorPicker, EmptyState, FormGrid, FormSection, Hint, Modal, Named, Notice, Select, Spacer, Tabs, Text, TextArea, TextInput, TlsOptIn } from "../ui";
 import { needsTlsOptIn } from "./TlsFix";
 import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, defaultDbOf, DRIVER_MISSING, isFileKind, isSystemDb, KIND_LABEL, meta, SCOPE_ALL, SchemaInfo, SshConfig, SsmConfig, targetId } from "../lib/api";
 import { scopeChecked, toggleScoped } from "../lib/scopeToggle";
@@ -166,16 +166,25 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   useSharedReady();
   // With AWS SSM a local Host is the instance itself: said, not refused (a database on the instance is fine)
   const ssmLocalHost = tunnel === "ssm" ? sharedOr(undefined, (s) => s.ssmLocalHost(cfg.host)) : undefined;
-  const tabHint =
+  // The tab's one must-read line under it, the rest behind its ⓘ (General has none: its note is the Password's ⓘ)
+  const tabHint: { text: string; about?: string; info?: string[] } | null =
     tab === "options"
-      ? "Changes apply on the next connection (the data source is reconnected on OK)."
+      ? { text: "Applied on OK: the data source reconnects." }
       : tab === "schemas"
-      ? `${edit ? "" : "Listed with this dialog's settings; nothing is saved until OK. "}Only checked databases and schemas are shown in the Database Explorer. Nothing checked = show all.`
+      ? { text: "Only checked items show in the Database Explorer; none checked shows all.", about: "the Schemas tab", info: edit ? undefined : ["Listed with this dialog's settings, as Test Connection connects; nothing is saved until OK."] }
       : tab === "ssh" && tunnel === "ssm"
-      ? "The database host/port on the General tab are reached from the instance (e.g. an RDS endpoint). Test Connection starts a session and connects through it."
+      ? {
+          text: "Host and port on General are reached from the instance (e.g. an RDS endpoint).",
+          about: "AWS SSM",
+          info: ["Runs the AWS CLI v2 with the Session Manager plugin, signed in with your AWS config or SSO. Qurry stores no AWS secrets.", "Test Connection starts a session and connects through it."],
+        }
       : tab === "ssh"
-      ? "The database host/port on the General tab are resolved from the SSH server. Host keys are checked against ~/.ssh/known_hosts. The SSH host may be a ~/.ssh/config Host (HostName, User, Port, IdentityFile, ProxyJump); with no private key or password, ssh-agent is used."
-      : "Passwords are stored encrypted in the app data folder (no Keychain prompts).";
+      ? {
+          text: "Host and port on General are reached from the SSH server.",
+          about: "SSH tunnels",
+          info: ["Host keys are checked against ~/.ssh/known_hosts.", "The SSH host may be a ~/.ssh/config Host (HostName, User, Port, IdentityFile, ProxyJump).", "With no private key or password, ssh-agent is used."],
+        }
+      : null;
   const port = (v: number, on: (n: number) => void, fallback: number, disabled?: boolean) => <TextInput className="w-port" disabled={disabled} value={v} onChange={(e) => on(Number(e.target.value) || fallback)} />;
 
   return (
@@ -277,7 +286,11 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
               )}
               <label>User</label>
               <TextInput value={cfg.user} placeholder={cfg.kind === "redis" ? "(optional, ACL user)" : cfg.kind === "milvus" ? "(optional — empty: the password is an API key)" : ""} onChange={(e) => set("user", e.target.value)} />
-              <label>{cfg.kind === "qdrant" || cfg.kind === "chroma" ? "API key" : "Password"}</label>
+              <label>
+                <Named info={["Saved passwords are encrypted in secrets.json; its key is in the config folder or in the system keychain (Settings › Passwords)."]}>
+                  {cfg.kind === "qdrant" || cfg.kind === "chroma" ? "API key" : "Password"}
+                </Named>
+              </label>
               <TextInput type="password" value={password ?? ""} placeholder={edit?.hasPassword ? "<saved — leave empty to keep>" : ""} onChange={(e) => setPassword(e.target.value)} />
             </>
           )}
@@ -359,8 +372,6 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
               <TextInput aria-label="Region" value={ssm.region} placeholder="(the profile's region)" onChange={(e) => setSsm("region", e.target.value)} />
               <label>Instance id</label>
               <TextInput aria-label="Instance id" value={ssm.target} placeholder="i-0123456789abcdef0" onChange={(e) => setSsm("target", e.target.value)} />
-              <span />
-              <Text tone="muted">Runs the AWS CLI v2 with the Session Manager plugin, signed in with your AWS config or SSO. Qurry stores no AWS secrets.</Text>
             </>
           ) : (
             <>
@@ -438,30 +449,47 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
             Read-only
           </Checkbox>
           <span />
-          <Checkbox checked={!!opt.confirmChanges} onChange={(v) => setOpt("confirmChanges", v)} title="Before UPDATE / DELETE / INSERT … run, show how many rows will change and ask">
-            Production: show affected rows and confirm changes
-          </Checkbox>
+          <Named about="Production: confirm changes" info={["Before UPDATE, DELETE or INSERT runs, shows how many rows will change and asks."]}>
+            <Checkbox checked={!!opt.confirmChanges} onChange={(v) => setOpt("confirmChanges", v)}>
+              Production: show affected rows and confirm changes
+            </Checkbox>
+          </Named>
           {/* #106: on by default for Production (unset = on); off, consoles start in the Transaction control mode below */}
           <span />
-          <Checkbox
-            checked={!!opt.confirmChanges && opt.productionManual !== false}
-            disabled={!opt.confirmChanges}
-            onChange={(v) => setOpt("productionManual", v ? null : false)}
-            title="New consoles start in Tx: Manual, so a change stays pending until you Commit or Roll back (closing the tab, switching the database or quitting asks first). Off: they start in the Transaction control mode below."
+          <Named
+            about="Production: Manual transaction mode"
+            info={["New consoles start in Tx: Manual: a change stays pending until you Commit or Roll back. Closing the tab, switching the database or quitting asks first.", "Off: they start in the Transaction control mode below."]}
           >
-            Production: start consoles in Manual transaction mode
-          </Checkbox>
+            <Checkbox checked={!!opt.confirmChanges && opt.productionManual !== false} disabled={!opt.confirmChanges} onChange={(v) => setOpt("productionManual", v ? null : false)}>
+              Production: start consoles in Manual transaction mode
+            </Checkbox>
+          </Named>
           {(cfg.kind === "mysql" || cfg.kind === "postgres") && (
             <>
               <span />
-              <Checkbox checked={!!opt.allowPlaintext} onChange={(v) => setOpt("allowPlaintext", v)} title="Without SSL settings Qurry requires TLS from remote servers. Tick this to connect to a server without TLS (or an old MySQL 5.7 without TLS 1.2) on a network you trust.">
-                Allow unencrypted connection (servers without TLS)
-              </Checkbox>
+              <div>
+                <Named
+                  about="Allow unencrypted connection"
+                  info={["Without SSL settings Qurry requires TLS from remote servers.", "Tick this only for a server without TLS (or an old MySQL 5.7 without TLS 1.2) on a network you trust."]}
+                >
+                  <Checkbox checked={!!opt.allowPlaintext} onChange={(v) => setOpt("allowPlaintext", v)}>
+                    Allow unencrypted connection (servers without TLS)
+                  </Checkbox>
+                </Named>
+                {/* What the choice does, while it is on */}
+                {opt.allowPlaintext && (
+                  <Text as="div" size="sm" tone="warn" className="ui-check-note">
+                    Passwords and data can travel unencrypted to this server.
+                  </Text>
+                )}
+              </div>
             </>
           )}
-          <label>MCP (AI tools)</label>
+          <label>
+            <Named info={["What qurry-mcp (Claude Code and other AI tools) may do with this data source.", "For Read, connect with a read-only database user."]}>MCP (AI tools)</Named>
+          </label>
           <div className="ui-row">
-            <Select value={mcpValue} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])} title="What qurry-mcp (Claude Code and other AI tools) may do with this data source. For Read, connect with a read-only database user.">
+            <Select aria-label="MCP (AI tools)" value={mcpValue} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])}>
               <option value="off">Off — not listed, no connection</option>
               <option value="read">Read</option>
               <option value="write" disabled={noMcpWrite} title={noMcpWrite ? `Not for a ${cfg.readOnly ? "Read-only" : "Production"} data source` : undefined}>
@@ -523,7 +551,13 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
         </FormGrid>
       )}
 
-      <Hint>{tabHint}</Hint>
+      {tabHint && (
+        <Hint>
+          <Named about={tabHint.about} info={tabHint.info}>
+            {tabHint.text}
+          </Named>
+        </Hint>
+      )}
       {test && <Notice tone={test.ok ? "ok" : "danger"}>{(test.ok ? "✓ " : "✕ ") + test.msg}</Notice>}
       {test && !test.ok && test.msg.includes(DRIVER_MISSING) && (
         <div className="ui-row conn-test-actions">

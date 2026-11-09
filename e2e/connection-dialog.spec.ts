@@ -21,7 +21,11 @@ test("SSH/SSL tab: Tunnel None / SSH / AWS SSM, test and save through SSM", asyn
   await expect(d.getByPlaceholder("bastion.example.com")).toHaveCount(0);
   await expect(d.getByRole("textbox", { name: "AWS profile" })).toHaveAttribute("placeholder", "(default profile)");
   await expect(d.getByRole("textbox", { name: "Region" })).toHaveAttribute("placeholder", "(the profile's region)");
-  await expect(d.getByText("Qurry stores no AWS secrets")).toBeVisible();
+  // The SSM note sits behind the footer's ⓘ
+  await d.getByRole("button", { name: "About AWS SSM" }).click();
+  await expect(page.getByRole("note", { name: "About AWS SSM" })).toContainText("Qurry stores no AWS secrets");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("note")).toHaveCount(0);
   await d.getByRole("textbox", { name: "AWS profile" }).fill("prod");
   await d.getByRole("textbox", { name: "Region" }).fill("ap-northeast-2");
   await d.getByRole("textbox", { name: "Instance id" }).fill("i-0123456789abcdef0");
@@ -193,7 +197,10 @@ test("Schemas tab of a new data source lists with the form's settings; the scope
   const box = (name: string) => d.locator(".scope-list").getByRole("checkbox", { name, exact: true });
   await expect(box("All databases")).toBeChecked();
   await expect(d.getByText("Save the data source first")).toHaveCount(0);
-  await expect(d.getByText("Listed with this dialog's settings; nothing is saved until OK.")).toBeVisible();
+  await expect(d.getByText("Only checked items show in the Database Explorer; none checked shows all.")).toBeVisible();
+  await d.getByRole("button", { name: "About the Schemas tab" }).click();
+  await expect(page.getByRole("note", { name: "About the Schemas tab" })).toHaveText("Listed with this dialog's settings, as Test Connection connects; nothing is saved until OK.");
+  await page.keyboard.press("Escape");
   await box("shop_app_test").click();
   const row = d.locator(".scope-row", { has: page.getByRole("checkbox", { name: "shop_app", exact: true }) });
   await row.locator(".twisty").click();

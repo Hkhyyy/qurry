@@ -13,12 +13,12 @@ import { FontPicker } from "./FontPicker";
 import { isMac, sk } from "../shortcuts/labels";
 
 /** Settings › Appearance › Editor / Grid font: a family picked from the installed ones (FontPicker) and a size. Applied as you pick */
-function FontField({ target, label, hint, installed, onOpen }: { target: FontTarget; label: string; hint?: string; installed: FontFamily[] | null; onOpen: () => void }) {
+function FontField({ target, label, info, installed, onOpen }: { target: FontTarget; label: string; info?: string[]; installed: FontFamily[] | null; onOpen: () => void }) {
   const { family, size } = useFonts()[target];
   const [min, max] = SIZES[target];
   return (
     // group: a <label> would turn a click in the font list into a click on the picker field
-    <Field group label={label} hint={hint}>
+    <Field group label={label} info={info}>
       <div className="ui-row">
         <FontPicker label={`${label} family`} value={family} installed={installed} onOpen={onOpen} onPick={(f) => setFont(target, { family: f })} />
         <Select aria-label={`${label} size`} value={size} onChange={(e) => setFont(target, { size: Number(e.target.value) })}>
@@ -44,11 +44,14 @@ export function GridAlignField() {
       label="Alignment"
       group
       error={err ?? undefined}
-      hint={
-        ready
-          ? "Where cells sit in result grids, by the kind of value; the TUI uses the same setting. NULL sits where its column's type does by default (Column type: left in text, right in numbers); set NULL to Right to keep the 0.3.0 look."
-          : "Alignment needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk. Until then numbers are on the right and everything else on the left."
-      }
+      // Only the WebAssembly error stays visible (nothing can be picked without it)
+      hint={ready ? undefined : "Alignment needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk."}
+      info={[
+        "Where values sit in result grids, by kind of value.",
+        "NULL › Column type follows the column: left in text, right in numbers. Pick Right for the 0.3.0 look.",
+        ...(ready ? [] : ["Without WebAssembly, numbers are on the right and everything else on the left."]),
+        "Shared with the TUI.",
+      ]}
     >
       <div className="align-grid">
         {VALUE_CLASSES.map(({ cls, label }) => (
@@ -88,7 +91,12 @@ export function KeywordCaseField() {
     <Field
       label="Keyword case"
       error={err ?? undefined}
-      hint={`Upper or lower case for SQL keywords as you type in a console (after a space, a new line or punctuation; not in strings, comments or quoted names) and in Reformat Code${reformat ? ` (${reformat})` : ""}. Off: typing is left as it is, and Reformat Code writes keywords in upper case. The TUI uses the same setting.`}
+      info={[
+        `SQL keywords' case as you type in a console (after a space, a new line or punctuation) and in Reformat Code${reformat ? ` (${reformat})` : ""}.`,
+        "Never inside strings, comments or quoted names.",
+        "Off: typing is left alone; Reformat Code still writes UPPER.",
+        "Shared with the TUI.",
+      ]}
     >
       <div className="ui-row">
         <Select
@@ -136,7 +144,13 @@ export function ThemeField({ onEdit }: { onEdit: () => void }) {
     p.catch((e) => setErr(String(e)));
   };
   return (
-    <Field label="Theme" group error={err ?? undefined} hint={sync ? `Follows the system appearance: ${current.name} now. The TUI uses the same themes (its terminal background picks dark or light).` : "The TUI uses the same theme."}>
+    <Field
+      label="Theme"
+      group
+      error={err ?? undefined}
+      hint={sync ? `Following the system: ${current.name} now.` : undefined}
+      info={[sync ? "The TUI uses the same themes; the terminal's background picks dark or light." : "The TUI uses the same theme."]}
+    >
       <div className="ui-row">
         <Select aria-label="Theme" value={sync ? current.id : settings.theme ?? "dark"} disabled={sync} onChange={(e) => run(setThemePick(e.target.value))}>
           <ThemeOptions themes={all} />
@@ -182,16 +196,29 @@ function PasswordSettings() {
   };
   return (
     <div className="settings-form">
-      <Field label="Key" hint={msg ?? "Saved passwords are encrypted in secrets.json. Its key is in the config folder (secret.key) or in the system keychain. The terminal UI and the MCP server use the same key, so they ask for keychain access too."}>
+      <Field
+        label="Key"
+        hint={msg ?? undefined}
+        info={[
+          "Saved passwords are encrypted in secrets.json; the key is in the config folder (secret.key) or in the system keychain.",
+          "qurry-tui and qurry-mcp use the same key, so they ask for keychain access too.",
+          ...(isMac ? ["macOS asks once per app (Qurry, qurry-tui, qurry-mcp), and again after each update while Qurry isn't code-signed."] : []),
+          'Older versions can\'t read the key in the keychain and stop with "secret.key is corrupted" (update with e.g. brew upgrade qurry).',
+        ]}
+      >
         <div className="ui-row">
-          <Select value={loc ?? ""} disabled={!loc} onChange={(e) => move(e.target.value === "keychain")}>
+          <Select aria-label="Key" value={loc ?? ""} disabled={!loc} onChange={(e) => move(e.target.value === "keychain")}>
             <option value="file">In the config folder (no prompts)</option>
             <option value="keychain">In the system keychain</option>
           </Select>
         </div>
+        {/* A warning before the move: shown while the key is still in the file */}
+        {loc === "file" && (
+          <Text size="sm" tone="warn">
+            Before moving the key to the keychain, update Qurry, qurry-tui and qurry-mcp: older versions can't read it there.
+          </Text>
+        )}
       </Field>
-      <Text tone="muted">Before moving it to the keychain, update every Qurry app you use (Qurry, qurry-tui, qurry-mcp — e.g. brew upgrade qurry): older versions can't read the key there and stop with "secret.key is corrupted".</Text>
-      {isMac && <Text tone="muted">macOS asks once per app (Qurry, qurry-tui, qurry-mcp) to allow keychain access, and again after each update while Qurry isn't code-signed.</Text>}
     </div>
   );
 }
@@ -254,7 +281,7 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
   useEffect(() => {
     loadFonts();
   }, []);
-  const fontKeys = [sk("font.bigger"), sk("font.smaller")].filter(Boolean).join(" / ");
+  const fontKeys = [sk("font.bigger"), sk("font.smaller")].filter(Boolean).join(" and ");
   return (
     <Modal
       title="Settings"
@@ -283,7 +310,7 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
         {page === "appearance" && (
           <div className="settings-form">
             <ThemeField onEdit={() => setPage("theme")} />
-            <FontField target="editor" label="Editor font" hint={fontKeys && `Size also with ${fontKeys} in the editor.`} installed={fonts} onOpen={loadFonts} />
+            <FontField target="editor" label="Editor font" info={fontKeys ? [`In the editor, ${fontKeys} change the size too.`] : undefined} installed={fonts} onOpen={loadFonts} />
             <FontField target="grid" label="Grid font" installed={fonts} onOpen={loadFonts} />
             <KeywordCaseField />
             <GridAlignField />
@@ -303,9 +330,9 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
                 </Button>
               </div>
             </Field>
-            <Field label="Channel" hint={chMsg ?? "Stable gets the releases made from a version tag. Beta also gets the pre-release built from every merge to main. The terminal UI uses the same channel."}>
+            <Field label="Channel" hint={chMsg ?? undefined} info={["Stable: releases made from a version tag.", "Beta: also the pre-release built from every merge to main.", "Shared with the TUI."]}>
               <div className="ui-row">
-                <Select value={channel ?? ""} disabled={!channel} onChange={(e) => pickChannel(e.target.value as UpdateChannel)}>
+                <Select aria-label="Channel" value={channel ?? ""} disabled={!channel} onChange={(e) => pickChannel(e.target.value as UpdateChannel)}>
                   <option value="stable">Stable</option>
                   <option value="beta">Beta</option>
                 </Select>

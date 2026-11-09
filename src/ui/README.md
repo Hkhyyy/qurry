@@ -53,6 +53,7 @@ Colors are theme tokens: every theme's values are in `crates/shared/src/themes.j
 | 조각 | 규칙 |
 |---|---|
 | `Field` · `RadioGroup` · `FormSection` · `Hint` · `ColorPicker` | 라벨 + 칸 (힌트 · 오류는 아래; `group` = 제 라벨이 있는 칸 여럿: `<div>` 라서 라벨을 눌러도 첫 칸으로 가지 않음) / 선택지마다 설명 / 구역 제목 / 작은 회색 설명 / 색 고르기 |
+| `Named` · `InfoTip` | 설명하는 이름 바로 뒤의 ⓘ: 칸의 라벨 (`Field` 의 `info`), 체크박스 옆 (라벨 안이 아니라서 ⓘ 를 눌러도 체크되지 않음), 힌트 줄, 구역 제목 — 어디서나 같은 간격 · 같은 팝오버. 누르거나 Space · Enter 로 열고, Esc (팝오버만 닫고 초점은 ⓘ 로) · 바깥 클릭 · 스크롤로 닫는다. 이름은 "About <이름>". 고르기 전에 꼭 읽어야 할 한 줄 (경고 · 결과) 만 보이게 두고 나머지 설명은 ⓘ 뒤로 |
 | `SearchField` | ⌕ + 입력 (+ 불러오는 중 ◌). `bare` = 팝오버 머리처럼 테두리 없이 크게 |
 | `Tabs` · `SectionTitle` · `KeyHints` | 구역 바꾸기 (`size` sm) / 목록 · 창 안의 작은 제목 / "↩ Open · ⇥ Next tab" |
 | `Notice` · `EmptyState` | 안내 · 경고 · 오류 한 덩어리 / 비어 있을 때 |

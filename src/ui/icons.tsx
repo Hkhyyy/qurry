@@ -279,5 +279,13 @@ export const IcMoreV = () => (
     <circle cx="8" cy="12.5" r="1.2" />
   </svg>
 );
+/** About (ⓘ): opens an explanation (InfoTip) */
+export const IcInfo = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" aria-hidden>
+    <circle cx="8" cy="8" r="6.2" />
+    <path d="M8 7.2v4" />
+    <circle cx="8" cy="4.9" r=".45" fill="currentColor" />
+  </svg>
+);
 export const IcChart = () => <L d="M2.5 13.5h11M4 11V8M7 11V4.5M10 11V6.5M13 11V9" />;
 export const IcTranspose = () => <L d="M3 3h4v4H3zM9 9h4v4H9zM9 4.5h2.5V7M7 11.5H4.5V9" />;

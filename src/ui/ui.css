@@ -130,6 +130,8 @@
 .ui-input.full, .ui-select.full { width: 100%; }
 .ui-check { display: inline-flex; align-items: center; gap: var(--ui-sp-2); cursor: pointer; }
 .ui-check input { margin: 0; }
+/* A line under a checkbox, aligned with its text */
+.ui-check-note { margin-top: var(--ui-sp-1); padding-left: calc(13px + var(--ui-sp-2)); }
 .ui-radio-group { display: flex; flex-direction: column; gap: var(--ui-sp-2); }
 .ui-radio-group.row { flex-direction: row; gap: var(--ui-sp-5); }
 
@@ -310,3 +312,10 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 /* DDL tab of an object: its icon + a small page mark in the lower right corner (TabIcon) */
 .ui-ddl-mark { position: relative; display: inline-flex; }
 .ui-ddl-mark > svg:last-child { position: absolute; right: -3px; bottom: -2px; }
+
+/* ── About (ⓘ): Named · InfoTip ── */
+.ui-named { display: inline-flex; align-items: center; gap: var(--ui-sp-2); max-width: 100%; vertical-align: middle; }
+.ui-info-btn { width: 18px; height: 18px; }
+.ui-info-btn[aria-expanded="true"] { color: var(--ui-accent); }
+/* Above any dialog it is opened from */
+.ui-menu.ui-info-pop { z-index: calc(var(--ui-z-dialog) + 1); display: flex; flex-direction: column; gap: var(--ui-sp-2); width: 340px; max-width: calc(100vw - 16px); padding: var(--ui-sp-3) var(--ui-sp-4); font-size: var(--ui-fs-sm); line-height: 1.5; white-space: normal; text-align: left; }

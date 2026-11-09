@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type BackupOptions, DataPreview, meta } from "../lib/api";
 import { useSharedReady } from "../lib/shared";
 import { autoMap, DataFormat, FORMATS, progressText } from "../lib/transfer";
-import { Button, Checkbox, Hint, IconButton, Modal, Notice, ProgressBar, RadioGroup, SectionTitle, Select, StatusItem, Table, Td, Text, TextInput, Th } from "../ui";
+import { Button, Checkbox, Hint, IconButton, Modal, Named, Notice, ProgressBar, RadioGroup, SectionTitle, Select, StatusItem, Table, Td, Text, TextInput, Th } from "../ui";
 
 const LAST = "qurry.export";
 function lastChoice(): { format: DataFormat; clipboard: boolean } {
@@ -170,7 +170,13 @@ export function ImportDialog({ target, schema, table, onImport, onClose }: {
           </Table>
         </div>
       )}
-      {file && <Hint>Empty cells are imported as NULL. Everything goes in one transaction — if a row fails, nothing is imported.</Hint>}
+      {file && (
+        <Hint>
+          <Named about="importing" info={["Empty cells are imported as NULL.", "Everything goes in one transaction."]}>
+            If a row fails, nothing is imported.
+          </Named>
+        </Hint>
+      )}
       {err && <Notice tone="danger">{err}</Notice>}
     </Modal>
   );
@@ -249,7 +255,11 @@ export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: b
           <Text tone="muted"> for restoring into RDS and other managed services, where another user's DEFINER needs SUPER. The objects then belong to the user who restores them.</Text>
         </Checkbox>
       )}
-      <Hint>Runs {pg ? "pg_dump" : "mysqldump"} on this computer (install the client tools if it's missing). The password is passed through the environment, not the command line.</Hint>
+      <Hint>
+        <Named about="backups" info={["The password is passed through the environment, not the command line."]}>
+          Runs {pg ? "pg_dump" : "mysqldump"} on this computer (install the client tools if it's missing).
+        </Named>
+      </Hint>
     </Modal>
   );
 }
