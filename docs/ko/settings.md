@@ -103,7 +103,7 @@ TUI 에서는 `<` / `>` 가 현재 컬럼을 좁히고 / 넓히고 `=` 가 내�
 | Shown columns | 모든 컬럼이 다 보이지 않을 때 보이는 컬럼 (`cols 3–8 of 14`) |
 | Not null | 선택한 셀 중 값이 있는 셀 (NULL 은 빼고) |
 | Sum, Avg, Min, Max | 선택한 셀 (2 개 이상) 중 숫자들의 합 · 평균 · 최솟값 · 최댓값 |
-| Size | 셀 하나: 크기를 바이트와 글자 수로 (`Size: 11 bytes (7 chars)`, 바이너리는 길이), 테이블 메타데이터가 알려 주면 컬럼에 선언된 한도도: `varchar(8): up to 8 chars (32 bytes in UTF-8)`, MySQL 은 `up to 8 chars (32 bytes in utf8mb4)`, `char(8): always 8 chars (padded)`, `varbinary(16): up to 16 bytes`, `blob: up to 65,535 bytes`, `bytea: no limit (up to 1 GB)`. 숫자와 날짜 / 시간에는 나오지 않습니다 |
+| Size | 셀 하나: 크기를 바이트와 글자 수로 (`Size: 11 bytes (7 chars)`, 바이너리는 길이), 테이블 메타데이터가 알려 주면 컬럼에 선언된 한도도: `varchar(8): up to 8 chars (32 bytes in UTF-8)`, MySQL 은 `up to 8 chars (32 bytes in utf8mb4)`, `char(8): always 8 chars (padded)`, `varbinary(16): up to 16 bytes`, `blob: up to 65,535 bytes`, `bytea: no limit (up to 1 GB)`. 숫자, 날짜 / 시간, boolean 에는 나오지 않습니다 |
 
 **Settings › Appearance › Status bar** 에서 고르거나, **상태 표시줄을 오른쪽 클릭** (또는 항목 하나를 클릭) 하면 같은 체크리스트가 열립니다. 항목을 켜고 끄는 동안 열려 있습니다 (`↑` `↓` 이동, `Space` 나 `↩` 켜고 끄기, `⎋` 닫기). **Restore Defaults** 는 Position 과 Shown columns 로 되돌립니다. 고른 항목은 `settings.json` 의 `"statusBarItems"` (켜진 항목들) 에 저장되고 TUI 와 공유됩니다. TUI 에서는 **⌃k › Status Bar Items…** 에서 바꿉니다 ([TUI 상태 줄](tui.md#상태-줄)). 두 앱 모두 시작할 때와 체크리스트를 열 때 읽으므로, 다른 앱에서 바꾼 것이 그때 보입니다.
 

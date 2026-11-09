@@ -41,7 +41,7 @@ The bottom line shows the status text on the left (the Production and Read-only 
 
 The selection the items read is the marked rows (`m`) in the cursor's column, or a range selected with `⇧↑↓←→` (or dragged); with neither, Position is the cursor's cell and Size is about that cell. A table tab knows its columns' declared limits; a console result only where its column is a table's column.
 
-When the line is too narrow, the screen's keys go first, then the common keys but `⌃k actions`, then the items (the column limit, Max, Min, Avg, Sum, Not null, Size, Shown columns), then `⌃k actions`; Position stays. While there are items, the status text keeps at least a third of the line (half without them) and is cut with `…`.
+When the line is too narrow, the screen's keys go first, then the common keys but `⌃k actions`, then the items (the column limit, Max, Min, Avg, Sum, Not null, Size, Shown columns), then `⌃k actions`; Position stays. The status text keeps up to half the line, as without items; only when an item would otherwise go does it give way down to a third (cut with `…`). A run's or a transfer's line is never cut to make room for items.
 
 ## Colors
 
