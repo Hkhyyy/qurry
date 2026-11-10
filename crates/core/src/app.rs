@@ -916,7 +916,11 @@ async fn with_pool_after<T, Fut: std::future::Future<Output = AppResult<T>>>(sta
     let pool = ensure_pool(state, id).await?;
     let r = match c {
         Some((c, g)) => {
-            match unless_stopped(state, &c, base, g, f(pool)).await {
+            // The tunnel is watched from the generation of the pool in hand: ensure_pool may have closed a dead tunnel and opened
+            // this pool on a new one (settle, shared_tunnel), which is no close under `f`. A close before, of a pool it handed out
+            // anyway, makes `f` fail on the closed pool (closed_under, from the generation read before)
+            let now = c.generation.load(SeqCst);
+            match unless_stopped(state, &c, base, now, f(pool)).await {
                 None => return again().await,
                 Some(Err(e)) if closed_under(&e, &c, g, tunnel_alive(state, base).await == Some(false)) => return again().await,
                 Some(r) => r,
@@ -2881,6 +2885,48 @@ pub(crate) mod tests {
             }
             drop_pool(&st, "w").await;
         }
+    }
+
+    /// A read through a tunnel that ensure_pool opened anew after it closed the dead one (here: the check after a wake waits for the
+    /// connect lock this test holds, meanwhile the source is closed for a dead tunnel and a new tunnel and pool open) runs once:
+    /// the new pool was not closed under it
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_read_on_the_pool_opened_after_a_dead_tunnel_runs_once() {
+        let lazy = || Pool::Pg(sqlx::postgres::PgPoolOptions::new().connect_lazy_with(sqlx::postgres::PgConnectOptions::new().host("127.0.0.1").port(9)));
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        st.store.save(&silent_source("w", 9, None)).unwrap();
+        let c = st.connecting("w");
+        let (old, t) = crate::ssm::tests::fake_tunnel().await;
+        st.tunnels.write().await.insert("w".into(), t);
+        st.pools.write().await.insert("w".into(), lazy());
+        *c.used.lock().unwrap() = None;
+        let held = c.failed.lock().await;
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let read = with_pool(&st, "w", |_| {
+            calls.fetch_add(1, SeqCst);
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                Ok(())
+            }
+        });
+        let (r, new) = tokio::join!(read, async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            drop_pool_logged(&st, "w", crate::audit::BY_SERVER).await;
+            let (new, t) = crate::ssm::tests::fake_tunnel().await;
+            st.tunnels.write().await.insert("w".into(), t);
+            st.pools.write().await.insert("w".into(), lazy());
+            // As keep_pool does for a new pool
+            c.settled(st.wakes());
+            drop(held);
+            new
+        });
+        assert!(r.is_ok());
+        assert_eq!(calls.load(SeqCst), 1, "not cut off and run again");
+        drop_pool(&st, "w").await;
+        crate::ssm::tests::gone(old.path()).await;
+        crate::ssm::tests::gone(new.path()).await;
     }
 
     /// An export, import, backup, restore or subset copy keeps its source in use while it runs (counted per source, not per
