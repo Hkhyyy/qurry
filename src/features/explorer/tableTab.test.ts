@@ -3,15 +3,16 @@ import type { ConnectionView, TableDetail } from "../../lib/api";
 import { buildTab } from "../tabs/ops";
 import { setTabs, useTabsStore } from "../tabs/store";
 
-let detail: { resolve: (d: TableDetail) => void; reject: (e: unknown) => void };
+let detail: { resolve: (d: TableDetail) => void; reject: (e: unknown) => void; callId: string };
+const cancels: string[] = [];
 vi.mock("../../lib/monaco", () => ({ forgetConsoleModel: () => {} }));
 vi.mock("../../lib/statusbar", () => ({ setTableColumns: () => {} }));
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
-  api: { reconnecting: async () => [] },
-  meta: { table: () => new Promise<TableDetail>((resolve, reject) => (detail = { resolve, reject })) },
+  api: { reconnecting: async () => [], cancelCall: async (id: string) => void cancels.push(id) },
+  meta: { table: (_t: string, _s: string, _n: string, callId: string) => new Promise<TableDetail>((resolve, reject) => (detail = { resolve, reject, callId })) },
 }));
-const { loadTableTab } = await import("./tableTab");
+const { cancelTableLoad, loadTableTab } = await import("./tableTab");
 
 const conn = { id: "dev", name: "[DEV] shop_app", kind: "postgres", database: "shop_app" } as ConnectionView;
 const tabNow = (id: string) => useTabsStore.getState().tabs.find((t) => t.id === id)!;
@@ -44,6 +45,23 @@ describe("a table tab opened from the explorer (#135)", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(status).toEqual(["10 rows retrieved", "Read-only: couldn't read the columns of public.users: permission denied for schema pg_catalog"]);
     expect(tabNow(tab.id).edit?.pk).toEqual([]);
+  });
+
+  it("Cancel while it waits for the metadata stops that load, and the rows never load", async () => {
+    const tab = buildTab(conn, "table", { edit: { schema: "public", table: "users", pk: [] } }, 0, "users");
+    setTabs([tab]);
+    const status: string[] = [];
+    const run = vi.fn(async () => {});
+    const done = loadTableTab(tab, "dev", "SELECT 1;", run, (s) => status.push(s));
+    expect(cancelTableLoad(tab.id)).toBe(true);
+    expect(cancels).toEqual([detail.callId]);
+    detail.reject("Cancelled");
+    await done;
+    expect(run).not.toHaveBeenCalled();
+    expect(tabNow(tab.id).running).toBe(false);
+    expect(status).toEqual(["Cancelled"]);
+    // Its rows' run is cancelled the usual way (cancel_query)
+    expect(cancelTableLoad(tab.id)).toBe(false);
   });
 
   it("a tab closed before the metadata came runs nothing", async () => {

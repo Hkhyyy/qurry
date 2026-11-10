@@ -65,3 +65,28 @@ test("an explorer list waiting on a reconnect shows only Loading… in the tree;
   await toast(page).getByRole("button", { name: "Cancel" }).click();
   await expect(page.locator(".ws-explorer.on .tree-status")).toHaveText("Cancelled while reconnecting [DEV] shop_app through SSH.");
 });
+
+const stop = (page: Page) => page.locator(".work-layer:visible").getByTitle(/^Cancel/);
+
+test("the table tab's own Cancel before a reconnect shows ends its load, and its rows never load", async ({ page }) => {
+  await reconnect(page, {});
+  await treeItem(page, "users").first().dblclick();
+  await expect(tableBody(page).getByText("Loading…", { exact: true })).toBeVisible();
+  // Within the first second nothing says the source reconnects yet
+  await stop(page).click();
+  await expect(tableBody(page).getByText("Loading…", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".statusbar")).toContainText("Cancelled");
+  await reconnect(page, null);
+  await page.waitForTimeout(1500);
+  await expect(page.locator(".statusbar")).not.toContainText(/rows retrieved/);
+  await expect(toast(page)).toHaveCount(0);
+});
+
+test("the table tab's own Cancel while the toast says its source reconnects cancels that reconnect", async ({ page }) => {
+  await reconnect(page, {});
+  await treeItem(page, "users").first().dblclick();
+  await expect(toast(page)).toContainText(WAITING);
+  await stop(page).click();
+  await expect(toast(page)).toHaveText("Cancelled while reconnecting [DEV] shop_app through SSH.×");
+  await expect(tableBody(page).getByText("Loading…", { exact: true })).toHaveCount(0);
+});

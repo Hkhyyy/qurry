@@ -9,7 +9,7 @@ vi.mock("./api", async (orig) => ({
     cancelCall: async (id: string) => void backend.cancelled.push(id),
   },
 }));
-const { cancelReconnect, ReconnectFailed, RECONNECT_POLL_MS, retryReconnect, useReconnect, waitOn, waitingToast } = await import("./reconnect");
+const { cancelReconnect, cancelWait, ReconnectFailed, RECONNECT_POLL_MS, retryReconnect, useReconnect, waitOn, waitingToast } = await import("./reconnect");
 
 const prod: Reconnecting = { id: "prod", message: "Reconnecting prod through AWS SSM", slow: "Taking longer…", failed: "Couldn't reconnect prod through AWS SSM", cancelled: "Cancelled while reconnecting prod through AWS SSM." };
 /** A call that ends when the test says so */
@@ -90,6 +90,42 @@ describe("waitOn (#135)", () => {
     const errors = await Promise.all([ra, rb].map((r) => r.catch((e) => String(e))));
     expect(errors).toEqual([prod.cancelled, prod.cancelled]);
     expect(toasts()).toEqual([{ phase: "cancelled", id: "prod", text: prod.cancelled }]);
+  });
+
+  it("a load's own Cancel: that load alone while nothing shows, the source's reconnect once the toast says it reconnects", async () => {
+    const [a, b] = [pending(), pending()];
+    const ids: string[] = [];
+    const ra = waitOn("prod", (id) => (ids.push(id), a.p), () => {});
+    const rb = waitOn("prod::other", (id) => (ids.push(id), b.p), () => {});
+    // Unique across webview reloads (the backend keeps a late cancel for a while), not a counter that starts again
+    expect(ids[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(ids[0]).not.toBe(ids[1]);
+    cancelWait(ids[0]);
+    expect(backend.cancelled).toEqual([ids[0]]);
+    a.fail("Cancelled");
+    expect(String(await ra.catch((e) => e))).toBe("Cancelled");
+    expect(toasts()).toEqual([]);
+    backend.reconnecting = [prod];
+    await beat();
+    const c = pending();
+    const rc = waitOn("prod", (id) => (ids.push(id), c.p), () => {});
+    cancelWait(ids[2]);
+    expect(backend.cancelled).toEqual([ids[0], ids[1], ids[2]]);
+    expect(toasts()).toEqual([{ phase: "cancelled", id: "prod", text: prod.cancelled }]);
+    b.fail("Cancelled");
+    c.fail("Cancelled");
+    expect(await Promise.all([rb, rc].map((r) => r.catch((e) => String(e))))).toEqual([prod.cancelled, prod.cancelled]);
+  });
+
+  it("a load cancelled as it answered drops the answer", async () => {
+    const c = pending();
+    let id = "";
+    const r = waitOn("dev", (i) => ((id = i), c.p), () => {});
+    cancelWait(id);
+    c.ok("rows");
+    const e = await r.catch((e) => e);
+    expect(e).toBeInstanceOf(ReconnectFailed);
+    expect(String(e)).toBe("Cancelled");
   });
 
   it("an error while nothing reconnects is the load's own", async () => {

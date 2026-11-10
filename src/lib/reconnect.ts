@@ -31,7 +31,6 @@ const seen = new Map<string, Reconnecting>();
 /** The failed loads' Retry, by source */
 const retries = new Map<string, (() => void)[]>();
 const cancelled = new Set<string>();
-let calls = 0;
 let timer: ReturnType<typeof setInterval> | undefined;
 
 const toastOf = (id: string) => useReconnect.getState().toasts.find((t) => t.id === id);
@@ -62,14 +61,19 @@ async function tick() {
  */
 export async function waitOn<T>(target: string, call: (callId: string) => Promise<T>, retry: () => void): Promise<T> {
   const base = target.split("::")[0];
-  const callId = `load-${++calls}`;
+  // Unique across webview reloads: a cancel the backend keeps for a call that had just ended never matches a new one
+  const callId = crypto.randomUUID();
   // A new load on a source whose last one failed or was cancelled: that toast goes
   if (toastOf(base) && toastOf(base)?.phase !== "waiting") dismissReconnect(base);
   waits.set(callId, { base, retry });
   timer ??= setInterval(tick, RECONNECT_POLL_MS);
   try {
-    return await call(callId);
+    const v = await call(callId);
+    // Cancelled as it answered: the answer is dropped
+    if (cancelled.has(callId)) throw new ReconnectFailed(seen.get(base)?.cancelled ?? "Cancelled");
+    return v;
   } catch (e) {
+    if (e instanceof ReconnectFailed) throw e;
     const r = seen.get(base);
     if (cancelled.has(callId)) throw new ReconnectFailed(r?.cancelled ?? String(e));
     if (!r) throw e;
@@ -86,15 +90,25 @@ export async function waitOn<T>(target: string, call: (callId: string) => Promis
   }
 }
 
+const stop = (callId: string) => {
+  cancelled.add(callId);
+  void api.cancelCall(callId);
+};
+
 /** Cancel: stops the source's waiting loads (the backend drops the connect they wait on) */
 export function cancelReconnect(id: string) {
   const text = seen.get(id)?.cancelled;
-  for (const [callId, w] of waits) {
-    if (w.base !== id) continue;
-    cancelled.add(callId);
-    void api.cancelCall(callId);
-  }
+  for (const [callId, w] of waits) if (w.base === id) stop(callId);
   if (text) setToast(id, { phase: "cancelled", id, text });
+}
+
+/** A table tab's own Cancel while its load waits (`callId`): while the toast says its source reconnects, that reconnect's Cancel
+ *  (all its loads, as the toast's and the status bar's); otherwise this load alone, which then fails with "Cancelled" */
+export function cancelWait(callId: string) {
+  const w = waits.get(callId);
+  if (!w) return;
+  if (toastOf(w.base)?.phase === "waiting") cancelReconnect(w.base);
+  else stop(callId);
 }
 
 /** Retry: runs the source's failed loads again */
