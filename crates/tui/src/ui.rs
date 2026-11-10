@@ -1568,7 +1568,7 @@ fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
             let disabled = form.disabled(fl.label);
             let shown = match fl.kind {
                 FieldKind::Secret if fl.value != "<saved>" => "•".repeat(fl.value.chars().count()),
-                FieldKind::Toggle => format!("[{}]", if disabled.map_or(fl.value == "on", |d| d.1) { "x" } else { " " }),
+                FieldKind::Toggle => format!("[{}]", if disabled.unwrap_or(fl.value == "on") { "x" } else { " " }),
                 FieldKind::Choice(_) => format!("◂ {} ▸", fl.value),
                 _ => fl.value.clone(),
             };
@@ -1587,18 +1587,9 @@ fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
             if let Some(note) = empty_field_note(fl.label, form.value("SSH auth")).filter(|_| fl.value.trim().is_empty()) {
                 spans.push(Span::styled(format!("  {note}"), Style::default().fg(DIM)));
             }
-            if let Some((why, _)) = disabled {
-                // Dim as a whole, with why
-                spans.push(Span::raw(format!("  {why}")));
+            if disabled.is_some() {
+                // Dim as a whole
                 return Line::from(spans).style(Style::default().fg(DIM).add_modifier(Modifier::DIM));
-            }
-            if fl.label == "Admin reports" {
-                // On: what still reaches the AI tool, as the GUI warns
-                spans.push(if fl.value == "on" {
-                    Span::styled("  names and query shapes still reach the AI tool", Style::default().fg(WARN))
-                } else {
-                    Span::styled("  slow queries, sessions, locks; values masked", Style::default().fg(DIM))
-                });
             }
             Line::from(spans)
         })

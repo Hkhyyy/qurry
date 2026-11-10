@@ -579,12 +579,12 @@ impl ConnForm {
         true
     }
 
-    /// Why a field can't be changed now, shown dim beside it, and whether it shows as on meanwhile (its value stays as stored).
+    /// Whether a field can't be changed now (shown dim), and if so whether it shows as on meanwhile (its value stays as chosen).
     /// Admin reports (MCP's dba_report, #131) asks only on Production sources shared with MCP: the others always answer it
-    pub fn disabled(&self, label: &str) -> Option<(&'static str, bool)> {
+    pub fn disabled(&self, label: &str) -> Option<bool> {
         match label {
-            "Admin reports" if self.value("MCP") == "off" => Some(("MCP is Off for this data source", false)),
-            "Admin reports" if self.value("Production") != "on" => Some(("Only Production sources ask", true)),
+            "Admin reports" if self.value("MCP") == "off" => Some(false),
+            "Admin reports" if self.value("Production") != "on" => Some(true),
             _ => None,
         }
     }

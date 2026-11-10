@@ -314,8 +314,7 @@ test("Schemas tab of a new data source: a slow connect shows the time and Cancel
 });
 
 test("Options › MCP: admin reports for AI tools ask on Production only, and MCP Off disables them", async ({ page }) => {
-  const label = "Let AI tools read admin reports (slow queries, sessions, locks); query values are masked";
-  const notProduction = "Only Production sources ask: AI tools read the admin reports of other sources shared with MCP.";
+  const label = "AI tools can read admin reports";
   const props = async (name: string) => {
     await treeNode(page, name).click({ button: "right" });
     await page.getByRole("menuitem", { name: /^Properties/ }).click();
@@ -323,20 +322,17 @@ test("Options › MCP: admin reports for AI tools ask on Production only, and MC
     return dialog(page);
   };
   const saved = () => page.evaluate(() => (window as any).__mockSaved.options);
-  // Production that never set MCP: Off, so the row is disabled and says why
+  // Production that never set MCP: Off, so the row is disabled
   let d = await props("[PROD] shop_app");
   const box = d.getByRole("checkbox", { name: label });
   await expect(box).toBeDisabled();
   await expect(box).not.toBeChecked();
-  await expect(d.getByText("MCP is Off for this data source: AI tools don't see it at all.")).toBeVisible();
   const size = await d.boundingBox();
-  // Read: editable and off by default; checking it says what still reaches the AI tool, and OK sends it
+  // Read: editable and off by default, and OK sends it
   await d.getByRole("combobox", { name: "MCP (AI tools)" }).selectOption("read");
   await expect(box).toBeEnabled();
   await expect(box).not.toBeChecked();
-  await expect(d.getByText("MCP is Off for this data source", { exact: false })).toHaveCount(0);
   await box.check();
-  await expect(d.getByText("Table and column names, and query shapes, still reach the AI tool.")).toBeVisible();
   expect(await d.boundingBox(), "the dialog keeps its size").toEqual(size);
   await d.getByRole("button", { name: "OK" }).click();
   await expect(dialog(page)).toHaveCount(0);
@@ -350,7 +346,6 @@ test("Options › MCP: admin reports for AI tools ask on Production only, and MC
   await d.getByRole("checkbox", { name: "Production: show affected rows and confirm changes" }).uncheck();
   await expect(box).toBeDisabled();
   await expect(box).toBeChecked();
-  await expect(d.getByText(notProduction)).toBeVisible();
   await d.getByRole("combobox", { name: "MCP (AI tools)" }).selectOption("off");
   await expect(box).toBeDisabled();
   await expect(box).not.toBeChecked();
@@ -363,7 +358,6 @@ test("Options › MCP: admin reports for AI tools ask on Production only, and MC
   await d.getByRole("combobox", { name: "MCP (AI tools)" }).selectOption("read");
   await expect(box).toBeDisabled();
   await expect(box).toBeChecked();
-  await expect(d.getByText(notProduction)).toBeVisible();
   await d.getByRole("button", { name: "OK" }).click();
   await expect(dialog(page)).toHaveCount(0);
   expect((await saved()).mcpDbaReports).toBeUndefined();
