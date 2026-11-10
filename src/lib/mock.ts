@@ -439,6 +439,8 @@ const handlers: Record<string, (a: any) => unknown> = {
   },
   save_connection: (a: any) => {
     tls.saves++;
+    // What the dialog sent last (e2e reads it)
+    (window as any).__mockSaved = a.config;
     const i = conns.findIndex((c: any) => c.id === a.config.id);
     if (i >= 0) (conns as any)[i] = { ...conns[i], ...a.config };
     // A new data source gets its id here, as in the core

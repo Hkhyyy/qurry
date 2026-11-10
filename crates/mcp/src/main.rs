@@ -328,7 +328,7 @@ impl Server {
                 let c = self.sources().await?.into_iter().find(|c| c.config.id == id).ok_or("Data source not found")?.config;
                 if !c.mcp_dba_report_allowed() {
                     return Err(format!(
-                        "\"{}\" is a Production data source: MCP reads its Database Admin reports (sessions, client addresses, settings, roles) only if a person allows it for this data source in Qurry",
+                        "\"{}\" is a Production data source: MCP reads its Database Admin reports (sessions, client addresses, settings, roles) only if a person allows it for this data source in Qurry (Data Source Properties › Options › \"Let AI tools read admin reports\"; TUI: \"Admin reports\" in the data source form)",
                         c.name
                     ));
                 }
