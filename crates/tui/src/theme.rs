@@ -17,7 +17,7 @@ pub fn auto_light(var: impl Fn(&str) -> Option<String>) -> bool {
 }
 
 /// The tokens of kit/atoms.rs by the names themes.json "tui" gives them (each one is drawn in that theme token's color)
-const ATOMS: [(&str, Color); 15] = [
+const ATOMS: [(&str, Color); 17] = [
     ("ACCENT", ACCENT),
     ("SEL", SEL),
     ("SURFACE", SURFACE),
@@ -33,6 +33,8 @@ const ATOMS: [(&str, Color); 15] = [
     ("JSON_PUNCT", JSON_PUNCT),
     ("C_ROUTINE", C_ROUTINE),
     ("NULL_TEXT", NULL_TEXT),
+    ("SQL_NUMBER", SQL_NUMBER),
+    ("SQL_COMMENT", SQL_COMMENT),
 ];
 
 /// The Data Source colors with a theme token of their own (the GUI's connBg): Red, the Production color, and Green
@@ -640,6 +642,8 @@ mod tests {
             assert_eq!(at(&look, ColorMode::TrueColor, Style::default().fg(ACCENT).bg(SEL)), (c("link"), c("sel")), "{}", t.id);
             assert_eq!(at(&look, ColorMode::TrueColor, Style::default().fg(NUMBER).bg(SURFACE)), (c("gridNum"), c("panel")), "{}", t.id);
             assert_eq!(at(&look, ColorMode::TrueColor, Style::default().fg(JSON_KEY).bg(POPUP_BG)), (c("jsonKey"), c("bg")), "{}", t.id);
+            assert_eq!(at(&look, ColorMode::TrueColor, Style::default().fg(SQL_NUMBER)).0, c("number"), "{}", t.id);
+            assert_eq!(at(&look, ColorMode::TrueColor, Style::default().fg(SQL_COMMENT)).0, c("comment"), "{}", t.id);
             let plain = at(&look, ColorMode::TrueColor, Style::default());
             let dim = at(&look, ColorMode::TrueColor, Style::default().fg(DIM)).0;
             if TERMINAL_BG.contains(&t.id.as_str()) {
@@ -706,10 +710,14 @@ mod tests {
         let white = Color::Rgb(255, 255, 255);
         let tc = |st: Style| cell_in(ColorMode::TrueColor, true, st);
         // Every text color token reads on a white terminal, the popups and the selection
-        for t in [ACCENT, OK, WARN, DANGER, NUMBER, JSON_KEY, JSON_STRING, JSON_KEYWORD, JSON_PUNCT, C_DB, C_VIEW, C_SEQUENCE, C_ROUTINE, C_KEYWORD] {
+        for t in [ACCENT, OK, WARN, DANGER, NUMBER, JSON_KEY, JSON_STRING, JSON_KEYWORD, JSON_PUNCT, C_DB, C_VIEW, C_SEQUENCE, C_ROUTINE, C_KEYWORD, SQL_NUMBER] {
             for bg in [white, lt(POPUP_BG, true), lt(SURFACE, true), lt(SEL, true)] {
                 assert!(contrast(lt(t, false), bg) >= 3.0, "{t:?} on {bg:?}: {}", contrast(lt(t, false), bg));
             }
+        }
+        // SQL comments are only drawn in the WHERE / ORDER BY input (a popup), never on a selection; 3:1 as the GUI's comment
+        for bg in [white, lt(POPUP_BG, true)] {
+            assert!(contrast(lt(SQL_COMMENT, false), bg) >= 3.0, "SQL_COMMENT on {bg:?}");
         }
         // Light surfaces and selections, each one apart from the others
         let bgs = [SEL, SEL_BLUR, SURFACE, POPUP_BG, CELL_EDITED, CELL_RANGE, DROP].map(|c| lt(c, true));

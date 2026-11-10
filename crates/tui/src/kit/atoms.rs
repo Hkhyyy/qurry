@@ -29,6 +29,11 @@ pub const JSON_KEY: Color = Color::Rgb(199, 125, 187);
 pub const JSON_STRING: Color = Color::Rgb(106, 171, 115);
 pub const JSON_KEYWORD: Color = Color::Rgb(207, 142, 109);
 pub const JSON_PUNCT: Color = Color::Rgb(139, 143, 149);
+/// SQL in the WHERE / ORDER BY inputs (qurry_shared::highlight; GUI --c-number, --c-comment): numbers and comments have atoms of
+/// their own, one step off NUMBER and the GUI's dark comment gray so a theme can draw them apart. Keywords, strings and functions
+/// are JSON_KEYWORD, JSON_STRING and C_ROUTINE (the same theme tokens)
+pub const SQL_NUMBER: Color = Color::Rgb(42, 172, 185);
+pub const SQL_COMMENT: Color = Color::Rgb(122, 126, 133);
 /// NULL in result cells and the value panel (GUI NULL color; dim gray in 16 colors, dim without colors)
 pub const NULL_TEXT: Color = Color::Rgb(139, 143, 148);
 // Tree · autocomplete icon colors

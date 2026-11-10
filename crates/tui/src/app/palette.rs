@@ -326,7 +326,7 @@ impl App {
             a.reload_table_checked(id);
         });
         if let Some(Popup::Input { filter, .. }) = &mut self.popup {
-            *filter = Some(FilterSource { meta, schema, table, order_by, db, kind });
+            *filter = Some(FilterSource { meta, schema, table, order_by, db, kind, scroll: 0 });
         }
     }
 

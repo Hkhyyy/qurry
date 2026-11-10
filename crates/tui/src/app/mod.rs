@@ -229,6 +229,9 @@ pub struct FilterSource {
     pub db: String,
     /// The tab's data source kind (MySQL inserts names bare; quotes and brackets pair up as it reads them)
     pub kind: DbKind,
+    /// The input's horizontal scroll (the first column drawn), which tui-textarea keeps to itself: ui.rs moves it each frame as
+    /// tui-textarea does, to color the text in view
+    pub scroll: u16,
 }
 
 /// The Redis browser's command line (:), the GUI's Terminal: completion from the shared command table (qurry_shared::redis_cmd)

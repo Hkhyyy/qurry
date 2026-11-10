@@ -1343,6 +1343,13 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let hint = if redis.is_some() { "Enter / Esc · Tab complete · ↑↓ history · HELP command" } else if filter.is_none() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
             input.set_block(panel(format!(" {} ({hint}) ", disp(title)), true));
             f.render_widget(&*input, r);
+            // WHERE / ORDER BY in the console's colors (qurry_shared::highlight, as the GUI's fields)
+            if let Some(fs) = filter {
+                let inner = Rect { x: r.x + 1, y: r.y + 1, width: r.width.saturating_sub(2), height: 1 };
+                let (line, caret) = (input.lines().first().cloned().unwrap_or_default(), input.cursor().1);
+                fs.scroll = textarea_scroll(fs.scroll, caret as u16, inner.width);
+                color_sql(f.buffer_mut(), inner, &line, caret, fs.scroll, fs.kind);
+            }
             // The Redis command line: the arguments still to type, muted, after the text
             if redis.is_some() {
                 let line = input.lines().first().cloned().unwrap_or_default();
@@ -1408,6 +1415,46 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             f.render_widget(List::new(items).block(panel(hint, true)), list);
         }
         Popup::ConnForm(form) => draw_conn_form(f, area, form),
+    }
+}
+
+/// tui-textarea's horizontal scroll after a frame: the first column stays until the caret leaves the view (its next_scroll_top)
+fn textarea_scroll(prev: u16, caret: u16, width: u16) -> u16 {
+    if caret < prev {
+        caret
+    } else if prev + width <= caret {
+        caret + 1 - width
+    } else {
+        prev
+    }
+}
+
+/// SQL colors over a one-line input's text as drawn in `inner` from column `scroll`: only the color changes (comments italic), and
+/// the caret's cell (character `caret`) keeps the input's look
+fn color_sql(buf: &mut Buffer, inner: Rect, line: &str, caret: usize, scroll: u16, kind: qurry_shared::DbKind) {
+    use qurry_shared::highlight::{Class, highlight};
+    use unicode_width::UnicodeWidthChar;
+    let spans = highlight(line, kind);
+    let (mut col, mut next) = (0u16, 0);
+    for (i, (b, ch)) in line.char_indices().enumerate() {
+        let w = ch.width().unwrap_or(0) as u16;
+        while spans.get(next).is_some_and(|s| s.end <= b) {
+            next += 1;
+        }
+        let style = match spans.get(next).filter(|s| s.start <= b).map(|s| s.class) {
+            Some(Class::Keyword) => Some(Style::default().fg(JSON_KEYWORD)),
+            Some(Class::Function) => Some(Style::default().fg(C_ROUTINE)),
+            Some(Class::Number) => Some(Style::default().fg(SQL_NUMBER)),
+            Some(Class::String) => Some(Style::default().fg(JSON_STRING)),
+            Some(Class::Comment) => Some(Style::default().fg(SQL_COMMENT).add_modifier(Modifier::ITALIC)),
+            _ => None,
+        };
+        if let Some(style) = style.filter(|_| i != caret) {
+            for x in (col..col + w).filter(|x| (scroll..scroll + inner.width).contains(x)) {
+                buf[(inner.x + x - scroll, inner.y)].set_style(style);
+            }
+        }
+        col += w;
     }
 }
 
@@ -1867,5 +1914,85 @@ mod tests {
         assert_eq!(buf[(4, 0)].symbol(), "│");
         assert_eq!(buf[(10, 0)].symbol(), " ");
         assert_eq!(buf[(10, 0)].bg, Color::Yellow, "the cell after the popup keeps the row's colour");
+    }
+
+    /// #136: the WHERE / ORDER BY inputs draw their SQL in the console's colors (the theme's keyword, number, string, function and
+    /// comment), symbol operators and names in the text color; the caret's cell keeps the input's look
+    #[tokio::test]
+    async fn filter_input_draws_sql_in_colors() {
+        use crate::testkit::Harness;
+        let mut h = Harness::new().await;
+        let id = h.table_tab("users", &["id", "name"], &[&["1", "a"]], &["id"]);
+        h.app.focus = crate::app::Focus::Grid;
+        let look = |h: &Harness, tok: &str| {
+            let t = h.app.themes.resolve(qurry_shared::theme::SYSTEM, !h.app.auto_light);
+            let (r, g, b) = qurry_shared::theme::rgb(t.color(tok)).unwrap();
+            Color::Rgb(r, g, b)
+        };
+        for theme in ["dark", "light"] {
+            h.app.themes.theme = Some(theme.into());
+            h.app.input_filter(id, false);
+            h.type_str("lower(name) = 'a' AND id IN (1, 2) /* x */");
+            h.key("Home");
+            let buf = h.buffer(100, 30);
+            let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
+            let y = (0..30).find(|&y| row(y).contains("lower(name)")).unwrap();
+            let r = row(y);
+            let at = |pat: &str| r[..r.find(pat).unwrap()].chars().count() as u16;
+            let fg = |pat: &str| buf[(at(pat), y)].fg;
+            assert_eq!(fg("AND"), look(&h, "keyword"), "{theme}");
+            assert_eq!(fg("IN"), look(&h, "keyword"), "{theme}");
+            assert_eq!(fg("1,"), look(&h, "number"), "{theme}");
+            assert_eq!(fg("'a'"), look(&h, "string"), "{theme}");
+            assert_eq!(fg("ower("), look(&h, "function"), "{theme}");
+            assert_eq!(fg("/* x"), look(&h, "comment"), "{theme}");
+            assert!(buf[(at("/* x"), y)].modifier.contains(Modifier::ITALIC));
+            for plain in ["name)", "=", "id IN", "("] {
+                assert!(![look(&h, "keyword"), look(&h, "number"), look(&h, "string"), look(&h, "function")].contains(&fg(plain)), "{theme}: {plain}");
+            }
+            // The caret (Home: on `lower`'s l) keeps the input's look
+            assert!(buf[(at("lower"), y)].modifier.contains(Modifier::REVERSED), "{theme}");
+            assert_ne!(buf[(at("lower"), y)].fg, look(&h, "function"), "{theme}");
+            h.app.popup = None;
+        }
+    }
+
+    /// A text longer than the input scrolls with the caret: the colors move with it (tui-textarea's scroll, mirrored)
+    #[tokio::test]
+    async fn filter_input_colors_follow_its_scroll() {
+        use crate::testkit::Harness;
+        let mut h = Harness::new().await;
+        let id = h.table_tab("users", &["id", "name"], &[&["1", "a"]], &["id"]);
+        h.app.focus = crate::app::Focus::Grid;
+        h.app.input_filter(id, false);
+        let text = (0..20).map(|i| format!("id = {i}")).collect::<Vec<_>>().join(" or ");
+        h.type_str(&text);
+        let check = |h: &mut Harness| {
+            let buf = h.buffer(100, 30);
+            let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
+            let y = (0..30).find(|&y| row(y).contains(" or id = ")).unwrap();
+            let r = row(y);
+            // Every visible `or` is a keyword, every `=` is not
+            let cells: Vec<_> = r.chars().enumerate().collect();
+            let mut n = 0;
+            for w in cells.windows(4) {
+                if w[0].1 == ' ' && w[1].1 == 'o' && w[2].1 == 'r' && w[3].1 == ' ' {
+                    assert_eq!(buf[(w[1].0 as u16, y)].fg, JSON_KEYWORD, "{r}");
+                    n += 1;
+                }
+                if w[1].1 == '=' {
+                    assert_ne!(buf[(w[1].0 as u16, y)].fg, JSON_KEYWORD, "{r}");
+                }
+            }
+            assert!(n >= 5, "{r}");
+        };
+        // At the end (scrolled), then back at the start
+        check(&mut h);
+        h.key("Home");
+        check(&mut h);
+        for _ in 0..3 {
+            h.key("Right");
+        }
+        check(&mut h);
     }
 }
