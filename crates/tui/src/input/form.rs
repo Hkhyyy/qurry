@@ -103,6 +103,132 @@ mod tests {
         assert_eq!(saved.options.startup_script, "SET search_path = shop");
     }
 
+    /// MCP's DBA reports on a Production source (the Admin reports field, left as it was): editing and saving the source keeps the setting
+    #[tokio::test]
+    async fn conn_form_keeps_mcp_dba_reports() {
+        let mut h = Harness::new().await;
+        let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "p1", "name": "prod", "kind": "postgres", "host": "localhost", "port": 5432,
+            "user": "postgres", "options": { "confirmChanges": true, "mcp": "read", "mcpDbaReports": true } })).unwrap();
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.app.conn_form(Some(cfg));
+        let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
+        f.fields.iter_mut().find(|x| x.label == "Name").unwrap().value = "prod renamed".into();
+        h.key("Enter");
+        h.settle().await;
+        let saved = h.app.state.store.get("p1").unwrap().unwrap();
+        assert_eq!(saved.name, "prod renamed");
+        assert!(saved.options.confirm_changes && saved.options.mcp_dba_reports && saved.mcp_dba_report_allowed());
+    }
+
+    /// Opens the form of a saved source with these options
+    fn admin_form(h: &mut Harness, options: serde_json::Value) {
+        let cfg: qurry_core::store::ConnectionConfig =
+            serde_json::from_value(serde_json::json!({ "id": "p1", "name": "src", "kind": "postgres", "host": "localhost", "port": 5432, "user": "postgres", "options": options })).unwrap();
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.app.conn_form(Some(cfg));
+    }
+
+    /// The fields ↓ stops at, once round the form
+    fn stops(h: &mut Harness) -> Vec<&'static str> {
+        let n = form(h).fields.len();
+        (0..n)
+            .map(|_| {
+                h.key("Down");
+                sel_label(h)
+            })
+            .collect()
+    }
+
+    fn sel_label(h: &mut Harness) -> &'static str {
+        let f = form(h);
+        f.fields[f.sel].label
+    }
+
+    /// The form's Admin reports row
+    fn admin_row(h: &mut Harness) -> String {
+        h.screen(120, 40).lines().find(|l| l.contains("Admin reports")).unwrap().to_string()
+    }
+
+    /// Production shared with MCP: ↓ reaches Admin reports, Space turns it on and saving stores it
+    #[tokio::test]
+    async fn conn_form_admin_reports_on_production() {
+        let mut h = Harness::new().await;
+        admin_form(&mut h, serde_json::json!({ "confirmChanges": true, "mcp": "read" }));
+        assert!(admin_row(&mut h).contains("[ ]"), "{}", admin_row(&mut h));
+        while sel_label(&mut h) != "Admin reports" {
+            h.key("Down");
+        }
+        h.key("Space");
+        assert!(admin_row(&mut h).contains("[x]"), "{}", admin_row(&mut h));
+        h.key("Enter");
+        h.settle().await;
+        let saved = h.app.state.store.get("p1").unwrap().unwrap();
+        assert!(saved.options.mcp_dba_reports && saved.mcp_dba_report_allowed());
+    }
+
+    /// Not Production, or MCP Off: the row is disabled (dim), ↓ skips it, Space on it does nothing and saving keeps the stored value
+    #[tokio::test]
+    async fn conn_form_admin_reports_disabled() {
+        let cases = [
+            (serde_json::json!({ "mcp": "read" }), false, "[x]"),
+            (serde_json::json!({ "confirmChanges": true, "mcp": "off", "mcpDbaReports": true }), true, "[ ]"),
+        ];
+        for (options, stored, shown) in cases {
+            let mut h = Harness::new().await;
+            admin_form(&mut h, options);
+            assert!(admin_row(&mut h).contains(shown), "{}", admin_row(&mut h));
+            assert!(!stops(&mut h).contains(&"Admin reports"));
+            let f = form(&mut h);
+            f.sel = f.fields.iter().position(|x| x.label == "Admin reports").unwrap();
+            h.key("Space");
+            h.key("Right");
+            assert_eq!(form(&mut h).value("Admin reports"), if stored { "on" } else { "off" });
+            h.key("Enter");
+            h.settle().await;
+            assert_eq!(h.app.state.store.get("p1").unwrap().unwrap().options.mcp_dba_reports, stored, "{shown}");
+        }
+    }
+
+    /// Revoked, then the row disabled in the same form (Production off, or MCP Off): the save keeps the revoke
+    #[tokio::test]
+    async fn conn_form_admin_reports_revoke_then_disable() {
+        for (label, key) in [("Production", "Space"), ("MCP", "Left")] {
+            let mut h = Harness::new().await;
+            admin_form(&mut h, serde_json::json!({ "confirmChanges": true, "mcp": "read", "mcpDbaReports": true }));
+            let f = form(&mut h);
+            f.sel = f.fields.iter().position(|x| x.label == "Admin reports").unwrap();
+            h.key("Space");
+            assert_eq!(form(&mut h).value("Admin reports"), "off");
+            let f = form(&mut h);
+            f.sel = f.fields.iter().position(|x| x.label == label).unwrap();
+            h.key(key);
+            assert!(form(&mut h).disabled("Admin reports").is_some(), "{label}");
+            h.key("Enter");
+            h.settle().await;
+            assert!(!h.app.state.store.get("p1").unwrap().unwrap().options.mcp_dba_reports, "{label}");
+        }
+    }
+
+    /// Turning Production on in the form enables the row; turning MCP Off disables it again
+    #[tokio::test]
+    async fn conn_form_admin_reports_follows_production_and_mcp() {
+        let mut h = Harness::new().await;
+        admin_form(&mut h, serde_json::json!({ "mcp": "read" }));
+        let f = form(&mut h);
+        f.sel = f.fields.iter().position(|x| x.label == "Production").unwrap();
+        h.key("Space");
+        assert!(stops(&mut h).contains(&"Admin reports"));
+        assert!(admin_row(&mut h).contains("[ ]"));
+        let f = form(&mut h);
+        f.sel = f.fields.iter().position(|x| x.label == "MCP").unwrap();
+        h.key("Left");
+        assert_eq!(form(&mut h).value("MCP"), "off");
+        assert_eq!(form(&mut h).disabled("Admin reports"), Some(false));
+        assert!(!stops(&mut h).contains(&"Admin reports"));
+    }
+
     /// A new Data Source starts hidden from MCP. Saves the MCP value shown in the form as is
     #[tokio::test]
     async fn conn_form_mcp_default() {

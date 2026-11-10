@@ -70,6 +70,8 @@ export interface ConnOptions {
   allowPlaintext?: boolean;
   /** Whether it is visible to the MCP server (missing on older sources: Production hidden, others read·write) */
   mcp?: "off" | "read" | "write" | null;
+  /** Production: MCP's dba_report may read its Database Admin reports (core ConnectionConfig::mcp_dba_report_allowed; off when missing) */
+  mcpDbaReports?: boolean;
   startupScript?: string;
   /** Oracle Instant Client folder */
   oracleClient?: string | null;
@@ -259,12 +261,15 @@ export const api = {
   /** After a TLS connect error (wasm tlsOptIn): turn on "Allow unencrypted connection", keeping the saved password */
   allowPlaintext: (id: string) => invoke<ConnectionConfig>("allow_plaintext", { id }),
   deleteConnection: (id: string) => invoke<void>("delete_connection", { id }),
-  /** `testId`: cancelTest(testId) stops it (an AWS SSM session can take up to 30 s); it then fails with "Test cancelled" */
+  /** `testId`: cancelCall(testId) stops it (an AWS SSM session can take up to 30 s); it then fails with "Test cancelled" */
   testConnection: (config: ConnectionConfig, password?: string, sshSecret?: string, testId?: string) =>
     invoke<string>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null, testId: testId ?? null }),
   testSsh: (config: ConnectionConfig, sshSecret?: string, testId?: string) => invoke<string>("test_ssh", { config, sshSecret: sshSecret ?? null, testId: testId ?? null }),
-  cancelTest: (testId: string) => invoke<void>("cancel_test", { testId }),
-  /** Schemas tab of a data source that isn't saved yet: listed with the form's settings, connecting as testConnection does (cancelTest(testId) stops it) */
+  /** Stops a call started with this id (a test, or a table's or the explorer's load that waits on a reconnecting source) */
+  cancelCall: (callId: string) => invoke<void>("cancel_call", { callId }),
+  /** The data sources whose tunnel Qurry waits for or replaces (asked about once a second while a load waits on a source) */
+  reconnecting: () => invoke<Reconnecting[]>("reconnecting"),
+  /** Schemas tab of a data source that isn't saved yet: listed with the form's settings, connecting as testConnection does (cancelCall(testId) stops it) */
   formDatabases: (config: ConnectionConfig, password?: string, sshSecret?: string, testId?: string) =>
     invoke<string[]>("form_databases", { config, password: password ?? null, sshSecret: sshSecret ?? null, testId: testId ?? null }),
   formSchemas: (config: ConnectionConfig, database: string, password?: string, sshSecret?: string, testId?: string) =>
@@ -311,6 +316,8 @@ export const api = {
   unsafeReason: (kind: DbKind, sql: string) => invoke<string | null>("unsafe_reason", { kind, sql }),
 };
 
+/** A data source that reconnects (core app::Reconnecting): what to say meanwhile, after 10 s (`slow`), when its load fails and after Cancel */
+export interface Reconnecting { id: string; message: string; slow: string; failed: string; cancelled: string }
 export interface SchemaInfo { name: string; isSystem: boolean }
 export interface RelationInfo { name: string; kind: "table" | "partitioned" | "view" | "matview" | "foreign" | "sequence" | "key"; comment: string | null; rowEstimate: number | null }
 export interface RoutineInfo { name: string; args: string; returns: string | null; kind: string }
@@ -479,8 +486,9 @@ export interface ImportSpec { path: string; schema: string; table: string; creat
 export const meta = {
   databases: (id: string) => invoke<string[]>("list_databases", { id }),
   schemas: (id: string) => invoke<SchemaInfo[]>("list_schemas", { id }),
-  objects: (id: string, schema: string) => invoke<SchemaObjects>("list_objects", { id, schema }),
-  table: (id: string, schema: string, table: string) => invoke<TableDetail>("table_detail", { id, schema, table }),
+  /** `callId`: api.cancelCall(callId) stops it; it then fails with "Cancelled" */
+  objects: (id: string, schema: string, callId?: string) => invoke<SchemaObjects>("list_objects", { id, schema, callId: callId ?? null }),
+  table: (id: string, schema: string, table: string, callId?: string) => invoke<TableDetail>("table_detail", { id, schema, table, callId: callId ?? null }),
   structure: (id: string, schema: string, table: string) => invoke<TableStructure>("table_structure", { id, schema, table }),
   /** pgvector: SQL finding rows near this row (pk = [column, value]) */
   similarRowsSql: (id: string, schema: string, table: string, column: string, pk: [string, string | null][]) => invoke<string>("similar_rows_sql", { id, schema, table, column, pk }),

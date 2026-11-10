@@ -132,6 +132,7 @@
 .ui-input.full, .ui-select.full { width: 100%; }
 .ui-check { display: inline-flex; align-items: center; gap: var(--ui-sp-2); cursor: pointer; }
 .ui-check input { margin: 0; }
+.ui-check:has(input:disabled) { color: var(--ui-text-muted); cursor: default; }
 /* A line under a checkbox, aligned with its text */
 .ui-check-note { margin-top: var(--ui-sp-1); padding-left: calc(13px + var(--ui-sp-2)); }
 .ui-radio-group { display: flex; flex-direction: column; gap: var(--ui-sp-2); }
@@ -163,6 +164,14 @@
 .ui-notice.tone-warn { border-color: color-mix(in srgb, var(--ui-warn) 50%, var(--ui-border)); }
 .ui-notice.tone-danger { color: var(--ui-danger); border-color: color-mix(in srgb, var(--ui-danger) 50%, var(--ui-border)); font-family: var(--ui-font-mono); }
 .ui-notice.tone-ok { border-color: color-mix(in srgb, var(--ui-ok) 50%, var(--ui-border)); }
+/* Toast: bottom right above the status bar (24 px), over the panes but under menus and dialogs; fixed width so its text wraps the same
+   while the elapsed time ticks */
+.ui-toasts { position: fixed; right: var(--ui-sp-4); bottom: 34px; z-index: var(--ui-z-modal); display: flex; flex-direction: column; align-items: flex-end; gap: var(--ui-sp-3); pointer-events: none; }
+.ui-toast { position: relative; box-sizing: border-box; width: 380px; max-width: calc(100vw - 2 * var(--ui-sp-4)); display: flex; flex-direction: column; gap: var(--ui-sp-2); padding: 10px var(--ui-sp-4); font-size: var(--ui-fs-md); line-height: 1.45; color: var(--ui-text); background: var(--ui-surface); border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-md); box-shadow: var(--ui-shadow-pop); pointer-events: auto; overflow-wrap: anywhere; }
+.ui-toast.closable { padding-right: 34px; }
+.ui-toast.tone-danger { border-color: color-mix(in srgb, var(--ui-danger) 60%, var(--ui-border-strong)); }
+.ui-toast-acts { display: flex; justify-content: flex-end; gap: var(--ui-sp-3); }
+.ui-toast-x { position: absolute; right: 6px; top: 6px; }
 /* TlsOptIn: the button, then the warning beside it (below it when narrow); the warning stays muted inside a danger-colored error */
 .ui-tls-optin { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-sp-2) var(--ui-sp-3); margin-top: var(--ui-sp-2); white-space: normal; }
 .ui-tls-optin-detail { font-size: var(--ui-fs-sm); color: var(--ui-text-muted); line-height: 1.5; }
@@ -285,6 +294,16 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-search.bare { padding: var(--ui-sp-2) var(--ui-sp-3); border-bottom: 1px solid var(--ui-border); }
 .ui-search.bare .ui-input { height: 30px; font-size: var(--ui-fs-lg); background: transparent; border: none; }
 .ui-search.bare .ui-search-glass { left: var(--ui-sp-4); font-size: 16px; }
+/* HighlightInput: the input's text is transparent; the colored copy over it sits inside the input's border and padding, in its font */
+.ui-hl { position: relative; display: flex; min-width: 0; }
+.ui-hl > .ui-input { flex: 1; color: transparent; caret-color: var(--ui-text); }
+.ui-hl > .ui-input::selection { color: transparent; background: var(--ui-selected); }
+.ui-hl-layer { position: absolute; inset: 1px calc(var(--ui-sp-3) + 1px); display: flex; align-items: center; overflow: hidden; pointer-events: none; white-space: pre; font: inherit; font-size: var(--ui-fs-md); color: var(--ui-text); }
+.ui-hl-keyword { color: var(--c-cf8e6d); }
+.ui-hl-function { color: var(--c-56a8f5); }
+.ui-hl-number { color: var(--c-number); }
+.ui-hl-string { color: var(--ui-json-string); }
+.ui-hl-comment { color: var(--c-comment); font-style: italic; }
 .ui-tabs.size-sm { gap: var(--ui-sp-1); margin-bottom: 0; border-bottom: none; }
 .ui-tabs.size-sm .ui-tab { padding: var(--ui-sp-2) var(--ui-sp-3) var(--ui-sp-2); }
 

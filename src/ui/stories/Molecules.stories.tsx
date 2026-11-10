@@ -1,8 +1,11 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
-import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormGrid, FormSection, Hint, InfoTip, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Named, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow, TxPending } from "..";
+import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormGrid, FormSection, HighlightInput, Hint, InfoTip, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Named, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow, TxPending } from "..";
+import { shared } from "../../lib/shared";
 import { connTabVars } from "../../lib/theme";
 import { ConsoleIcon, DatabaseIcon, FolderIcon, PgIcon, ReportIcon, SchemaIcon, TabIcon, TableIcon } from "../icons";
+import { ReconnectToastView } from "../../components/ReconnectToasts";
+import type { ReconnectToast } from "../../lib/reconnect";
 
 /** Molecules: a row · cell made of a few atoms */
 const meta: Meta = { title: "GUI/2 Molecules" };
@@ -121,6 +124,21 @@ export const InfoTipOpen: S = {
     canvasElement.querySelector<HTMLButtonElement>('button[aria-label="About Channel"]')?.click();
   },
 };
+
+/** HighlightInput: an input whose text is drawn in SQL colors (spans from qurry_shared::highlight), editable; the table tab's WHERE /
+ *  ORDER BY fields (GUI/5 Screens › Table data — colors) are built on it. A long text scrolls with the caret, the colors with it */
+function Highlighted() {
+  const [v, setV] = useState("lower(name) LIKE 'a%' AND id IN (1, 2) AND deleted_at IS NOT NULL /* recent */ ORDER BY id DESC NULLS LAST");
+  const [m, setM] = useState("name = '한글 값' OR 값 BETWEEN 1 AND 2 # MySQL comment");
+  return (
+    <div style={{ width: 520, display: "flex", flexDirection: "column", gap: 8 }}>
+      <HighlightInput value={v} spans={shared().highlight(v, "postgres")} onChange={(e) => setV(e.target.value)} aria-label="PostgreSQL" />
+      <HighlightInput value={m} spans={shared().highlight(m, "mysql")} onChange={(e) => setM(e.target.value)} aria-label="MySQL" />
+    </div>
+  );
+}
+export const HighlightInputDark: S = { name: "HighlightInput — dark", globals: { theme: "dark" }, render: () => <Highlighted /> };
+export const HighlightInputLight: S = { name: "HighlightInput — light", globals: { theme: "light" }, render: () => <Highlighted /> };
 
 /** SearchField is a TextInput: no autocorrect or spell check (see GUI/1 Atoms › Inputs) */
 export const SearchAndTabs: S = {
@@ -370,3 +388,32 @@ export const TabItems: S = {
     </div>
   ),
 };
+
+// ───────── Toast (#135): what a data source that reconnects says, bottom right above the status bar ─────────
+const SINCE = 1_000_000;
+const reconnecting: ReconnectToast = { phase: "waiting", id: "prod", message: "Reconnecting [PROD] orders through AWS SSM", slow: "Taking longer than usual: after the Mac sleeps, the AWS SSM session can take a while to come back.", since: SINCE };
+const failedToast: ReconnectToast = {
+  phase: "failed",
+  id: "prod",
+  title: "Couldn't reconnect [PROD] orders through AWS SSM",
+  reason: "aws ssm start-session: TargetNotConnected — i-0a1b2c3d4e5f is not connected. Check that the instance is running and its SSM agent is online.",
+};
+const cancelledToast: ReconnectToast = { phase: "cancelled", id: "prod", text: "Cancelled while reconnecting [PROD] orders through AWS SSM." };
+/** The toast `waited` ms after it started, in a theme (the clock held still) */
+const toastStory = (name: string, t: ReconnectToast, waited: number, light?: boolean): S => ({
+  name: `Toast · ${name} (${light ? "light" : "dark"})`,
+  globals: { theme: light ? "light" : "dark" },
+  render: () => (
+    <div style={{ padding: 16, background: "var(--bg)" }}>
+      <ReconnectToastView t={t} now={SINCE + waited} onCancel={() => {}} onRetry={() => {}} onClose={() => {}} />
+    </div>
+  ),
+});
+export const ToastWaiting = toastStory("waiting, with Cancel", reconnecting, 3200);
+export const ToastWaitingLight = toastStory("waiting, with Cancel", reconnecting, 3200, true);
+export const ToastSlow = toastStory("slow (over 10 s)", reconnecting, 14_000);
+export const ToastSlowLight = toastStory("slow (over 10 s)", reconnecting, 14_000, true);
+export const ToastFailed = toastStory("failed, reason and Retry", failedToast, 0);
+export const ToastFailedLight = toastStory("failed, reason and Retry", failedToast, 0, true);
+export const ToastCancelled = toastStory("cancelled", cancelledToast, 0);
+export const ToastCancelledLight = toastStory("cancelled", cancelledToast, 0, true);

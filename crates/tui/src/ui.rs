@@ -598,7 +598,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     g.render_value_panel(f, side, value_keys);
                 }
             } else {
-                let msg = if tt.error.is_some() { "" } else { "Loading…" };
+                // Nothing while nothing loads: a failed load says why on the status line, a cancelled one how to load again
+                let msg = if tt.error.is_some() || !tt.running { "" } else { "Loading…" };
                 f.render_widget(Paragraph::new(msg).block(panel(format!(" {}.{} ", tt.schema, tt.table), focused)), grid);
             }
         }
@@ -1071,12 +1072,22 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect) {
     let (ctx, glob) = status_hints(app);
     // While the active tab runs or loads more rows: a moving bar, what it does and for how long (as the GUI's status bar), cancel
     // with the Cancel key. While export·import runs, a progress bar (stop with ⌃K › Cancel Export/Import). Else the status text
-    let busy = app.tabs.get(app.active).and_then(|t| t.busy()).map(|what| {
-        let ms = app.run_elapsed(app.active).unwrap_or_default().as_millis() as u64;
-        format!("▕{}▏ {what}… {} · {} cancel", bounce(ms), crate::app::elapsed_text(ms), app.keys.label(crate::app::Action::Cancel))
-    });
-    // A run's or a transfer's line is never cut below its length (up to half the line) to make room for the items
-    let progress = busy.is_some() || !app.jobs.is_empty();
+    // A source that reconnects while a load waits on it says so first, with its own time (#135; the GUI's running indicator too)
+    // (not while the active tab runs on its own: the Cancel key stops that, App::cancels_own)
+    let reconnect = app.reconnect_line().filter(|_| !app.cancels_own());
+    // Its time and Cancel key come after the source's name: it may take up to three quarters of the line. So may what its Cancel or
+    // failure leaves, which ends with the key that loads it again (App::retry_status)
+    let retry = !app.status.is_empty() && app.status == app.retry_status;
+    let cap = if reconnect.is_some() || retry { area.width * 3 / 4 } else { area.width / 2 };
+    let busy = match reconnect {
+        Some((line, ms)) => Some(format!("▕{}▏ {line}", bounce(ms))),
+        None => app.tabs.get(app.active).and_then(|t| t.busy()).map(|what| {
+            let ms = app.run_elapsed(app.active).unwrap_or_default().as_millis() as u64;
+            format!("▕{}▏ {what}… {} · {} cancel", bounce(ms), crate::app::elapsed_text(ms), app.keys.label(crate::app::Action::Cancel))
+        }),
+    };
+    // A run's or a transfer's line (and the retry status) is never cut below its length (up to half the line) to make room for the items
+    let progress = busy.is_some() || !app.jobs.is_empty() || retry;
     let status = match busy {
         Some(b) => b,
         None if app.jobs.is_empty() => disp(&app.status),
@@ -1101,7 +1112,7 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect) {
     let segs = app.status_segments();
     let sw = |cap: u16| (lead + status.chars().count() as u16 + 1).clamp(12, cap.max(12));
     let right = |sw: u16| status_right(ctx.clone(), glob.clone(), segs.clone(), area.width.saturating_sub(bw + sw) as usize);
-    let (mut hints, dropped) = right(sw(area.width / 2));
+    let (mut hints, dropped) = right(sw(cap));
     if dropped && !progress {
         hints = right(sw(area.width / 3)).0;
     }
@@ -1343,6 +1354,13 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let hint = if redis.is_some() { "Enter / Esc · Tab complete · ↑↓ history · HELP command" } else if filter.is_none() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
             input.set_block(panel(format!(" {} ({hint}) ", disp(title)), true));
             f.render_widget(&*input, r);
+            // WHERE / ORDER BY in the console's colors (qurry_shared::highlight, as the GUI's fields)
+            if let Some(fs) = filter {
+                let inner = Rect { x: r.x + 1, y: r.y + 1, width: r.width.saturating_sub(2), height: 1 };
+                let (line, caret) = (input.lines().first().cloned().unwrap_or_default(), input.cursor().1);
+                fs.scroll = textarea_scroll(fs.scroll, caret as u16, inner.width);
+                color_sql(f.buffer_mut(), inner, &line, caret, fs.scroll, input.tab_length(), fs.kind);
+            }
             // The Redis command line: the arguments still to type, muted, after the text
             if redis.is_some() {
                 let line = input.lines().first().cloned().unwrap_or_default();
@@ -1408,6 +1426,46 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             f.render_widget(List::new(items).block(panel(hint, true)), list);
         }
         Popup::ConnForm(form) => draw_conn_form(f, area, form),
+    }
+}
+
+/// tui-textarea's horizontal scroll after a frame: the first column stays until the caret leaves the view (its next_scroll_top)
+fn textarea_scroll(prev: u16, caret: u16, width: u16) -> u16 {
+    if caret < prev {
+        caret
+    } else if prev + width <= caret {
+        caret + 1 - width
+    } else {
+        prev
+    }
+}
+
+/// SQL colors over a one-line input's text as drawn in `inner` from column `scroll`: only the color changes (comments italic), and
+/// the caret's cell (character `caret`) keeps the input's look. A tab (pasted) spans up to the next stop of `tab`, as tui-textarea draws it
+fn color_sql(buf: &mut Buffer, inner: Rect, line: &str, caret: usize, scroll: u16, tab: u8, kind: qurry_shared::DbKind) {
+    use qurry_shared::highlight::{Class, highlight};
+    use unicode_width::UnicodeWidthChar;
+    let spans = highlight(line, kind);
+    let (mut col, mut next) = (0u16, 0);
+    for (i, (b, ch)) in line.char_indices().enumerate() {
+        let w = if ch == '\t' { tab.max(1) as u16 - col % tab.max(1) as u16 } else { ch.width().unwrap_or(0) as u16 };
+        while spans.get(next).is_some_and(|s| s.end <= b) {
+            next += 1;
+        }
+        let style = match spans.get(next).filter(|s| s.start <= b).map(|s| s.class) {
+            Some(Class::Keyword) => Some(Style::default().fg(JSON_KEYWORD)),
+            Some(Class::Function) => Some(Style::default().fg(C_ROUTINE)),
+            Some(Class::Number) => Some(Style::default().fg(SQL_NUMBER)),
+            Some(Class::String) => Some(Style::default().fg(JSON_STRING)),
+            Some(Class::Comment) => Some(Style::default().fg(SQL_COMMENT).add_modifier(Modifier::ITALIC)),
+            _ => None,
+        };
+        if let Some(style) = style.filter(|_| i != caret) {
+            for x in (col..col + w).filter(|x| (scroll..scroll + inner.width).contains(x)) {
+                buf[(inner.x + x - scroll, inner.y)].set_style(style);
+            }
+        }
+        col += w;
     }
 }
 
@@ -1507,9 +1565,10 @@ fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
         .iter()
         .map(|&i| (i, &form.fields[i]))
         .map(|(i, fl)| {
+            let disabled = form.disabled(fl.label);
             let shown = match fl.kind {
                 FieldKind::Secret if fl.value != "<saved>" => "•".repeat(fl.value.chars().count()),
-                FieldKind::Toggle => format!("[{}]", if fl.value == "on" { "x" } else { " " }),
+                FieldKind::Toggle => format!("[{}]", if disabled.unwrap_or(fl.value == "on") { "x" } else { " " }),
                 FieldKind::Choice(_) => format!("◂ {} ▸", fl.value),
                 _ => fl.value.clone(),
             };
@@ -1527,6 +1586,10 @@ fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
             }
             if let Some(note) = empty_field_note(fl.label, form.value("SSH auth")).filter(|_| fl.value.trim().is_empty()) {
                 spans.push(Span::styled(format!("  {note}"), Style::default().fg(DIM)));
+            }
+            if disabled.is_some() {
+                // Dim as a whole
+                return Line::from(spans).style(Style::default().fg(DIM).add_modifier(Modifier::DIM));
             }
             Line::from(spans)
         })
@@ -1714,13 +1777,14 @@ mod tests {
     async fn conn_form_scrolls_to_the_focused_field_in_small_windows() {
         let mut h = crate::testkit::Harness::new().await;
         h.app.conn_form(None);
-        let n = match &h.app.popup {
-            Some(Popup::ConnForm(f)) => f.visible().len(),
+        // n fields shown; Tab skips the disabled ones (a new source's Admin reports: MCP is Off)
+        let (n, stops) = match &h.app.popup {
+            Some(Popup::ConnForm(f)) => (f.visible().len(), f.visible().iter().filter(|&&i| f.disabled(f.fields[i].label).is_none()).count()),
             _ => unreachable!(),
         };
         // Everything fits at 120×40: no position shown
         assert!(!h.screen(120, 40).contains(&format!("1/{n}")));
-        for _ in 1..n {
+        for _ in 1..stops {
             h.key("Tab");
         }
         for (w, ht) in [(80, 24), MIN_SIZE] {
@@ -1728,7 +1792,7 @@ mod tests {
             assert!(s.contains("Redis nodes ▏"), "{w}×{ht}\n{s}");
             assert!(s.contains("Esc cancel") && s.contains(&format!("{n}/{n}")), "{w}×{ht}\n{s}");
         }
-        for _ in 1..n {
+        for _ in 1..stops {
             h.key("Up");
         }
         for (w, ht) in [(80, 24), MIN_SIZE] {
@@ -1867,5 +1931,103 @@ mod tests {
         assert_eq!(buf[(4, 0)].symbol(), "│");
         assert_eq!(buf[(10, 0)].symbol(), " ");
         assert_eq!(buf[(10, 0)].bg, Color::Yellow, "the cell after the popup keeps the row's colour");
+    }
+
+    /// #136: the WHERE / ORDER BY inputs draw their SQL in the console's colors (the theme's keyword, number, string, function and
+    /// comment), symbol operators and names in the text color; the caret's cell keeps the input's look
+    #[tokio::test]
+    async fn filter_input_draws_sql_in_colors() {
+        use crate::testkit::Harness;
+        let mut h = Harness::new().await;
+        let id = h.table_tab("users", &["id", "name"], &[&["1", "a"]], &["id"]);
+        h.app.focus = crate::app::Focus::Grid;
+        let look = |h: &Harness, tok: &str| {
+            let t = h.app.themes.resolve(qurry_shared::theme::SYSTEM, !h.app.auto_light);
+            let (r, g, b) = qurry_shared::theme::rgb(t.color(tok)).unwrap();
+            Color::Rgb(r, g, b)
+        };
+        for theme in ["dark", "light"] {
+            h.app.themes.theme = Some(theme.into());
+            h.app.input_filter(id, false);
+            h.type_str("lower(name) = 'a' AND id IN (1, 2) /* x */");
+            h.key("Home");
+            let buf = h.buffer(100, 30);
+            let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
+            let y = (0..30).find(|&y| row(y).contains("lower(name)")).unwrap();
+            let r = row(y);
+            let at = |pat: &str| r[..r.find(pat).unwrap()].chars().count() as u16;
+            let fg = |pat: &str| buf[(at(pat), y)].fg;
+            assert_eq!(fg("AND"), look(&h, "keyword"), "{theme}");
+            assert_eq!(fg("IN"), look(&h, "keyword"), "{theme}");
+            assert_eq!(fg("1,"), look(&h, "number"), "{theme}");
+            assert_eq!(fg("'a'"), look(&h, "string"), "{theme}");
+            assert_eq!(fg("ower("), look(&h, "function"), "{theme}");
+            assert_eq!(fg("/* x"), look(&h, "comment"), "{theme}");
+            assert!(buf[(at("/* x"), y)].modifier.contains(Modifier::ITALIC));
+            for plain in ["name)", "=", "id IN", "("] {
+                assert!(![look(&h, "keyword"), look(&h, "number"), look(&h, "string"), look(&h, "function")].contains(&fg(plain)), "{theme}: {plain}");
+            }
+            // The caret (Home: on `lower`'s l) keeps the input's look
+            assert!(buf[(at("lower"), y)].modifier.contains(Modifier::REVERSED), "{theme}");
+            assert_ne!(buf[(at("lower"), y)].fg, look(&h, "function"), "{theme}");
+            h.app.popup = None;
+        }
+        // A pasted tab is drawn as spaces up to the next stop: the colors after it stay on their characters
+        h.app.input_filter(id, false);
+        h.paste("id\t= 1 AND name = 'x'");
+        h.key("Home");
+        let buf = h.buffer(100, 30);
+        let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
+        let y = (0..30).find(|&y| row(y).contains("AND name")).unwrap();
+        let r = row(y);
+        let at = |pat: &str| r[..r.find(pat).unwrap()].chars().count() as u16;
+        let fg = |pat: &str| buf[(at(pat), y)].fg;
+        assert_eq!(fg("1 A"), look(&h, "number"));
+        assert_eq!(fg("AND"), look(&h, "keyword"));
+        assert_eq!(fg("ND"), look(&h, "keyword"));
+        assert_eq!(fg("'x'"), look(&h, "string"));
+        assert_eq!(fg("x'"), look(&h, "string"));
+        for plain in ["= 1", "name", "= '"] {
+            assert!(![look(&h, "keyword"), look(&h, "number"), look(&h, "string")].contains(&fg(plain)), "{plain}");
+        }
+    }
+
+    /// A text longer than the input scrolls with the caret: the colors move with it (tui-textarea's scroll, mirrored)
+    #[tokio::test]
+    async fn filter_input_colors_follow_its_scroll() {
+        use crate::testkit::Harness;
+        let mut h = Harness::new().await;
+        let id = h.table_tab("users", &["id", "name"], &[&["1", "a"]], &["id"]);
+        h.app.focus = crate::app::Focus::Grid;
+        h.app.input_filter(id, false);
+        let text = (0..20).map(|i| format!("id = {i}")).collect::<Vec<_>>().join(" or ");
+        h.type_str(&text);
+        let check = |h: &mut Harness| {
+            let buf = h.buffer(100, 30);
+            let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
+            let y = (0..30).find(|&y| row(y).contains(" or id = ")).unwrap();
+            let r = row(y);
+            // Every visible `or` is a keyword, every `=` is not
+            let cells: Vec<_> = r.chars().enumerate().collect();
+            let mut n = 0;
+            for w in cells.windows(4) {
+                if w[0].1 == ' ' && w[1].1 == 'o' && w[2].1 == 'r' && w[3].1 == ' ' {
+                    assert_eq!(buf[(w[1].0 as u16, y)].fg, JSON_KEYWORD, "{r}");
+                    n += 1;
+                }
+                if w[1].1 == '=' {
+                    assert_ne!(buf[(w[1].0 as u16, y)].fg, JSON_KEYWORD, "{r}");
+                }
+            }
+            assert!(n >= 5, "{r}");
+        };
+        // At the end (scrolled), then back at the start
+        check(&mut h);
+        h.key("Home");
+        check(&mut h);
+        for _ in 0..3 {
+            h.key("Right");
+        }
+        check(&mut h);
     }
 }

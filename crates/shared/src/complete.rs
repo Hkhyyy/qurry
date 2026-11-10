@@ -277,6 +277,11 @@ pub(crate) fn is_keyword(w: &str) -> bool {
     RESERVED.binary_search_by(|k| k.bytes().cmp(w.bytes().map(|b| b.to_ascii_lowercase()))).is_ok()
 }
 
+/// A keyword of the list completion offers (not a function name), in any letter case: what highlight.rs draws as a keyword
+pub(crate) fn is_listed_keyword(w: &str) -> bool {
+    SORTED_KEYWORDS.binary_search_by(|k| k.bytes().cmp(w.bytes().map(|b| b.to_ascii_lowercase()))).is_ok()
+}
+
 /// Identifier characters: letters and digits of any script (Korean …) and `_`
 pub fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'

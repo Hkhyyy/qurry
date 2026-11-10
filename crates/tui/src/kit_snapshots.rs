@@ -712,6 +712,23 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.type_str("user_id = 41 and ca");
     scenes.push(app_scene(h, "Table filter completion", "w / o on a table tab: the WHERE / ORDER BY input completes like the console (the table's columns first, then keywords); ↑↓ PgUp PgDn move, Enter / Tab pick, Esc closes the list first", 120, 22));
     h.app.popup = None;
+    // #136: the inputs draw their SQL in the console's colors (qurry_shared::highlight, the GUI's fields too)
+    let colored = "lower(card_brand) LIKE 'vi%' AND user_id IN (41, 7) AND amount IS NOT NULL -- recent";
+    for (theme, name) in [("dark", "Table filter: SQL colors"), ("light", "Table filter: SQL colors (light)")] {
+        h.app.themes.theme = Some(theme.into());
+        h.app.input_filter(id, false);
+        h.type_str(colored);
+        for _ in 0..12 {
+            h.key("Left");
+        }
+        scenes.push(app_scene(h, name, "w: keywords (word operators IN, IS, NOT, NULL, AND, LIKE too), functions, numbers, strings and comments in the console's colors; =, < and names in the text color. The caret mid-text keeps its look", 120, 22));
+        h.app.popup = None;
+    }
+    h.app.themes.theme = None;
+    h.app.input_filter(id, true);
+    h.type_str("created_at DESC NULLS LAST, id");
+    scenes.push(app_scene(h, "Table filter: ORDER BY colors", "o: DESC, NULLS, LAST in the keyword color", 120, 22));
+    h.app.popup = None;
     h.app.close_tab_now(h.app.active);
 }
 
@@ -927,6 +944,22 @@ async fn all_scenes() -> Vec<Value> {
     h.app.conn_form(Some(ssm));
     scenes.push(app_scene(&mut h, "Data source form: AWS SSM", "Tunnel ◂ aws ssm ▸: AWS profile · region (empty: the profile's) · SSM target (instance id). Host / Port are the database as seen from the instance; no AWS secrets are stored (the aws CLI uses your AWS config or SSO login)", 120, 34));
     h.app.popup = None;
+    // #131: whether AI tools may read a Production source's admin reports (MCP dba_report); disabled with why elsewhere
+    let cases = [("off", true, "read", false, false), ("on", true, "read", true, false), ("not Production", false, "read", false, false), ("MCP Off", true, "off", false, false), ("off", true, "read", false, true), ("on", true, "read", true, true)];
+    for (name, prod, mcp, on, light) in cases {
+        let mut c = conn("prod", if prod { "[PROD] rentalpay" } else { "[DEV] rentalpay" }, if prod { "#6e2a2a" } else { "#2f5634" }, prod);
+        (c.options.mcp, c.options.mcp_dba_reports) = (Some(mcp.into()), on);
+        h.app.themes.theme = light.then(|| "light".into());
+        h.app.conn_form(Some(c));
+        if let Some(Popup::ConnForm(f)) = &mut h.app.popup {
+            let at = f.fields.iter().position(|x| x.label == "Admin reports").unwrap();
+            f.sel = if f.disabled("Admin reports").is_none() { at } else { at - 1 };
+        }
+        let l = if light { " (light)" } else { "" };
+        scenes.push(app_scene(&mut h, &format!("Data source form: admin reports, {name}{l}"), "Admin reports: AI tools may read this Production source's Database Admin reports (MCP dba_report), query values masked; off by default. Not Production (always readable) or MCP Off: disabled, dim", 120, 36));
+    }
+    h.app.themes.theme = None;
+    h.app.popup = None;
     h.app.popup = Some(Popup::Help { sel: 0, scroll: 0, record: None, message: None });
     scenes.push(app_scene(&mut h, "Keymap (F1)", "F1: 처음 쓸 키 → 바꿀 수 있는 명령 → 고정 키", 120, 30));
     // Recording a key for the explorer's c (Connect): pane keys follow every command, then the fixed keys
@@ -969,8 +1002,66 @@ async fn all_scenes() -> Vec<Value> {
     h.app.auto_light = false;
     h.app.popup = None;
     tab_bars(&mut scenes).await;
+    reconnect_scenes(&mut scenes).await;
     scenes.push(temporary_scene().await);
     scenes
+}
+
+/// #135: a table tab and an explorer node waiting on [PROD] rentalpay while it reconnects through AWS SSM: the status line says so with
+/// the time and the Cancel key (past 10 s why), a failure opens the Message popup, Cancel leaves how to load again (the GUI's toast)
+async fn reconnect_scenes(scenes: &mut Vec<Value>) {
+    use crate::app::{Action, TabKind, WaitFor};
+    let mut h = Harness::new().await;
+    explorer(&mut h).await;
+    let mut ssm = conn("prod", "[PROD] rentalpay", "#6e2a2a", true);
+    ssm.ssm = Some(qurry_core::store::SsmConfig { enabled: true, profile: "prod".into(), region: String::new(), target: "i-0a1b2c3d4e5f".into() });
+    h.app.state.store.save(&ssm).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    let st = h.app.state.clone();
+    let shown = st.reconnecting_now("prod");
+    let tab = h.app.tabs.iter().find(|t| t.conn == "prod").map(|t| t.id).unwrap();
+    let load = |h: &mut Harness| {
+        if let Some(TabKind::Table(tt)) = h.app.tabs.iter_mut().find(|t| t.id == tab).map(|t| &mut t.kind) {
+            (tt.grid, tt.running) = (None, true);
+        }
+        h.app.spawn_wait("prod", WaitFor::Table(tab), std::future::pending::<()>(), |_, _, _| {});
+    };
+    // Shown since `secs` ago (drawn right after, so the time reads the same on every run)
+    let since = |h: &mut Harness, secs: f64| {
+        h.app.reconnect_line();
+        *h.app.reconnect_since.get_mut("prod").unwrap() = std::time::Instant::now() - std::time::Duration::from_secs_f64(secs);
+    };
+    load(&mut h);
+    (h.app.focus, h.app.status) = (crate::app::Focus::Grid, String::new());
+    since(&mut h, 3.2);
+    scenes.push(app_scene(&mut h, "Reconnect: table tab waiting", "A table tab opens at once and loads inside it; while its source reconnects through AWS SSM the status line says so, how long, and that the Cancel key stops it (the GUI's running indicator and toast)", 120, 22));
+    since(&mut h, 14.0);
+    scenes.push(app_scene(&mut h, "Reconnect: slow", "Past 10 s: why it may take a while, after the Cancel key (a narrower line cuts the note, never the key)", 160, 22));
+    h.app.run_action(Action::Cancel);
+    scenes.push(app_scene(&mut h, "Reconnect: cancelled", "The Cancel key stops the loads waiting on the source (the connect they wait on is dropped); the tab stays, r loads it again", 120, 22));
+    let r = h.app.state.reconnecting().pop().unwrap();
+    let e = format!("{}: aws ssm start-session: TargetNotConnected (i-0a1b2c3d4e5f is not connected). Check that the instance is running and its SSM agent is online.", r.failed);
+    h.app.reconnect_failed(&r, &e, true);
+    scenes.push(app_scene(&mut h, "Reconnect: failed", "A load that waited on the reconnect failed: the Message popup says why and that r in the table tab loads it again; the status line keeps it", 120, 22));
+    h.app.popup = None;
+    // The explorer: a schema expanding while the source reconnects shows only its loading mark
+    let key = "prod|rentalpay|public";
+    let tables = h.app.tree.children.remove(key);
+    h.app.tree.loading.insert(key.into());
+    h.app.spawn_wait("prod", WaitFor::Tree(key.into()), std::future::pending::<()>(), |_, _, _| {});
+    (h.app.focus, h.app.tree.sel, h.app.status) = (crate::app::Focus::Tree, 2, String::new());
+    since(&mut h, 4.1);
+    scenes.push(app_scene(&mut h, "Reconnect: explorer expand", "Expanding a schema while its source reconnects: the tree shows only that it loads, the status line says why", 120, 22));
+    h.app.run_action(Action::Cancel);
+    h.app.tree.children.insert(key.into(), tables.unwrap());
+    h.app.themes.theme = Some("light".into());
+    load(&mut h);
+    (h.app.focus, h.app.status) = (crate::app::Focus::Grid, String::new());
+    since(&mut h, 3.2);
+    scenes.push(app_scene(&mut h, "Reconnect: table tab waiting (light)", "Theme Light: the same line on a light terminal", 120, 22));
+    h.app.run_action(Action::Cancel);
+    drop(shown);
 }
 
 /// `qurry-tui --read-only postgres://…`: the temporary source at the top of the explorer, its mark before the long URL name

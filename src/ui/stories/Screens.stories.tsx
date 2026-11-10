@@ -35,7 +35,9 @@ import { UpdateDialog } from "../../components/UpdateDialog";
 import { WorkspaceBar } from "../../components/WorkspaceBar";
 import { StatusBar } from "../../features/settings/StatusBar";
 import { useConnActions } from "../../features/conns/useConnActions";
-import { ConfirmHost, Menu, Text } from "..";
+import { ConfirmHost, Menu, TabItem, TabStrip, Text, Toasts } from "..";
+import { ReconnectToastView } from "../../components/ReconnectToasts";
+import type { ReconnectToast } from "../../lib/reconnect";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
@@ -233,6 +235,30 @@ export const EditDataSourceSsmError: S = {
   },
 };
 
+/** Options › MCP: whether AI tools may read the admin reports (dba_report) of a Production source, off by default; elsewhere the
+ * row is disabled and says why (not Production: checked, as they always may; MCP Off: AI tools don't see the source) */
+const adminReports = (name: string, theme: "dark" | "light", c: ConnectionView): S => ({
+  name: `Data Source — admin reports for AI tools, ${name} (${theme})`,
+  globals: { theme },
+  render: () => <ConnectionDialog edit={c} onClose={noop} onSaved={noop} />,
+  play: async ({ canvasElement }) => {
+    await userEvent.click(within(canvasElement.ownerDocument.body).getByRole("tab", { name: "Options" }));
+  },
+});
+const withOptions = (c: ConnectionView, options: ConnectionView["options"]) => ({ ...c, options: { ...c.options, ...options } }) as ConnectionView;
+const REPORTS_OFF = withOptions(PROD, { mcp: "read" });
+const REPORTS_ON = withOptions(PROD, { mcp: "read", mcpDbaReports: true });
+const REPORTS_DEV = withOptions(DEV, { mcp: "read" });
+const REPORTS_MCP_OFF = withOptions(PROD, { mcp: "off" });
+export const AdminReportsOffDark = adminReports("Production, off", "dark", REPORTS_OFF);
+export const AdminReportsOffLight = adminReports("Production, off", "light", REPORTS_OFF);
+export const AdminReportsOnDark = adminReports("Production, on", "dark", REPORTS_ON);
+export const AdminReportsOnLight = adminReports("Production, on", "light", REPORTS_ON);
+export const AdminReportsNotProductionDark = adminReports("not Production", "dark", REPORTS_DEV);
+export const AdminReportsNotProductionLight = adminReports("not Production", "light", REPORTS_DEV);
+export const AdminReportsMcpOffDark = adminReports("MCP Off", "dark", REPORTS_MCP_OFF);
+export const AdminReportsMcpOffLight = adminReports("MCP Off", "light", REPORTS_MCP_OFF);
+
 export const TableNew: S = { name: "New Table", render: () => <TableDesigner target="dev" conn={DEV} schema="public" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 export const TableModify: S = { name: "Modify Table (⌘F6)", render: () => <TableDesigner target="dev" conn={DEV} schema="public" table="customers" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 /** A column's type is a ComboBox: the suggestions for the data source's database open right under the field (typing "int" here
@@ -326,6 +352,67 @@ export const TableFilterPairs: S = {
     await waitFor(() => expect(field.value).toBe("user_name in ('a', 'b')"));
   },
 };
+
+/** #136: the WHERE / ORDER BY fields drawn in the console's colors (qurry_shared::highlight): keywords — word operators IN, IS, NOT,
+ * NULL, AND, OR, LIKE, BETWEEN too — functions, numbers, strings and comments; `=`, `<` and names in the text color */
+const ColoredFilter = (p: { where: string; orderBy: string }) => (
+  <Frame h={300}>
+    <TableEditor
+      where={p.where}
+      orderBy={p.orderBy}
+      running={false}
+      error={null}
+      result={users}
+      query="SELECT * FROM public.users"
+      loadingMore={false}
+      dialect={dialectOf("postgres")}
+      completion={{ target: "dev", schema: "public", table: "users", db: "shop_app", mysql: false }}
+      onApply={noop}
+      onCancel={noop}
+      onFetchMore={noop}
+      onSubmit={async () => {}}
+      onExportCsv={noop}
+      onDdl={noop}
+      onCopyQueryToConsole={noop}
+    />
+  </Frame>
+);
+const filterField = async (c: HTMLElement, kw: string) => within(c).findByRole<HTMLInputElement>("combobox", { name: kw });
+/** [name, WHERE, ORDER BY] */
+type FilterCase = readonly [string, string, string];
+const filterStory = (theme: "dark" | "light", [name, where, orderBy]: FilterCase, play?: S["play"]): S => ({
+  name: `Table data — colors: ${name} (${theme})`,
+  globals: { theme },
+  render: () => <ColoredFilter where={where} orderBy={orderBy} />,
+  play,
+});
+const inList: FilterCase = ["IN with numbers", "id IN (366, 3934)", ""];
+const strings: FilterCase = ["strings and a comment", "user_name = 'paid' AND user_name LIKE '%@example.com' -- note", ""];
+const isNotNull: FilterCase = ["IS NOT NULL", "user_name IS NOT NULL AND id > 100", ""];
+const functions: FilterCase = ["functions", "lower(user_name) = 'a@b.com' AND id BETWEEN 1 AND 10", "coalesce(user_name, 'x')"];
+const orderBy: FilterCase = ["ORDER BY … DESC NULLS LAST", "", "user_name DESC NULLS LAST, id"];
+const completion: FilterCase = ["completion list open", "", ""];
+const typeInWhere: S["play"] = async ({ canvasElement }) => userEvent.type(await filterField(canvasElement, "WHERE"), "id IN (1) AND u");
+const caretText: FilterCase = ["caret mid-text, a selection", "id IN (366, 3934) AND user_name = 'paid'", "id DESC"];
+const caretMid: S["play"] = async ({ canvasElement }) => {
+  const w = await filterField(canvasElement, "WHERE");
+  w.focus();
+  w.setSelectionRange(3, 5);
+};
+export const FilterColorsInDark = filterStory("dark", inList);
+export const FilterColorsInLight = filterStory("light", inList);
+export const FilterColorsStringsDark = filterStory("dark", strings);
+export const FilterColorsStringsLight = filterStory("light", strings);
+export const FilterColorsIsNotNullDark = filterStory("dark", isNotNull);
+export const FilterColorsIsNotNullLight = filterStory("light", isNotNull);
+export const FilterColorsFunctionsDark = filterStory("dark", functions);
+export const FilterColorsFunctionsLight = filterStory("light", functions);
+export const FilterColorsOrderByDark = filterStory("dark", orderBy);
+export const FilterColorsOrderByLight = filterStory("light", orderBy);
+export const FilterColorsCompletionDark = filterStory("dark", completion, typeInWhere);
+export const FilterColorsCompletionLight = filterStory("light", completion, typeInWhere);
+export const FilterColorsCaretDark = filterStory("dark", caretText, caretMid);
+export const FilterColorsCaretLight = filterStory("light", caretText, caretMid);
 
 export const Chart: S = { name: "Result Chart", render: () => <Frame><ResultChart result={sales} /></Frame> };
 export const Grid: S = {
@@ -1124,3 +1211,51 @@ export const ImportError: S = {
     return <ImportFlow from={{ folder: false }} />;
   },
 };
+
+/** #135 Reconnect: a table tab opened at once (Loading… in it) while its source reconnects through AWS SSM. The status bar's running
+ *  indicator says so with the time; the toast (bottom right, above the status bar) has Cancel, past 10 s why, and on failure the reason
+ *  and Retry. `waited`: seconds already waited (the clock runs on) */
+function ReconnectScreen({ phase, waited = 3.2 }: { phase: ReconnectToast["phase"]; waited?: number }) {
+  const [since] = useState(() => Date.now() - waited * 1000);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const h = setInterval(() => setNow(Date.now()), 100);
+    return () => clearInterval(h);
+  }, []);
+  const name = "[PROD] orders";
+  const t: ReconnectToast =
+    phase === "waiting"
+      ? { phase, id: "prod", message: `Reconnecting ${name} through AWS SSM`, slow: "Taking longer than usual: after the Mac sleeps, the AWS SSM session can take a while to come back.", since }
+      : phase === "failed"
+        ? { phase, id: "prod", title: `Couldn't reconnect ${name} through AWS SSM`, reason: "aws ssm start-session: TargetNotConnected — i-0a1b2c3d4e5f is not connected. Check that the instance is running and its SSM agent is online." }
+        : { phase, id: "prod", text: `Cancelled while reconnecting ${name} through AWS SSM.` };
+  const status = t.phase === "failed" ? `${t.title}: ${t.reason}` : t.phase === "cancelled" ? t.text : "";
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
+      <TabStrip className="tabs" activeKey="t">
+        <TabItem label="payment" icon={<TableIcon />} active onClose={noop} />
+      </TabStrip>
+      <div style={{ position: "relative", flex: 1 }}>
+        <TableEditor where="" orderBy="" running={phase === "waiting"} error={null} result={null} query="SELECT * FROM public.payment;" loadingMore={false}
+          onApply={noop} onCancel={noop} onFetchMore={noop} onSubmit={async () => {}} onExportCsv={noop} onDdl={noop} onCopyQueryToConsole={noop} />
+      </div>
+      <Toasts>
+        <ReconnectToastView t={t} now={now} onCancel={noop} onRetry={noop} onClose={noop} />
+      </Toasts>
+      <StatusBar status={status} busy={t.phase === "waiting" ? { label: t.message, since, onCancel: noop } : undefined} readOnly={false} onUpdate={noop} jobs={[]} />
+    </div>
+  );
+}
+const reconnectStory = (name: string, phase: ReconnectToast["phase"], light: boolean, waited?: number): S => ({
+  name: `Reconnect — ${name} (${light ? "light" : "dark"})`,
+  globals: { theme: light ? "light" : "dark" },
+  render: () => <ReconnectScreen phase={phase} waited={waited} />,
+});
+export const ReconnectWaiting = reconnectStory("table tab waiting", "waiting", false);
+export const ReconnectWaitingLight = reconnectStory("table tab waiting", "waiting", true);
+export const ReconnectSlow = reconnectStory("slow (over 10 s)", "waiting", false, 14);
+export const ReconnectSlowLight = reconnectStory("slow (over 10 s)", "waiting", true, 14);
+export const ReconnectFailed = reconnectStory("failed, reason and Retry", "failed", false);
+export const ReconnectFailedLight = reconnectStory("failed, reason and Retry", "failed", true);
+export const ReconnectCancelled = reconnectStory("cancelled", "cancelled", false);
+export const ReconnectCancelledLight = reconnectStory("cancelled", "cancelled", true);

@@ -312,3 +312,53 @@ test("Schemas tab of a new data source: a slow connect shows the time and Cancel
   await page.keyboard.press("Escape");
   await expect(dialog(page)).toHaveCount(0);
 });
+
+test("Options › MCP: admin reports for AI tools ask on Production only, and MCP Off disables them", async ({ page }) => {
+  const label = "AI tools can read admin reports";
+  const props = async (name: string) => {
+    await treeNode(page, name).click({ button: "right" });
+    await page.getByRole("menuitem", { name: /^Properties/ }).click();
+    await dialog(page).getByRole("tab", { name: "Options" }).click();
+    return dialog(page);
+  };
+  const saved = () => page.evaluate(() => (window as any).__mockSaved.options);
+  // Production that never set MCP: Off, so the row is disabled
+  let d = await props("[PROD] shop_app");
+  const box = d.getByRole("checkbox", { name: label });
+  await expect(box).toBeDisabled();
+  await expect(box).not.toBeChecked();
+  const size = await d.boundingBox();
+  // Read: editable and off by default, and OK sends it
+  await d.getByRole("combobox", { name: "MCP (AI tools)" }).selectOption("read");
+  await expect(box).toBeEnabled();
+  await expect(box).not.toBeChecked();
+  await box.check();
+  expect(await d.boundingBox(), "the dialog keeps its size").toEqual(size);
+  await d.getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  expect(await saved()).toMatchObject({ confirmChanges: true, mcp: "read", mcpDbaReports: true });
+
+  // Production turned off: disabled and checked (other sources always answer); MCP Off: disabled and unchecked.
+  // Unchecking it on Production first is what the save keeps: a disabled row saves the value chosen, not the one shown
+  d = await props("[PROD] shop_app");
+  await expect(box).toBeChecked();
+  await box.uncheck();
+  await d.getByRole("checkbox", { name: "Production: show affected rows and confirm changes" }).uncheck();
+  await expect(box).toBeDisabled();
+  await expect(box).toBeChecked();
+  await d.getByRole("combobox", { name: "MCP (AI tools)" }).selectOption("off");
+  await expect(box).toBeDisabled();
+  await expect(box).not.toBeChecked();
+  await d.getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  expect(await saved()).toMatchObject({ confirmChanges: false, mcp: "off", mcpDbaReports: false });
+
+  // Not Production, shared with MCP: disabled and checked, nothing written
+  d = await props("[DEV] shop_app");
+  await d.getByRole("combobox", { name: "MCP (AI tools)" }).selectOption("read");
+  await expect(box).toBeDisabled();
+  await expect(box).toBeChecked();
+  await d.getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  expect((await saved()).mcpDbaReports).toBeUndefined();
+});

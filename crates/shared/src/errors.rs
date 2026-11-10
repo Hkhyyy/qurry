@@ -100,6 +100,46 @@ pub fn disconnected(name: &str, tunnel: &str, why: Disconnected) -> String {
     }
 }
 
+/// The status while Qurry waits for or replaces a data source's tunnel after the Mac woke or the tunnel stopped answering (GUI and
+/// TUI ask for it: AppState::reconnecting, and append "… <elapsed>"). ssm = through AWS SSM, else SSH
+pub fn reconnecting(name: &str, ssm: bool) -> String {
+    format!("Reconnecting {name} through {}", tunnel_way(ssm))
+}
+
+/// After this long reconnecting the apps add why it may take a while (reconnect_slow)
+pub const RECONNECT_SLOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// What the apps add to reconnecting after RECONNECT_SLOW
+pub fn reconnect_slow(ssm: bool) -> String {
+    format!("Taking longer than usual: after the Mac sleeps, the {} session can take a while to come back.", tunnel_way(ssm))
+}
+
+/// The heading of a load that failed while its data source was reconnecting: the reason follows, then how to retry
+pub fn reconnect_failed(name: &str, ssm: bool) -> String {
+    format!("Couldn't reconnect {name} through {}", tunnel_way(ssm))
+}
+
+/// The error of a load whose data source couldn't be reconnected (the core: its tunnel didn't open again while the apps said it
+/// reconnects): reconnect_failed, then the reason
+pub fn reconnect_failed_error(name: &str, ssm: bool, reason: &str) -> String {
+    format!("{}: {reason}", reconnect_failed(name, ssm))
+}
+
+/// The reason in a load's error that says its data source couldn't be reconnected (reconnect_failed_error, `failed` its heading).
+/// None for any other error: the load's own, also after a reconnect (the GUI: reconnect.ts reconnectReason)
+pub fn reconnect_reason<'a>(failed: &str, e: &'a str) -> Option<&'a str> {
+    e.strip_prefix(failed)?.strip_prefix(": ")
+}
+
+/// A load cancelled while its data source was reconnecting
+pub fn reconnect_cancelled(name: &str, ssm: bool) -> String {
+    format!("Cancelled while reconnecting {name} through {}.", tunnel_way(ssm))
+}
+
+fn tunnel_way(ssm: bool) -> &'static str {
+    if ssm { "AWS SSM" } else { "SSH" }
+}
+
 /// The DBA report's database picker couldn't list the databases (GUI and TUI): it lists through the report's database, or the
 /// source's default one, so the way out is a default database the account can connect to
 pub fn db_list_failed(msg: &str) -> String {
@@ -239,6 +279,20 @@ mod tests {
     fn console_texts_match_the_gui() {
         let gui = include_str!("../../../src/components/ResultGrid.tsx");
         assert!(gui.contains(&format!("\"{CONSOLE_READ_ONLY}\"")), "ResultGrid.tsx lacks: {CONSOLE_READ_ONLY}");
+    }
+
+    /// The reconnect texts name the source and the way: AWS SSM or SSH
+    #[test]
+    fn reconnecting_names_the_tunnel() {
+        assert_eq!(reconnecting("prod", true), "Reconnecting prod through AWS SSM");
+        assert_eq!(reconnecting("stage", false), "Reconnecting stage through SSH");
+        assert_eq!(reconnect_failed("prod", true), "Couldn't reconnect prod through AWS SSM");
+        assert_eq!(reconnect_cancelled("stage", false), "Cancelled while reconnecting stage through SSH.");
+        assert!(reconnect_slow(true).contains("the AWS SSM session") && reconnect_slow(false).contains("the SSH session"));
+        let e = reconnect_failed_error("prod", true, "TargetNotConnected");
+        assert_eq!(reconnect_reason(&reconnect_failed("prod", true), &e), Some("TargetNotConnected"));
+        assert_eq!(reconnect_reason(&reconnect_failed("prod", true), "permission denied for schema x"), None);
+        assert_eq!(reconnect_reason(&reconnect_failed("prod", false), &e), None);
     }
 
     #[test]

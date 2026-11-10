@@ -196,6 +196,8 @@ impl App {
                 f("Allow unencrypted", if c.options.allow_plaintext { "on" } else { "off" }.into(), FieldKind::Toggle),
                 // Whether it's visible to qurry-mcp (AI tools). New sources start off
                 f("MCP", if edit.is_some() { mcp_label(&c) } else { "off" }.into(), ch(&["off", "read", "write"])),
+                // Production: AI tools may read its Database Admin reports (MCP dba_report, values masked); ConnForm::disabled elsewhere
+                f("Admin reports", if c.options.mcp_dba_reports { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("Tunnel", tunnel.into(), ch(&["none", "ssh", "aws ssm"])),
                 f("SSH host", ssh.host.clone(), FieldKind::Text),
                 f("SSH port", ssh.port.to_string(), FieldKind::Text),
@@ -257,6 +259,8 @@ impl App {
         // Save the shown value as is (leaving it unset would reopen it automatically after turning Production off)
         // Read-only and Production sources have no MCP write (ConnectionConfig::mcp_access): saved as read
         c.options.mcp = Some(if v("MCP") == "write" && (c.read_only || c.options.confirm_changes) { "read".into() } else { v("MCP") });
+        // The field holds the chosen value even while disabled (not Production, or MCP Off): only the shown check is derived
+        c.options.mcp_dba_reports = v("Admin reports") == "on";
         // custom = a color outside the presets picked in the GUI: leave it
         match v("Color").as_str() {
             "custom" => {}

@@ -177,6 +177,25 @@ impl Pool {
     pub async fn ping(&self) -> bool {
         tokio::time::timeout(std::time::Duration::from_secs(5), async { dispatch!(self, b => b.ping().await) }).await.is_ok()
     }
+
+    /// Closes its idle connections without a word to the server (app::settle): after the Mac slept they may be dead, and sqlx
+    /// tests one before handing it out, waiting out the 10s acquire_timeout on a dead one. Its POOL_IDLE counts on an Instant,
+    /// which stops while the Mac sleeps, so it doesn't close them itself. The next use opens new ones
+    pub fn drop_idle(&self) {
+        fn drop_all<DB: sqlx::Database>(p: &sqlx::Pool<DB>) {
+            for _ in 0..p.num_idle() {
+                match p.try_acquire() {
+                    Some(c) => drop(c.detach()),
+                    None => break,
+                }
+            }
+        }
+        match self {
+            Pool::Pg(p) => drop_all(p),
+            Pool::My(p) => drop_all(p),
+            Pool::Redis(..) | Pool::Plugin(_) => {}
+        }
+    }
 }
 
 /// Run one statement on an already acquired connection (transaction). With 0 rows the columns come from describe

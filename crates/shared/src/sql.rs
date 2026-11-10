@@ -77,6 +77,56 @@ pub fn literal(kind: DbKind, v: Option<&str>) -> String {
     }
 }
 
+/// Query text with each string and number literal replaced by `?` (MCP's Database Admin reports: session and statement text can hold
+/// values from the rows). Read with scope::lex, so names, quoted names, comments, PostgreSQL `$1` and MySQL digest `?` stay as written.
+/// A prefix glued to a string goes with it (E'…', X'…', B'…', N'…', MySQL _charset'…'); an unclosed literal at the end (text cut by
+/// left(query, 4000)) runs to the end and is masked whole. MySQL `/*! … */` · `/*M! … */` are code the server runs, so their inside is masked too
+pub fn mask_literals(text: &str, kind: DbKind) -> String {
+    use crate::scope::{K, Tok};
+    let toks = crate::scope::lex(text, kind == DbKind::Mysql);
+    let (mut out, mut at) = (String::with_capacity(text.len()), 0);
+    let src = |t: &Tok| &text[t.s..t.e];
+    for (i, t) in toks.iter().enumerate() {
+        let prev = i.checked_sub(1).map(|p| &toks[p]).filter(|p| p.e == t.s);
+        let start = match t.k {
+            K::Str => match prev {
+                Some(p) if p.k == K::Word && ((src(p).len() == 1 && "eEbBxXnN".contains(src(p))) || src(p).starts_with('_')) => p.s,
+                _ => t.s,
+            },
+            // $1 is a placeholder
+            K::Num if prev.is_none_or(|p| src(p) != "$") => t.s,
+            _ => continue,
+        };
+        mask_gap(&mut out, &text[at..start], kind);
+        out.push('?');
+        at = t.e;
+    }
+    mask_gap(&mut out, &text[at..], kind);
+    out
+}
+
+/// Text between tokens (whitespace and comments) as is, except the inside of MySQL executable comments
+fn mask_gap(out: &mut String, gap: &str, kind: DbKind) {
+    let mut rest = gap;
+    while kind == DbKind::Mysql
+        && let Some(i) = rest.find("/*")
+    {
+        let end = rest[i + 2..].find("*/").map_or(rest.len(), |j| i + 2 + j);
+        let marker = [("/*!", 3), ("/*M!", 4)].into_iter().find(|(m, _)| rest[i..].starts_with(m)).map(|(_, n)| n);
+        // The version number after the marker isn't a literal
+        let Some(m) = marker.map(|m| m + rest[i + m..end].bytes().take_while(u8::is_ascii_digit).count()) else {
+            let past = (end + 2).min(rest.len());
+            out.push_str(&rest[..past]);
+            rest = &rest[past..];
+            continue;
+        };
+        out.push_str(&rest[..i + m]);
+        out.push_str(&mask_literals(&rest[i + m..end], kind));
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+}
+
 /// Split statements on semicolons (skipping strings·comments·PG dollar quotes). Redis is one line = one command. (start, end) byte ranges.
 /// Must parse with the same rules as the server (the read-only check counts statements with this):
 /// in MySQL `--` needs a following space to be a comment and `/*! … */` is executed code; in PG comments nest and \ escapes inside E'…'
@@ -675,5 +725,53 @@ mod tests {
         assert_eq!(n("/* a /* b */ ; */ select 1", DbKind::Postgres), 1);
         assert_eq!(n("select E'\\'; x'; select 2", DbKind::Postgres), 2);
         assert_eq!(n("select '\\'; select 2", DbKind::Postgres), 2);
+    }
+
+    #[test]
+    fn mask_literals_postgres() {
+        let m = |s: &str| mask_literals(s, DbKind::Postgres);
+        assert_eq!(m("select 'abc', 'it''s', 42, 3.14, -7, .5"), "select ?, ?, ?, ?, -?, .?");
+        assert_eq!(m(r"select E'it\'s', e'a\\', X'1F', B'0101', N'name', U&'d\0061'"), "select ?, ?, ?, ?, ?, U&?");
+        assert_eq!(m("select $$se'cret$$, $t$a $$ b$t$ from t"), "select ?, ? from t");
+        assert_eq!(m("insert into t1 (col2) values (1e10, '2024-01-01'::date)"), "insert into t1 (col2) values (?, ?::date)");
+        // \ is a plain character in '…' (standard_conforming_strings): the string ends at the next '
+        assert_eq!(m(r"select 'a\', 'b'"), "select ?, ?");
+        // Left alone: names with digits, quoted names (quotes inside too), placeholders, comments
+        let kept = "select \"t1\".col2, \"it's 5\" from s3.t1 where id = $1 and x = $12 -- 'note' 5\n/* 'c' 7 */";
+        assert_eq!(m(kept), kept);
+        assert_eq!(m(r#"select "Weird""Name", 'v'"#), r#"select "Weird""Name", ?"#);
+    }
+
+    #[test]
+    fn mask_literals_mysql() {
+        let m = |s: &str| mask_literals(s, DbKind::Mysql);
+        assert_eq!(m(r#"select 'a\'b', "dq", "d\"q", _utf8mb4'x', _binary 'y', x'1f', b'01', N'n', 0x1F"#), "select ?, ?, ?, ?, _binary ?, ?, ?, ?, ?");
+        // Digest text keeps ?, backtick names and comments; executable comments are code
+        let kept = "SELECT `t1`.`col2` FROM `db1`.`t1` WHERE `a` = ? AND `b` IN (...) # 'c' 9\n-- 'd'\n/* 'e' */";
+        assert_eq!(m(kept), kept);
+        assert_eq!(m("select /*!40101 'x', 5 */ 1 /*M!100108 'y' */"), "select /*!40101 ?, ? */ ? /*M!100108 ? */");
+        // The other quoting: \ escapes in MySQL strings (one string, then an unclosed b'…'); "…" is a string in MySQL, a name in PostgreSQL
+        assert_eq!(m(r"select 'a\', 'b'"), "select ??");
+        assert_eq!(mask_literals(r#"select "dq""#, DbKind::Postgres), r#"select "dq""#);
+    }
+
+    /// PostgreSQL comments nest, MySQL's don't: the literal after the inner */ is code in MySQL, still comment in PostgreSQL
+    #[test]
+    fn mask_literals_nested_comments() {
+        let pg = |s: &str| mask_literals(s, DbKind::Postgres);
+        assert_eq!(pg("/* a /* b */ it's */ select 'secret-1'"), "/* a /* b */ it's */ select ?");
+        assert_eq!(pg("/* a /* b */ 'c' */ select 2"), "/* a /* b */ 'c' */ select ?");
+        assert_eq!(pg("select 1 /* a /* b */ 'c'"), "select ? /* a /* b */ 'c'");
+        assert_eq!(mask_literals("/* a /* b */ 'c' */ select 2", DbKind::Mysql), "/* a /* b */ ? */ select ?");
+    }
+
+    /// Report SQL cuts query text with left(query, 4000): the cut literal runs to the end
+    #[test]
+    fn mask_literals_cut_at_the_end() {
+        let cut = |open: &str| format!("select * from t where token = {open}{}", "s".repeat(5000)).chars().take(4000).collect::<String>();
+        for (open, kind) in [("'", DbKind::Postgres), (r"E'\'", DbKind::Postgres), ("$q$", DbKind::Postgres), ("'", DbKind::Mysql), ("\"", DbKind::Mysql), ("_latin1'", DbKind::Mysql)] {
+            assert_eq!(mask_literals(&cut(open), kind), "select * from t where token = ?", "{open}");
+        }
+        assert_eq!(mask_literals("select 1 /*!40101 'x", DbKind::Mysql), "select ? /*!40101 ?");
     }
 }

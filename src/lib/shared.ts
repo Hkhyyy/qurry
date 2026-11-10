@@ -38,6 +38,13 @@ export interface Unbalanced {
   message: string;
 }
 
+/** A piece of a field's SQL and how it is drawn (qurry_shared::highlight::Span), UTF-16 offsets */
+export interface HighlightSpan {
+  start: number;
+  end: number;
+  class: "keyword" | "function" | "number" | "string" | "comment" | "other";
+}
+
 /** A completion candidate (qurry_shared::complete::Item) */
 export interface CompletionItem {
   label: string;
@@ -331,6 +338,8 @@ const api = {
   pairEdit: (text: string, start: number, end: number, key: string, kind: DbKind): PairEdit | undefined => wasm.pairEdit(text, start, end, key, kind),
   /** The quotes and brackets `text` leaves open, and closing brackets without an opener, in text order */
   unbalanced: (text: string, kind: DbKind): Unbalanced[] => wasm.unbalanced(text, kind),
+  /** SQL coloring of a one-line field (the table tab's WHERE / ORDER BY, the TUI's too), in text order */
+  highlight: (text: string, kind: DbKind): HighlightSpan[] => wasm.highlight(text, kind),
   /** null → NULL */
   sqlLiteral: (kind: DbKind, value: string | null): string => wasm.sqlLiteral(kind, value),
   inList: (rows: Cell[][], types: string[], kind: DbKind, opts: ExtractOptions): string => wasm.inList(rows, types, kind, opts),

@@ -28,6 +28,7 @@ Colors are theme tokens: every theme's values are in `crates/shared/src/themes.j
 | 글자 | `--ui-text` · `--ui-text-muted` · `--ui-text-on-accent` | #dfe1e5 · #8b8f95 · #fff | 본문 · 설명 · 강조색 위 |
 | 색 | `--ui-accent` · `--ui-danger` · `--ui-warn` · `--ui-ok` | #3574f0 · #f75464 · #e5a64b · #5fb865 | 주 버튼 · 위험 · 주의 · 성공 |
 | JSON | `--ui-json-key` · `-string` · `-number` · `-keyword` · `-punct` | #c77dbb · #6aab73 · #2aacb8 · #cf8e6d · #8b8f95 | JSON cells in result grids (the TUI uses the same values) |
+| SQL | `--c-cf8e6d` · `--c-56a8f5` · `--c-number` · `--ui-json-string` · `--c-comment` | #cf8e6d · #56a8f5 · #2aacb8 · #6aab73 · #7a7e85 | Keyword · function · number · string · comment in `HighlightInput` (the table tab's WHERE / ORDER BY; the console's Monaco theme and the TUI use the same values) |
 | 간격 | `--ui-sp-1` … `--ui-sp-6` | 2 · 4 · 8 · 12 · 16 · 24px | padding · gap · margin 은 이 값만 |
 | 둥글기 | `--ui-radius-sm` / `-md` / `-lg` | 4 · 6 · 10px | 버튼 / 메뉴 · 목록 / 대화상자 |
 | 글자 크기 | `--ui-fs-xs` / `-sm` / `-md` / `-lg` | 11 · 12 · 13 · 14px | 배지 / 보조 / 본문 / 제목 |
@@ -55,6 +56,7 @@ Colors are theme tokens: every theme's values are in `crates/shared/src/themes.j
 | `Field` · `RadioGroup` · `FormSection` · `Hint` · `ColorPicker` | 라벨 + 칸 (힌트 · 오류는 아래; `group` = 제 라벨이 있는 칸 여럿: `<div>` 라서 라벨을 눌러도 첫 칸으로 가지 않음) / 선택지마다 설명 / 구역 제목 / 작은 회색 설명 / 색 고르기 |
 | `Named` · `InfoTip` | 설명하는 이름 바로 뒤의 ⓘ: 칸의 라벨 (`Field` 의 `info`), 체크박스 옆 (라벨 안이 아니라서 ⓘ 를 눌러도 체크되지 않음), 힌트 줄, 구역 제목 — 어디서나 같은 간격 · 같은 팝오버. 누르거나 Space · Enter 로 열고, Esc (팝오버만 닫고 초점은 ⓘ 로) · 바깥 클릭 · 스크롤로 닫는다. 이름은 "About <이름>". 고르기 전에 꼭 읽어야 할 한 줄 (경고 · 결과) 만 보이게 두고 나머지 설명은 ⓘ 뒤로 |
 | `SearchField` | ⌕ + 입력 (+ 불러오는 중 ◌). `bare` = 팝오버 머리처럼 테두리 없이 크게 |
+| `HighlightInput` | One-line input whose text is drawn in SQL colors (`spans`: UTF-16 ranges with keyword · function · number · string · comment, from `shared().highlight`). The input's own text is transparent and a colored copy is drawn over it in the same font and padding, following its scroll: caret, selection and keys stay the input's (the table tab's WHERE / ORDER BY) |
 | `Tabs` · `SectionTitle` · `KeyHints` | 구역 바꾸기 (`size` sm) / 목록 · 창 안의 작은 제목 / "↩ Open · ⇥ Next tab" |
 | `Notice` · `EmptyState` | 안내 · 경고 · 오류 한 덩어리 / 비어 있을 때 |
 | `ListItem` | 목록 한 줄: [앞(체크)] [색 띠] [아이콘] 제목 설명 ……… 오른쪽, 두 번째 줄 (`subtitle`), `selected` · `dim` · `mono` |

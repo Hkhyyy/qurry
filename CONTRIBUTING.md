@@ -4,6 +4,18 @@ Thanks for helping. Bug reports and feature ideas go in [issues](https://github.
 
 How the code is laid out (core / tui / mcp / drivers / src) and where each config file is written: [Development › Layout](docs/development.md#layout).
 
+## What belongs in Qurry
+
+Qurry is a free DataGrip alternative: one Rust engine behind a desktop app, a terminal UI and an MCP server, safe to hand to AI tools, small and fast. A feature goes into a milestone only after its issue answers these, and says the outcome: **in**, **in, smaller** (which part), **later**, or **no**.
+
+1. **Everyday database work?** Browsing, querying, editing data, schema and DDL, admin reports, moving data in and out, working safely on Production. Beyond that (design tools, AI pipelines, BI, dashboards) needs a clear reason, and starts as the smallest useful version.
+2. **In the engine, the same in the GUI, the TUI and MCP?** Logic lives in `crates/core` / `crates/shared`; the apps are views of it. A GUI-only (or TUI-only) feature is an exception the issue names: why, and what the other app shows instead.
+3. **Safe for AI?** MCP stays read-only by default and never writes to a Production or Read-only data source. A new tool reads only; anything that can expose row data or query text (personal data) is off for Production data sources by default, and is described in [docs/mcp-security.md](docs/mcp-security.md).
+4. **Small and fast?** Say the cost: app and binary size, startup, memory, CI time, new dependencies. A heavy dependency for something few people use goes into a driver plugin, or doesn't go in.
+5. **Who could it break after an update, and how do they recover?** Prefer not breaking them; when it does, the pull request lists it under Behavior changes.
+
+Features already in that don't meet these aren't removed silently: open an issue that says what would change and who it affects.
+
 ## Setup
 
 You need Rust (stable), Node.js 22 or newer, pnpm 10 and, for the tests against real servers, Docker.

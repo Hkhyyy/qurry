@@ -3,8 +3,6 @@ import * as monaco from "monaco-editor/editor/editor.api";
 import "monaco-editor/editor/editor.main";
 import "monaco-editor/languages/definitions/pgsql/register";
 import "monaco-editor/languages/definitions/mysql/register";
-import { language as mysqlLanguage } from "monaco-editor/languages/definitions/mysql/mysql";
-import { language as pgsqlLanguage } from "monaco-editor/languages/definitions/pgsql/pgsql";
 import "monaco-editor/languages/definitions/redis/register";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import JsonWorker from "monaco-editor/language/json/json.worker?worker";
@@ -12,34 +10,14 @@ import { loader } from "@monaco-editor/react";
 import { MONACO_THEME, monacoThemeData, onTheme } from "./theme";
 import type { DbKind } from "./api";
 import { initShared, sharedOr } from "./shared";
+import { SQL_GRAMMARS } from "./sqlGrammars";
 
 // JSON (the grid's Value Editor panel) validates and folds in its own worker
 self.MonacoEnvironment = { getWorker: (_, label) => (label === "json" ? new JsonWorker() : new EditorWorker()) };
 loader.config({ monaco });
 
-/**
- * MySQL reads `--` as a comment only when a space, a control character or the line end follows (`select 1--1` is 1 - -1), and so does
- * the console's split (qurry_shared::sql dash_comment). The built-in grammar greys out every `--…`, so `select 1--1; delete …` looked like
- * one statement with a comment while ⌘↩ ran the DELETE: colour it the way it runs
- */
-const comments = [
-  [/--(?:[\x00-\x20\x7f].*|$)/, "comment"],
-  [/#+.*/, "comment"],
-  [/\/\*/, { token: "comment.quote", next: "@comment" }],
-];
-/**
- * The built-in grammars know only part of the words a statement is made of: pgsql only PostgreSQL's reserved words (no UPDATE, SET,
- * INSERT, DELETE, VALUES, ALTER, DROP, BEGIN …), mysql no BEGIN, COMMIT, ROLLBACK … Those showed as plain names. Words that are
- * common column names (type, first, last, row, partition …) aren't added
- */
-const COMMON_KEYWORDS = `SELECT INSERT UPDATE DELETE MERGE SET VALUES INTO FROM WHERE JOIN LEFT RIGHT INNER OUTER FULL CROSS NATURAL ON USING AS BY ORDER
-  GROUP HAVING LIMIT OFFSET FETCH RETURNING WITH RECURSIVE UNION INTERSECT EXCEPT ALL DISTINCT CREATE ALTER DROP TRUNCATE RENAME TO ADD COLUMN
-  TABLE VIEW MATERIALIZED INDEX UNIQUE SCHEMA DATABASE FUNCTION PROCEDURE TRIGGER SEQUENCE EXTENSION IF EXISTS NOT REPLACE CASCADE RESTRICT
-  BEGIN TRANSACTION COMMIT ROLLBACK SAVEPOINT EXPLAIN ANALYZE VACUUM COPY SHOW CALL DO CONFLICT NOTHING GRANT REVOKE
-  NULLS OVER WINDOW PRECEDING FOLLOWING UNBOUNDED INTERVAL ESCAPE LATERAL`.split(/\s+/);
-const withKeywords = (words: string[]) => [...new Set([...words, ...COMMON_KEYWORDS])];
-monaco.languages.setMonarchTokensProvider("pgsql", { ...pgsqlLanguage, keywords: withKeywords(pgsqlLanguage.keywords) } as monaco.languages.IMonarchLanguage);
-monaco.languages.setMonarchTokensProvider("mysql", { ...mysqlLanguage, keywords: withKeywords(mysqlLanguage.keywords), tokenizer: { ...mysqlLanguage.tokenizer, comments } } as monaco.languages.IMonarchLanguage);
+// pgsql, mysql and the driver DBs' generic sql, with the words Qurry adds (lib/sqlGrammars.ts)
+for (const [id, grammar] of Object.entries(SQL_GRAMMARS)) monaco.languages.setMonarchTokensProvider(id, grammar as monaco.languages.IMonarchLanguage);
 
 // One Monaco theme, redefined from the theme drawn whenever it changes (lib/theme.ts monacoThemeData)
 onTheme((t) => {

@@ -130,6 +130,8 @@ a { color: var(--c-548af7); cursor: pointer; }
 .app-toolbar .ui-badge { height: 20px; font-size: 12px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; line-height: 20px; flex: 0 1 auto; min-width: 0; }
 .main { flex: 1; min-height: 0; }
 .statusbar { height: 24px; display: flex; align-items: center; gap: 2px; padding: 0 12px 0 4px; background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+/* A reconnect toast's reason (ReconnectToasts): the core's message as it is, lines kept */
+.reconnect-reason { white-space: pre-wrap; }
 .resize-h { width: 1px; background: var(--border); }
 .resize-v { height: 1px; background: var(--border); }
 .resize-h:hover, .resize-h[data-resize-handle-active] { background: var(--accent); width: 2px; }
@@ -319,6 +321,8 @@ input:disabled, select:disabled { opacity: .45; }
 .dg-filter-field + .dg-filter-field { border-left: 1px solid var(--border); }
 .dg-filter-field .kw { font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; letter-spacing: .3px; }
 .dg-filter-field input { flex: 1; min-width: 0; border: none; background: none; padding: 0; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; color: var(--text); }
+.dg-filter-field .ui-hl { flex: 1; }
+.dg-filter-field .ui-hl-layer { inset: 0; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; color: var(--text); }
 .dg-filter-field input:focus { outline: none; }
 .dg-filter-field:focus-within { box-shadow: inset 0 -2px 0 var(--accent); }
 .dg-filter-field .clear { background: none; border: none; padding: 0 4px; color: var(--muted); }

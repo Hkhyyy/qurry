@@ -292,7 +292,8 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                 KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) => test_form(app, &mut form),
                 KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => return save_form(app, form),
                 KeyCode::Enter => return save_form(app, form),
-                KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if !matches!(form.fields[form.sel].kind, FieldKind::Text | FieldKind::Secret) => {
+                // A disabled field (ConnForm::disabled) doesn't change
+                KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if !matches!(form.fields[form.sel].kind, FieldKind::Text | FieldKind::Secret) && form.disabled(form.fields[form.sel].label).is_none() => {
                     // A running test and the last message are for the other tunnel (⌃y would act on the SSH server): drop both
                     if form.fields[form.sel].label == "Tunnel" {
                         if let Some((_, h)) = form.testing.take() {

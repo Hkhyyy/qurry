@@ -227,7 +227,10 @@ impl App {
                 let db = n.db.clone().unwrap();
                 let target = sql::target_id(&conn, Some(&db));
                 let flat = kind.flat();
-                self.spawn(
+                let t2 = target.clone();
+                self.spawn_wait(
+                    &t2,
+                    WaitFor::Tree(key.clone()),
                     async move {
                         let schemas = st.list_schemas(target.clone()).await.map_err(err)?;
                         if flat {
@@ -238,8 +241,13 @@ impl App {
                             Ok((schemas, None))
                         }
                     },
-                    move |a, r| match r {
-                        Err(e) => done(a, key, Err(e)),
+                    move |a, r, seen| match r {
+                        Err(e) => {
+                            done(a, key, Err(e.clone()));
+                            if let Some(rc) = seen {
+                                a.reconnect_failed(&rc, &e, false);
+                            }
+                        }
                         Ok((_, Some((schema, objs)))) => {
                             let groups = a.groups(&key, &n.conn, n.db.as_deref().unwrap(), &schema, objs);
                             done(a, key, Ok(groups));
@@ -276,9 +284,15 @@ impl App {
                 let (db, schema) = (n.db.clone().unwrap(), n.schema.clone().unwrap());
                 let target = sql::target_id(&conn, Some(&db));
                 let s2 = schema.clone();
-                self.spawn(async move { st.list_objects(target, s2).await.map_err(err) }, move |a, r| {
+                let t2 = target.clone();
+                self.spawn_wait(&t2, WaitFor::Tree(key.clone()), async move { st.list_objects(target, s2).await.map_err(err) }, move |a, r, seen| {
+                    let failed = r.as_ref().err().cloned().zip(seen);
                     let r = r.map(|objs| a.groups(&key, &n.conn, &db, &schema, objs));
                     done(a, key, r);
+                    // It waited on a reconnect: if that failed (not the load itself), why, and how to load it again (the Message popup)
+                    if let Some((e, rc)) = failed {
+                        a.reconnect_failed(&rc, &e, false);
+                    }
                 });
             }
             NodeKind::Object(_) if n.is_relation() => {

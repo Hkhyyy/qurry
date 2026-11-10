@@ -19,7 +19,7 @@ Only `qurry-mcp` 0.2.13 or newer reads the MCP setting. An older `qurry-mcp` or 
 | MCP setting | Without `--allow-write` | With `--allow-write` |
 |---|---|---|
 | **Off** | Nothing. Not listed; its password is never read and no connection is opened (also when the client asks for it by name or id) | Same |
-| **Read** | Browse and read: databases, schemas, objects, columns, DDL, object search, `query`, `explain`, `full_text_search`, Redis keys and values, RAG search, `export_csv` | Same |
+| **Read** | Browse and read: databases, schemas, objects, columns, DDL, object search, `query`, `explain`, `full_text_search`, `get_erd`, `dba_report` (on Production only where a person allowed it), Redis keys and values, RAG search, `export_csv` | Same |
 | **Read & write** | Same as Read | Also `execute` — unless the data source is **Read-only** or **Production**, which keep it at Read |
 | *(not set: made before the setting existed)* | Read, or **Off** if it is a Production data source | Read & write (Read if Read-only), or **Off** if it is a Production data source |
 
@@ -29,6 +29,8 @@ Only `qurry-mcp` 0.2.13 or newer reads the MCP setting. An older `qurry-mcp` or 
 - `list_data_sources` shows the host, port, user name and SSH user; passwords never (a password inside a URI such as `mongodb://user:pass@host` is removed).
 - `export_csv` writes only new files in `~/Downloads/qurry-exports`, named by the client without folders, and never overwrites one.
 - `semantic_search` sends the question to the index's embedding provider (Ollama, or OpenAI) and only works when both the indexed table's data source and the vector store's are visible.
+- `dba_report` shows what the app's Database Admin shows: who is connected (user, application, client address) and what they run, lock waits, the slowest statements, server settings, roles with their powers, and table grants. String and number literals in statement text are replaced with `?` on every data source, but table and column names, comments and the shape of each statement stay readable. MySQL replication's last errors (`Last_Error`, `Last_SQL_Error`, `Last_IO_Error` of `SHOW REPLICA STATUS`) quote row values and the failed statement inside quotes the server doesn't escape, so everything from their first quote to their last is replaced with one `?` (the error number and the words around it stay); read the full text in Qurry's Database Admin. Masking reads strings the default way: on a server running with MySQL `NO_BACKSLASH_ESCAPES` or PostgreSQL `standard_conforming_strings = off`, a statement with a `\` inside a string can leave a later literal unmasked. On a **Production** data source it answers only after a person allows it for that data source in Qurry (Data Source Properties › Options › **AI tools can read admin reports**, TUI: `Admin reports` in the data source form); it starts off, and an older Qurry that saves the data source turns it off again. On other data sources the setting shows checked and disabled, since they always answer while MCP shares them. It never changes anything: no session is cancelled or ended, and a fix a report suggests (CREATE / DROP INDEX, VACUUM …) comes back as text for a person to run in Qurry.
+- `get_erd` returns names only: tables, primary key and foreign key columns, never rows.
 
 ## How read-only is enforced
 
@@ -38,7 +40,7 @@ Only `qurry-mcp` 0.2.13 or newer reads the MCP setting. An older `qurry-mcp` or 
 - **Redis**: read commands only, not `CONFIG` or `KEYS`, and at most 1,000 elements per command.
 - **Driver data sources** (SQL Server, DuckDB, ClickHouse, MongoDB, vector databases) have no READ ONLY transaction, so the statement check is stricter, DuckDB is opened without external access and ClickHouse reads run with `readonly=2`.
 
-The other tools take no SQL: they run statements Qurry writes itself, without the engine check. `full_text_search` on PostgreSQL and MySQL runs one `SELECT` per table in a READ ONLY transaction that is rolled back, with a 15 s limit per table and none for the whole call. The browse tools (databases, schemas, objects, columns, DDL, `search_objects`) read the catalog. `redis_get` reads up to 10,000 elements of a value and `redis_scan` up to 5,000 keys per call.
+The other tools take no SQL: they run statements Qurry writes itself, without the engine check. `full_text_search` on PostgreSQL and MySQL runs one `SELECT` per table in a READ ONLY transaction that is rolled back, with a 15 s limit per table and none for the whole call. The browse tools (databases, schemas, objects, columns, DDL, `search_objects`, `get_erd`) read the catalog. `dba_report` runs only the report statements built into Qurry, each with a 30 s limit (on PostgreSQL inside a transaction that is rolled back). `redis_get` reads up to 10,000 elements of a value and `redis_scan` up to 5,000 keys per call.
 
 The full list is in [MCP server › How read-only is enforced](mcp.md). These checks are a second line of defence: a function the checks don't know about runs if the database user may run it.
 
@@ -70,7 +72,7 @@ Qurry passes data to the client as it is. It does not look for or remove instruc
 
 ## Recommendations
 
-- Leave Production data sources Off. If an agent must see production, use Read and a read-only replica or role.
+- Leave Production data sources Off. If an agent must see production, use Read and a read-only replica or role, and allow its Database Admin reports only while you need them.
 - Give MCP its own database user with only the privileges it needs (no superuser, `FILE`, `pg_read_server_files`, `pg_signal_backend` or `dblink`).
 - Use `--allow-write` only in a separate server entry (`claude mcp add qurry-rw -- qurry-mcp --allow-write`) and only for the data sources you set to Read & write.
 - Keep confirmation prompts on in the AI client for `execute` and for tools that send data out (web requests, writing files, git push).

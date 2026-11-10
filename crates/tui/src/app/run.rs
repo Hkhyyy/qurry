@@ -539,6 +539,11 @@ impl App {
     }
 
     pub fn cancel(&mut self) {
+        // The status line says a source reconnects (#135): Cancel stops the loads waiting on it, unless the active tab has its own
+        // run or load-more to stop (the GUI: ⌘F2 stops the tab, the status bar's ✕ the reconnect)
+        if !self.cancels_own() && self.cancel_reconnect() {
+            return;
+        }
         let Some(t) = self.tabs.get(self.active) else { return };
         // A run or a load-more (it reads on the tab's session too)
         if t.busy().is_none() {

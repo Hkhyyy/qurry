@@ -4,6 +4,7 @@ import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redis, redisDb
 import { ScopePopup } from "./ScopePopup";
 import { Button, Notice, TreeRow } from "../ui";
 import { invalidateCompletion } from "../lib/completion";
+import { waitOn } from "../lib/reconnect";
 import { TlsFix } from "./TlsFix";
 import { ColumnIcon, DatabaseIcon, FkIcon, FolderIcon, IndexIcon, KeyIcon, MySqlIcon, objectIcon, PgIcon, RedisIcon, RoutineIcon, SchemaIcon, TableIcon } from "../ui/icons";
 
@@ -419,7 +420,8 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
   const loadObjects = (schema: string, force = false) => {
     if (objects[schema]?.state === "ok" && !force) return;
     setObjects((o) => ({ ...o, [schema]: { state: "loading" } }));
-    meta.objects(target, schema).then(
+    // A reconnect it waits on shows in the toast and the status bar (Cancel, Retry); the tree shows only Loading…
+    waitOn(target, (callId) => meta.objects(target, schema, callId), () => loadObjects(schema, true)).then(
       (data) => setObjects((o) => ({ ...o, [schema]: { state: "ok", data } })),
       (e) => setObjects((o) => ({ ...o, [schema]: { state: "error", msg: String(e) } })),
     );
@@ -443,7 +445,7 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
     const key = `${schema}.${table}`;
     if (details[key]?.state === "ok" && !force) return;
     setDetails((d) => ({ ...d, [key]: { state: "loading" } }));
-    meta.table(target, schema, table).then(
+    waitOn(target, (callId) => meta.table(target, schema, table, callId), () => loadDetail(schema, table, true)).then(
       (data) => setDetails((d) => ({ ...d, [key]: { state: "ok", data } })),
       (e) => setDetails((d) => ({ ...d, [key]: { state: "error", msg: String(e) } })),
     );
