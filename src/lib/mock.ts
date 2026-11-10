@@ -138,8 +138,32 @@ let updateChecked = false;
 let cancelMore: (() => void) | null = null;
 /** The last id save_connection gave a new data source (never reused, also after a delete) */
 let newIds = 0;
-/** Test Connections waiting for cancel_test, by test id */
+/** Test Connections waiting for cancel_call, by test id */
 const testsRunning: Record<string, () => void> = {};
+/** window.__mockReconnect = { id, fail?, after? } (e2e, stories): that data source reconnects. Its table_detail and list_objects wait
+ *  until cancel_call, or `after` ms and then answer (or fail with `fail`); `reconnecting` lists it while one waits */
+const reconnectWaits: Record<string, () => void> = {};
+let reconnectWaiting = 0;
+const reconnectWait = async (a: any) => {
+  const r = (globalThis as any).__mockReconnect;
+  if (!r || String(a.id).split("::")[0] !== r.id) return;
+  reconnectWaiting++;
+  try {
+    await new Promise<void>((ok, fail) => {
+      if (a.callId) reconnectWaits[a.callId] = () => fail("Cancelled");
+      if (r.after != null) setTimeout(() => (r.fail ? fail(r.fail) : ok()), r.after);
+    });
+  } finally {
+    reconnectWaiting--;
+    delete reconnectWaits[a.callId];
+  }
+};
+/** core app::Reconnecting for a mock source (qurry_shared::errors' words) */
+export const mockReconnecting = (id: string) => {
+  const c: any = conns.find((c) => c.id === id);
+  const way = c?.ssm?.enabled ? "AWS SSM" : "SSH";
+  return { id, message: `Reconnecting ${c?.name} through ${way}`, slow: `Taking longer than usual: after the Mac sleeps, the ${way} session can take a while to come back.`, failed: `Couldn't reconnect ${c?.name} through ${way}`, cancelled: `Cancelled while reconnecting ${c?.name} through ${way}.` };
+};
 // Import Data Sources (core import.rs): the locations found and a preview in the core's words
 const IMPORT_LOCATIONS = [
   { label: "DataGrip 2025.2 · global", path: "/Users/me/Library/Application Support/JetBrains/DataGrip2025.2/options", shown: "~/Library/Application Support/JetBrains/DataGrip2025.2/options", count: 7 },
@@ -256,7 +280,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     { schema: "public", table: "users", whereClause: `"user_name"::text ilike '%${a.req.text}%'`, result: { ...result, rows: result.rows.slice(0, 3), truncated: false } },
   ],
   list_schemas: (a: any) => (String(a.id).startsWith("rd") ? [{ name: String(a.id).split("::")[1] || "db0", isSystem: false }] : null) ?? (String(a.id).startsWith("my") ? [{ name: String(a.id).split("::")[1] || "shop", isSystem: false }] : null) ?? [{ name: "public", isSystem: false }, { name: "billing", isSystem: false }, { name: "pg_catalog", isSystem: true }],
-  list_objects: (a: any) => String(a.id).startsWith("rd") ? { relations: [["events", "stream"], ["rank", "zset"], ["session:abc", "string"], ["tags", "set"], ["user:1", "hash"]].map(([name, t]) => ({ name, kind: "key", comment: t, rowEstimate: null })), routines: [] } : a.schema === "billing" ? {
+  list_objects: async (a: any) => (await reconnectWait(a), String(a.id).startsWith("rd") ? { relations: [["events", "stream"], ["rank", "zset"], ["session:abc", "string"], ["tags", "set"], ["user:1", "hash"]].map(([name, t]) => ({ name, kind: "key", comment: t, rowEstimate: null })), routines: [] } : a.schema === "billing" ? {
     // users in two schemas (same-name table tabs)
     relations: [{ name: "invoices", kind: "table", comment: null, rowEstimate: 800 }, { name: "users", kind: "table", comment: "billing accounts", rowEstimate: 40 }],
     routines: [],
@@ -269,8 +293,8 @@ const handlers: Record<string, (a: any) => unknown> = {
       { name: "users_id_seq", kind: "sequence", comment: null, rowEstimate: null },
     ],
     routines: [{ name: "calc_fee", args: "amount numeric", returns: "numeric", kind: "function" }],
-  }),
-  table_detail: () => ({
+  })),
+  table_detail: async (a: any) => (await reconnectWait(a), {
     columns: [
       { name: "id", dataType: "bigint", nullable: false, defaultValue: "nextval('users_id_seq'::regclass)", comment: null, isPk: true },
       { name: "user_name", dataType: "character varying(50)", nullable: false, defaultValue: null, comment: "이름", isPk: false },
@@ -397,7 +421,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     (globalThis as any).__mockDdlCalls = ((globalThis as any).__mockDdlCalls ?? 0) + 1;
     return ((globalThis as any).__mockDdlExtra ?? "") + `CREATE TABLE ${a.schema}.${a.name}\n(\n    id bigint DEFAULT nextval('users_id_seq'::regclass) NOT NULL,\n    user_name character varying(50) NOT NULL,\n    CONSTRAINT users_pkey PRIMARY KEY (id)\n);\n`;
   },
-  // Instance i-00000000000000000 never connects (like a stopped one): the test runs until cancel_test. On i-0000000000000dead it
+  // Instance i-00000000000000000 never connects (like a stopped one): the test runs until cancel_call. On i-0000000000000dead it
   // fails with the core's long message for a missing Session Manager plugin. window.__mockTestDelay (ms, set before load) makes
   // every test take that long, as a real connect does
   test_connection: async (a: any) => {
@@ -420,11 +444,13 @@ const handlers: Record<string, (a: any) => unknown> = {
     if (a.database === (globalThis as any).__mockDbRefuse) throw `permission denied for database "${a.database}"`;
     return a.config.kind === "mysql" ? [{ name: a.database, isSystem: false }] : [{ name: "public", isSystem: false }, { name: "billing", isSystem: false }, { name: "pg_catalog", isSystem: true }];
   },
-  cancel_test: (a: any) => {
-    testsRunning[a.testId]?.();
-    delete testsRunning[a.testId];
+  cancel_call: (a: any) => {
+    testsRunning[a.callId]?.();
+    delete testsRunning[a.callId];
+    reconnectWaits[a.callId]?.();
     return null;
   },
+  reconnecting: () => (reconnectWaiting ? [mockReconnecting((globalThis as any).__mockReconnect.id)] : []),
   connect: (a: any) => {
     lanCheck(a.id);
     const c: any = conns.find((c) => c.id === a.id);

@@ -100,10 +100,32 @@ pub fn disconnected(name: &str, tunnel: &str, why: Disconnected) -> String {
     }
 }
 
-/// The status while Qurry replaces a data source's tunnel after the Mac woke or the tunnel stopped answering (GUI and TUI ask
-/// for it: AppState::reconnecting). ssm = through AWS SSM, else the SSH tunnel
+/// The status while Qurry waits for or replaces a data source's tunnel after the Mac woke or the tunnel stopped answering (GUI and
+/// TUI ask for it: AppState::reconnecting, and append "… <elapsed>"). ssm = through AWS SSM, else SSH
 pub fn reconnecting(name: &str, ssm: bool) -> String {
-    format!("Reconnecting {name} through {}", if ssm { "AWS SSM" } else { "the SSH tunnel" })
+    format!("Reconnecting {name} through {}", tunnel_way(ssm))
+}
+
+/// After this long reconnecting the apps add why it may take a while (reconnect_slow)
+pub const RECONNECT_SLOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// What the apps add to reconnecting after RECONNECT_SLOW
+pub fn reconnect_slow(ssm: bool) -> String {
+    format!("Taking longer than usual: after the Mac sleeps, the {} session can take a while to come back.", tunnel_way(ssm))
+}
+
+/// The heading of a load that failed while its data source was reconnecting: the reason follows, then how to retry
+pub fn reconnect_failed(name: &str, ssm: bool) -> String {
+    format!("Couldn't reconnect {name} through {}", tunnel_way(ssm))
+}
+
+/// A load cancelled while its data source was reconnecting
+pub fn reconnect_cancelled(name: &str, ssm: bool) -> String {
+    format!("Cancelled while reconnecting {name} through {}.", tunnel_way(ssm))
+}
+
+fn tunnel_way(ssm: bool) -> &'static str {
+    if ssm { "AWS SSM" } else { "SSH" }
 }
 
 /// The DBA report's database picker couldn't list the databases (GUI and TUI): it lists through the report's database, or the
@@ -247,6 +269,16 @@ mod tests {
         assert!(gui.contains(&format!("\"{CONSOLE_READ_ONLY}\"")), "ResultGrid.tsx lacks: {CONSOLE_READ_ONLY}");
     }
 
+    /// The reconnect texts name the source and the way: AWS SSM or SSH
+    #[test]
+    fn reconnecting_names_the_tunnel() {
+        assert_eq!(reconnecting("prod", true), "Reconnecting prod through AWS SSM");
+        assert_eq!(reconnecting("stage", false), "Reconnecting stage through SSH");
+        assert_eq!(reconnect_failed("prod", true), "Couldn't reconnect prod through AWS SSM");
+        assert_eq!(reconnect_cancelled("stage", false), "Cancelled while reconnecting stage through SSH.");
+        assert!(reconnect_slow(true).contains("the AWS SSM session") && reconnect_slow(false).contains("the SSH session"));
+    }
+
     #[test]
     fn error_position_finds_the_spot() {
         // PostgreSQL: characters, 1-based (a multi-byte one before it counts once)
@@ -290,12 +322,6 @@ mod tests {
         for (s, says) in [(90, "90 s idle"), (600, "10 min idle"), (28800, "8 h idle"), (7500, "2 h 5 min idle")] {
             assert!(tx_idle_reminder("prod", 5, true, Some((true, s))).contains(&format!("after {says} (wait_timeout)")), "{s}");
         }
-    }
-
-    #[test]
-    fn reconnecting_names_the_tunnel() {
-        assert_eq!(reconnecting("prod", true), "Reconnecting prod through AWS SSM");
-        assert_eq!(reconnecting("stage", false), "Reconnecting stage through the SSH tunnel");
     }
 
     #[test]

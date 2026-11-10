@@ -163,6 +163,14 @@
 .ui-notice.tone-warn { border-color: color-mix(in srgb, var(--ui-warn) 50%, var(--ui-border)); }
 .ui-notice.tone-danger { color: var(--ui-danger); border-color: color-mix(in srgb, var(--ui-danger) 50%, var(--ui-border)); font-family: var(--ui-font-mono); }
 .ui-notice.tone-ok { border-color: color-mix(in srgb, var(--ui-ok) 50%, var(--ui-border)); }
+/* Toast: bottom right above the status bar (24 px), over the panes but under menus and dialogs; fixed width so its text wraps the same
+   while the elapsed time ticks */
+.ui-toasts { position: fixed; right: var(--ui-sp-4); bottom: 34px; z-index: var(--ui-z-modal); display: flex; flex-direction: column; align-items: flex-end; gap: var(--ui-sp-3); pointer-events: none; }
+.ui-toast { position: relative; box-sizing: border-box; width: 380px; max-width: calc(100vw - 2 * var(--ui-sp-4)); display: flex; flex-direction: column; gap: var(--ui-sp-2); padding: 10px var(--ui-sp-4); font-size: var(--ui-fs-md); line-height: 1.45; color: var(--ui-text); background: var(--ui-surface); border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-md); box-shadow: var(--ui-shadow-pop); pointer-events: auto; overflow-wrap: anywhere; }
+.ui-toast.closable { padding-right: 34px; }
+.ui-toast.tone-danger { border-color: color-mix(in srgb, var(--ui-danger) 60%, var(--ui-border-strong)); }
+.ui-toast-acts { display: flex; justify-content: flex-end; gap: var(--ui-sp-3); }
+.ui-toast-x { position: absolute; right: 6px; top: 6px; }
 /* TlsOptIn: the button, then the warning beside it (below it when narrow); the warning stays muted inside a danger-colored error */
 .ui-tls-optin { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-sp-2) var(--ui-sp-3); margin-top: var(--ui-sp-2); white-space: normal; }
 .ui-tls-optin-detail { font-size: var(--ui-fs-sm); color: var(--ui-text-muted); line-height: 1.5; }

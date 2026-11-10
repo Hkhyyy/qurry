@@ -539,6 +539,10 @@ impl App {
     }
 
     pub fn cancel(&mut self) {
+        // The status line says a source reconnects (#135): Cancel stops the loads waiting on it
+        if self.cancel_reconnect() {
+            return;
+        }
         let Some(t) = self.tabs.get(self.active) else { return };
         // A run or a load-more (it reads on the tab's session too)
         if t.busy().is_none() {

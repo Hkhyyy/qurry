@@ -2,7 +2,7 @@
 use qurry_core::complete::{self, Item, Options};
 use crate::grid::{raw_text, Grid};
 use crate::tree::{Node, NodeKind, Tree};
-use qurry_core::app::{AppState, ConnectionView};
+use qurry_core::app::{AppState, ConnectionView, Reconnecting};
 use qurry_core::db::{ColumnInfo, QueryResult};
 use qurry_core::meta::{IndexEntry, SchemaObjects};
 use qurry_core::redisdb::{KeyDetail, KeyRow};
@@ -838,6 +838,11 @@ pub struct App {
     hints_loading: HashSet<String>,
     /// When the running tab started (synced at draw time)
     run_since: HashMap<u64, std::time::Instant>,
+    /// Loads a reconnecting source may hold up (spawn_wait), by a running number: Cancel stops them (cancel_reconnect)
+    pub waits: HashMap<u64, Wait>,
+    next_wait: u64,
+    /// Since when each source has been shown reconnecting on the status line (reconnect_line)
+    pub(crate) reconnect_since: HashMap<String, std::time::Instant>,
     /// Command shortcuts ("tui" in keymap.json)
     pub keys: crate::keys::Keymap,
     /// The new version, if one is available (announced in the status bar)
@@ -949,6 +954,9 @@ impl App {
             hints: HashMap::new(),
             hints_loading: HashSet::new(),
             run_since: HashMap::new(),
+            waits: HashMap::new(),
+            next_wait: 0,
+            reconnect_since: HashMap::new(),
             keys: crate::keys::Keymap::new(&user_keys),
             update: None,
             restart: false,
@@ -1047,10 +1055,114 @@ impl App {
         Some(self.run_since.entry(t.id).or_insert_with(std::time::Instant::now).elapsed())
     }
 
-    /// If a tab is running or loading more, the elapsed time needs redrawing
+    /// If a tab is running or loading more, or a load waits on a source (its reconnect's time), the elapsed time needs redrawing
     pub fn any_running(&self) -> bool {
         self.tabs.iter().any(|t| t.busy().is_some())
             || matches!(&self.popup, Some(Popup::ConnForm(f)) if f.testing.is_some())
+            || !self.waits.is_empty()
+    }
+
+    /// spawn for a load on `target` that a reconnecting source may hold up (#135): Cancel stops it while the source reconnects
+    /// (cancel_reconnect), and `apply` gets, with the result, the reconnect it waited on, if one showed meanwhile
+    pub fn spawn_wait<T: Send + 'static>(&mut self, target: &str, into: WaitFor, fut: impl Future<Output = T> + Send + 'static, apply: impl FnOnce(&mut App, T, Option<Reconnecting>) + Send + 'static) {
+        let base = qurry_core::app::split_target(target).0.to_string();
+        self.next_wait += 1;
+        let id = self.next_wait;
+        let (st, b) = (self.state.clone(), base.clone());
+        let abort = self.spawn_abortable(watch_reconnect(st, b, fut), move |a, (v, seen)| {
+            a.waits.remove(&id);
+            apply(a, v, seen)
+        });
+        self.waits.insert(id, Wait { base, into, abort });
+    }
+
+    /// The status line while a load waits on a source that reconnects (qurry_shared::errors' words, as the GUI): what, how long, the
+    /// Cancel key, and past RECONNECT_SLOW why it may take a while. Asks the core only while a load waits
+    pub fn reconnect_line(&mut self) -> Option<(String, u64)> {
+        if self.waits.is_empty() {
+            self.reconnect_since.clear();
+            return None;
+        }
+        let now = self.state.reconnecting();
+        self.reconnect_since.retain(|id, _| now.iter().any(|r| &r.id == id));
+        let r = now.into_iter().find(|r| self.waits.values().any(|w| w.base == r.id))?;
+        let t = self.reconnect_since.entry(r.id.clone()).or_insert_with(std::time::Instant::now).elapsed();
+        let slow = if t > qurry_shared::errors::RECONNECT_SLOW { format!(" · {}", r.slow) } else { String::new() };
+        let ms = t.as_millis() as u64;
+        Some((format!("{}… {} · {} cancel{slow}", r.message, elapsed_text(ms), self.keys.label(Action::Cancel)), ms))
+    }
+
+    /// Cancel while a load waits on a source shown reconnecting (reconnect_line): its loads stop (dropping them drops the connect
+    /// they wait on), the tab and the tree stop loading, and the status line says how to load again. False when none is shown
+    pub(crate) fn cancel_reconnect(&mut self) -> bool {
+        let Some(base) = self.waits.values().map(|w| w.base.clone()).find(|b| self.reconnect_since.contains_key(b)) else { return false };
+        let text = self.state.reconnecting().into_iter().find(|r| r.id == base).map(|r| r.cancelled).unwrap_or_else(|| "Cancelled.".into());
+        let ids: Vec<u64> = self.waits.iter().filter(|(_, w)| w.base == base).map(|(id, _)| *id).collect();
+        let mut table = false;
+        let gone: Vec<Wait> = ids.into_iter().filter_map(|id| self.waits.remove(&id)).collect();
+        for w in gone {
+            w.abort.abort();
+            match w.into {
+                WaitFor::Table(tab) => {
+                    table = true;
+                    if let Some(TabKind::Table(tt)) = self.tab_mut(tab).map(|t| &mut t.kind) {
+                        tt.running = false;
+                    }
+                }
+                WaitFor::Tree(key) => {
+                    self.tree.loading.remove(&key);
+                    self.tree.children.insert(key.clone(), vec![Node::info(&key, "", format!("⚠ {text}"))]);
+                }
+            }
+        }
+        self.reconnect_since.remove(&base);
+        self.status = format!("{text} {} retries.", self.retry_key(table));
+        true
+    }
+
+    /// The key that loads again what waited on a reconnect: r in a table tab, Refresh on an explorer node
+    fn retry_key(&self, table: bool) -> String {
+        if table {
+            return "r".into();
+        }
+        let refresh = crate::keys::Slot { action: Action::Refresh, pane: qurry_core::keymap::Scope::Tree };
+        self.keys.slot_keys(refresh).first().map(|k| crate::keys::pane_disp(k)).unwrap_or_else(|| self.keys.label(Action::Refresh))
+    }
+
+    /// A load that waited on a reconnect failed (`r`: what the core listed): the Message popup says why and how to load again, and
+    /// the status line too
+    pub(crate) fn reconnect_failed(&mut self, r: &Reconnecting, reason: &str, table: bool) {
+        let key = self.retry_key(table);
+        let where_ = if table { "in the table tab" } else { "on the explorer node" };
+        self.status = format!("{}: {reason} · {key} retry", r.failed);
+        self.open_after_notices(Popup::Message { title: "Couldn't reconnect".into(), text: format!("{}.\n\n{reason}\n\n{key} {where_} retries.", r.failed) });
+    }
+}
+
+/// A load a reconnecting source may hold up (App::spawn_wait): its source, what it loads into, and how to stop it
+pub struct Wait {
+    pub base: String,
+    pub into: WaitFor,
+    abort: tokio::task::AbortHandle,
+}
+
+/// What a waiting load fills in: a table tab (its id) or an explorer node's children (its key)
+pub enum WaitFor {
+    Table(u64),
+    Tree(String),
+}
+
+/// `fut`, and the last reconnecting() entry for `base` seen when it started or while it ran (looked at every 250 ms; nothing is read
+/// when nothing reconnects)
+async fn watch_reconnect<T>(st: Arc<AppState>, base: String, fut: impl Future<Output = T>) -> (T, Option<Reconnecting>) {
+    tokio::pin!(fut);
+    let look = || st.reconnecting().into_iter().find(|r| r.id == base);
+    let mut seen = look();
+    loop {
+        tokio::select! {
+            v = &mut fut => return (v, seen),
+            () = tokio::time::sleep(std::time::Duration::from_millis(250)) => seen = look().or(seen),
+        }
     }
 }
 

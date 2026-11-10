@@ -9,6 +9,7 @@ import { schemaChanged } from "../../components/SchemaTree";
 import { commitNoticeTitle } from "../../lib/commitNotice";
 import { sharedOr } from "../../lib/shared";
 import { setTableColumns } from "../../lib/statusbar";
+import { cancelTableLoad } from "../explorer/tableTab";
 import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "../../lib/stmtKind";
 import { patch, updTab } from "../tabs/ops";
 import { editorApis, setTabs, useTabsStore } from "../tabs/store";
@@ -418,6 +419,8 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
   };
 
   const cancel = async (tab: Tab) => {
+    // A table tab still waiting for its metadata: no statement runs on its session yet
+    if (cancelTableLoad(tab.id)) return;
     try {
       await api.cancelQuery(tab.id);
       setStatus("Cancel requested");

@@ -44,69 +44,80 @@ pub async fn delete_connection(state: State<'_, AppState>, id: String) -> AppRes
 /// Only tests the connection without saving. If `password` is None, the saved password is used.
 #[tauri::command]
 pub async fn test_connection(state: State<'_, AppState>, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>, test_id: Option<String>) -> AppResult<String> {
-    cancellable_test(test_id, state.test_connection(config, password, ssh_secret)).await
+    cancellable(test_id, TEST_CANCELLED, state.test_connection(config, password, ssh_secret)).await
 }
 
 /// Schemas tab of a data source that isn't saved yet: its databases, listed with the form's settings (as test_connection connects)
 #[tauri::command]
 pub async fn form_databases(state: State<'_, AppState>, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>, test_id: Option<String>) -> AppResult<Vec<String>> {
-    cancellable_test(test_id, state.form_databases(config, password, ssh_secret)).await
+    cancellable(test_id, TEST_CANCELLED, state.form_databases(config, password, ssh_secret)).await
 }
 
 /// The schemas of one database of a data source that isn't saved yet
 #[tauri::command]
 pub async fn form_schemas(state: State<'_, AppState>, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>, database: String, test_id: Option<String>) -> AppResult<Vec<crate::meta::SchemaInfo>> {
-    cancellable_test(test_id, state.form_schemas(config, password, ssh_secret, database)).await
+    cancellable(test_id, TEST_CANCELLED, state.form_schemas(config, password, ssh_secret, database)).await
 }
 
 /// Test Connection on the SSH/SSL tab: checks the SSH login only.
 #[tauri::command]
 pub async fn test_ssh(state: State<'_, AppState>, config: ConnectionConfig, ssh_secret: Option<String>, test_id: Option<String>) -> AppResult<String> {
-    cancellable_test(test_id, state.test_ssh(config, ssh_secret)).await
+    cancellable(test_id, TEST_CANCELLED, state.test_ssh(config, ssh_secret)).await
 }
 
-/// Running Test Connections by the dialog's test id, for cancel_test, and the ids cancelled before their test started
+/// Running calls that cancel_call can stop, by the caller's id (Test Connection's test id, a table's or the explorer's load), and
+/// the ids cancelled before their call started
 #[derive(Default)]
-struct Tests {
+struct Calls {
     running: std::collections::HashMap<String, std::sync::Arc<tokio::sync::Notify>>,
     cancelled: std::collections::HashMap<String, std::time::Instant>,
 }
-static TESTS: std::sync::LazyLock<std::sync::Mutex<Tests>> = std::sync::LazyLock::new(Default::default);
-/// How long a cancel waits for its test to start (IPC calls can arrive out of order); then it is forgotten
+static CALLS: std::sync::LazyLock<std::sync::Mutex<Calls>> = std::sync::LazyLock::new(Default::default);
+/// How long a cancel waits for its call to start (IPC calls can arrive out of order); then it is forgotten
 const CANCEL_KEPT: std::time::Duration = std::time::Duration::from_secs(60);
+const TEST_CANCELLED: &str = "Test cancelled";
+const LOAD_CANCELLED: &str = "Cancelled";
 
-/// Runs a test that cancel_test can stop: the test is dropped, and with it its SSH / AWS SSM tunnel (an SSM session can take 30s)
-async fn cancellable_test<T>(id: Option<String>, test: impl std::future::Future<Output = AppResult<T>>) -> AppResult<T> {
-    let Some(id) = id else { return test.await };
+/// Runs a call that cancel_call can stop: it is dropped, and with it the connect it waits on and its SSH / AWS SSM tunnel (an SSM
+/// session can take 30s). It then fails with `cancelled`
+async fn cancellable<T>(id: Option<String>, cancelled: &str, call: impl std::future::Future<Output = AppResult<T>>) -> AppResult<T> {
+    let Some(id) = id else { return call.await };
     let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
     {
-        let mut all = TESTS.lock().unwrap();
+        let mut all = CALLS.lock().unwrap();
         // Cancelled before it got here: it never starts
         if all.cancelled.remove(&id).is_some() {
-            return Err(crate::error::AppError::Msg("Test cancelled".into()));
+            return Err(crate::error::AppError::Msg(cancelled.into()));
         }
         all.running.insert(id.clone(), cancel.clone());
     }
     let r = tokio::select! {
-        r = test => r,
-        _ = cancel.notified() => Err(crate::error::AppError::Msg("Test cancelled".into())),
+        r = call => r,
+        _ = cancel.notified() => Err(crate::error::AppError::Msg(cancelled.into())),
     };
-    TESTS.lock().unwrap().running.remove(&id);
+    CALLS.lock().unwrap().running.remove(&id);
     r
 }
 
 #[tauri::command]
-pub fn cancel_test(test_id: String) {
-    let mut all = TESTS.lock().unwrap();
-    match all.running.remove(&test_id) {
-        // notify_one keeps the wake-up if the test isn't waiting yet
+pub fn cancel_call(call_id: String) {
+    let mut all = CALLS.lock().unwrap();
+    match all.running.remove(&call_id) {
+        // notify_one keeps the wake-up if the call isn't waiting yet
         Some(c) => c.notify_one(),
-        // Not started yet, or already done: kept for a while for a test that starts after it (old ones are dropped here)
+        // Not started yet, or already done: kept for a while for a call that starts after it (old ones are dropped here)
         None => {
             all.cancelled.retain(|_, at| at.elapsed() < CANCEL_KEPT);
-            all.cancelled.insert(test_id, std::time::Instant::now());
+            all.cancelled.insert(call_id, std::time::Instant::now());
         }
     }
+}
+
+/// The data sources whose tunnel Qurry waits for or replaces (AppState::reconnecting): the GUI asks about once a second while one
+/// of its loads waits on a source
+#[tauri::command]
+pub fn reconnecting(state: State<'_, AppState>) -> Vec<crate::app::Reconnecting> {
+    state.reconnecting()
 }
 
 #[tauri::command]
@@ -690,14 +701,16 @@ pub async fn list_schemas(state: State<'_, AppState>, id: String) -> AppResult<V
     state.list_schemas(id).await
 }
 
+/// `call_id`: cancel_call stops it (it may wait on a reconnecting tunnel)
 #[tauri::command]
-pub async fn list_objects(state: State<'_, AppState>, id: String, schema: String) -> AppResult<crate::meta::SchemaObjects> {
-    state.list_objects(id, schema).await
+pub async fn list_objects(state: State<'_, AppState>, id: String, schema: String, call_id: Option<String>) -> AppResult<crate::meta::SchemaObjects> {
+    cancellable(call_id, LOAD_CANCELLED, state.list_objects(id, schema)).await
 }
 
+/// `call_id`: cancel_call stops it (it may wait on a reconnecting tunnel)
 #[tauri::command]
-pub async fn table_detail(state: State<'_, AppState>, id: String, schema: String, table: String) -> AppResult<crate::meta::TableDetail> {
-    state.table_detail(id, schema, table).await
+pub async fn table_detail(state: State<'_, AppState>, id: String, schema: String, table: String, call_id: Option<String>) -> AppResult<crate::meta::TableDetail> {
+    cancellable(call_id, LOAD_CANCELLED, state.table_detail(id, schema, table)).await
 }
 
 #[tauri::command]
@@ -977,7 +990,7 @@ mod ipc_tests {
         }
     }
 
-    /// cancel_test drops the running test (and so its tunnel) and the dialog gets "Test cancelled"
+    /// cancel_call drops the running test (and so its tunnel) and the dialog gets "Test cancelled"
     #[tokio::test]
     async fn a_test_can_be_cancelled() {
         struct Dropped(std::sync::Arc<std::sync::atomic::AtomicBool>);
@@ -992,25 +1005,25 @@ mod ipc_tests {
             let _guard = guard;
             std::future::pending::<AppResult<String>>().await
         };
-        let run = tokio::spawn(cancellable_test(Some("t1".into()), test));
+        let run = tokio::spawn(cancellable(Some("t1".into()), TEST_CANCELLED, test));
         tokio::task::yield_now().await;
-        cancel_test("t1".into());
+        cancel_call("t1".into());
         let e = run.await.unwrap().unwrap_err().to_string();
         assert_eq!(e, "Test cancelled");
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
-        assert!(!TESTS.lock().unwrap().running.contains_key("t1"));
+        assert!(!CALLS.lock().unwrap().running.contains_key("t1"));
     }
 
     /// A cancel that arrives before its test registered (IPC calls can overtake each other) still stops it, at once; an old one is forgotten
     #[tokio::test]
     async fn a_cancel_before_the_test_starts_stops_it() {
-        cancel_test("early".into());
-        let e = cancellable_test(Some("early".into()), std::future::pending::<AppResult<String>>()).await.unwrap_err().to_string();
+        cancel_call("early".into());
+        let e = cancellable(Some("early".into()), TEST_CANCELLED, std::future::pending::<AppResult<String>>()).await.unwrap_err().to_string();
         assert_eq!(e, "Test cancelled");
-        assert!(!TESTS.lock().unwrap().cancelled.contains_key("early"), "used once");
-        TESTS.lock().unwrap().cancelled.insert("old".into(), std::time::Instant::now() - CANCEL_KEPT);
-        cancel_test("late".into());
-        let all = TESTS.lock().unwrap();
+        assert!(!CALLS.lock().unwrap().cancelled.contains_key("early"), "used once");
+        CALLS.lock().unwrap().cancelled.insert("old".into(), std::time::Instant::now() - CANCEL_KEPT);
+        cancel_call("late".into());
+        let all = CALLS.lock().unwrap();
         assert!(!all.cancelled.contains_key("old") && all.cancelled.contains_key("late"));
     }
 

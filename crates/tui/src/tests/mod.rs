@@ -10,6 +10,7 @@ mod keymap;
 mod marks;
 mod notices;
 mod perf;
+mod reconnect;
 mod reformat;
 mod status_items;
 mod tabs;

@@ -3,6 +3,8 @@ import { useState } from "react";
 import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormGrid, FormSection, Hint, InfoTip, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Named, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow, TxPending } from "..";
 import { connTabVars } from "../../lib/theme";
 import { ConsoleIcon, DatabaseIcon, FolderIcon, PgIcon, ReportIcon, SchemaIcon, TabIcon, TableIcon } from "../icons";
+import { ReconnectToastView } from "../../components/ReconnectToasts";
+import type { ReconnectToast } from "../../lib/reconnect";
 
 /** Molecules: a row · cell made of a few atoms */
 const meta: Meta = { title: "GUI/2 Molecules" };
@@ -370,3 +372,32 @@ export const TabItems: S = {
     </div>
   ),
 };
+
+// ───────── Toast (#135): what a data source that reconnects says, bottom right above the status bar ─────────
+const SINCE = 1_000_000;
+const reconnecting: ReconnectToast = { phase: "waiting", id: "prod", message: "Reconnecting [PROD] orders through AWS SSM", slow: "Taking longer than usual: after the Mac sleeps, the AWS SSM session can take a while to come back.", since: SINCE };
+const failedToast: ReconnectToast = {
+  phase: "failed",
+  id: "prod",
+  title: "Couldn't reconnect [PROD] orders through AWS SSM",
+  reason: "aws ssm start-session: TargetNotConnected — i-0a1b2c3d4e5f is not connected. Check that the instance is running and its SSM agent is online.",
+};
+const cancelledToast: ReconnectToast = { phase: "cancelled", id: "prod", text: "Cancelled while reconnecting [PROD] orders through AWS SSM." };
+/** The toast `waited` ms after it started, in a theme (the clock held still) */
+const toastStory = (name: string, t: ReconnectToast, waited: number, light?: boolean): S => ({
+  name: `Toast · ${name} (${light ? "light" : "dark"})`,
+  globals: { theme: light ? "light" : "dark" },
+  render: () => (
+    <div style={{ padding: 16, background: "var(--bg)" }}>
+      <ReconnectToastView t={t} now={SINCE + waited} onCancel={() => {}} onRetry={() => {}} onClose={() => {}} />
+    </div>
+  ),
+});
+export const ToastWaiting = toastStory("waiting, with Cancel", reconnecting, 3200);
+export const ToastWaitingLight = toastStory("waiting, with Cancel", reconnecting, 3200, true);
+export const ToastSlow = toastStory("slow (over 10 s)", reconnecting, 14_000);
+export const ToastSlowLight = toastStory("slow (over 10 s)", reconnecting, 14_000, true);
+export const ToastFailed = toastStory("failed, reason and Retry", failedToast, 0);
+export const ToastFailedLight = toastStory("failed, reason and Retry", failedToast, 0, true);
+export const ToastCancelled = toastStory("cancelled", cancelledToast, 0);
+export const ToastCancelledLight = toastStory("cancelled", cancelledToast, 0, true);
