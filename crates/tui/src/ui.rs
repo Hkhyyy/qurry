@@ -1348,7 +1348,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 let inner = Rect { x: r.x + 1, y: r.y + 1, width: r.width.saturating_sub(2), height: 1 };
                 let (line, caret) = (input.lines().first().cloned().unwrap_or_default(), input.cursor().1);
                 fs.scroll = textarea_scroll(fs.scroll, caret as u16, inner.width);
-                color_sql(f.buffer_mut(), inner, &line, caret, fs.scroll, fs.kind);
+                color_sql(f.buffer_mut(), inner, &line, caret, fs.scroll, input.tab_length(), fs.kind);
             }
             // The Redis command line: the arguments still to type, muted, after the text
             if redis.is_some() {
@@ -1430,14 +1430,14 @@ fn textarea_scroll(prev: u16, caret: u16, width: u16) -> u16 {
 }
 
 /// SQL colors over a one-line input's text as drawn in `inner` from column `scroll`: only the color changes (comments italic), and
-/// the caret's cell (character `caret`) keeps the input's look
-fn color_sql(buf: &mut Buffer, inner: Rect, line: &str, caret: usize, scroll: u16, kind: qurry_shared::DbKind) {
+/// the caret's cell (character `caret`) keeps the input's look. A tab (pasted) spans up to the next stop of `tab`, as tui-textarea draws it
+fn color_sql(buf: &mut Buffer, inner: Rect, line: &str, caret: usize, scroll: u16, tab: u8, kind: qurry_shared::DbKind) {
     use qurry_shared::highlight::{Class, highlight};
     use unicode_width::UnicodeWidthChar;
     let spans = highlight(line, kind);
     let (mut col, mut next) = (0u16, 0);
     for (i, (b, ch)) in line.char_indices().enumerate() {
-        let w = ch.width().unwrap_or(0) as u16;
+        let w = if ch == '\t' { tab.max(1) as u16 - col % tab.max(1) as u16 } else { ch.width().unwrap_or(0) as u16 };
         while spans.get(next).is_some_and(|s| s.end <= b) {
             next += 1;
         }
@@ -1954,6 +1954,24 @@ mod tests {
             assert!(buf[(at("lower"), y)].modifier.contains(Modifier::REVERSED), "{theme}");
             assert_ne!(buf[(at("lower"), y)].fg, look(&h, "function"), "{theme}");
             h.app.popup = None;
+        }
+        // A pasted tab is drawn as spaces up to the next stop: the colors after it stay on their characters
+        h.app.input_filter(id, false);
+        h.paste("id\t= 1 AND name = 'x'");
+        h.key("Home");
+        let buf = h.buffer(100, 30);
+        let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
+        let y = (0..30).find(|&y| row(y).contains("AND name")).unwrap();
+        let r = row(y);
+        let at = |pat: &str| r[..r.find(pat).unwrap()].chars().count() as u16;
+        let fg = |pat: &str| buf[(at(pat), y)].fg;
+        assert_eq!(fg("1 A"), look(&h, "number"));
+        assert_eq!(fg("AND"), look(&h, "keyword"));
+        assert_eq!(fg("ND"), look(&h, "keyword"));
+        assert_eq!(fg("'x'"), look(&h, "string"));
+        assert_eq!(fg("x'"), look(&h, "string"));
+        for plain in ["= 1", "name", "= '"] {
+            assert!(![look(&h, "keyword"), look(&h, "number"), look(&h, "string")].contains(&fg(plain)), "{plain}");
         }
     }
 
