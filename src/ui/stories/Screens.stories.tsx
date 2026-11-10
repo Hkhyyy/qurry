@@ -235,6 +235,30 @@ export const EditDataSourceSsmError: S = {
   },
 };
 
+/** Options › MCP: whether AI tools may read the admin reports (dba_report) of a Production source, off by default; elsewhere the
+ * row is disabled and says why (not Production: checked, as they always may; MCP Off: AI tools don't see the source) */
+const adminReports = (name: string, theme: "dark" | "light", c: ConnectionView): S => ({
+  name: `Data Source — admin reports for AI tools, ${name} (${theme})`,
+  globals: { theme },
+  render: () => <ConnectionDialog edit={c} onClose={noop} onSaved={noop} />,
+  play: async ({ canvasElement }) => {
+    await userEvent.click(within(canvasElement.ownerDocument.body).getByRole("tab", { name: "Options" }));
+  },
+});
+const withOptions = (c: ConnectionView, options: ConnectionView["options"]) => ({ ...c, options: { ...c.options, ...options } }) as ConnectionView;
+const REPORTS_OFF = withOptions(PROD, { mcp: "read" });
+const REPORTS_ON = withOptions(PROD, { mcp: "read", mcpDbaReports: true });
+const REPORTS_DEV = withOptions(DEV, { mcp: "read" });
+const REPORTS_MCP_OFF = withOptions(PROD, { mcp: "off" });
+export const AdminReportsOffDark = adminReports("Production, off", "dark", REPORTS_OFF);
+export const AdminReportsOffLight = adminReports("Production, off", "light", REPORTS_OFF);
+export const AdminReportsOnDark = adminReports("Production, on", "dark", REPORTS_ON);
+export const AdminReportsOnLight = adminReports("Production, on", "light", REPORTS_ON);
+export const AdminReportsNotProductionDark = adminReports("not Production", "dark", REPORTS_DEV);
+export const AdminReportsNotProductionLight = adminReports("not Production", "light", REPORTS_DEV);
+export const AdminReportsMcpOffDark = adminReports("MCP Off", "dark", REPORTS_MCP_OFF);
+export const AdminReportsMcpOffLight = adminReports("MCP Off", "light", REPORTS_MCP_OFF);
+
 export const TableNew: S = { name: "New Table", render: () => <TableDesigner target="dev" conn={DEV} schema="public" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 export const TableModify: S = { name: "Modify Table (⌘F6)", render: () => <TableDesigner target="dev" conn={DEV} schema="public" table="customers" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 /** A column's type is a ComboBox: the suggestions for the data source's database open right under the field (typing "int" here

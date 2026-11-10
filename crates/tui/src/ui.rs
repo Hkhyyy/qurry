@@ -1562,9 +1562,10 @@ fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
         .iter()
         .map(|&i| (i, &form.fields[i]))
         .map(|(i, fl)| {
+            let disabled = form.disabled(fl.label);
             let shown = match fl.kind {
                 FieldKind::Secret if fl.value != "<saved>" => "•".repeat(fl.value.chars().count()),
-                FieldKind::Toggle => format!("[{}]", if fl.value == "on" { "x" } else { " " }),
+                FieldKind::Toggle => format!("[{}]", if disabled.map_or(fl.value == "on", |d| d.1) { "x" } else { " " }),
                 FieldKind::Choice(_) => format!("◂ {} ▸", fl.value),
                 _ => fl.value.clone(),
             };
@@ -1582,6 +1583,19 @@ fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
             }
             if let Some(note) = empty_field_note(fl.label, form.value("SSH auth")).filter(|_| fl.value.trim().is_empty()) {
                 spans.push(Span::styled(format!("  {note}"), Style::default().fg(DIM)));
+            }
+            if let Some((why, _)) = disabled {
+                // Dim as a whole, with why
+                spans.push(Span::raw(format!("  {why}")));
+                return Line::from(spans).style(Style::default().fg(DIM).add_modifier(Modifier::DIM));
+            }
+            if fl.label == "Admin reports" {
+                // On: what still reaches the AI tool, as the GUI warns
+                spans.push(if fl.value == "on" {
+                    Span::styled("  names and query shapes still reach the AI tool", Style::default().fg(WARN))
+                } else {
+                    Span::styled("  slow queries, sessions, locks; values masked", Style::default().fg(DIM))
+                });
             }
             Line::from(spans)
         })
@@ -1769,13 +1783,14 @@ mod tests {
     async fn conn_form_scrolls_to_the_focused_field_in_small_windows() {
         let mut h = crate::testkit::Harness::new().await;
         h.app.conn_form(None);
-        let n = match &h.app.popup {
-            Some(Popup::ConnForm(f)) => f.visible().len(),
+        // n fields shown; Tab skips the disabled ones (a new source's Admin reports: MCP is Off)
+        let (n, stops) = match &h.app.popup {
+            Some(Popup::ConnForm(f)) => (f.visible().len(), f.visible().iter().filter(|&&i| f.disabled(f.fields[i].label).is_none()).count()),
             _ => unreachable!(),
         };
         // Everything fits at 120×40: no position shown
         assert!(!h.screen(120, 40).contains(&format!("1/{n}")));
-        for _ in 1..n {
+        for _ in 1..stops {
             h.key("Tab");
         }
         for (w, ht) in [(80, 24), MIN_SIZE] {
@@ -1783,7 +1798,7 @@ mod tests {
             assert!(s.contains("Redis nodes ▏"), "{w}×{ht}\n{s}");
             assert!(s.contains("Esc cancel") && s.contains(&format!("{n}/{n}")), "{w}×{ht}\n{s}");
         }
-        for _ in 1..n {
+        for _ in 1..stops {
             h.key("Up");
         }
         for (w, ht) in [(80, 24), MIN_SIZE] {

@@ -132,6 +132,7 @@
 .ui-input.full, .ui-select.full { width: 100%; }
 .ui-check { display: inline-flex; align-items: center; gap: var(--ui-sp-2); cursor: pointer; }
 .ui-check input { margin: 0; }
+.ui-check:has(input:disabled) { color: var(--ui-text-muted); cursor: default; }
 /* A line under a checkbox, aligned with its text */
 .ui-check-note { margin-top: var(--ui-sp-1); padding-left: calc(13px + var(--ui-sp-2)); }
 .ui-radio-group { display: flex; flex-direction: column; gap: var(--ui-sp-2); }

@@ -22,6 +22,13 @@ export const ScreenExplorerDropMarked = { ...by("Explorer: drop marked objects")
 export const ScreenProductionConfirm = { ...by("Production confirm"), name: "Screen · Production confirm" };
 export const ScreenActionsPalette = { ...by("Actions palette"), name: "Screen · Actions palette" };
 export const ScreenDataSourceForm = { ...by("Data source form"), name: "Screen · Data source form" };
+// #131: Admin reports (MCP dba_report) for Production sources; disabled with why on other sources and with MCP Off
+export const ScreenFormReportsOff = { ...by("Data source form: admin reports, off"), name: "Screen · Data source form: admin reports, Production off" };
+export const ScreenFormReportsOn = { ...by("Data source form: admin reports, on"), name: "Screen · Data source form: admin reports, Production on" };
+export const ScreenFormReportsNotProduction = { ...by("Data source form: admin reports, not Production"), name: "Screen · Data source form: admin reports, not Production" };
+export const ScreenFormReportsMcpOff = { ...by("Data source form: admin reports, MCP Off"), name: "Screen · Data source form: admin reports, MCP Off" };
+export const ScreenFormReportsOffLight = { ...by("Data source form: admin reports, off (light)"), name: "Light · Data source form: admin reports, Production off" };
+export const ScreenFormReportsOnLight = { ...by("Data source form: admin reports, on (light)"), name: "Light · Data source form: admin reports, Production on" };
 export const ScreenKeymap = { ...by("Keymap (F1)"), name: "Screen · Keymap (F1)" };
 export const ScreenWorkspaces = { ...by("Workspaces"), name: "Screen · Workspaces" };
 export const ScreenConsole = { ...by("Console & result"), name: "Screen · Console & result" };

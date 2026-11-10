@@ -98,6 +98,14 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   // Read-only and Production sources have no MCP write (core: ConnectionConfig::mcp_access): ticking either shows and saves Read
   const noMcpWrite = !!cfg.readOnly || !!opt.confirmChanges;
   const mcpValue = mcpSet === "write" && noMcpWrite ? "read" : mcpSet;
+  // #131: MCP's dba_report asks only on Production (core ConnectionConfig::mcp_dba_report_allowed): elsewhere the row shows why it
+  // can't change, and saving keeps the stored value
+  const reportsWhy =
+    mcpValue === "off"
+      ? "MCP is Off for this data source: AI tools don't see it at all."
+      : !opt.confirmChanges
+        ? "Only Production sources ask: AI tools read the admin reports of other sources shared with MCP."
+        : null;
   // Newly enabled SSL is require: verifying needs a CA the built-in list knows (AWS RDS, a company CA, a server behind an SSH tunnel need a CA file)
   const ssl: SslConfig = cfg.ssl ?? { enabled: false, mode: "require", caFile: "", certFile: "", keyFile: "" };
   const setSsl = <K extends keyof SslConfig>(k: K, v: SslConfig[K]) => setCfg((c) => ({ ...c, ssl: { ...ssl, ...(c.ssl ?? {}), [k]: v } }));
@@ -150,7 +158,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     const name = cfg.name.trim() || `${cfg.user}@${cfg.host}`;
     try {
       // Save the shown MCP value as is (if left unset, it would turn on by itself after Production is turned off)
-      const saved = await api.saveConnection({ ...cfg, name, options: { ...opt, mcp: mcpValue } }, password, sshSecret);
+      const mcpDbaReports = reportsWhy ? edit?.options?.mcpDbaReports : opt.mcpDbaReports;
+      const saved = await api.saveConnection({ ...cfg, name, options: { ...opt, mcp: mcpValue, mcpDbaReports } }, password, sshSecret);
       onSaved(saved);
     } catch (e) {
       setTest({ ok: false, msg: `Save failed: ${String(e)}` });
@@ -499,6 +508,31 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
                 Read &amp; write (when qurry-mcp runs with --allow-write)
               </option>
             </Select>
+          </div>
+          <span />
+          <div>
+            <Named
+              about="Admin reports for AI tools"
+              info={[
+                "The dba_report tool: slow queries, sessions, locks and the other Database Admin reports, read-only.",
+                "Literal values in query text (WHERE email = '…') are replaced with ? before an AI tool sees them.",
+              ]}
+            >
+              {/* Not Production: shown checked, as AI tools read its reports anyway */}
+              <Checkbox checked={reportsWhy ? mcpValue !== "off" : !!opt.mcpDbaReports} disabled={!!reportsWhy} onChange={(v) => setOpt("mcpDbaReports", v)}>
+                Let AI tools read admin reports (slow queries, sessions, locks); query values are masked
+              </Checkbox>
+            </Named>
+            {reportsWhy && (
+              <Text as="div" size="sm" tone="muted" className="ui-check-note">
+                {reportsWhy}
+              </Text>
+            )}
+            {!reportsWhy && opt.mcpDbaReports && (
+              <Text as="div" size="sm" tone="warn" className="ui-check-note">
+                Table and column names, and query shapes, still reach the AI tool.
+              </Text>
+            )}
           </div>
           <label>Transaction control</label>
           <div className="ui-row">
