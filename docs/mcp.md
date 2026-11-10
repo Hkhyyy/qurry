@@ -16,14 +16,16 @@ Data sources made before this setting existed keep working as before (read, and 
 
 | Tool | Description |
 |---|---|
-| `list_data_sources` | Data sources shared with MCP (kind, host without any password in a URI, default database, read-only, production, MCP access, SSH) |
+| `list_data_sources` | Data sources shared with MCP (kind, host without any password in a URI, default database, read-only, production, MCP access, SSH, and `dba_report`: whether `dba_report` answers for it) |
 | `list_databases` / `list_schemas` / `list_objects` | Browse the tree (Redis: keys and their types) |
 | `describe_table` | Columns, indexes, constraints |
+| `get_erd` | Tables with their primary keys and the foreign keys between them, as JSON and as a Mermaid `erDiagram` (no row data). `schemas` defaults to `public` on PostgreSQL and the database on MySQL; tables in other schemas that a foreign key points to come too. At most 200 tables: a `note` then says how many there are, and keys to tables left out are dropped |
 | `get_ddl` | DDL (Redis: commands that recreate the key — up to 1,000 elements; use `redis_get` for bigger keys) |
 | `search_objects` | Fuzzy search by object name (Go to Database Object), across the databases visible in each data source |
 | `query` | Read-only query (100 rows by default, max 1000) |
-| `explain` | Execution plan (optionally ANALYZE) |
+| `explain` | Execution plan (optionally ANALYZE). PostgreSQL answers with two content items: the plan text as before, then JSON `{"plan_analysis": …}` — the plan tree with each step's share of the estimated cost, its own cost, estimated rows and warnings (a Seq Scan reading a big table, sorts or hashes spilled to disk …). The analysis comes from a separate `EXPLAIN (FORMAT JSON)` without ANALYZE, so with `analyze` the statement still runs once, and the shares are by cost (`"basis": "cost"`). If that second run fails, only the text comes back. MySQL and the others answer with one item, as before |
 | `full_text_search` | Find a value in every table |
+| `dba_report` | One of the Database Admin reports by id (PostgreSQL / MySQL): `sessions`, `locks`, `slow_queries`, `table_sizes`, `table_bloat`, `index_bloat`, `fragmentation`, `unused_indexes`, `duplicate_indexes`, `fk_without_index`, `vacuum`, `vacuum_progress`, `wraparound`, `replication`, `server`, `settings`, `roles`, `grants` — not every kind has every report, and an id the data source lacks gets the list it has. Returns the rows (1000 at most), the title and how to read it. See below |
 | `redis_scan` / `redis_get` | Redis key list / key details |
 | `export_csv` | Save a read-only query result as CSV in `~/Downloads/qurry-exports` (file name only, never overwrites; 60 s and 512 MB at most) |
 | `list_rag_indexes` / `semantic_search` | RAG indexes made in the app / the rows closest in meaning to a question, with a score |
@@ -34,6 +36,10 @@ Data sources made before this setting existed keep working as before (read, and 
 - Redis: only read commands, and not `CONFIG` (it can reveal passwords) or `KEYS` (use `redis_scan`). A command reads at most 1,000 elements: ranges such as `LRANGE 0 999` or `LRANGE -10 -1`, `ZRANGEBYSCORE … LIMIT`, `XRANGE … COUNT` (an option given twice, such as `LIMIT 0 1 LIMIT 0 -1`, is refused: Redis uses the last one). Commands that read a whole key (`HGETALL`, `SMEMBERS`, `SUNION`, `LRANGE 0 -1`, `XRANGE` without `COUNT`, …) run only when the key has at most 1,000 elements (and 16 MB) — otherwise use `HSCAN` / `SSCAN`, a bounded range or `redis_get`. Reads sent to `execute` are checked the same way.
 - Driver data sources (SQL Server, DuckDB, ClickHouse, MongoDB, vector DBs) have no READ ONLY transaction, so the check is stricter: one statement and no second statement in the same SQL Server batch, no `SELECT … INTO`, no functions that read files or other servers (`OPENROWSET`, ClickHouse `url()` / `file()` / `remote()` …, DuckDB `read_text()` …), only search / query / list requests for vector DBs, and no `$out` / `$merge` for MongoDB. DuckDB is opened with external access switched off, and ClickHouse reads run with `readonly=2` (unless the user is already read-only). This applies to the MCP server; in the app, a read-only DuckDB data source can still read files on your own computer.
 - Still, give the MCP server a **least-privilege database user** (read-only role, no superuser/FILE privilege): the checks above are a second line of defence, not a replacement for database permissions.
+
+**Database Admin reports (`dba_report`)** — the same reports as the app's Database Admin, run as Qurry writes them: no SQL from the client runs. Nothing is changed through it: there is no Cancel Query, Terminate Session or generated SQL, so a fix it points to (CREATE / DROP INDEX, VACUUM, REINDEX …) comes back as text for a person to run in Qurry.
+- String and number literals in statement text (`sessions`, `locks`, `slow_queries`, `vacuum_progress`) are replaced with `?` on every data source, so `where email = 'a@b.c'` shows as `where email = ?`. Names, comments, `$1` placeholders and MySQL's own `?` stay.
+- On a **Production** data source the tool answers only if a person allowed it for that data source in Qurry; it starts off. The reports show who is connected and from where, what they run, server settings, roles and grants. Other data sources shared with MCP answer without that step. An older Qurry that saves the data source drops the permission, so it is off again until a person allows it once more.
 
 What this does and doesn't protect against, including prompt injection through data: [MCP threat model](mcp-security.md).
 

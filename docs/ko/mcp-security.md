@@ -19,7 +19,7 @@ MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mc
 | MCP 설정 | `--allow-write` 없이 | `--allow-write` 로 |
 |---|---|---|
 | **Off** | 아무것도. 목록에 없고, 비밀번호를 읽지도 접속하지도 않습니다 (클라이언트가 이름이나 id 로 직접 요청해도) | 같음 |
-| **Read** | 둘러보기와 읽기: 데이터베이스, 스키마, 객체, 컬럼, DDL, 객체 검색, `query`, `explain`, `full_text_search`, Redis 키와 값, RAG 검색, `export_csv` | 같음 |
+| **Read** | 둘러보기와 읽기: 데이터베이스, 스키마, 객체, 컬럼, DDL, 객체 검색, `query`, `explain`, `full_text_search`, `get_erd`, `dba_report` (Production 은 사람이 허용한 곳만), Redis 키와 값, RAG 검색, `export_csv` | 같음 |
 | **Read & write** | Read 와 같음 | `execute` 도 — 단 Data Source 가 **읽기 전용** 이거나 **Production** 이면 Read 에 머뭅니다 |
 | *(설정 없음: 이 설정이 생기기 전에 만든 것)* | Read, Production Data Source 면 **Off** | Read & write (읽기 전용이면 Read), Production Data Source 면 **Off** |
 
@@ -29,6 +29,8 @@ MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mc
 - `list_data_sources` 는 호스트, 포트, 사용자 이름, SSH 사용자를 보여 줍니다. 비밀번호는 절대 보이지 않습니다 (`mongodb://user:pass@host` 처럼 URI 안의 비밀번호도 지웁니다).
 - `export_csv` 는 `~/Downloads/qurry-exports` 에 새 파일만 씁니다. 이름은 클라이언트가 폴더 없이 정하고, 있는 파일을 덮어쓰지 않습니다.
 - `semantic_search` 는 질문을 인덱스의 임베딩 제공자 (Ollama 또는 OpenAI) 로 보내고, 인덱스한 테이블의 Data Source 와 벡터 저장소의 Data Source 가 둘 다 보일 때만 동작합니다.
+- `dba_report` 는 앱의 Database Admin 이 보여 주는 것을 보여 줍니다: 누가 접속해 있는지 (사용자, 애플리케이션, 클라이언트 주소) 와 무엇을 실행하는지, 락 대기, 가장 느린 문장, 서버 설정, 역할과 그 권한, 테이블 권한. 문장 텍스트 안의 문자열 · 숫자 리터럴은 모든 Data Source 에서 `?` 로 바꾸지만, 테이블 · 컬럼 이름, 주석, 문장의 모양은 그대로 읽힙니다. 리터럴은 기본 설정대로 읽습니다: MySQL `NO_BACKSLASH_ESCAPES` 나 PostgreSQL `standard_conforming_strings = off` 로 도는 서버에서는 문자열 안에 `\` 가 있는 문장의 뒤쪽 리터럴이 가려지지 않을 수 있습니다. **Production** Data Source 에서는 사람이 Qurry 에서 그 Data Source 에 허용한 뒤에만 답합니다. 처음에는 꺼져 있고, 예전 Qurry 가 그 Data Source 를 저장하면 다시 꺼집니다. 아무것도 바꾸지 않습니다: 세션을 취소하거나 끝내지 않고, 리포트가 권하는 해결책 (CREATE / DROP INDEX, VACUUM …) 은 사람이 Qurry 에서 실행할 텍스트로만 돌아옵니다.
+- `get_erd` 는 이름만 돌려줍니다: 테이블, 기본 키와 외래 키 컬럼. 행은 돌려주지 않습니다.
 
 ## 읽기 전용은 어떻게 지키는가
 
@@ -38,7 +40,7 @@ MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mc
 - **Redis**: 읽기 명령만, `CONFIG` 와 `KEYS` 는 빼고, 명령 하나에 원소 1,000개까지.
 - **드라이버 Data Source** (SQL Server, DuckDB, ClickHouse, MongoDB, 벡터 DB) 는 READ ONLY 트랜잭션이 없어서 문장 검사가 더 엄격하고, DuckDB 는 외부 접근을 끈 채 열며 ClickHouse 읽기는 `readonly=2` 로 실행합니다.
 
-다른 도구는 SQL 을 받지 않습니다: Qurry 가 직접 만든 문장을 엔진 검사 없이 실행합니다. PostgreSQL · MySQL 의 `full_text_search` 는 테이블마다 `SELECT` 하나를 롤백하는 READ ONLY 트랜잭션에서 실행하고, 테이블마다 15초 제한이 있지만 호출 전체에는 제한이 없습니다. 둘러보기 도구 (데이터베이스, 스키마, 객체, 컬럼, DDL, `search_objects`) 는 카탈로그를 읽습니다. `redis_get` 은 값의 원소를 10,000개까지, `redis_scan` 은 호출 한 번에 키를 5,000개까지 읽습니다.
+다른 도구는 SQL 을 받지 않습니다: Qurry 가 직접 만든 문장을 엔진 검사 없이 실행합니다. PostgreSQL · MySQL 의 `full_text_search` 는 테이블마다 `SELECT` 하나를 롤백하는 READ ONLY 트랜잭션에서 실행하고, 테이블마다 15초 제한이 있지만 호출 전체에는 제한이 없습니다. 둘러보기 도구 (데이터베이스, 스키마, 객체, 컬럼, DDL, `search_objects`, `get_erd`) 는 카탈로그를 읽습니다. `dba_report` 는 Qurry 에 들어 있는 리포트 문장만, 문장마다 30초 제한으로 실행합니다 (PostgreSQL 은 롤백하는 트랜잭션 안에서). `redis_get` 은 값의 원소를 10,000개까지, `redis_scan` 은 호출 한 번에 키를 5,000개까지 읽습니다.
 
 전체 목록은 [MCP 서버 › 읽기 전용을 지키는 방법](mcp.md)에 있습니다. 이 검사들은 두 번째 방어선입니다: 검사가 모르는 함수는 DB 사용자에게 권한이 있으면 실행됩니다.
 
@@ -70,7 +72,7 @@ Qurry 는 데이터를 있는 그대로 클라이언트에 넘깁니다. 그 안
 
 ## 권장 사항
 
-- Production Data Source 는 Off 로 두세요. 에이전트가 운영 데이터를 봐야 한다면 Read 와 읽기 전용 복제본이나 역할을 쓰세요.
+- Production Data Source 는 Off 로 두세요. 에이전트가 운영 데이터를 봐야 한다면 Read 와 읽기 전용 복제본이나 역할을 쓰고, Database Admin 리포트는 필요한 동안만 허용하세요.
 - MCP 에는 필요한 권한만 가진 전용 DB 사용자를 주세요 (superuser, `FILE`, `pg_read_server_files`, `pg_signal_backend`, `dblink` 없이).
 - `--allow-write` 는 따로 등록한 서버 (`claude mcp add qurry-rw -- qurry-mcp --allow-write`) 에서만, Read & write 로 정한 Data Source 에만 쓰세요.
 - AI 클라이언트에서 `execute` 와 데이터를 밖으로 보내는 도구 (웹 요청, 파일 쓰기, git push) 의 확인 창은 켜 두세요.

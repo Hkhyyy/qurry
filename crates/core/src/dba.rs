@@ -370,6 +370,11 @@ fn sqls(d: &Def, kind: DbKind) -> &'static [&'static str] {
     }
 }
 
+/// Report columns that hold statement text, which can carry values from the rows (sessions, locks, slow_queries, vacuum_progress).
+/// MCP masks their literals (sql::mask_literals); the test query_text_columns_are_listed fails when a report adds another one.
+/// Index definitions (definition, sql_drop_index) are schema, as get_ddl shows them, so they stay
+pub const QUERY_TEXT_COLUMNS: &[&str] = &["query", "blocking_query", "waiting_query"];
+
 /// Reports available for this DB
 pub fn reports(kind: DbKind) -> Vec<ReportInfo> {
     DEFS.iter().filter(|d| !sqls(d, kind).is_empty()).map(|d| (d.info)()).collect()
@@ -650,6 +655,45 @@ mod tests {
         }
         assert!(reports(DbKind::Mysql).iter().any(|r| r.id == "fragmentation"));
         assert!(reports(DbKind::Redis).is_empty());
+    }
+
+    /// Output names of the columns a report SQL fills with statement text: a server column that holds it (pg_stat_activity.query,
+    /// pg_stat_statements.query, PROCESSLIST.INFO, DIGEST_TEXT, sys.innodb_lock_waits' …_query), bare or in left(…, n), and the
+    /// name it gets (AS x, otherwise its own). Used in a condition (LIKE, IS NULL) it is no output
+    fn query_text_outputs(sql: &str, mysql: bool) -> Vec<String> {
+        use qurry_shared::scope::{K, lex};
+        const SOURCES: &[&str] = &["query", "info", "digest_text", "blocking_query", "waiting_query", "sql_text", "query_sample_text"];
+        let toks = lex(sql, mysql);
+        let w = |i: usize| toks.get(i).map(|t| sql[t.s..t.e].trim_matches(|c| c == '"' || c == '`').to_lowercase()).unwrap_or_default();
+        let mut out = vec![];
+        for (i, t) in toks.iter().enumerate() {
+            if t.k != K::Word || !SOURCES.contains(&w(i).as_str()) || (i > 0 && w(i - 1) == "as") {
+                continue;
+            }
+            // left(x, 4000)
+            let next = if w(i + 1) == "," && toks.get(i + 2).is_some_and(|t| t.k == K::Num) && w(i + 3) == ")" { i + 4 } else { i + 1 };
+            match w(next).as_str() {
+                "as" => out.push(w(next + 1)),
+                "," | "from" | "" => out.push(w(i)),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn query_text_columns_are_listed() {
+        assert_eq!(query_text_outputs("SELECT left(a.query, 4000) AS statement, a.query LIKE '%x%' AS w, b.query FROM t", false), ["statement", "query"]);
+        let mut seen = std::collections::BTreeSet::new();
+        for d in DEFS {
+            for (sql, mysql) in d.pg.iter().map(|s| (s, false)).chain(d.my.iter().map(|s| (s, true))) {
+                for name in query_text_outputs(sql, mysql) {
+                    assert!(QUERY_TEXT_COLUMNS.contains(&name.as_str()), "{}: column {name} holds statement text; add it to QUERY_TEXT_COLUMNS", (d.info)().id);
+                    seen.insert((d.info)().id);
+                }
+            }
+        }
+        assert_eq!(seen.into_iter().collect::<Vec<_>>(), ["locks", "sessions", "slow_queries", "vacuum_progress"]);
     }
 
     /// Normalized statements ($1 from pg_stat_statements, ? from DIGEST_TEXT) can't be explained as they are

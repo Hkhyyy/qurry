@@ -132,6 +132,10 @@ pub struct ConnOptions {
     /// Whether it's visible to the MCP server: "off" | "read" | "write" (None = source created before this was set, ConnectionConfig::mcp_access)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<String>,
+    /// Production: MCP's dba_report tool may read this source's Database Admin reports (ConnectionConfig::mcp_dba_report_allowed).
+    /// Off unless a person turns it on; an older app that drops the field turns it off again
+    #[serde(default)]
+    pub mcp_dba_reports: bool,
     /// Oracle: Instant Client folder (if empty, ORACLE_CLIENT_LIB_DIR · system default)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oracle_client: Option<String>,
@@ -331,6 +335,12 @@ impl ConnectionConfig {
             None => McpAccess::Write,
         };
         if a == McpAccess::Write && (!allow_write || self.read_only || self.options.confirm_changes) { McpAccess::Read } else { a }
+    }
+
+    /// Whether MCP's dba_report may read this source's Database Admin reports (sessions, client addresses, settings, roles):
+    /// any source MCP sees, except a Production one until a person allows it there
+    pub fn mcp_dba_report_allowed(&self) -> bool {
+        !self.options.confirm_changes || self.options.mcp_dba_reports
     }
 }
 
@@ -599,6 +609,9 @@ impl Store {
                         McpAccess::Read => notes.push("shared with MCP (read)".into()),
                         McpAccess::Write => notes.push("shared with MCP (read & write)".into()),
                     }
+                    if c.options.confirm_changes && c.options.mcp_dba_reports {
+                        notes.push("lets MCP read its Database Admin reports".into());
+                    }
                     if c.active_ssl().is_some_and(|s| s.mode() == "require") {
                         notes.push("SSL without certificate checks".into());
                     }
@@ -649,6 +662,9 @@ impl Store {
                     as_saved.options.mcp.get_or_insert_with(|| e.mcp_access(true).as_str().into());
                     if e.mcp_access(true) < as_saved.mcp_access(true) {
                         ch.push("shares more with MCP (AI tools)".into());
+                    }
+                    if c.options.confirm_changes && c.options.mcp_dba_reports && !e.mcp_dba_report_allowed() {
+                        ch.push("lets MCP read its Database Admin reports".into());
                     }
                     if Self::import_moves_server(e, c) && e.password_saved {
                         ch.push("the saved password will be removed and asked again".into());
@@ -1290,6 +1306,36 @@ mod tests {
             c.options.mcp = Some(odd.into());
             assert_eq!(c.mcp_access(true), McpAccess::Off, "{odd}");
         }
+    }
+
+    /// MCP's DBA reports: an old config has no setting (off); only Production needs it; saving and listing keep it;
+    /// importing a Production source with it on says so
+    #[test]
+    fn mcp_dba_reports_setting() {
+        let mut c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "1", "name": "a", "kind": "postgres", "host": "h", "port": 1, "user": "u", "options": { "confirmChanges": true } })).unwrap();
+        assert!(!c.options.mcp_dba_reports);
+        for (prod, flag, allowed) in [(false, false, true), (false, true, true), (true, false, false), (true, true, true)] {
+            (c.options.confirm_changes, c.options.mcp_dba_reports) = (prod, flag);
+            assert_eq!(c.mcp_dba_report_allowed(), allowed, "production {prod}, setting {flag}");
+        }
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let s = Store::new(base.join("a"));
+        s.save(&c).unwrap();
+        assert!(s.list().unwrap()[0].options.mcp_dba_reports);
+        assert!(Store::new(base.join("a")).get("1").unwrap().unwrap().mcp_dba_report_allowed());
+        let file = base.join("in.json");
+        c.id = "2".into();
+        std::fs::write(&file, serde_json::to_string(&vec![c.clone()]).unwrap()).unwrap();
+        let fresh = Store::new(base.join("b"));
+        assert!(preview(&fresh, &file).contains("lets MCP read its Database Admin reports"), "{}", preview(&fresh, &file));
+        // An update that turns it on says so; one that keeps it doesn't
+        c.options.mcp_dba_reports = false;
+        fresh.save(&c).unwrap();
+        assert!(preview(&fresh, &file).contains("lets MCP read its Database Admin reports"));
+        c.options.mcp_dba_reports = true;
+        fresh.save(&c).unwrap();
+        assert!(!preview(&fresh, &file).contains("Database Admin"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
