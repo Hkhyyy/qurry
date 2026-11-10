@@ -375,6 +375,10 @@ fn sqls(d: &Def, kind: DbKind) -> &'static [&'static str] {
 /// Index definitions (definition, sql_drop_index) are schema, as get_ddl shows them, so they stay
 pub const QUERY_TEXT_COLUMNS: &[&str] = &["query", "blocking_query", "waiting_query"];
 
+/// Server messages that quote row values or the failed statement: MySQL's SHOW REPLICA STATUS (Last_SQL_Error: Error 'Duplicate
+/// entry '…' for key …' on query. … Query: '…'). Their quotes nest without escaping, so MCP masks them as a whole, not by literal
+pub const ERROR_TEXT_COLUMNS: &[&str] = &["last_error", "last_sql_error", "last_io_error"];
+
 /// Reports available for this DB
 pub fn reports(kind: DbKind) -> Vec<ReportInfo> {
     DEFS.iter().filter(|d| !sqls(d, kind).is_empty()).map(|d| (d.info)()).collect()
@@ -681,6 +685,8 @@ mod tests {
         out
     }
 
+    /// Sees only the columns a report's SELECT names: a SHOW statement's columns come from the server, so they never reach
+    /// query_text_outputs (SHOW REPLICA STATUS's Last_Error, Last_SQL_Error, Last_IO_Error are listed by hand in ERROR_TEXT_COLUMNS)
     #[test]
     fn query_text_columns_are_listed() {
         assert_eq!(query_text_outputs("SELECT left(a.query, 4000) AS statement, a.query LIKE '%x%' AS w, b.query FROM t", false), ["statement", "query"]);
