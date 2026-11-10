@@ -1059,7 +1059,7 @@ const FIRST_PROBE: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Whether the source's running tunnel carries a new connection to the database (tunnel::answers) within TUNNEL_GRACE (BUSY_CHECK
 /// when closing it would lose work), trying again while it refuses: the plugin may be resuming. False at once when its process stops.
-/// Counted as reconnecting (AppState::reconnecting) only once the first try got nothing within FIRST_PROBE
+/// Counted as reconnecting (AppState::reconnecting) only once the first try got nothing within FIRST_PROBE (it goes on meanwhile)
 async fn resumes(state: &AppState, base: &str, cfg: &ConnectionConfig) -> bool {
     let within = if in_use(state, base).await { BUSY_CHECK } else { TUNNEL_GRACE };
     let end = std::time::Instant::now() + within;
@@ -1070,13 +1070,23 @@ async fn resumes(state: &AppState, base: &str, cfg: &ConnectionConfig) -> bool {
         if left.is_zero() {
             return false;
         }
-        let first = shown.is_none();
-        if crate::tunnel::answers(port, cfg, if first { left.min(FIRST_PROBE) } else { left }).await {
+        let probe = crate::tunnel::answers(port, cfg, left);
+        tokio::pin!(probe);
+        // The first try runs on past FIRST_PROBE (a slow tunnel's connection isn't thrown away); from then on it shows
+        let ok = match shown {
+            Some(_) => probe.await,
+            None => tokio::select! {
+                ok = &mut probe => ok,
+                () = tokio::time::sleep(left.min(FIRST_PROBE)) => {
+                    shown = Some(state.reconnecting_now(base));
+                    probe.await
+                }
+            },
+        };
+        if ok {
             return true;
         }
-        if first {
-            shown = Some(state.reconnecting_now(base));
-        }
+        shown.get_or_insert_with(|| state.reconnecting_now(base));
         tokio::time::sleep(left.min(std::time::Duration::from_millis(200))).await;
     }
 }
@@ -2844,6 +2854,51 @@ pub(crate) mod tests {
         let (r, seen) = shown_while(&st, drop_dead_tunnel(&st, &c, "r", &st.source("r").unwrap(), g, std::time::Instant::now())).await;
         assert!(r.is_ok() && !seen, "closed, not reconnecting");
         assert!(st.reconnecting().is_empty());
+        crate::ssm::tests::gone(fake.path()).await;
+    }
+
+    /// A tunnel that works but takes longer than FIRST_PROBE to bring the database's first byte (here 1.3s): its first probe is
+    /// kept for the whole grace, so the check ends on that one connection after about 1.3s, not on a second probe after 1s + 1.3s
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_slow_first_answer_is_not_probed_again() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        let mut c = silent_source("p", 5432, None);
+        c.ssm = Some(store::SsmConfig { enabled: true, profile: String::new(), region: String::new(), target: "i-0123456789abcdef0".into() });
+        st.store.save(&c).unwrap();
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let n = accepted.clone();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = l.accept().await {
+                n.fetch_add(1, SeqCst);
+                tokio::spawn(async move {
+                    let mut b = [0u8; 8];
+                    if s.read_exact(&mut b).await.is_ok() {
+                        tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
+                        let _ = s.write_all(b"N").await;
+                    }
+                    let _ = s.read_to_end(&mut Vec::new()).await;
+                });
+            }
+        });
+        let (fake, t) = crate::ssm::tests::fake_tunnel_to(port).await;
+        st.tunnels.write().await.insert("p".into(), t);
+        // Opening the fake tunnel may have connected through it already
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let before = accepted.load(SeqCst);
+        sleep_mac(&st, std::time::Duration::from_secs(3600));
+        let started = std::time::Instant::now();
+        let why = settle(&st, "p").await;
+        let took = started.elapsed();
+        assert!(why.is_none(), "kept");
+        assert_eq!(accepted.load(SeqCst), before + 1, "one probe");
+        assert!(took < std::time::Duration::from_millis(2000), "{took:?}");
+        assert!(st.reconnecting().is_empty());
+        drop_pool(&st, "p").await;
         crate::ssm::tests::gone(fake.path()).await;
     }
 
