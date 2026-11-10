@@ -471,6 +471,20 @@ pub fn unbalanced(text: &str, kind: JsValue) -> Result<JsValue, JsError> {
     to(&v.into_iter().zip(r).map(|(u, [start, end])| Mark { start, end, message: u.message }).collect::<Vec<_>>())
 }
 
+/// SQL coloring of a one-line field (qurry_shared::highlight): [{start, end, class}] in UTF-16 code units, in text order
+#[wasm_bindgen]
+pub fn highlight(text: &str, kind: JsValue) -> Result<JsValue, JsError> {
+    #[derive(Serialize)]
+    struct Span {
+        start: usize,
+        end: usize,
+        class: qurry_shared::highlight::Class,
+    }
+    let v = qurry_shared::highlight::highlight(text, parse_kind(kind)?);
+    let r = utf16_ranges(text, &v.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
+    to(&v.into_iter().zip(r).map(|(s, [start, end])| Span { start, end, class: s.class }).collect::<Vec<_>>())
+}
+
 /// The range and the leading candidates (the statement's columns), and what the rest comes from
 fn suggestions(m: &complete::Meta, text: &str, caret: usize, db: &str, mysql: bool) -> (Suggestions, Option<complete::Rest>) {
     let at = Caret::new(text, caret);

@@ -12,6 +12,7 @@ pub mod extract;
 pub mod format;
 pub mod fuzzy;
 pub mod guard;
+pub mod highlight;
 pub mod keymap;
 pub mod keytree;
 pub mod kind;
