@@ -140,21 +140,26 @@ let cancelMore: (() => void) | null = null;
 let newIds = 0;
 /** Test Connections waiting for cancel_call, by test id */
 const testsRunning: Record<string, () => void> = {};
-/** window.__mockReconnect = { id, fail?, after? } (e2e, stories): that data source reconnects. Its table_detail and list_objects wait
- *  until cancel_call, or `after` ms and then answer (or fail with `fail`); `reconnecting` lists it while one waits */
+/** window.__mockReconnect = { id, fail?, own?, after?, listFor? } (e2e, stories): that data source reconnects. Its table_detail and
+ *  list_objects wait until cancel_call, or `after` ms and then answer, or fail: with `fail` after the core's "Couldn't reconnect …: "
+ *  (the tunnel didn't open), or as it is when `own` (the load's own error once the source is back). `reconnecting` lists it while
+ *  one waits, or for the first `listFor` ms of it */
 const reconnectWaits: Record<string, () => void> = {};
 let reconnectWaiting = 0;
 const reconnectWait = async (a: any) => {
   const r = (globalThis as any).__mockReconnect;
   if (!r || String(a.id).split("::")[0] !== r.id) return;
   reconnectWaiting++;
+  let listed = true;
+  const unlist = () => listed && (reconnectWaiting--, (listed = false));
+  if (r.listFor != null) setTimeout(unlist, r.listFor);
   try {
     await new Promise<void>((ok, fail) => {
       if (a.callId) reconnectWaits[a.callId] = () => fail("Cancelled");
-      if (r.after != null) setTimeout(() => (r.fail ? fail(r.fail) : ok()), r.after);
+      if (r.after != null) setTimeout(() => (r.fail ? fail(r.own ? r.fail : `${mockReconnecting(r.id).failed}: ${r.fail}`) : ok()), r.after);
     });
   } finally {
-    reconnectWaiting--;
+    unlist();
     delete reconnectWaits[a.callId];
   }
 };

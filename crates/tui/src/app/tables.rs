@@ -146,7 +146,7 @@ impl App {
                         }
                         tt.error = Some(e.clone());
                         a.status = e.clone();
-                        // It waited on a reconnect that failed: why, and r retries (the Message popup)
+                        // It waited on a reconnect: if that failed (not the load itself), why, and r retries (the Message popup)
                         if let Some(rc) = seen {
                             a.reconnect_failed(&rc, &e, true);
                         }

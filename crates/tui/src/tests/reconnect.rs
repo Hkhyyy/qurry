@@ -49,13 +49,51 @@ async fn the_status_line_says_a_source_reconnects_and_cancel_stops_its_loads() {
 
     h.app.run_action(Action::Cancel);
     assert!(h.app.waits.is_empty() && !running(&h, id));
-    assert_eq!(h.app.status, "Cancelled while reconnecting [PROD] orders through AWS SSM. r retries.");
-    assert!(!h.screen(160, 20).contains("Reconnecting"));
+    // The short form, never cut, so the key that loads it again shows (120 columns, the PROD badge in front, the grid's items)
+    assert_eq!(h.app.status, "Cancelled while reconnecting [PROD] orders · r retry");
+    h.app.focus = crate::app::Focus::Grid;
+    let s = h.screen(120, 20);
+    assert!(s.contains("Cancelled while reconnecting [PROD] orders · r retry"), "{s}");
+    assert!(!s.contains("Reconnecting"));
     drop(shown);
 }
 
+/// A load waiting on the reconnect: the core says it couldn't reconnect (the tunnel didn't open again)
+fn failed(h: &Harness, reason: &str) -> (qurry_core::app::Reconnecting, String) {
+    let r = h.app.state.reconnecting().pop().expect("shown");
+    let e = format!("{}: {reason}", r.failed);
+    (r, e)
+}
+
 #[tokio::test]
-async fn a_failed_load_while_reconnecting_says_why_and_how_to_retry() {
+async fn a_failed_reconnect_says_why_and_how_to_retry_once_per_source() {
+    let mut h = Harness::new().await;
+    let id = source(&mut h).await;
+    let st = h.app.state.clone();
+    let shown = st.reconnecting_now("s");
+    let (r, e) = failed(&h, "TargetNotConnected");
+    // A table tab and an explorer node waited on it: one popup
+    h.app.reconnect_failed(&r, &e, true);
+    h.app.reconnect_failed(&r, &e, false);
+    let Some(Popup::Message { title, text }) = &h.app.popup else { panic!("no popup: {}", h.app.status) };
+    assert_eq!(title, "Couldn't reconnect");
+    assert_eq!(text, "Couldn't reconnect [PROD] orders through AWS SSM.\n\nTargetNotConnected\n\nr in the table tab retries.");
+    assert_eq!(h.app.status, "Couldn't reconnect [PROD] orders · r retry");
+    h.app.focus = crate::app::Focus::Grid;
+    let s = h.screen(120, 20);
+    assert!(s.contains("Couldn't reconnect [PROD] orders · r retry"), "{s}");
+    // Another source's failure still opens its own
+    let mut other = r.clone();
+    other.failed = "Couldn't reconnect stage through SSH".into();
+    h.app.reconnect_failed(&other, &format!("{}: refused", other.failed), true);
+    assert!(matches!(&h.app.popup, Some(Popup::Note { text, back, .. }) if text.starts_with("Couldn't reconnect [PROD]") && matches!(&**back, Popup::Message { text, .. } if text.starts_with("Couldn't reconnect stage"))));
+    drop(shown);
+    let _ = id;
+}
+
+/// A load that fails for its own reason while (or after) its source reconnected says that reason: no 'Couldn't reconnect' popup
+#[tokio::test]
+async fn a_loads_own_error_after_a_reconnect_is_not_a_failed_reconnect() {
     let mut h = Harness::new().await;
     let id = source(&mut h).await;
     let st = h.app.state.clone();
@@ -68,11 +106,44 @@ async fn a_failed_load_while_reconnecting_says_why_and_how_to_retry() {
         }
     }
     drop(shown);
-    let Some(Popup::Message { title, text }) = &h.app.popup else { panic!("no popup: {}", h.app.status) };
-    assert_eq!(title, "Couldn't reconnect");
-    assert!(text.starts_with("Couldn't reconnect [PROD] orders through AWS SSM.\n\n") && text.ends_with("\n\nr in the table tab retries."), "{text}");
-    assert!(h.app.status.starts_with("Couldn't reconnect [PROD] orders through AWS SSM: ") && h.app.status.ends_with(" · r retry"), "{}", h.app.status);
+    assert!(h.app.popup.is_none(), "{:?}", h.app.status);
+    assert!(!h.app.status.contains("reconnect"), "{}", h.app.status);
     assert!(!running(&h, id));
+    let r = h.app.state.reconnecting();
+    assert!(r.is_empty());
+}
+
+/// The Cancel key stops the active tab's own run first (as the GUI's ⌘F2), not a reconnect another source's load waits on; the
+/// status line keeps its running line. With nothing of its own to stop, or when it is the one waiting, Cancel stops the reconnect
+#[tokio::test]
+async fn cancel_stops_the_active_tabs_own_run_before_a_reconnect_elsewhere() {
+    let mut h = Harness::new().await;
+    let table = source(&mut h).await;
+    let console = h.console_tab();
+    if let Some(TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == console).map(|t| &mut t.kind) {
+        c.running = true;
+    }
+    h.app.active = h.app.tabs.iter().position(|t| t.id == console).unwrap();
+    let st = h.app.state.clone();
+    let shown = st.reconnecting_now("s");
+    h.app.tree.loading.insert("s|d|public".into());
+    h.app.spawn_wait("s", WaitFor::Tree("s|d|public".into()), std::future::pending::<()>(), |_, _, _| {});
+    let s = h.screen(160, 20);
+    assert!(s.contains("Executing… "), "{s}");
+    assert!(!s.contains("Reconnecting"), "{s}");
+    h.app.run_action(Action::Cancel);
+    assert_eq!(h.app.waits.len(), 1, "the tree's load waits on");
+
+    // The table tab waiting on the source: its Cancel stops the reconnect
+    if let Some(TabKind::Table(tt)) = h.app.tabs.iter_mut().find(|t| t.id == table).map(|t| &mut t.kind) {
+        (tt.grid, tt.running) = (None, true);
+    }
+    h.app.spawn_wait("s", WaitFor::Table(table), std::future::pending::<()>(), |_, _, _| {});
+    h.app.active = h.app.tabs.iter().position(|t| t.id == table).unwrap();
+    assert!(h.screen(160, 20).contains("Reconnecting [PROD] orders"));
+    h.app.run_action(Action::Cancel);
+    assert!(h.app.waits.is_empty() && !running(&h, table));
+    drop(shown);
 }
 
 /// A load that ends while nothing reconnects leaves no wait behind and opens no popup

@@ -8,8 +8,7 @@ import type { MarkStmt } from "../../lib/stmtMark";
 import { schemaChanged } from "../../components/SchemaTree";
 import { commitNoticeTitle } from "../../lib/commitNotice";
 import { sharedOr } from "../../lib/shared";
-import { setTableColumns } from "../../lib/statusbar";
-import { cancelTableLoad } from "../explorer/tableTab";
+import { cancelTableLoad, loadTableTab } from "../explorer/tableTab";
 import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "../../lib/stmtKind";
 import { patch, updTab } from "../tabs/ops";
 import { editorApis, setTabs, useTabsStore } from "../tabs/store";
@@ -40,21 +39,10 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     if (t.kind === "console" && t.txManual) api.setTxMode(t.target, t.id, true).catch((e) => setStatus(String(e)));
     if (t.kind === "table") loadTable(t);
   };
-  /** Load a table tab's PK and data together (if the connection fails, waiting for both would take twice as long) */
+  /** Load a table tab's PK, then its data: the same load as a tab just opened (loadTableTab: a reconnect it waits on shows with
+   *  Cancel, a metadata error is said) */
   const loadTable = (t: Tab) => {
-    const { edit, tableSql } = t;
-    if (!edit || !tableSql) return;
-    meta
-      .table(t.target, edit.schema, edit.table)
-      .then((d) => {
-        // The status bar's Size reads the columns' declared types from here, fresh on each load
-        setTableColumns(t.target, edit.schema, edit.table, d.columns);
-        updTab(t.id, (x) => (x.edit ? { ...x, edit: { ...x.edit, pk: d.columns.filter((c) => c.isPk).map((c) => c.name) } } : x));
-      })
-      .catch(() => {
-        /* Read-only if the metadata lookup fails */
-      });
-    run(t, tableSql);
+    if (t.edit && t.tableSql) void loadTableTab(t, t.target, t.tableSql, run, setStatus);
   };
   // Data Source just connected: reload table tabs left empty by a failed connection
   const wasConnected = useRef(new Set<string>());
