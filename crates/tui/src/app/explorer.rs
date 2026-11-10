@@ -289,7 +289,7 @@ impl App {
                     let failed = r.as_ref().err().cloned().zip(seen);
                     let r = r.map(|objs| a.groups(&key, &n.conn, &db, &schema, objs));
                     done(a, key, r);
-                    // It waited on a reconnect that failed: why, and how to load it again (the Message popup)
+                    // It waited on a reconnect: if that failed (not the load itself), why, and how to load it again (the Message popup)
                     if let Some((e, rc)) = failed {
                         a.reconnect_failed(&rc, &e, false);
                     }

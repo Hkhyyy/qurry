@@ -856,6 +856,9 @@ pub struct App {
     next_wait: u64,
     /// Since when each source has been shown reconnecting on the status line (reconnect_line)
     pub(crate) reconnect_since: HashMap<String, std::time::Instant>,
+    /// The status a reconnect's Cancel or failure left, which ends with the key that loads it again: drawn uncut (as a run's line)
+    /// while it is the status
+    pub(crate) retry_status: String,
     /// Command shortcuts ("tui" in keymap.json)
     pub keys: crate::keys::Keymap,
     /// The new version, if one is available (announced in the status bar)
@@ -970,6 +973,7 @@ impl App {
             waits: HashMap::new(),
             next_wait: 0,
             reconnect_since: HashMap::new(),
+            retry_status: String::new(),
             keys: crate::keys::Keymap::new(&user_keys),
             update: None,
             restart: false,
@@ -1090,7 +1094,8 @@ impl App {
     }
 
     /// The status line while a load waits on a source that reconnects (qurry_shared::errors' words, as the GUI): what, how long, the
-    /// Cancel key, and past RECONNECT_SLOW why it may take a while. Asks the core only while a load waits
+    /// Cancel key, and past RECONNECT_SLOW why it may take a while. The active tab's source first, when it is the one waiting. Asks
+    /// the core only while a load waits
     pub fn reconnect_line(&mut self) -> Option<(String, u64)> {
         if self.waits.is_empty() {
             self.reconnect_since.clear();
@@ -1098,17 +1103,37 @@ impl App {
         }
         let now = self.state.reconnecting();
         self.reconnect_since.retain(|id, _| now.iter().any(|r| &r.id == id));
-        let r = now.into_iter().find(|r| self.waits.values().any(|w| w.base == r.id))?;
+        let own = self.active_wait();
+        let waited = |r: &&Reconnecting| self.waits.values().any(|w| w.base == r.id);
+        let r = now.iter().find(|r| Some(&r.id) == own.as_ref()).or_else(|| now.iter().find(waited))?.clone();
         let t = self.reconnect_since.entry(r.id.clone()).or_insert_with(std::time::Instant::now).elapsed();
         let slow = if t > qurry_shared::errors::RECONNECT_SLOW { format!(" · {}", r.slow) } else { String::new() };
         let ms = t.as_millis() as u64;
         Some((format!("{}… {} · {} cancel{slow}", r.message, elapsed_text(ms), self.keys.label(Action::Cancel)), ms))
     }
 
+    /// The source the active table tab's load waits on (spawn_wait), if it does
+    fn active_wait(&self) -> Option<String> {
+        let id = self.tabs.get(self.active)?.id;
+        self.waits.values().find(|w| matches!(w.into, WaitFor::Table(t) if t == id)).map(|w| w.base.clone())
+    }
+
+    /// Whether the Cancel key stops the active tab's own work (a run or a load-more, as the GUI's ⌘F2) rather than a reconnect a
+    /// load elsewhere waits on: it is busy and not itself waiting on a source. The status line then keeps its running line
+    pub(crate) fn cancels_own(&self) -> bool {
+        self.tabs.get(self.active).is_some_and(|t| t.busy().is_some()) && self.active_wait().is_none()
+    }
+
     /// Cancel while a load waits on a source shown reconnecting (reconnect_line): its loads stop (dropping them drops the connect
-    /// they wait on), the tab and the tree stop loading, and the status line says how to load again. False when none is shown
+    /// they wait on), the tab and the tree stop loading, and the status line says how to load again. The active tab's source when
+    /// it is the one waiting, else any shown. False when none is shown
     pub(crate) fn cancel_reconnect(&mut self) -> bool {
-        let Some(base) = self.waits.values().map(|w| w.base.clone()).find(|b| self.reconnect_since.contains_key(b)) else { return false };
+        let shown = |b: &String| self.reconnect_since.contains_key(b);
+        let base = match self.active_wait() {
+            Some(own) => Some(own).filter(shown),
+            None => self.waits.values().map(|w| w.base.clone()).find(shown),
+        };
+        let Some(base) = base else { return false };
         let text = self.state.reconnecting().into_iter().find(|r| r.id == base).map(|r| r.cancelled).unwrap_or_else(|| "Cancelled.".into());
         let ids: Vec<u64> = self.waits.iter().filter(|(_, w)| w.base == base).map(|(id, _)| *id).collect();
         let mut table = false;
@@ -1129,8 +1154,14 @@ impl App {
             }
         }
         self.reconnect_since.remove(&base);
-        self.status = format!("{text} {} retries.", self.retry_key(table));
+        // Short, and never cut, so the key shows (the tree node keeps the whole text)
+        self.status = format!("Cancelled while reconnecting {} · {} retry", self.conn_name(&base), self.retry_key(table));
+        self.retry_status = self.status.clone();
         true
+    }
+
+    fn conn_name(&self, base: &str) -> String {
+        self.conn(base).map(|c| c.config.name.clone()).unwrap_or_else(|| base.to_string())
     }
 
     /// The key that loads again what waited on a reconnect: r in a table tab, Refresh on an explorer node
@@ -1142,13 +1173,27 @@ impl App {
         self.keys.slot_keys(refresh).first().map(|k| crate::keys::pane_disp(k)).unwrap_or_else(|| self.keys.label(Action::Refresh))
     }
 
-    /// A load that waited on a reconnect failed (`r`: what the core listed): the Message popup says why and how to load again, and
-    /// the status line too
-    pub(crate) fn reconnect_failed(&mut self, r: &Reconnecting, reason: &str, table: bool) {
+    /// A load that waited on a reconnect (`r`: what the core listed) failed with `e`. When the core says it couldn't reconnect (the
+    /// tunnel didn't open again), the Message popup says why and how to load again, once per source (its loads fail together), and
+    /// the status line too, short and never cut so the key shows. Any other error is the load's own, which its caller shows
+    pub(crate) fn reconnect_failed(&mut self, r: &Reconnecting, e: &str, table: bool) {
+        let Some(reason) = qurry_shared::errors::reconnect_reason(&r.failed, e) else { return };
+        let heading = format!("{}.\n\n", r.failed);
+        let mut open = self.popup.as_ref();
+        while let Some(Popup::Message { text, .. } | Popup::Note { text, .. }) = open {
+            if text.starts_with(&heading) {
+                return;
+            }
+            open = match open {
+                Some(Popup::Note { back, .. }) => Some(back),
+                _ => None,
+            };
+        }
         let key = self.retry_key(table);
         let where_ = if table { "in the table tab" } else { "on the explorer node" };
-        self.status = format!("{}: {reason} · {key} retry", r.failed);
-        self.open_after_notices(Popup::Message { title: "Couldn't reconnect".into(), text: format!("{}.\n\n{reason}\n\n{key} {where_} retries.", r.failed) });
+        self.status = format!("Couldn't reconnect {} · {key} retry", self.conn_name(&r.id));
+        self.retry_status = self.status.clone();
+        self.open_after_notices(Popup::Message { title: "Couldn't reconnect".into(), text: format!("{heading}{reason}\n\n{key} {where_} retries.") });
     }
 }
 

@@ -1041,7 +1041,8 @@ async fn reconnect_scenes(scenes: &mut Vec<Value>) {
     h.app.run_action(Action::Cancel);
     scenes.push(app_scene(&mut h, "Reconnect: cancelled", "The Cancel key stops the loads waiting on the source (the connect they wait on is dropped); the tab stays, r loads it again", 120, 22));
     let r = h.app.state.reconnecting().pop().unwrap();
-    h.app.reconnect_failed(&r, "aws ssm start-session: TargetNotConnected (i-0a1b2c3d4e5f is not connected). Check that the instance is running and its SSM agent is online.", true);
+    let e = format!("{}: aws ssm start-session: TargetNotConnected (i-0a1b2c3d4e5f is not connected). Check that the instance is running and its SSM agent is online.", r.failed);
+    h.app.reconnect_failed(&r, &e, true);
     scenes.push(app_scene(&mut h, "Reconnect: failed", "A load that waited on the reconnect failed: the Message popup says why and that r in the table tab loads it again; the status line keeps it", 120, 22));
     h.app.popup = None;
     // The explorer: a schema expanding while the source reconnects shows only its loading mark

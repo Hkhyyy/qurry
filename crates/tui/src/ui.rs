@@ -1073,9 +1073,12 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect) {
     // While the active tab runs or loads more rows: a moving bar, what it does and for how long (as the GUI's status bar), cancel
     // with the Cancel key. While export·import runs, a progress bar (stop with ⌃K › Cancel Export/Import). Else the status text
     // A source that reconnects while a load waits on it says so first, with its own time (#135; the GUI's running indicator too)
-    let reconnect = app.reconnect_line();
-    // Its time and Cancel key come after the source's name: it may take up to three quarters of the line
-    let cap = if reconnect.is_some() { area.width * 3 / 4 } else { area.width / 2 };
+    // (not while the active tab runs on its own: the Cancel key stops that, App::cancels_own)
+    let reconnect = app.reconnect_line().filter(|_| !app.cancels_own());
+    // Its time and Cancel key come after the source's name: it may take up to three quarters of the line. So may what its Cancel or
+    // failure leaves, which ends with the key that loads it again (App::retry_status)
+    let retry = !app.status.is_empty() && app.status == app.retry_status;
+    let cap = if reconnect.is_some() || retry { area.width * 3 / 4 } else { area.width / 2 };
     let busy = match reconnect {
         Some((line, ms)) => Some(format!("▕{}▏ {line}", bounce(ms))),
         None => app.tabs.get(app.active).and_then(|t| t.busy()).map(|what| {
@@ -1083,8 +1086,8 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect) {
             format!("▕{}▏ {what}… {} · {} cancel", bounce(ms), crate::app::elapsed_text(ms), app.keys.label(crate::app::Action::Cancel))
         }),
     };
-    // A run's or a transfer's line is never cut below its length (up to half the line) to make room for the items
-    let progress = busy.is_some() || !app.jobs.is_empty();
+    // A run's or a transfer's line (and the retry status) is never cut below its length (up to half the line) to make room for the items
+    let progress = busy.is_some() || !app.jobs.is_empty() || retry;
     let status = match busy {
         Some(b) => b,
         None if app.jobs.is_empty() => disp(&app.status),
