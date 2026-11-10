@@ -48,10 +48,10 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const [password, setPassword] = useState<string | undefined>(undefined);
   const [sshSecret, setSshSecret] = useState<string | undefined>(undefined);
   const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
-  // The running test's id (cancelTest stops it, and with it its SSH / SSM tunnel); closing the dialog stops it too
+  // The running test's id (cancelCall stops it, and with it its SSH / SSM tunnel); closing the dialog stops it too
   const [testing, setTesting] = useState<string | null>(null);
   const testingRef = useRef<string | null>(null);
-  useEffect(() => () => void (testingRef.current && api.cancelTest(testingRef.current)), []);
+  useEffect(() => () => void (testingRef.current && api.cancelCall(testingRef.current)), []);
   // A new data source's Schemas tab while it connects to list the databases: Esc stops that first, as it stops a test
   const cancelListing = useRef<(() => void) | null>(null);
   // The Allow button under a failed test goes away when it tests again: focus moves to Test Connection first (the same button
@@ -114,7 +114,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   // One tunnel at a time; the other keeps its fields (a source that never used SSM gets no ssm settings).
   // A running test and the last result were for the other tunnel: stop it and drop both (no result for the old tunnel shows up later)
   const setTunnel = (t: typeof tunnel) => {
-    if (testingRef.current) void api.cancelTest(testingRef.current);
+    if (testingRef.current) void api.cancelCall(testingRef.current);
     testingRef.current = null;
     setTesting(null);
     setTest(null);
@@ -144,7 +144,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     setTesting(null);
     setTest(result);
   };
-  const cancelTest = () => void (testing && api.cancelTest(testing));
+  const cancelTest = () => void (testing && api.cancelCall(testing));
 
   const save = async () => {
     const name = cfg.name.trim() || `${cfg.user}@${cfg.host}`;
@@ -655,7 +655,7 @@ function SchemasTab({ connId, form, cancelRef, onAllowPlaintext, kind, defaultDb
   const wrap = useRef<HTMLDivElement>(null);
   // Schemas being listed for an expanded database (a new source: each connects on its own), stopped when the tab or the dialog closes
   const expanding = useRef(new Set<string>());
-  useEffect(() => () => expanding.current.forEach((id) => void api.cancelTest(id)), []);
+  useEffect(() => () => expanding.current.forEach((id) => void api.cancelCall(id)), []);
 
   const missing = connId ? [] : missingForListing(form.config);
   const ready = missing.length === 0;
@@ -672,7 +672,7 @@ function SchemasTab({ connId, form, cancelRef, onAllowPlaintext, kind, defaultDb
       running = false;
       cancelRef.current = null;
     };
-    const stop = () => (done(), void api.cancelTest(id));
+    const stop = () => (done(), void api.cancelCall(id));
     cancelRef.current = () => (stop(), setErr("Cancelled."));
     const f = formNow.current;
     api.formDatabases(f.config, f.password, f.sshSecret, id).then(
