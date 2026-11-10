@@ -1535,7 +1535,12 @@ fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
                 return Line::from(spans).style(Style::default().fg(DIM).add_modifier(Modifier::DIM));
             }
             if fl.label == "Admin reports" {
-                spans.push(Span::styled("  slow queries, sessions, locks; values masked", Style::default().fg(DIM)));
+                // On: what still reaches the AI tool, as the GUI warns
+                spans.push(if fl.value == "on" {
+                    Span::styled("  names and query shapes still reach the AI tool", Style::default().fg(WARN))
+                } else {
+                    Span::styled("  slow queries, sessions, locks; values masked", Style::default().fg(DIM))
+                });
             }
             Line::from(spans)
         })

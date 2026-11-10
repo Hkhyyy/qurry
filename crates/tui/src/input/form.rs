@@ -161,7 +161,7 @@ mod tests {
             h.key("Down");
         }
         h.key("Space");
-        assert!(admin_row(&mut h).contains("[x]"));
+        assert!(admin_row(&mut h).contains("[x]  names and query shapes still reach the AI tool"), "{}", admin_row(&mut h));
         h.key("Enter");
         h.settle().await;
         let saved = h.app.state.store.get("p1").unwrap().unwrap();
