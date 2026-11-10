@@ -1449,8 +1449,26 @@ pub(crate) mod tests {
         o.expect("list_objects too");
         assert!(took >= grace && took < grace + Duration::from_secs(3), "the grace and one tunnel open: {took:?}");
         assert_eq!(starts(), before + 1, "one new session for both");
-        assert_eq!(shown, vec![(id.clone(), qurry_shared::errors::reconnecting("ssm-wake", true))]);
+        assert_eq!(shown.into_iter().map(|r| (r.id, r.message)).collect::<Vec<_>>(), vec![(id.clone(), qurry_shared::errors::reconnecting("ssm-wake", true))]);
+        assert_eq!(qurry_shared::errors::reconnecting("ssm-wake", true), "Reconnecting ssm-wake through AWS SSM");
         assert!(st.reconnecting().is_empty(), "not once it's open");
+
+        // (1b) A second database of the source, its pool not open yet, first after the wake: the same check of the tunnel, not a
+        // 10s timeout through the dead one and a check after it
+        let other = match kind {
+            crate::store::DbKind::Postgres if server.cfg.database == "postgres" => "template1",
+            crate::store::DbKind::Postgres => "postgres",
+            _ => "information_schema",
+        };
+        stop_forwarding(fake.path());
+        sleep_mac(&st, Duration::from_secs(3600));
+        let before = starts();
+        let t = Instant::now();
+        tokio::time::timeout(Duration::from_secs(40), st.list_schemas(format!("{id}::{other}"))).await.expect("doesn't hang").expect("a second database");
+        let took = t.elapsed();
+        println!("{kind:?} (1b) a second database first after a wake: {took:?}");
+        assert!(took < grace + Duration::from_secs(3), "the grace and one tunnel open: {took:?}");
+        assert_eq!(starts(), before + 1);
 
         // (2) Stopped through the sleep, resumed 3s after the wake: the tunnel answers within the grace and is kept
         detail().await.unwrap();
