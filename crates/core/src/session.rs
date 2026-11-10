@@ -39,8 +39,8 @@ pub struct PgSession {
     changed: bool,
     /// Production (Session::set_reads_outside_tx): in Manual mode a plain read before the transaction is open runs as in Auto
     reads_outside_tx: bool,
-    /// Last time the cursor was used (closed when unused for long)
-    cursor_used: Instant,
+    /// Last time the cursor was used (closed when unused for long). By the wall clock: an Instant stops while the Mac sleeps
+    cursor_used: std::time::SystemTime,
     /// Whether the cursor was closed for being unused (reopened on load more)
     idle_closed: bool,
     /// Rows read through the cursor for the current result (OFFSET when reopening)
@@ -49,6 +49,8 @@ pub struct PgSession {
     zone: Option<crate::zone::Zone>,
     /// Such a statement ran since the transaction began: its end may change the zone back
     zone_set: bool,
+    /// Session::abandoned
+    abandoned: bool,
 }
 
 /// Why loading more needs a new session: saving the source's settings, Disconnect and the idle drop close the tab sessions (app::drop_pool)
@@ -161,7 +163,7 @@ impl PgSession {
     pub async fn open(pool: &PgPool) -> AppResult<Self> {
         let mut conn = pool.acquire().await?;
         let pid: i32 = sqlx::query_scalar("select pg_backend_pid()").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), origins: Vec::new(), manual: false, in_tx: false, changed: false, reads_outside_tx: false, cursor_used: Instant::now(), idle_closed: false, fetched: 0, zone: None, zone_set: false })
+        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), origins: Vec::new(), manual: false, in_tx: false, changed: false, reads_outside_tx: false, cursor_used: std::time::SystemTime::now(), idle_closed: false, fetched: 0, zone: None, zone_set: false, abandoned: false })
     }
 
     /// keep-alive: so idle session connections are not dropped
@@ -192,16 +194,15 @@ impl PgSession {
 
     /// In Auto mode, close cursors unused for long and end the transaction (Manual is left alone since it is the user's transaction).
     /// Within 5s, like the keep-alive ping: through a tunnel that stopped forwarding it would wait forever, holding the session
-    /// and housekeeping (keep-alive and auto-disconnect of every source)
-    pub async fn close_idle_cursor(&mut self, idle: std::time::Duration) -> bool {
-        if self.cursor_open && !self.user_tx() && self.cursor_used.elapsed() >= idle {
-            if tokio::time::timeout(std::time::Duration::from_secs(5), self.close_cursor()).await.is_err() {
-                return false;
-            }
+    /// and housekeeping (keep-alive and auto-disconnect of every source). → whether it closed one; None when the close didn't
+    /// answer in time (the session is then given up: app::housekeeping)
+    pub async fn close_idle_cursor(&mut self, idle: std::time::Duration) -> Option<bool> {
+        if self.cursor_open && !self.user_tx() && crate::app::idle_for(self.cursor_used, idle) {
+            tokio::time::timeout(std::time::Duration::from_secs(5), self.close_cursor()).await.ok()?;
             self.idle_closed = true;
-            return true;
+            return Some(true);
         }
-        false
+        Some(false)
     }
 
     /// On tab close: clean up the cursor and transaction and return a clean connection to the pool
@@ -383,7 +384,7 @@ impl PgSession {
         };
         self.conn.execute(declare.as_str()).await?;
         self.cursor_open = true;
-        self.cursor_used = Instant::now();
+        self.cursor_used = std::time::SystemTime::now();
         self.idle_closed = false;
         Ok(())
     }
@@ -474,7 +475,7 @@ impl PgSession {
         if !self.cursor_open {
             return Err(AppError::Msg("No more rows".into()));
         }
-        self.cursor_used = Instant::now();
+        self.cursor_used = std::time::SystemTime::now();
         let start = Instant::now();
         let rows: Vec<PgRow> = match sqlx::query(&format!("FETCH {limit} FROM {CURSOR}")).persistent(false).fetch_all(&mut *self.conn).await {
             Ok(r) => r,
@@ -772,9 +773,20 @@ impl Session {
     /// cut off by a time limit may have left it halfway through a message
     pub fn abandon(&mut self) {
         match self {
-            Session::Pg(s) => s.conn.close_on_drop(),
+            Session::Pg(s) => {
+                s.conn.close_on_drop();
+                s.abandoned = true;
+            }
             Session::My(s) => s.abandon(),
             Session::Redis(_) | Session::Plugin(_) => {}
+        }
+    }
+    /// It was abandoned: a run or load-more that waited for its lock meanwhile (housekeeping gave it up) sends nothing to it
+    pub fn abandoned(&self) -> bool {
+        match self {
+            Session::Pg(s) => s.abandoned,
+            Session::My(s) => s.abandoned(),
+            Session::Redis(_) | Session::Plugin(_) => false,
         }
     }
     /// A round trip that runs nothing (PostgreSQL: the protocol's ping; MySQL: DO 0): whether the connection still answers. Callers
@@ -787,10 +799,17 @@ impl Session {
             Session::Plugin(_) => Ok(()),
         }
     }
-    pub async fn close_idle_cursor(&mut self, idle: std::time::Duration) -> bool {
+    pub async fn close_idle_cursor(&mut self, idle: std::time::Duration) -> Option<bool> {
         match self {
             Session::Pg(s) => s.close_idle_cursor(idle).await,
-            _ => false,
+            _ => Some(false),
+        }
+    }
+    /// Its cursor as if it was last used `by` earlier (housekeeping tests)
+    #[cfg(test)]
+    pub(crate) fn age_cursor(&mut self, by: std::time::Duration) {
+        if let Session::Pg(s) = self {
+            s.cursor_used -= by;
         }
     }
     pub async fn ping(&mut self) {
@@ -912,21 +931,21 @@ mod tests {
         let r1 = s.run("select g from generate_series(1,1200) g order by g -- tail comment", 500).await.unwrap();
         assert_eq!((r1.rows.len(), r1.truncated), (500, true));
         // After it is closed for being unused (the transaction ends too)
-        assert!(s.close_idle_cursor(std::time::Duration::ZERO).await);
+        assert_eq!(s.close_idle_cursor(std::time::Duration::ZERO).await, Some(true));
         let state: String = sqlx::query_scalar("select state from pg_stat_activity where pid = $1").bind(s.pid).fetch_one(&p).await.unwrap();
         assert_eq!(state, "idle");
         // Loading more continues from the row after the ones read
         let r2 = s.fetch(500).await.unwrap();
         assert_eq!((r2.rows.len(), r2.truncated, r2.columns.len()), (500, true, 1));
         assert_eq!(r2.rows[0][0], Value::from(501));
-        assert!(s.close_idle_cursor(std::time::Duration::ZERO).await);
+        assert_eq!(s.close_idle_cursor(std::time::Duration::ZERO).await, Some(true));
         let r3 = s.fetch(500).await.unwrap();
         assert_eq!((r3.rows.len(), r3.truncated), (200, false));
         assert_eq!(r3.rows[0][0], Value::from(1001));
         assert!(s.fetch(500).await.is_err(), "no more rows");
         // If another statement ran in between, the old result is not reopened
         s.run("select g from generate_series(1,1200) g", 500).await.unwrap();
-        assert!(s.close_idle_cursor(std::time::Duration::ZERO).await);
+        assert_eq!(s.close_idle_cursor(std::time::Duration::ZERO).await, Some(true));
         s.run("set application_name = 'x'", 500).await.unwrap();
         assert!(s.fetch(500).await.is_err());
     }

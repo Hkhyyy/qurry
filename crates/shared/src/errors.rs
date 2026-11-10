@@ -100,6 +100,12 @@ pub fn disconnected(name: &str, tunnel: &str, why: Disconnected) -> String {
     }
 }
 
+/// The status while Qurry replaces a data source's tunnel after the Mac woke or the tunnel stopped answering (GUI and TUI ask
+/// for it: AppState::reconnecting). ssm = through AWS SSM, else the SSH tunnel
+pub fn reconnecting(name: &str, ssm: bool) -> String {
+    format!("Reconnecting {name} through {}", if ssm { "AWS SSM" } else { "the SSH tunnel" })
+}
+
 /// The DBA report's database picker couldn't list the databases (GUI and TUI): it lists through the report's database, or the
 /// source's default one, so the way out is a default database the account can connect to
 pub fn db_list_failed(msg: &str) -> String {
@@ -284,6 +290,12 @@ mod tests {
         for (s, says) in [(90, "90 s idle"), (600, "10 min idle"), (28800, "8 h idle"), (7500, "2 h 5 min idle")] {
             assert!(tx_idle_reminder("prod", 5, true, Some((true, s))).contains(&format!("after {says} (wait_timeout)")), "{s}");
         }
+    }
+
+    #[test]
+    fn reconnecting_names_the_tunnel() {
+        assert_eq!(reconnecting("prod", true), "Reconnecting prod through AWS SSM");
+        assert_eq!(reconnecting("stage", false), "Reconnecting stage through the SSH tunnel");
     }
 
     #[test]

@@ -950,4 +950,48 @@ mod tests {
         assert_eq!(logins.load(SeqCst), 2, "the first session and one new one");
         st.disconnect(id).await.unwrap();
     }
+
+    /// After the Mac woke (#135), the first use of a source through an SSH tunnel: (1) the session stopped forwarding in the sleep
+    /// while it stays open: the tunnel gets TUNNEL_GRACE to answer, then a new one is opened (was the 10s acquire_timeout and a
+    /// 2s check); (3) the SSH server ended the session just before the call: a new one at once.
+    /// Run on its own (it sets QURRY_KNOWN_HOSTS): QURRY_TEST_PG=… cargo test -p qurry-core ssh_tunnel_reconnects_after_wake -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn ssh_tunnel_reconnects_after_wake() {
+        use std::sync::atomic::Ordering::SeqCst;
+        use std::time::{Duration, Instant};
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let kh = tempfile::NamedTempFile::new().unwrap();
+        unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", kh.path()) };
+        let (port, logins, sessions) = sshd(format!("{}:{}", pg.host, pg.port).parse().unwrap(), kh.path()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "ssh-wake", "kind": "postgres", "host": "db.internal", "port": 5432, "user": &pg.user, "database": &pg.database,
+            "ssh": { "enabled": true, "host": "127.0.0.1", "port": port, "user": "me", "auth": "password", "keyPath": "" } })).unwrap();
+        let id = st.save_connection(c, None, Some("pw".into())).await.unwrap().id;
+        let detail = || async { tokio::time::timeout(Duration::from_secs(40), st.table_detail(id.clone(), "pg_catalog".into(), "pg_class".into())).await.expect("doesn't hang") };
+        detail().await.expect("connects");
+        assert_eq!(logins.load(SeqCst), 1);
+
+        // (1) Stopped forwarding in the sleep
+        sessions.lock().unwrap().iter().for_each(|(_, dead)| dead.store(true, SeqCst));
+        crate::app::tests::sleep_mac(&st, Duration::from_secs(3600));
+        let t = Instant::now();
+        detail().await.expect("goes on through a new SSH session");
+        let took = t.elapsed();
+        println!("ssh (1) dead forwarding after a wake: {took:?}");
+        assert!(took >= crate::app::TUNNEL_GRACE && took < crate::app::TUNNEL_GRACE + Duration::from_secs(3), "the grace and one SSH login: {took:?}");
+        assert_eq!(logins.load(SeqCst), 2);
+
+        // (3) The server ended the session just before the call
+        let last = sessions.lock().unwrap().last().unwrap().0.clone();
+        last.disconnect(russh::Disconnect::ByApplication, String::new(), String::new()).await.unwrap();
+        let t = Instant::now();
+        detail().await.expect("goes on through a new SSH session");
+        let took = t.elapsed();
+        println!("ssh (3) session ended just before the call: {took:?}");
+        assert!(took < Duration::from_secs(3), "one SSH login: {took:?}");
+        assert_eq!(logins.load(SeqCst), 3);
+        st.disconnect(id).await.unwrap();
+    }
 }

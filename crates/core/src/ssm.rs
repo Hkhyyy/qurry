@@ -1384,4 +1384,330 @@ pub(crate) mod tests {
     async fn slow_ssm_session_keeps_its_transaction_my() {
         slow_ssm_session_keeps_its_transaction(crate::store::DbKind::Mysql).await;
     }
+
+    fn signal(pid: &str, sig: &str) {
+        assert!(std::process::Command::new("kill").args([sig, pid]).status().unwrap().success());
+    }
+
+    /// The fake's CLI and plugin pids
+    fn cli_and_plugin(dir: &Path) -> (String, String) {
+        let plugin = plugin_pid(dir);
+        let pids = std::fs::read_to_string(dir.join("pids")).unwrap();
+        (pids.split_whitespace().next().unwrap().to_string(), plugin)
+    }
+
+    /// The fake's session forwards again (stop_forwarding undone)
+    fn resume_forwarding(dir: &Path) {
+        std::fs::remove_file(dir.join(format!("dead-{}", plugin_pid(dir)))).unwrap();
+    }
+
+    /// After the Mac woke (#135), the first use of a source through AWS SSM, one row each of the issue's table: (1) the session
+    /// died in the sleep while the CLI and plugin run on: the tunnel gets TUNNEL_GRACE to answer, then a new one is opened at once
+    /// (was the 10s acquire_timeout and a 2s check, ~12.1s), and the explorer's calls that come together share it; (2) the CLI and
+    /// plugin were stopped and resume 3s later: the same tunnel goes on (3.0s before too); (3) the CLI and plugin were killed just
+    /// before the call: a new tunnel at once (was sqlx's ConnectionRefused retries until its 10s acquire_timeout), and after a wake
+    /// too. While Qurry waits for or replaces the tunnel, reconnecting() says so. PostgreSQL and MySQL, each on its own (PATH):
+    /// QURRY_TEST_PG=… cargo test -p qurry-core reconnects_after_wake_pg -- --ignored
+    /// QURRY_TEST_MY=… cargo test -p qurry-core reconnects_after_wake_my -- --ignored
+    async fn reconnects_after_wake(kind: crate::store::DbKind) {
+        use crate::app::tests::sleep_mac;
+        let server = crate::testenv::server(kind).expect("QURRY_TEST_PG / QURRY_TEST_MY");
+        let fake = fake_aws_on_path();
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut c = server.cfg.clone();
+        c.id = String::new();
+        c.name = "ssm-wake".into();
+        c.ssm = Some(cfg());
+        let id = st.save_connection(c, server.password.clone(), None).await.unwrap().id;
+        let schema = if kind == crate::store::DbKind::Postgres { "public".to_string() } else { server.cfg.database.clone() };
+        st.run_query(id.clone(), "create table if not exists qurry_t135_wake (id int primary key, v text)".into(), None, None).await.unwrap();
+        let starts = || std::fs::read_to_string(fake.path().join("starts")).unwrap().lines().count();
+        let detail = || async { tokio::time::timeout(Duration::from_secs(40), st.table_detail(id.clone(), schema.clone(), "qurry_t135_wake".into())).await.expect("doesn't hang") };
+        let objects = || async { tokio::time::timeout(Duration::from_secs(40), st.list_objects(id.clone(), schema.clone())).await.expect("doesn't hang") };
+        let grace = crate::app::TUNNEL_GRACE;
+        detail().await.expect("connects");
+
+        // (1) Dead forwarding: the grace, then one new session for both calls; reconnecting() says so meanwhile
+        stop_forwarding(fake.path());
+        sleep_mac(&st, Duration::from_secs(3600));
+        let before = starts();
+        let t = Instant::now();
+        let (d, o, shown) = tokio::join!(detail(), objects(), async {
+            for _ in 0..50 {
+                let r = st.reconnecting();
+                if !r.is_empty() {
+                    return r;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            vec![]
+        });
+        let took = t.elapsed();
+        println!("{kind:?} (1) dead forwarding after a wake: {took:?}");
+        d.expect("table_detail goes on through a new tunnel");
+        o.expect("list_objects too");
+        assert!(took >= grace && took < grace + Duration::from_secs(3), "the grace and one tunnel open: {took:?}");
+        assert_eq!(starts(), before + 1, "one new session for both");
+        assert_eq!(shown, vec![(id.clone(), qurry_shared::errors::reconnecting("ssm-wake", true))]);
+        assert!(st.reconnecting().is_empty(), "not once it's open");
+
+        // (2) Stopped through the sleep, resumed 3s after the wake: the tunnel answers within the grace and is kept
+        detail().await.unwrap();
+        let (cli, plugin) = cli_and_plugin(fake.path());
+        signal(&cli, "-STOP");
+        signal(&plugin, "-STOP");
+        let resume = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(3));
+            signal(&plugin, "-CONT");
+            signal(&cli, "-CONT");
+        });
+        sleep_mac(&st, Duration::from_secs(3600));
+        let before = starts();
+        let t = Instant::now();
+        detail().await.expect("the same tunnel goes on");
+        let took = t.elapsed();
+        println!("{kind:?} (2) stopped, resumed after 3s: {took:?}");
+        resume.join().unwrap();
+        assert!(took >= Duration::from_secs(3) && took < Duration::from_secs(4), "3s and the answer: {took:?}");
+        assert_eq!(starts(), before, "no new session");
+
+        // (3) Killed just before the call, no wake: a new tunnel at once instead of sqlx's retries against the closed port
+        for wake in [false, true] {
+            detail().await.unwrap();
+            let (cli, plugin) = cli_and_plugin(fake.path());
+            signal(&plugin, "-KILL");
+            signal(&cli, "-KILL");
+            if wake {
+                sleep_mac(&st, Duration::from_secs(3600));
+            }
+            let before = starts();
+            let t = Instant::now();
+            detail().await.expect("goes on through a new tunnel");
+            let took = t.elapsed();
+            println!("{kind:?} (3) killed just before the call (wake: {wake}): {took:?}");
+            assert!(took < Duration::from_secs(3), "one tunnel open: {took:?}");
+            assert_eq!(starts(), before + 1);
+        }
+
+        // A long idle (POOL_IDLE by the wall clock) checks the tunnel first too
+        detail().await.unwrap();
+        stop_forwarding(fake.path());
+        crate::app::tests::idle_source(&st, &id, crate::db::POOL_IDLE);
+        let t = Instant::now();
+        detail().await.expect("after a long idle");
+        let took = t.elapsed();
+        println!("{kind:?} dead forwarding after a long idle: {took:?}");
+        assert!(took >= grace && took < grace + Duration::from_secs(3), "{took:?}");
+        st.run_query(id.clone(), "drop table qurry_t135_wake".into(), None, None).await.unwrap();
+        st.disconnect(id).await.unwrap();
+        gone(fake.path()).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn reconnects_after_wake_pg() {
+        reconnects_after_wake(crate::store::DbKind::Postgres).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn reconnects_after_wake_my() {
+        reconnects_after_wake(crate::store::DbKind::Mysql).await;
+    }
+
+    /// The tab's cursor as if unread for longer than CURSOR_IDLE
+    async fn age_cursor(st: &crate::app::AppState, tab: &str) {
+        let s = st.sessions.read().await.get(tab).expect("a console session").session.clone();
+        s.lock().await.age_cursor(crate::session::CURSOR_IDLE + Duration::from_secs(1));
+    }
+
+    /// Housekeeping closing idle cursors through a tunnel that carries nothing (#135): a close that doesn't answer within 5s gives
+    /// its session up after that one try (it used to try again every beat, holding the session's lock), the sessions' closes run
+    /// at once (not 5s each), a refresh waiting for such a session says nothing was sent instead of hanging (was more than 90s),
+    /// and a console without a transaction whose session housekeeping held when the source closed isn't told one was lost.
+    /// Run on its own (PATH): QURRY_TEST_PG=… cargo test -p qurry-core housekeeping_gives_up -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn housekeeping_gives_up_a_cursor_that_doesnt_close() {
+        use crate::app::housekeeping;
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG");
+        let fake = fake_aws_on_path();
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut c = pg.cfg.clone();
+        c.id = String::new();
+        c.name = "ssm-cursor".into();
+        c.ssm = Some(cfg());
+        let id = st.save_connection(c, pg.password.clone(), None).await.unwrap().id;
+        let paged = |tab: &str| st.run_query(id.clone(), "select g from generate_series(1, 100000) g".into(), Some(10), Some(tab.into()));
+        let sessions = &st.sessions;
+        let pid = move |tab: &'static str| async move { sessions.read().await.get(tab).map(|e| e.pid) };
+
+        // One try, then the session is given up; the next beat tries nothing; the tab's next run opens a new session
+        paged("a").await.unwrap();
+        let first = pid("a").await;
+        age_cursor(&st, "a").await;
+        stop_forwarding(fake.path());
+        let t = Instant::now();
+        housekeeping(&st).await;
+        let took = t.elapsed();
+        assert!(took >= Duration::from_secs(5) && took < Duration::from_secs(6), "one 5s try: {took:?}");
+        assert_eq!(pid("a").await, None, "given up");
+        let t = Instant::now();
+        housekeeping(&st).await;
+        println!("a cursor that doesn't close: {took:?}, the next beat {:?}", t.elapsed());
+        assert!(t.elapsed() < Duration::from_secs(1), "no second try: {:?}", t.elapsed());
+        resume_forwarding(fake.path());
+        st.run_query(id.clone(), "select 1".into(), None, Some("a".into())).await.expect("a new session");
+        assert!(pid("a").await.is_some() && pid("a").await != first);
+
+        // Several at once: one 5s in all
+        for tab in ["b1", "b2", "b3"] {
+            paged(tab).await.unwrap();
+            age_cursor(&st, tab).await;
+        }
+        stop_forwarding(fake.path());
+        let t = Instant::now();
+        housekeeping(&st).await;
+        println!("three cursors that don't close: {:?}", t.elapsed());
+        assert!(t.elapsed() < Duration::from_secs(6), "together: {:?}", t.elapsed());
+        for tab in ["b1", "b2", "b3"] {
+            assert_eq!(pid(tab).await, None);
+        }
+        resume_forwarding(fake.path());
+
+        // A refresh that waits for housekeeping's hold: nothing sent, it says to try again, and the next run goes on
+        paged("d").await.unwrap();
+        age_cursor(&st, "d").await;
+        crate::app::tests::age_session(&st, "d").await;
+        stop_forwarding(fake.path());
+        let (_, (took, r)) = tokio::join!(housekeeping(&st), async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let t = Instant::now();
+            let r = tokio::time::timeout(Duration::from_secs(40), st.run_query(id.clone(), "select 1".into(), None, Some("d".into()))).await;
+            (t.elapsed(), r)
+        });
+        let e = r.expect("doesn't hang").expect_err("not sent").to_string();
+        println!("a refresh during housekeeping's hold: {took:?}: {e}");
+        assert!(e.starts_with("Nothing was sent") && e.contains("Try again"), "{e}");
+        assert!(took < Duration::from_secs(6), "{took:?}");
+        resume_forwarding(fake.path());
+        st.run_query(id.clone(), "select 1".into(), None, Some("d".into())).await.expect("the next run goes on");
+
+        // The source closes while housekeeping holds a console without a transaction: not told one was lost
+        paged("e").await.unwrap();
+        age_cursor(&st, "e").await;
+        stop_forwarding(fake.path());
+        tokio::join!(housekeeping(&st), async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            crate::app::drop_pool_logged(&st, &id, crate::audit::BY_SERVER).await;
+        });
+        st.run_query(id.clone(), "select 1".into(), None, Some("e".into())).await.expect("not told a transaction was lost");
+        st.disconnect(id).await.unwrap();
+        gone(fake.path()).await;
+    }
+
+    /// A table_detail through a tunnel that carries nothing while housekeeping beats (every 5s, as the apps run it) and holds a
+    /// console's session to close its cursor: one timeout and one 2s check (a lock only housekeeping holds isn't in_use), not the
+    /// 5s check (was 15s); after a wake, the grace and a new tunnel. Run on its own (PATH):
+    /// QURRY_TEST_PG=… cargo test -p qurry-core table_detail_during_housekeeping -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn table_detail_during_housekeeping_waits_one_tunnel_check() {
+        use crate::app::housekeeping;
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG");
+        let fake = fake_aws_on_path();
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut c = pg.cfg.clone();
+        c.id = String::new();
+        c.name = "ssm-beats".into();
+        c.ssm = Some(cfg());
+        let id = st.save_connection(c, pg.password.clone(), None).await.unwrap().id;
+        st.run_query(id.clone(), "create table if not exists qurry_t135_beats (id int primary key)".into(), None, None).await.unwrap();
+        for wake in [false, true] {
+            st.run_query(id.clone(), "select g from generate_series(1, 100000) g".into(), Some(10), Some("c".into())).await.unwrap();
+            age_cursor(&st, "c").await;
+            stop_forwarding(fake.path());
+            if wake {
+                crate::app::tests::sleep_mac(&st, Duration::from_secs(3600));
+            }
+            let beats = async {
+                loop {
+                    housekeeping(&st).await;
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            };
+            let took = tokio::select! {
+                () = beats => unreachable!(),
+                took = async {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let t = Instant::now();
+                    tokio::time::timeout(Duration::from_secs(40), st.table_detail(id.clone(), "public".into(), "qurry_t135_beats".into())).await.expect("doesn't hang").expect("goes on");
+                    t.elapsed()
+                } => took,
+            };
+            println!("table_detail during housekeeping (wake: {wake}): {took:?}");
+            let most = if wake { crate::app::TUNNEL_GRACE + Duration::from_secs(3) } else { Duration::from_secs(14) };
+            assert!(took < most, "{took:?}");
+        }
+        st.run_query(id.clone(), "drop table qurry_t135_beats".into(), None, None).await.unwrap();
+        st.disconnect(id).await.unwrap();
+        gone(fake.path()).await;
+    }
+
+    /// On a wake, housekeeping checks every source's tunnel at once: two that carry nothing are closed within one grace, not one
+    /// after the other, and the status line says why; the next use of each opens a new tunnel at once.
+    /// Run on its own (PATH): QURRY_TEST_PG=… cargo test -p qurry-core housekeeping_checks_every_tunnel -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn housekeeping_checks_every_tunnel_at_once_after_a_wake() {
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG");
+        let fake = fake_aws_on_path();
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut ids = Vec::new();
+        let mut plugins = Vec::new();
+        for name in ["ssm-a", "ssm-b"] {
+            let mut c = pg.cfg.clone();
+            c.id = String::new();
+            c.name = name.into();
+            c.ssm = Some(cfg());
+            let id = st.save_connection(c, pg.password.clone(), None).await.unwrap().id;
+            st.run_read_only(id.clone(), "select 1".into(), 1).await.expect("connects");
+            // This tunnel's plugin, not the one before (the fake writes the pids of the latest start)
+            let plugin = loop {
+                let p = plugin_pid(fake.path());
+                if !plugins.contains(&p) {
+                    break p;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            };
+            plugins.push(plugin);
+            ids.push(id);
+        }
+        for p in &plugins {
+            std::fs::write(fake.path().join(format!("dead-{p}")), "").unwrap();
+        }
+        crate::app::tests::sleep_mac(&st, Duration::from_secs(3600));
+        let t = Instant::now();
+        let mut dropped = crate::app::housekeeping(&st).await;
+        let took = t.elapsed();
+        println!("two dead tunnels after a wake: {took:?}");
+        let grace = crate::app::TUNNEL_GRACE;
+        assert!(took >= grace && took < grace + Duration::from_secs(2), "at once: {took:?}");
+        dropped.sort();
+        let said = |n: &str| format!("Disconnected: the AWS SSM tunnel of {n} stopped answering — the next query opens a new one");
+        let mut want = vec![(ids[0].clone(), said("ssm-a")), (ids[1].clone(), said("ssm-b"))];
+        want.sort();
+        assert_eq!(dropped, want);
+        for id in &ids {
+            let t = Instant::now();
+            st.run_read_only(id.clone(), "select 1".into(), 1).await.expect("a new tunnel");
+            assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+            st.disconnect(id.clone()).await.unwrap();
+        }
+        gone(fake.path()).await;
+    }
 }

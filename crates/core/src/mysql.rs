@@ -290,13 +290,15 @@ pub struct MySession {
     probe: bool,
     /// (SELECT statement, next OFFSET)
     more: Option<(String, usize)>,
+    /// Session::abandoned
+    abandoned: bool,
 }
 
 impl MySession {
     pub async fn open(p: &MySqlPool) -> AppResult<Self> {
         let mut conn = p.acquire().await?;
         let id: u64 = sqlx::query_scalar("select connection_id()").fetch_one(&mut *conn).await?;
-        let mut s = Self { conn, id: id as i64, manual: false, in_tx: false, changed: false, reads_outside_tx: false, ended: None, probe: true, more: None };
+        let mut s = Self { conn, id: id as i64, manual: false, in_tx: false, changed: false, reads_outside_tx: false, ended: None, probe: true, more: None, abandoned: false };
         // Best effort: a MySQL-protocol server without transactions (ClickHouse, older StarRocks / Doris) still opens, without the probe
         let began = s.conn.execute("START TRANSACTION").await.is_ok();
         s.probe = began && s.tx_open().await != Some(false);
@@ -321,6 +323,11 @@ impl MySession {
     /// Session::abandon
     pub(crate) fn abandon(&mut self) {
         self.conn.close_on_drop();
+        self.abandoned = true;
+    }
+
+    pub(crate) fn abandoned(&self) -> bool {
+        self.abandoned
     }
 
     pub fn close_cursor(&mut self) {
