@@ -157,9 +157,9 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const save = async () => {
     const name = cfg.name.trim() || `${cfg.user}@${cfg.host}`;
     try {
-      // Save the shown MCP value as is (if left unset, it would turn on by itself after Production is turned off)
-      const mcpDbaReports = reportsWhy ? edit?.options?.mcpDbaReports : opt.mcpDbaReports;
-      const saved = await api.saveConnection({ ...cfg, name, options: { ...opt, mcp: mcpValue, mcpDbaReports } }, password, sshSecret);
+      // Save the shown MCP value as is (if left unset, it would turn on by itself after Production is turned off).
+      // opt.mcpDbaReports is the chosen value even while its row is disabled: only the shown check is derived
+      const saved = await api.saveConnection({ ...cfg, name, options: { ...opt, mcp: mcpValue } }, password, sshSecret);
       onSaved(saved);
     } catch (e) {
       setTest({ ok: false, msg: `Save failed: ${String(e)}` });

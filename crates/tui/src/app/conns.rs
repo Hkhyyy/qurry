@@ -259,10 +259,8 @@ impl App {
         // Save the shown value as is (leaving it unset would reopen it automatically after turning Production off)
         // Read-only and Production sources have no MCP write (ConnectionConfig::mcp_access): saved as read
         c.options.mcp = Some(if v("MCP") == "write" && (c.read_only || c.options.confirm_changes) { "read".into() } else { v("MCP") });
-        // Disabled (not Production, or MCP Off): the stored value stays
-        if form.disabled("Admin reports").is_none() {
-            c.options.mcp_dba_reports = v("Admin reports") == "on";
-        }
+        // The field holds the chosen value even while disabled (not Production, or MCP Off): only the shown check is derived
+        c.options.mcp_dba_reports = v("Admin reports") == "on";
         // custom = a color outside the presets picked in the GUI: leave it
         match v("Color").as_str() {
             "custom" => {}
