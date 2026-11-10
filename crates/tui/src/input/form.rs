@@ -156,24 +156,24 @@ mod tests {
     async fn conn_form_admin_reports_on_production() {
         let mut h = Harness::new().await;
         admin_form(&mut h, serde_json::json!({ "confirmChanges": true, "mcp": "read" }));
-        assert!(admin_row(&mut h).contains("[ ]  slow queries, sessions, locks; values masked"), "{}", admin_row(&mut h));
+        assert!(admin_row(&mut h).contains("[ ]"), "{}", admin_row(&mut h));
         while sel_label(&mut h) != "Admin reports" {
             h.key("Down");
         }
         h.key("Space");
-        assert!(admin_row(&mut h).contains("[x]  names and query shapes still reach the AI tool"), "{}", admin_row(&mut h));
+        assert!(admin_row(&mut h).contains("[x]"), "{}", admin_row(&mut h));
         h.key("Enter");
         h.settle().await;
         let saved = h.app.state.store.get("p1").unwrap().unwrap();
         assert!(saved.options.mcp_dba_reports && saved.mcp_dba_report_allowed());
     }
 
-    /// Not Production, or MCP Off: the row is disabled with why, ↓ skips it, Space on it does nothing and saving keeps the stored value
+    /// Not Production, or MCP Off: the row is disabled (dim), ↓ skips it, Space on it does nothing and saving keeps the stored value
     #[tokio::test]
     async fn conn_form_admin_reports_disabled() {
         let cases = [
-            (serde_json::json!({ "mcp": "read" }), false, "[x]  Only Production sources ask"),
-            (serde_json::json!({ "confirmChanges": true, "mcp": "off", "mcpDbaReports": true }), true, "[ ]  MCP is Off for this data source"),
+            (serde_json::json!({ "mcp": "read" }), false, "[x]"),
+            (serde_json::json!({ "confirmChanges": true, "mcp": "off", "mcpDbaReports": true }), true, "[ ]"),
         ];
         for (options, stored, shown) in cases {
             let mut h = Harness::new().await;
@@ -220,12 +220,12 @@ mod tests {
         f.sel = f.fields.iter().position(|x| x.label == "Production").unwrap();
         h.key("Space");
         assert!(stops(&mut h).contains(&"Admin reports"));
-        assert!(admin_row(&mut h).contains("[ ]  slow queries"));
+        assert!(admin_row(&mut h).contains("[ ]"));
         let f = form(&mut h);
         f.sel = f.fields.iter().position(|x| x.label == "MCP").unwrap();
         h.key("Left");
         assert_eq!(form(&mut h).value("MCP"), "off");
-        assert!(admin_row(&mut h).contains("MCP is Off for this data source"));
+        assert_eq!(form(&mut h).disabled("Admin reports"), Some(false));
         assert!(!stops(&mut h).contains(&"Admin reports"));
     }
 

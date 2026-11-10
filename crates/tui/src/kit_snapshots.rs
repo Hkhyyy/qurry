@@ -956,7 +956,7 @@ async fn all_scenes() -> Vec<Value> {
             f.sel = if f.disabled("Admin reports").is_none() { at } else { at - 1 };
         }
         let l = if light { " (light)" } else { "" };
-        scenes.push(app_scene(&mut h, &format!("Data source form: admin reports, {name}{l}"), "Admin reports: AI tools may read this Production source's Database Admin reports (MCP dba_report), query values masked; off by default. Not Production (always readable) or MCP Off: disabled, with why", 120, 36));
+        scenes.push(app_scene(&mut h, &format!("Data source form: admin reports, {name}{l}"), "Admin reports: AI tools may read this Production source's Database Admin reports (MCP dba_report), query values masked; off by default. Not Production (always readable) or MCP Off: disabled, dim", 120, 36));
     }
     h.app.themes.theme = None;
     h.app.popup = None;
