@@ -927,6 +927,22 @@ async fn all_scenes() -> Vec<Value> {
     h.app.conn_form(Some(ssm));
     scenes.push(app_scene(&mut h, "Data source form: AWS SSM", "Tunnel ◂ aws ssm ▸: AWS profile · region (empty: the profile's) · SSM target (instance id). Host / Port are the database as seen from the instance; no AWS secrets are stored (the aws CLI uses your AWS config or SSO login)", 120, 34));
     h.app.popup = None;
+    // #131: whether AI tools may read a Production source's admin reports (MCP dba_report); disabled with why elsewhere
+    let cases = [("off", true, "read", false, false), ("on", true, "read", true, false), ("not Production", false, "read", false, false), ("MCP Off", true, "off", false, false), ("off", true, "read", false, true), ("on", true, "read", true, true)];
+    for (name, prod, mcp, on, light) in cases {
+        let mut c = conn("prod", if prod { "[PROD] rentalpay" } else { "[DEV] rentalpay" }, if prod { "#6e2a2a" } else { "#2f5634" }, prod);
+        (c.options.mcp, c.options.mcp_dba_reports) = (Some(mcp.into()), on);
+        h.app.themes.theme = light.then(|| "light".into());
+        h.app.conn_form(Some(c));
+        if let Some(Popup::ConnForm(f)) = &mut h.app.popup {
+            let at = f.fields.iter().position(|x| x.label == "Admin reports").unwrap();
+            f.sel = if f.disabled("Admin reports").is_none() { at } else { at - 1 };
+        }
+        let l = if light { " (light)" } else { "" };
+        scenes.push(app_scene(&mut h, &format!("Data source form: admin reports, {name}{l}"), "Admin reports: AI tools may read this Production source's Database Admin reports (MCP dba_report), query values masked; off by default. Not Production (always readable) or MCP Off: disabled, with why", 120, 36));
+    }
+    h.app.themes.theme = None;
+    h.app.popup = None;
     h.app.popup = Some(Popup::Help { sel: 0, scroll: 0, record: None, message: None });
     scenes.push(app_scene(&mut h, "Keymap (F1)", "F1: 처음 쓸 키 → 바꿀 수 있는 명령 → 고정 키", 120, 30));
     // Recording a key for the explorer's c (Connect): pane keys follow every command, then the fixed keys

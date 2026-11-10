@@ -576,9 +576,19 @@ impl ConnForm {
         true
     }
 
-    /// Moves the selection by `d` shown fields (wrapping around)
+    /// Why a field can't be changed now, shown dim beside it, and whether it shows as on meanwhile (its value stays as stored).
+    /// Admin reports (MCP's dba_report, #131) asks only on Production sources shared with MCP: the others always answer it
+    pub fn disabled(&self, label: &str) -> Option<(&'static str, bool)> {
+        match label {
+            "Admin reports" if self.value("MCP") == "off" => Some(("MCP is Off for this data source", false)),
+            "Admin reports" if self.value("Production") != "on" => Some(("Only Production sources ask", true)),
+            _ => None,
+        }
+    }
+
+    /// Moves the selection by `d` shown fields that can be changed (wrapping around)
     pub fn step(&mut self, d: isize) {
-        let v = self.visible();
+        let v: Vec<usize> = self.visible().into_iter().filter(|&i| self.disabled(self.fields[i].label).is_none()).collect();
         let pos = v.iter().position(|&i| i == self.sel).unwrap_or(0) as isize;
         self.sel = v[(pos + d).rem_euclid(v.len() as isize) as usize];
     }
