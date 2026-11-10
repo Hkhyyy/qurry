@@ -45,10 +45,12 @@ pub fn lex(text: &str, mysql: bool) -> Vec<Tok> {
             i = text[i + 2..].find("*/").map_or(n, |j| i + 2 + j + 2);
             continue;
         }
+        // \ escapes in MySQL strings and in PostgreSQL E'…'
         let quote = |q: u8, i: usize| {
+            let escapes = if mysql { q != b'`' } else { q == b'\'' && crate::sql::is_e_string(b, i) };
             let mut j = i + 1;
             while j < n {
-                if mysql && q != b'`' && b[j] == b'\\' {
+                if escapes && b[j] == b'\\' {
                     j += 2;
                     continue;
                 }
@@ -649,6 +651,10 @@ mod tests {
         assert_eq!(words, ["select", "'a -- b'", ",", "My T", "from", "x", "where", "$$z$$", "=", "1.5", "::", "int"]);
         let m = Scope::new("select `a``b`, \"s\" # c\nfrom t", true);
         assert_eq!((m.name(1), m.toks[3].k), ("a`b".to_string(), K::Str));
+        // PostgreSQL E'…': \' doesn't end it; in '…' \ is a plain character
+        let e = r"select E'it\'s', 'a\', x";
+        let kinds: Vec<K> = lex(e, false).iter().map(|t| t.k).collect();
+        assert_eq!(kinds, [K::Word, K::Word, K::Str, K::Punct, K::Str, K::Punct, K::Word]);
     }
 
     #[test]
