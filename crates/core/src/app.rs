@@ -1210,6 +1210,11 @@ async fn shared_tunnel(state: &AppState, c: &Connecting, base: &str, cfg: &Conne
     let t = match open_tunnel(cfg, ssh_secret).await.and_then(|t| t.ok_or_else(|| AppError::Msg("No tunnel is turned on".into()))) {
         Ok(t) => t,
         Err(e) => {
+            // The apps said it reconnects: it couldn't (they tell this from the load's own errors by these words)
+            let e = match shown {
+                Some(_) => AppError::Msg(qurry_shared::errors::reconnect_failed_error(&cfg.name, cfg.active_ssm().is_some(), &e.to_string())),
+                None => e,
+            };
             *failed = Some((std::time::Instant::now(), e.to_string()));
             return Err(e);
         }
@@ -2855,6 +2860,24 @@ pub(crate) mod tests {
         assert!(r.is_ok() && !seen, "closed, not reconnecting");
         assert!(st.reconnecting().is_empty());
         crate::ssm::tests::gone(fake.path()).await;
+    }
+
+    /// A connect whose tunnel couldn't be opened again in place of one that stopped (while reconnecting() lists the source) says it
+    /// couldn't reconnect, before the reason: the apps tell it from the load's own errors by that. A first open that fails doesn't
+    #[tokio::test]
+    async fn a_tunnel_that_cant_be_opened_again_says_it_couldnt_reconnect() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let c = silent_source("x", 5432, Some(serde_json::json!({ "enabled": true, "host": "127.0.0.1", "port": closed, "user": "me", "auth": "password", "keyPath": "" })));
+        st.store.save(&c).unwrap();
+        let first = ensure_pool(&st, "x").await.err().expect("no SSH server").to_string();
+        assert!(!first.starts_with("Couldn't reconnect"), "{first}");
+        // The tunnel stopped (as the keep-alive or the check after a wake closes it): the next open is a reconnect
+        st.connecting("x").dead.store(true, SeqCst);
+        let again = ensure_pool(&st, "x").await.err().expect("no SSH server").to_string();
+        assert_eq!(again, format!("{}: {first}", qurry_shared::errors::reconnect_failed("x", false)));
+        assert!(st.reconnecting().is_empty());
     }
 
     /// A tunnel that works but takes longer than FIRST_PROBE to bring the database's first byte (here 1.3s): its first probe is

@@ -66,7 +66,8 @@ describe("waitOn (#135)", () => {
     backend.reconnecting = [prod];
     await beat();
     backend.reconnecting = [];
-    c.fail("TargetNotConnected");
+    // The core says it couldn't reconnect (its tunnel didn't open)
+    c.fail(`${prod.failed}: TargetNotConnected`);
     const e = await r.catch((e) => e);
     expect(e).toBeInstanceOf(ReconnectFailed);
     expect(String(e)).toBe(`${prod.failed}: TargetNotConnected`);
@@ -134,5 +135,42 @@ describe("waitOn (#135)", () => {
     c.fail("permission denied for table users");
     expect(await r.catch((e) => e)).toBe("permission denied for table users");
     expect(toasts()).toEqual([]);
+  });
+
+  it("an error of its own once the source reconnected is the load's, not a failed reconnect", async () => {
+    const c = pending();
+    const retry = vi.fn();
+    const r = waitOn("prod", () => c.p, retry);
+    backend.reconnecting = [prod];
+    await beat();
+    backend.reconnecting = [];
+    c.fail("permission denied for schema x");
+    expect(await r.catch((e) => e)).toBe("permission denied for schema x");
+    expect(toasts()).toEqual([]);
+    retryReconnect("prod");
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it("the waiting toast goes once the backend no longer lists the source (after a beat's grace), and comes back if it does again", async () => {
+    const c = pending();
+    const r = waitOn("prod", () => c.p, () => {});
+    backend.reconnecting = [prod];
+    await beat();
+    expect(waitingToast(toasts())).toBeDefined();
+    backend.reconnecting = [];
+    await beat();
+    expect(waitingToast(toasts()), "a beat's grace: the load may fail as the listing ends").toBeDefined();
+    await beat();
+    expect(toasts()).toEqual([]);
+    backend.reconnecting = [prod];
+    await beat();
+    expect(waitingToast(toasts())).toBeDefined();
+    // It still knows the source's texts: a failure then is a failed reconnect
+    backend.reconnecting = [];
+    await beat();
+    await beat();
+    c.fail(`${prod.failed}: TargetNotConnected`);
+    expect(await r.catch((e) => e)).toBeInstanceOf(ReconnectFailed);
+    expect(toasts()).toEqual([{ phase: "failed", id: "prod", title: prod.failed, reason: "TargetNotConnected" }]);
   });
 });

@@ -119,6 +119,18 @@ pub fn reconnect_failed(name: &str, ssm: bool) -> String {
     format!("Couldn't reconnect {name} through {}", tunnel_way(ssm))
 }
 
+/// The error of a load whose data source couldn't be reconnected (the core: its tunnel didn't open again while the apps said it
+/// reconnects): reconnect_failed, then the reason
+pub fn reconnect_failed_error(name: &str, ssm: bool, reason: &str) -> String {
+    format!("{}: {reason}", reconnect_failed(name, ssm))
+}
+
+/// The reason in a load's error that says its data source couldn't be reconnected (reconnect_failed_error, `failed` its heading).
+/// None for any other error: the load's own, also after a reconnect (the GUI: reconnect.ts reconnectReason)
+pub fn reconnect_reason<'a>(failed: &str, e: &'a str) -> Option<&'a str> {
+    e.strip_prefix(failed)?.strip_prefix(": ")
+}
+
 /// A load cancelled while its data source was reconnecting
 pub fn reconnect_cancelled(name: &str, ssm: bool) -> String {
     format!("Cancelled while reconnecting {name} through {}.", tunnel_way(ssm))
@@ -277,6 +289,10 @@ mod tests {
         assert_eq!(reconnect_failed("prod", true), "Couldn't reconnect prod through AWS SSM");
         assert_eq!(reconnect_cancelled("stage", false), "Cancelled while reconnecting stage through SSH.");
         assert!(reconnect_slow(true).contains("the AWS SSM session") && reconnect_slow(false).contains("the SSH session"));
+        let e = reconnect_failed_error("prod", true, "TargetNotConnected");
+        assert_eq!(reconnect_reason(&reconnect_failed("prod", true), &e), Some("TargetNotConnected"));
+        assert_eq!(reconnect_reason(&reconnect_failed("prod", true), "permission denied for schema x"), None);
+        assert_eq!(reconnect_reason(&reconnect_failed("prod", false), &e), None);
     }
 
     #[test]

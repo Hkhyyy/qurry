@@ -6,7 +6,7 @@ import type { Page } from "@playwright/test";
 // window.__mockReconnect makes [DEV] shop_app reconnect (src/lib/mock.ts)
 test.beforeEach(async ({ page }) => openApp(page));
 
-const reconnect = (page: Page, r: { fail?: string; after?: number } | null) => page.evaluate((r) => ((window as any).__mockReconnect = r && { id: "dev", ...r }), r);
+const reconnect = (page: Page, r: { fail?: string; own?: boolean; after?: number; listFor?: number } | null) => page.evaluate((r) => ((window as any).__mockReconnect = r && { id: "dev", ...r }), r);
 const toast = (page: Page) => page.locator(".ui-toast");
 const running = (page: Page) => page.locator(".statusbar .running-bar");
 const tableBody = (page: Page) => page.locator(".work-layer:visible .table-body");
@@ -67,6 +67,7 @@ test("an explorer list waiting on a reconnect shows only Loading… in the tree;
 });
 
 const stop = (page: Page) => page.locator(".work-layer:visible").getByTitle(/^Cancel/);
+const reload = (page: Page) => page.locator(".work-layer:visible").getByTitle(/^Reload Page/);
 
 test("the table tab's own Cancel before a reconnect shows ends its load, and its rows never load", async ({ page }) => {
   await reconnect(page, {});
@@ -89,4 +90,42 @@ test("the table tab's own Cancel while the toast says its source reconnects canc
   await stop(page).click();
   await expect(toast(page)).toHaveText("Cancelled while reconnecting [DEV] shop_app through SSH.×");
   await expect(tableBody(page).getByText("Loading…", { exact: true })).toHaveCount(0);
+});
+
+test("Reload of a table tab left without its metadata goes through the same load: the reconnect shows, and its Cancel ends it", async ({ page }) => {
+  await reconnect(page, {});
+  await treeItem(page, "users").first().dblclick();
+  await expect(toast(page)).toContainText(WAITING);
+  await toast(page).getByRole("button", { name: "Cancel" }).click();
+  await toast(page).getByRole("button", { name: "Close" }).click();
+  // No primary key yet: Reload loads the metadata again, waiting on the reconnect as the first load did
+  await reload(page).click();
+  await expect(tableBody(page).getByText("Loading…", { exact: true })).toBeVisible();
+  await expect(toast(page)).toContainText(WAITING);
+  await stop(page).click();
+  await expect(toast(page)).toHaveText("Cancelled while reconnecting [DEV] shop_app through SSH.×");
+  await expect(tableBody(page).getByText("Loading…", { exact: true })).toHaveCount(0);
+  // Once the source answers, Reload loads the primary key and the rows
+  await reconnect(page, null);
+  await reload(page).click();
+  await expect(page.locator(".statusbar")).toContainText(/rows retrieved/);
+  await expect(toast(page)).toHaveCount(0);
+});
+
+test("a load that fails for its own reason after its source reconnected says that reason, not that it couldn't reconnect", async ({ page }) => {
+  await reconnect(page, { fail: "permission denied for schema public", own: true, after: 1800 });
+  await treeItem(page, "users").first().dblclick();
+  await expect(toast(page)).toContainText(WAITING);
+  // The rows still load, read-only, and the status bar says why
+  await expect(page.locator(".statusbar")).toContainText("Read-only: couldn't read the columns of public.users: permission denied for schema public");
+  await expect(toast(page)).toHaveCount(0);
+});
+
+test("the waiting toast goes once the backend no longer lists the source", async ({ page }) => {
+  await reconnect(page, { listFor: 1500 });
+  await treeItem(page, "users").first().dblclick();
+  await expect(toast(page)).toContainText(WAITING);
+  await expect(running(page)).toContainText(WAITING);
+  await expect(toast(page)).toHaveCount(0, { timeout: 5000 });
+  await expect(running(page)).not.toContainText("Reconnecting");
 });

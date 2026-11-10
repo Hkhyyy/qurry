@@ -28,6 +28,8 @@ export const useReconnect = create<{ toasts: ReconnectToast[] }>()(() => ({ toas
 const waits = new Map<string, { base: string; retry: () => void }>();
 /** The last reconnect seen for each source with a load waiting: the texts its failure and Cancel use */
 const seen = new Map<string, Reconnecting>();
+/** When the backend last listed each of those sources */
+const listedAt = new Map<string, number>();
 /** The failed loads' Retry, by source */
 const retries = new Map<string, (() => void)[]>();
 const cancelled = new Set<string>();
@@ -48,16 +50,25 @@ async function tick() {
   for (const r of now) {
     if (!bases.has(r.id)) continue;
     seen.set(r.id, r);
-    // Kept until its loads end, also when the backend stops listing it a moment before a load fails
+    listedAt.set(r.id, Date.now());
     if (toastOf(r.id)?.phase !== "waiting") setToast(r.id, { phase: "waiting", id: r.id, message: r.message, slow: r.slow, since: Date.now() });
+  }
+  // No longer listed: it reconnected and its loads go on, so the toast goes. After a beat's grace: the backend stops listing it a
+  // moment before a load that couldn't reconnect fails
+  for (const t of useReconnect.getState().toasts) {
+    if (t.phase === "waiting" && !now.some((r) => r.id === t.id) && Date.now() - (listedAt.get(t.id) ?? 0) > RECONNECT_POLL_MS * 1.5) setToast(t.id, null);
   }
 }
 
+/** The reason in a load's error when the core says it couldn't reconnect the source ("<failed>: <reason>", its tunnel didn't open
+ *  again; qurry_shared::errors::reconnect_reason). Undefined for any other error: the load's own, also after a reconnect */
+const reconnectReason = (r: Reconnecting, e: string) => (e.startsWith(`${r.failed}: `) ? e.slice(r.failed.length + 2) : undefined);
+
 /**
  * Runs `call` (a table_detail or list_objects with its call id) on `target`, a load that a reconnecting tunnel may hold up: while the
- * backend says the source reconnects, the toast and the status bar say so, with Cancel. A failure then keeps the reason and Retry
- * (`retry`) and throws ReconnectFailed saying it couldn't reconnect; after Cancel, one saying it was cancelled. Any other error is the
- * call's own
+ * backend says the source reconnects, the toast and the status bar say so, with Cancel. When the core then says it couldn't
+ * reconnect, the toast keeps the reason and Retry (`retry`) and this throws ReconnectFailed with that text; after Cancel, one saying
+ * it was cancelled. Any other error is the call's own
  */
 export async function waitOn<T>(target: string, call: (callId: string) => Promise<T>, retry: () => void): Promise<T> {
   const base = target.split("::")[0];
@@ -76,15 +87,17 @@ export async function waitOn<T>(target: string, call: (callId: string) => Promis
     if (e instanceof ReconnectFailed) throw e;
     const r = seen.get(base);
     if (cancelled.has(callId)) throw new ReconnectFailed(r?.cancelled ?? String(e));
-    if (!r) throw e;
+    const reason = r && reconnectReason(r, String(e));
+    if (!r || reason === undefined) throw e;
     retries.set(base, [...(retries.get(base) ?? []), retry]);
-    setToast(base, { phase: "failed", id: base, title: r.failed, reason: String(e) });
-    throw new ReconnectFailed(`${r.failed}: ${String(e)}`);
+    setToast(base, { phase: "failed", id: base, title: r.failed, reason });
+    throw new ReconnectFailed(String(e));
   } finally {
     waits.delete(callId);
     cancelled.delete(callId);
     if (![...waits.values()].some((w) => w.base === base)) {
       seen.delete(base);
+      listedAt.delete(base);
       if (toastOf(base)?.phase === "waiting") setToast(base, null);
     }
   }
