@@ -19,6 +19,8 @@ import { Group, Tab } from "./features/tabs/types";
 import { isMac } from "./features/shortcuts/labels";
 import { offered, upToDate } from "./features/settings/SettingsDialog";
 import { StatusBar } from "./features/settings/StatusBar";
+import { ReconnectToasts } from "./components/ReconnectToasts";
+import { cancelReconnect, useReconnect, waitingToast } from "./lib/reconnect";
 import { useTabsStore } from "./features/tabs/store";
 import { stash, useWorkspacesStore } from "./features/workspaces/store";
 import { useWorkspaces } from "./features/workspaces/useWorkspaces";
@@ -208,6 +210,8 @@ export default function App() {
     else if (!busySince.has(t.id)) busySince.set(t.id, Date.now());
   }
   const activeBusy = active && busyLabel(active);
+  // A source that reconnects while a load waits on it (#135): the running indicator says so, its ✕ cancels those loads
+  const reconnect = waitingToast(useReconnect((s) => s.toasts));
   const tabOps = useTabs({ setStatus, loadStale });
   const { activate, addTab, openConsole } = tabOps;
   const ws = useWorkspaces({ conns, setStatus, loadStale });
@@ -329,8 +333,16 @@ export default function App() {
       {search.switcherPopup}
       <Dialogs conns={conns} setStatus={setStatus} openConsole={openConsole} startBackup={startBackup} startExport={startExport} startImport={startImport} readyToQuit={readyToQuit} />
       {search.popups}
+      <ReconnectToasts />
       <StatusBar
-        status={status} busy={activeBusy ? { label: activeBusy, since: busySince.get(active.id) ?? Date.now(), onCancel: () => cancelRun(active) } : undefined} readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} jobs={jobs} />
+        status={status}
+        busy={
+          reconnect
+            ? { label: reconnect.message, since: reconnect.since, onCancel: () => cancelReconnect(reconnect.id) }
+            : activeBusy
+              ? { label: activeBusy, since: busySince.get(active.id) ?? Date.now(), onCancel: () => cancelRun(active) }
+              : undefined
+        } readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} jobs={jobs} />
 
       {tabMenu && <ContextMenu menu={tabMenu} onClose={() => setTabMenu(null)} />}
 

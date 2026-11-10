@@ -35,7 +35,9 @@ import { UpdateDialog } from "../../components/UpdateDialog";
 import { WorkspaceBar } from "../../components/WorkspaceBar";
 import { StatusBar } from "../../features/settings/StatusBar";
 import { useConnActions } from "../../features/conns/useConnActions";
-import { ConfirmHost, Menu, Text } from "..";
+import { ConfirmHost, Menu, TabItem, TabStrip, Text, Toasts } from "..";
+import { ReconnectToastView } from "../../components/ReconnectToasts";
+import type { ReconnectToast } from "../../lib/reconnect";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
@@ -1124,3 +1126,51 @@ export const ImportError: S = {
     return <ImportFlow from={{ folder: false }} />;
   },
 };
+
+/** #135 Reconnect: a table tab opened at once (Loading… in it) while its source reconnects through AWS SSM. The status bar's running
+ *  indicator says so with the time; the toast (bottom right, above the status bar) has Cancel, past 10 s why, and on failure the reason
+ *  and Retry. `waited`: seconds already waited (the clock runs on) */
+function ReconnectScreen({ phase, waited = 3.2 }: { phase: ReconnectToast["phase"]; waited?: number }) {
+  const [since] = useState(() => Date.now() - waited * 1000);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const h = setInterval(() => setNow(Date.now()), 100);
+    return () => clearInterval(h);
+  }, []);
+  const name = "[PROD] orders";
+  const t: ReconnectToast =
+    phase === "waiting"
+      ? { phase, id: "prod", message: `Reconnecting ${name} through AWS SSM`, slow: "Taking longer than usual: after the Mac sleeps, the AWS SSM session can take a while to come back.", since }
+      : phase === "failed"
+        ? { phase, id: "prod", title: `Couldn't reconnect ${name} through AWS SSM`, reason: "aws ssm start-session: TargetNotConnected — i-0a1b2c3d4e5f is not connected. Check that the instance is running and its SSM agent is online." }
+        : { phase, id: "prod", text: `Cancelled while reconnecting ${name} through AWS SSM.` };
+  const status = t.phase === "failed" ? `${t.title}: ${t.reason}` : t.phase === "cancelled" ? t.text : "";
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
+      <TabStrip className="tabs" activeKey="t">
+        <TabItem label="payment" icon={<TableIcon />} active onClose={noop} />
+      </TabStrip>
+      <div style={{ position: "relative", flex: 1 }}>
+        <TableEditor where="" orderBy="" running={phase === "waiting"} error={null} result={null} query="SELECT * FROM public.payment;" loadingMore={false}
+          onApply={noop} onCancel={noop} onFetchMore={noop} onSubmit={async () => {}} onExportCsv={noop} onDdl={noop} onCopyQueryToConsole={noop} />
+      </div>
+      <Toasts>
+        <ReconnectToastView t={t} now={now} onCancel={noop} onRetry={noop} onClose={noop} />
+      </Toasts>
+      <StatusBar status={status} busy={t.phase === "waiting" ? { label: t.message, since, onCancel: noop } : undefined} readOnly={false} onUpdate={noop} jobs={[]} />
+    </div>
+  );
+}
+const reconnectStory = (name: string, phase: ReconnectToast["phase"], light: boolean, waited?: number): S => ({
+  name: `Reconnect — ${name} (${light ? "light" : "dark"})`,
+  globals: { theme: light ? "light" : "dark" },
+  render: () => <ReconnectScreen phase={phase} waited={waited} />,
+});
+export const ReconnectWaiting = reconnectStory("table tab waiting", "waiting", false);
+export const ReconnectWaitingLight = reconnectStory("table tab waiting", "waiting", true);
+export const ReconnectSlow = reconnectStory("slow (over 10 s)", "waiting", false, 14);
+export const ReconnectSlowLight = reconnectStory("slow (over 10 s)", "waiting", true, 14);
+export const ReconnectFailed = reconnectStory("failed, reason and Retry", "failed", false);
+export const ReconnectFailedLight = reconnectStory("failed, reason and Retry", "failed", true);
+export const ReconnectCancelled = reconnectStory("cancelled", "cancelled", false);
+export const ReconnectCancelledLight = reconnectStory("cancelled", "cancelled", true);

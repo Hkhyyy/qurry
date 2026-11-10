@@ -4,12 +4,11 @@ import type { BackupOptions } from "../../lib/api";
 import { ask, askText, notice } from "../../lib/dialogs";
 import { invalidateCompletion } from "../../lib/completion";
 import { hasStructure } from "../../lib/structure";
-import { setTableColumns } from "../../lib/statusbar";
+import { loadTableTab } from "./tableTab";
 import { bindings, cmd, formatSpec } from "../../lib/shortcuts";
 import type { MenuItem } from "../../components/Explorer";
 import { forSelection } from "./selection";
 import type { NewKind } from "../../components/ObjectEditors";
-import type { EditTarget } from "../../components/ResultGrid";
 import { invalidateSearchIndex } from "../../components/SearchEverywhere";
 import { isRelation, NodeInfo, schemaChanged } from "../../components/SchemaTree";
 import type { useConnActions } from "../conns/useConnActions";
@@ -54,16 +53,9 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     if (where) sql += ` WHERE ${where}`;
     if (orderBy) sql += ` ORDER BY ${orderBy}`;
     sql += ";";
-    let edit: EditTarget = { schema, table, pk: [] };
-    try {
-      const d = await meta.table(target, schema, table);
-      edit = { schema, table, pk: d.columns.filter((x) => x.isPk).map((x) => x.name) };
-      setTableColumns(target, schema, table, d.columns);
-    } catch {
-      /* Read-only if the metadata lookup fails */
-    }
-    const tab = addTab(c, "table", { title: table, sql, database: db, tableSql: sql, edit, group, where, orderBy, objKind });
-    run(tab, sql);
+    // The tab at once, Loading… inside it; its rows once the metadata is in (loadTableTab)
+    const tab = addTab(c, "table", { title: table, sql, database: db, tableSql: sql, edit: { schema, table, pk: [] }, group, where, orderBy, objKind });
+    void loadTableTab(tab, target, sql, run, setStatus);
   };
 
   const openDdl = async (info: NodeInfo) => {

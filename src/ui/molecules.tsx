@@ -4,7 +4,7 @@
  */
 import { HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Avatar, Badge, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
+import { Avatar, Badge, Button, IconButton, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { Chevron, IcInfo } from "./icons";
 import { placePopup } from "./popup";
@@ -311,6 +311,25 @@ export function TlsOptIn({ host, production, inDialog, onAllow }: { host: string
     </div>
   );
 }
+/**
+ * What a wait in the background says (a data source that reconnects), bottom right above the status bar (inside Toasts): its text,
+ * then its actions on the right. tone="danger": it failed (role alert, a danger border); onClose: a × in the corner
+ */
+export function Toast({ tone, children, actions, onClose }: { tone?: "danger"; children: ReactNode; actions?: ReactNode; onClose?: () => void }) {
+  return (
+    <div className={cx("ui-toast", tone && `tone-${tone}`, onClose && "closable")} role={tone === "danger" ? "alert" : "status"}>
+      {children}
+      {actions && <div className="ui-toast-acts">{actions}</div>}
+      {onClose && (
+        <IconButton size="sm" className="ui-toast-x" title="Close" onClick={onClose}>
+          ×
+        </IconButton>
+      )}
+    </div>
+  );
+}
+/** The toasts, stacked bottom right above the status bar; clicks go through around them */
+export const Toasts = ({ children }: { children: ReactNode }) => <div className="ui-toasts">{children}</div>;
 export function EmptyState({ title, children, action }: { title?: ReactNode; children?: ReactNode; action?: ReactNode }) {
   return (
     <div className="ui-empty">

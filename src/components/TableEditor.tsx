@@ -5,7 +5,7 @@ import { pairKey } from "../lib/pairs";
 import type { CompletionItem } from "../lib/shared";
 import { EditTarget, ResultGrid } from "./ResultGrid";
 import { ColumnIcon, IcFilter, IcOrder, SchemaIcon, TableIcon } from "../ui/icons";
-import { IconButton, ListItem, listKey, Notice, PopupList, TextInput } from "../ui";
+import { IconButton, ListItem, listKey, Notice, PopupList, Text, TextInput } from "../ui";
 
 /** What the WHERE / ORDER BY fields complete against: the console's index of `target`, the tab's table and database */
 export interface FilterCompletion {
@@ -103,6 +103,12 @@ export function TableEditor(p: Props) {
           widthsOf={p.table}
           target={p.target}
         />
+        {/* The first load (a new tab, its metadata and rows): only this, whatever it waits on (a reconnect says itself in the toast) */}
+        {p.running && !p.result && !p.error && (
+          <Text as="div" tone="muted" className="grid-overlay">
+            Loading…
+          </Text>
+        )}
         {p.error && (
           <Notice tone="danger" className="grid-overlay">
             {p.error}
