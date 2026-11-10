@@ -384,6 +384,8 @@ test.describe("Statements popup (⌘↩ with several choices)", () => {
 
   test.beforeEach(async ({ page }) => {
     await typeSql(page, "select 1;\nselect 2;\nselect 3;");
+    // On a slow runner Monaco draws the last line after typing returns: wait for all of it
+    await expect.poll(() => text(page)).toBe("select 1;\nselect 2;\nselect 3;");
     await page.keyboard.press("ArrowUp");
     await page.keyboard.press("Home");
   });

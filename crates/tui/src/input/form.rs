@@ -185,11 +185,29 @@ mod tests {
             h.key("Space");
             h.key("Right");
             assert_eq!(form(&mut h).value("Admin reports"), if stored { "on" } else { "off" });
-            // Changed behind the form's back as well: the save still writes what is stored
-            form(&mut h).fields.iter_mut().find(|x| x.label == "Admin reports").unwrap().value = if stored { "off" } else { "on" }.into();
             h.key("Enter");
             h.settle().await;
             assert_eq!(h.app.state.store.get("p1").unwrap().unwrap().options.mcp_dba_reports, stored, "{shown}");
+        }
+    }
+
+    /// Revoked, then the row disabled in the same form (Production off, or MCP Off): the save keeps the revoke
+    #[tokio::test]
+    async fn conn_form_admin_reports_revoke_then_disable() {
+        for (label, key) in [("Production", "Space"), ("MCP", "Left")] {
+            let mut h = Harness::new().await;
+            admin_form(&mut h, serde_json::json!({ "confirmChanges": true, "mcp": "read", "mcpDbaReports": true }));
+            let f = form(&mut h);
+            f.sel = f.fields.iter().position(|x| x.label == "Admin reports").unwrap();
+            h.key("Space");
+            assert_eq!(form(&mut h).value("Admin reports"), "off");
+            let f = form(&mut h);
+            f.sel = f.fields.iter().position(|x| x.label == label).unwrap();
+            h.key(key);
+            assert!(form(&mut h).disabled("Admin reports").is_some(), "{label}");
+            h.key("Enter");
+            h.settle().await;
+            assert!(!h.app.state.store.get("p1").unwrap().unwrap().options.mcp_dba_reports, "{label}");
         }
     }
 

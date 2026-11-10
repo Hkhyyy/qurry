@@ -343,7 +343,7 @@ test("Options › MCP: admin reports for AI tools ask on Production only, and MC
   expect(await saved()).toMatchObject({ confirmChanges: true, mcp: "read", mcpDbaReports: true });
 
   // Production turned off: disabled and checked (other sources always answer); MCP Off: disabled and unchecked.
-  // Unchecking it on Production first doesn't reach the save: a disabled row saves the stored value
+  // Unchecking it on Production first is what the save keeps: a disabled row saves the value chosen, not the one shown
   d = await props("[PROD] shop_app");
   await expect(box).toBeChecked();
   await box.uncheck();
@@ -356,7 +356,7 @@ test("Options › MCP: admin reports for AI tools ask on Production only, and MC
   await expect(box).not.toBeChecked();
   await d.getByRole("button", { name: "OK" }).click();
   await expect(dialog(page)).toHaveCount(0);
-  expect(await saved()).toMatchObject({ confirmChanges: false, mcp: "off", mcpDbaReports: true });
+  expect(await saved()).toMatchObject({ confirmChanges: false, mcp: "off", mcpDbaReports: false });
 
   // Not Production, shared with MCP: disabled and checked, nothing written
   d = await props("[DEV] shop_app");
