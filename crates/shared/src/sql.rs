@@ -755,6 +755,16 @@ mod tests {
         assert_eq!(mask_literals(r#"select "dq""#, DbKind::Postgres), r#"select "dq""#);
     }
 
+    /// PostgreSQL comments nest, MySQL's don't: the literal after the inner */ is code in MySQL, still comment in PostgreSQL
+    #[test]
+    fn mask_literals_nested_comments() {
+        let pg = |s: &str| mask_literals(s, DbKind::Postgres);
+        assert_eq!(pg("/* a /* b */ it's */ select 'secret-1'"), "/* a /* b */ it's */ select ?");
+        assert_eq!(pg("/* a /* b */ 'c' */ select 2"), "/* a /* b */ 'c' */ select ?");
+        assert_eq!(pg("select 1 /* a /* b */ 'c'"), "select ? /* a /* b */ 'c'");
+        assert_eq!(mask_literals("/* a /* b */ 'c' */ select 2", DbKind::Mysql), "/* a /* b */ ? */ select ?");
+    }
+
     /// Report SQL cuts query text with left(query, 4000): the cut literal runs to the end
     #[test]
     fn mask_literals_cut_at_the_end() {

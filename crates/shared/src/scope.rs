@@ -41,8 +41,21 @@ pub fn lex(text: &str, mysql: bool) -> Vec<Tok> {
             i = text[i..].find('\n').map_or(n, |j| i + j);
             continue;
         }
+        // PostgreSQL comments nest, as the server and sql.rs's splitter read them
         if c == b'/' && b.get(i + 1) == Some(&b'*') {
-            i = text[i + 2..].find("*/").map_or(n, |j| i + 2 + j + 2);
+            let (mut depth, mut j) = (1, i + 2);
+            while j < n && depth > 0 {
+                if !mysql && b[j] == b'/' && b.get(j + 1) == Some(&b'*') {
+                    depth += 1;
+                    j += 2;
+                } else if b[j] == b'*' && b.get(j + 1) == Some(&b'/') {
+                    depth -= 1;
+                    j += 2;
+                } else {
+                    j += 1;
+                }
+            }
+            i = j;
             continue;
         }
         // \ escapes in MySQL strings and in PostgreSQL E'…'
