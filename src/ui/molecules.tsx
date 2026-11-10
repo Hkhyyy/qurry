@@ -2,7 +2,7 @@
  * Molecules: a row · cell made of a few atoms — list row, detail row, menu item, form field, tab, hint, section title.
  * Spec in README.md
  */
-import { HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { forwardRef, HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Avatar, Badge, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
@@ -216,6 +216,54 @@ export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttribu
     </div>
   );
 }
+
+/**
+ * A one-line input whose text is drawn in colors: `spans` are UTF-16 ranges in order with a class (keyword · function · number ·
+ * string · comment, ui.css .ui-hl-*; others stay plain). The input's own text is transparent and a copy in the same font and padding
+ * is drawn over it, following its scroll, so the caret, selection and keys stay the input's
+ */
+export const HighlightInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { value: string; spans: { start: number; end: number; class: string }[] }>(function HighlightInput({ value, spans, className, onScroll, onSelect, ...rest }, ref) {
+  const input = useRef<HTMLInputElement>(null);
+  const text = useRef<HTMLSpanElement>(null);
+  useImperativeHandle(ref, () => input.current!);
+  const sync = () => {
+    if (text.current && input.current) text.current.style.transform = `translateX(${-input.current.scrollLeft}px)`;
+  };
+  useLayoutEffect(sync);
+  const out: ReactNode[] = [];
+  let at = 0;
+  for (const sp of spans) {
+    if (sp.class === "other") continue;
+    if (sp.start > at) out.push(value.slice(at, sp.start));
+    out.push(
+      <span key={sp.start} className={`ui-hl-${sp.class}`}>
+        {value.slice(sp.start, sp.end)}
+      </span>,
+    );
+    at = sp.end;
+  }
+  out.push(value.slice(at));
+  return (
+    <span className={cx("ui-hl", className)}>
+      <TextInput
+        ref={input}
+        value={value}
+        {...rest}
+        onScroll={(e) => {
+          sync();
+          onScroll?.(e);
+        }}
+        onSelect={(e) => {
+          sync();
+          onSelect?.(e);
+        }}
+      />
+      <span className="ui-hl-layer" aria-hidden>
+        <span ref={text}>{out}</span>
+      </span>
+    </span>
+  );
+});
 
 // ───────── Tabs · titles ─────────
 /** A `disabled` tab is greyed out and can't be picked, but still shows its `title` (why) on hover: aria-disabled, not disabled */

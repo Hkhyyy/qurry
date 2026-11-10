@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
-import { expect, openApp, test, treeItem, work } from "./app";
+import TABLE from "../crates/shared/src/themes.json" with { type: "json" };
+import { expect, openApp, openInTheme, test, treeItem, work } from "./app";
 
 // The table tab's WHERE / ORDER BY fields complete like the console (qurry_shared::complete::suggest_filter), listed in a PopupList
 const field = (page: Page, kw: "WHERE" | "ORDER BY") => work(page).getByRole("combobox", { name: kw, exact: true });
@@ -125,4 +126,68 @@ test("other tables and schemas are never listed, typed or asked with ⌃Space", 
   await page.keyboard.press("Control+Space");
   await expect(rows(page).first()).toHaveText("id");
   await expect(rows(page).filter({ hasText: /^(orders|users|public)$/ })).toHaveCount(0);
+});
+
+// #136: the fields are drawn in the console's colors (qurry_shared::highlight) on a layer over the input, whose own text is transparent
+const rgb = (h: string) => `rgb(${[1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(", ")})`;
+/** Each colored piece of a field's layer: [text, color] */
+const colored = (page: Page, kw: "WHERE" | "ORDER BY") =>
+  work(page)
+    .locator(`.dg-filter-field:has([aria-label="${kw}"]) .ui-hl-layer [class^="ui-hl-"]`)
+    .evaluateAll((els) => els.map((e) => [e.textContent, e.className.slice(6), getComputedStyle(e).color]));
+for (const id of ["dark", "light"]) {
+  test(`WHERE and ORDER BY are drawn in the console's colors; caret, completion and ↩ stay the input's (${id})`, async ({ page }) => {
+    const c = TABLE.themes.find((t) => t.id === id)!.colors;
+    await openInTheme(page, id);
+    await treeItem(page, "users").first().dblclick();
+    const where = field(page, "WHERE");
+    await where.click();
+    // `(` closes itself and `)` types over it (pairs), as before
+    await where.pressSequentially("id IN (1, 2)");
+    await expect(where).toHaveValue("id IN (1, 2)");
+    // --c-number is the theme's number color, set on <html> for every theme
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--c-number"))).toBe(c.number);
+    await expect.poll(() => colored(page, "WHERE")).toEqual([
+      ["IN", "keyword", rgb(c.keyword)],
+      ["1", "number", rgb(c.number)],
+      ["2", "number", rgb(c.number)],
+    ]);
+    // The input's own text is transparent, its caret the text color; the layer starts where the input's text does
+    expect(await where.evaluate((e) => [getComputedStyle(e).color, getComputedStyle(e).caretColor])).toEqual(["rgba(0, 0, 0, 0)", rgb(c.text)]);
+    const [box, text] = [await where.boundingBox(), await work(page).locator('.dg-filter-field:has([aria-label="WHERE"]) .ui-hl-layer > span').boundingBox()];
+    expect(Math.abs(text!.x - box!.x)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(text!.y + text!.height / 2 - (box!.y + box!.height / 2))).toBeLessThanOrEqual(1);
+    // Completion lists and picks as before; the caret lands after the pick
+    await where.pressSequentially(" and us");
+    await expect(rows(page).first()).toHaveText("user_name");
+    await page.keyboard.press("Enter");
+    await expect(where).toHaveValue("id IN (1, 2) and user_name");
+    expect(await where.evaluate((e: HTMLInputElement) => e.selectionStart)).toBe(26);
+    await where.pressSequentially(" is not null");
+    await expect.poll(async () => (await colored(page, "WHERE")).map((x) => x[0])).toEqual(["IN", "1", "2", "and", "is", "not", "null"]);
+    const order = field(page, "ORDER BY");
+    await order.click();
+    await order.pressSequentially("user_name DESC");
+    await expect.poll(() => colored(page, "ORDER BY")).toEqual([["DESC", "keyword", rgb(c.keyword)]]);
+    const sqls = await spyQueries(page);
+    await page.keyboard.press("Enter");
+    await expect.poll(sqls).toEqual([expect.stringMatching(/WHERE id IN \(1, 2\) and user_name is not null\s+ORDER BY user_name DESC/)]);
+  });
+}
+
+test("a long filter scrolled to the caret: the colored layer moves with the input's scroll", async ({ page }) => {
+  const where = field(page, "WHERE");
+  await where.click();
+  await where.pressSequentially(Array.from({ length: 30 }, (_, i) => `id = ${i}`).join(" or "));
+  const scroll = () =>
+    where.evaluate((e: HTMLInputElement) => [e.scrollLeft, new DOMMatrix(getComputedStyle(e.parentElement!.querySelector(".ui-hl-layer > span")!).transform).m41]);
+  await expect.poll(async () => (await scroll())[0]).toBeGreaterThan(0);
+  const [left, x] = await scroll();
+  expect(x + left).toBe(0);
+  // Scrolled back (as the input does when the caret goes home), and after leaving the field
+  await where.evaluate((e: HTMLInputElement) => (e.scrollLeft = 0));
+  await expect.poll(async () => (await scroll())[1]).toBe(0);
+  await where.evaluate((e: HTMLInputElement) => (e.scrollLeft = 300));
+  await where.blur();
+  await expect.poll(async () => (await scroll()).reduce((a, b) => a + b)).toBe(0);
 });
