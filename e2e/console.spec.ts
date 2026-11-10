@@ -167,6 +167,20 @@ test("statement words are keywords in both grammars (pgsql knew only reserved wo
   }
 });
 
+test("word operators are keywords, symbol operators keep their color: `a = 1 AND b IN (2)` (#136)", async ({ page }) => {
+  const colors = () =>
+    editor(page).locator(".view-line span span").evaluateAll((els) => Object.fromEntries(els.map((e) => [e.textContent!.trim(), getComputedStyle(e).color])));
+  await typeSql(page, "SELECT 1 WHERE a = 1 AND b IN (2) OR c IS NOT NULL");
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => (await colors())["AND"]).toBeTruthy();
+  const c = await colors();
+  for (const w of ["AND", "IN", "OR", "IS", "NOT", "NULL"]) expect(c[w], w).toBe(c["WHERE"]);
+  // `=` (with the spaces around it, one piece when they are the same color) is not drawn as a keyword
+  const eq = Object.entries(c).find(([t]) => t.includes("="));
+  expect(eq?.[1]).toBeTruthy();
+  expect(eq![1]).not.toBe(c["WHERE"]);
+});
+
 test("a run shows in the status bar (bar · Executing… · elapsed) for the focused tab only; hovering it shows ✕, which cancels it (#107)", async ({ page }) => {
   const bar = page.locator(".statusbar .running-bar");
   const x = bar.getByRole("button", { name: "Cancel (⌘F2)" });

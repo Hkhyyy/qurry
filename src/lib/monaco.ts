@@ -37,9 +37,17 @@ const COMMON_KEYWORDS = `SELECT INSERT UPDATE DELETE MERGE SET VALUES INTO FROM 
   TABLE VIEW MATERIALIZED INDEX UNIQUE SCHEMA DATABASE FUNCTION PROCEDURE TRIGGER SEQUENCE EXTENSION IF EXISTS NOT REPLACE CASCADE RESTRICT
   BEGIN TRANSACTION COMMIT ROLLBACK SAVEPOINT EXPLAIN ANALYZE VACUUM COPY SHOW CALL DO CONFLICT NOTHING GRANT REVOKE
   NULLS OVER WINDOW PRECEDING FOLLOWING UNBOUNDED INTERVAL ESCAPE LATERAL`.split(/\s+/);
-const withKeywords = (words: string[]) => [...new Set([...words, ...COMMON_KEYWORDS])];
-monaco.languages.setMonarchTokensProvider("pgsql", { ...pgsqlLanguage, keywords: withKeywords(pgsqlLanguage.keywords) } as monaco.languages.IMonarchLanguage);
-monaco.languages.setMonarchTokensProvider("mysql", { ...mysqlLanguage, keywords: withKeywords(mysqlLanguage.keywords), tokenizer: { ...mysqlLanguage.tokenizer, comments } } as monaco.languages.IMonarchLanguage);
+/**
+ * The grammars list these words as operators, drawn in the base theme's operator gray. They are keywords in the table tab's WHERE /
+ * ORDER BY (qurry_shared::highlight, completion's keywords), so the console draws them as keywords too; symbol operators stay operators
+ */
+const WORD_OPERATORS = ["IN", "IS", "NOT", "NULL", "AND", "OR", "LIKE", "BETWEEN"];
+const withKeywords = (l: { keywords: string[]; operators?: unknown }) => ({
+  keywords: [...new Set([...l.keywords, ...COMMON_KEYWORDS, ...WORD_OPERATORS])],
+  operators: (l.operators as string[]).filter((o) => !WORD_OPERATORS.includes(o)),
+});
+monaco.languages.setMonarchTokensProvider("pgsql", { ...pgsqlLanguage, ...withKeywords(pgsqlLanguage) } as monaco.languages.IMonarchLanguage);
+monaco.languages.setMonarchTokensProvider("mysql", { ...mysqlLanguage, ...withKeywords(mysqlLanguage), tokenizer: { ...mysqlLanguage.tokenizer, comments } } as monaco.languages.IMonarchLanguage);
 
 // One Monaco theme, redefined from the theme drawn whenever it changes (lib/theme.ts monacoThemeData)
 onTheme((t) => {

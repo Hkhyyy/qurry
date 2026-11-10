@@ -7,6 +7,10 @@ describe("theme contrast (WASM)", () => {
   it("finds no pair below its minimum in any built-in theme", () => {
     for (const t of TABLE.themes) expect(shared().themeWarnings(t.colors), t.id).toEqual([]);
   });
+  it("checks the SQL number color (--c-number: the table tab's WHERE / ORDER BY, #136) on the background in every theme", () => {
+    expect(TABLE.tokens.find((t) => t.key === "number")!.checks).toContainEqual(["number", "bg", 4.5]);
+    for (const t of TABLE.themes) expect(shared().themeWarnings(t.colors).filter((w) => w.token === "number"), t.id).toEqual([]);
+  });
   it("warns about a custom palette's low pairs, by token", () => {
     const colors = { ...TABLE.themes[0].colors, comment: "#3a3c40", text: "#55585e" };
     const w = shared().themeWarnings(colors);

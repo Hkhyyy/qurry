@@ -1,5 +1,6 @@
 /* UI tokens — spec in README.md. The colors (--ui-bg, --ui-text, --ui-accent …, the tree icon strokes --ui-icon / --ui-icon-db and
-   the result grid's JSON colors --ui-json-*) are the theme's: lib/theme.ts sets them on <html> from crates/shared/src/themes.json */
+   the result grid's JSON colors --ui-json-*, the SQL colors of HighlightInput --c-number · --c-comment …) are the theme's:
+   lib/theme.ts sets them on <html> from crates/shared/src/themes.json */
 :root {
   --ui-sp-1: 2px;
   --ui-sp-2: 4px;

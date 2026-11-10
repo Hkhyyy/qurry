@@ -293,6 +293,16 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-search.bare { padding: var(--ui-sp-2) var(--ui-sp-3); border-bottom: 1px solid var(--ui-border); }
 .ui-search.bare .ui-input { height: 30px; font-size: var(--ui-fs-lg); background: transparent; border: none; }
 .ui-search.bare .ui-search-glass { left: var(--ui-sp-4); font-size: 16px; }
+/* HighlightInput: the input's text is transparent; the colored copy over it sits inside the input's border and padding, in its font */
+.ui-hl { position: relative; display: flex; min-width: 0; }
+.ui-hl > .ui-input { flex: 1; color: transparent; caret-color: var(--ui-text); }
+.ui-hl > .ui-input::selection { color: transparent; background: var(--ui-selected); }
+.ui-hl-layer { position: absolute; inset: 1px calc(var(--ui-sp-3) + 1px); display: flex; align-items: center; overflow: hidden; pointer-events: none; white-space: pre; font: inherit; font-size: var(--ui-fs-md); color: var(--ui-text); }
+.ui-hl-keyword { color: var(--c-cf8e6d); }
+.ui-hl-function { color: var(--c-56a8f5); }
+.ui-hl-number { color: var(--c-number); }
+.ui-hl-string { color: var(--ui-json-string); }
+.ui-hl-comment { color: var(--c-comment); font-style: italic; }
 .ui-tabs.size-sm { gap: var(--ui-sp-1); margin-bottom: 0; border-bottom: none; }
 .ui-tabs.size-sm .ui-tab { padding: var(--ui-sp-2) var(--ui-sp-3) var(--ui-sp-2); }
 

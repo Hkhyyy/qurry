@@ -329,6 +329,67 @@ export const TableFilterPairs: S = {
   },
 };
 
+/** #136: the WHERE / ORDER BY fields drawn in the console's colors (qurry_shared::highlight): keywords — word operators IN, IS, NOT,
+ * NULL, AND, OR, LIKE, BETWEEN too — functions, numbers, strings and comments; `=`, `<` and names in the text color */
+const ColoredFilter = (p: { where: string; orderBy: string }) => (
+  <Frame h={300}>
+    <TableEditor
+      where={p.where}
+      orderBy={p.orderBy}
+      running={false}
+      error={null}
+      result={users}
+      query="SELECT * FROM public.users"
+      loadingMore={false}
+      dialect={dialectOf("postgres")}
+      completion={{ target: "dev", schema: "public", table: "users", db: "shop_app", mysql: false }}
+      onApply={noop}
+      onCancel={noop}
+      onFetchMore={noop}
+      onSubmit={async () => {}}
+      onExportCsv={noop}
+      onDdl={noop}
+      onCopyQueryToConsole={noop}
+    />
+  </Frame>
+);
+const filterField = async (c: HTMLElement, kw: string) => within(c).findByRole<HTMLInputElement>("combobox", { name: kw });
+/** [name, WHERE, ORDER BY] */
+type FilterCase = readonly [string, string, string];
+const filterStory = (theme: "dark" | "light", [name, where, orderBy]: FilterCase, play?: S["play"]): S => ({
+  name: `Table data — colors: ${name} (${theme})`,
+  globals: { theme },
+  render: () => <ColoredFilter where={where} orderBy={orderBy} />,
+  play,
+});
+const inList: FilterCase = ["IN with numbers", "id IN (366, 3934)", ""];
+const strings: FilterCase = ["strings and a comment", "user_name = 'paid' AND user_name LIKE '%@example.com' -- note", ""];
+const isNotNull: FilterCase = ["IS NOT NULL", "user_name IS NOT NULL AND id > 100", ""];
+const functions: FilterCase = ["functions", "lower(user_name) = 'a@b.com' AND id BETWEEN 1 AND 10", "coalesce(user_name, 'x')"];
+const orderBy: FilterCase = ["ORDER BY … DESC NULLS LAST", "", "user_name DESC NULLS LAST, id"];
+const completion: FilterCase = ["completion list open", "", ""];
+const typeInWhere: S["play"] = async ({ canvasElement }) => userEvent.type(await filterField(canvasElement, "WHERE"), "id IN (1) AND u");
+const caretText: FilterCase = ["caret mid-text, a selection", "id IN (366, 3934) AND user_name = 'paid'", "id DESC"];
+const caretMid: S["play"] = async ({ canvasElement }) => {
+  const w = await filterField(canvasElement, "WHERE");
+  w.focus();
+  w.setSelectionRange(3, 5);
+};
+export const FilterColorsInDark = filterStory("dark", inList);
+export const FilterColorsInLight = filterStory("light", inList);
+export const FilterColorsStringsDark = filterStory("dark", strings);
+export const FilterColorsStringsLight = filterStory("light", strings);
+export const FilterColorsIsNotNullDark = filterStory("dark", isNotNull);
+export const FilterColorsIsNotNullLight = filterStory("light", isNotNull);
+export const FilterColorsFunctionsDark = filterStory("dark", functions);
+export const FilterColorsFunctionsLight = filterStory("light", functions);
+export const FilterColorsOrderByDark = filterStory("dark", orderBy);
+export const FilterColorsOrderByLight = filterStory("light", orderBy);
+export const FilterColorsCompletionDark = filterStory("dark", completion, typeInWhere);
+export const FilterColorsCompletionLight = filterStory("light", completion, typeInWhere);
+export const FilterColorsCaretDark = filterStory("dark", caretText, caretMid);
+export const FilterColorsCaretLight = filterStory("light", caretText, caretMid);
+
 export const Chart: S = { name: "Result Chart", render: () => <Frame><ResultChart result={sales} /></Frame> };
 export const Grid: S = {
   name: "Result Grid",

@@ -712,6 +712,23 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.type_str("user_id = 41 and ca");
     scenes.push(app_scene(h, "Table filter completion", "w / o on a table tab: the WHERE / ORDER BY input completes like the console (the table's columns first, then keywords); ↑↓ PgUp PgDn move, Enter / Tab pick, Esc closes the list first", 120, 22));
     h.app.popup = None;
+    // #136: the inputs draw their SQL in the console's colors (qurry_shared::highlight, the GUI's fields too)
+    let colored = "lower(card_brand) LIKE 'vi%' AND user_id IN (41, 7) AND amount IS NOT NULL -- recent";
+    for (theme, name) in [("dark", "Table filter: SQL colors"), ("light", "Table filter: SQL colors (light)")] {
+        h.app.themes.theme = Some(theme.into());
+        h.app.input_filter(id, false);
+        h.type_str(colored);
+        for _ in 0..12 {
+            h.key("Left");
+        }
+        scenes.push(app_scene(h, name, "w: keywords (word operators IN, IS, NOT, NULL, AND, LIKE too), functions, numbers, strings and comments in the console's colors; =, < and names in the text color. The caret mid-text keeps its look", 120, 22));
+        h.app.popup = None;
+    }
+    h.app.themes.theme = None;
+    h.app.input_filter(id, true);
+    h.type_str("created_at DESC NULLS LAST, id");
+    scenes.push(app_scene(h, "Table filter: ORDER BY colors", "o: DESC, NULLS, LAST in the keyword color", 120, 22));
+    h.app.popup = None;
     h.app.close_tab_now(h.app.active);
 }
 

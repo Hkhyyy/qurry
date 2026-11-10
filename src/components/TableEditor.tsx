@@ -2,10 +2,10 @@ import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Cell, DbKind, Dialect, QueryResult, TableRef } from "../lib/api";
 import { filterSuggestions } from "../lib/completion";
 import { pairKey } from "../lib/pairs";
-import type { CompletionItem } from "../lib/shared";
+import { sharedOr, useSharedReady, type CompletionItem } from "../lib/shared";
 import { EditTarget, ResultGrid } from "./ResultGrid";
 import { ColumnIcon, IcFilter, IcOrder, SchemaIcon, TableIcon } from "../ui/icons";
-import { IconButton, ListItem, listKey, Notice, PopupList, Text, TextInput } from "../ui";
+import { HighlightInput, IconButton, ListItem, listKey, Notice, PopupList, Text } from "../ui";
 
 /** What the WHERE / ORDER BY fields complete against: the console's index of `target`, the tab's table and database */
 export interface FilterCompletion {
@@ -127,7 +127,7 @@ const ITEM_ICON: Record<CompletionItem["kind"], ReactNode> = { column: <ColumnIc
  * One field of the filter bar. While an identifier is typed it lists the console's candidates for the field's text in its query
  * (`SELECT * FROM schema.table WHERE <text>`), with the keys of the column type ComboBox: ↑↓ PgUp PgDn move, ↩ / ⇥ pick, ⎋ closes the
  * list. With the list closed, ↩ applies the filter and ⎋ resets the field. Quotes and brackets pair up as in the console and the TUI
- * (lib/pairs: qurry_shared::pairs)
+ * (lib/pairs: qurry_shared::pairs). The text is drawn in the console's colors (qurry_shared::highlight, as the TUI's w / o inputs)
  */
 function FilterField(p: { icon: ReactNode; kw: "WHERE" | "ORDER BY"; value: string; onChange: (v: string) => void; reset: string; onApply: () => void; onClear: () => void; completion?: FilterCompletion; kind: DbKind }) {
   const input = useRef<HTMLInputElement>(null);
@@ -164,14 +164,17 @@ function FilterField(p: { icon: ReactNode; kw: "WHERE" | "ORDER BY"; value: stri
     close();
   };
   const open = !!list;
+  useSharedReady();
+  const spans = sharedOr([], (s) => s.highlight(p.value, p.kind));
   return (
     <>
       <label className="dg-filter-field">
         {p.icon}
         <span className="kw">{p.kw}</span>
-        <TextInput
+        <HighlightInput
           ref={input}
           value={p.value}
+          spans={spans}
           spellCheck={false}
           aria-label={p.kw}
           role="combobox"

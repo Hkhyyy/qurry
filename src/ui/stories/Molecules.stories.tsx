@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
-import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormGrid, FormSection, Hint, InfoTip, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Named, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow, TxPending } from "..";
+import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormGrid, FormSection, HighlightInput, Hint, InfoTip, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Named, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow, TxPending } from "..";
+import { shared } from "../../lib/shared";
 import { connTabVars } from "../../lib/theme";
 import { ConsoleIcon, DatabaseIcon, FolderIcon, PgIcon, ReportIcon, SchemaIcon, TabIcon, TableIcon } from "../icons";
 import { ReconnectToastView } from "../../components/ReconnectToasts";
@@ -123,6 +124,21 @@ export const InfoTipOpen: S = {
     canvasElement.querySelector<HTMLButtonElement>('button[aria-label="About Channel"]')?.click();
   },
 };
+
+/** HighlightInput: an input whose text is drawn in SQL colors (spans from qurry_shared::highlight), editable; the table tab's WHERE /
+ *  ORDER BY fields (GUI/5 Screens › Table data — colors) are built on it. A long text scrolls with the caret, the colors with it */
+function Highlighted() {
+  const [v, setV] = useState("lower(name) LIKE 'a%' AND id IN (1, 2) AND deleted_at IS NOT NULL /* recent */ ORDER BY id DESC NULLS LAST");
+  const [m, setM] = useState("name = '한글 값' OR 값 BETWEEN 1 AND 2 # MySQL comment");
+  return (
+    <div style={{ width: 520, display: "flex", flexDirection: "column", gap: 8 }}>
+      <HighlightInput value={v} spans={shared().highlight(v, "postgres")} onChange={(e) => setV(e.target.value)} aria-label="PostgreSQL" />
+      <HighlightInput value={m} spans={shared().highlight(m, "mysql")} onChange={(e) => setM(e.target.value)} aria-label="MySQL" />
+    </div>
+  );
+}
+export const HighlightInputDark: S = { name: "HighlightInput — dark", globals: { theme: "dark" }, render: () => <Highlighted /> };
+export const HighlightInputLight: S = { name: "HighlightInput — light", globals: { theme: "light" }, render: () => <Highlighted /> };
 
 /** SearchField is a TextInput: no autocorrect or spell check (see GUI/1 Atoms › Inputs) */
 export const SearchAndTabs: S = {
