@@ -1516,6 +1516,68 @@ pub(crate) mod tests {
         reconnects_after_wake(crate::store::DbKind::Mysql).await;
     }
 
+    /// A statement on the pool (no tab: the Redis browser, MySQL DDL, a run without a console) may change data, so it is never
+    /// run again once it reached the server: its CLI dying mid-statement doesn't insert the row twice. And a read in flight when
+    /// the user presses Disconnect ends there: it doesn't open the tunnel and the pool again. PostgreSQL and MySQL, each on its own:
+    /// QURRY_TEST_PG=… cargo test -p qurry-core writes_and_disconnects_are_not_run_again_pg -- --ignored
+    /// QURRY_TEST_MY=… cargo test -p qurry-core writes_and_disconnects_are_not_run_again_my -- --ignored
+    async fn writes_and_disconnects_are_not_run_again(kind: crate::store::DbKind) {
+        let server = crate::testenv::server(kind).expect("QURRY_TEST_PG / QURRY_TEST_MY");
+        let fake = fake_aws_on_path();
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut c = server.cfg.clone();
+        c.id = String::new();
+        c.name = "ssm-once".into();
+        c.ssm = Some(cfg());
+        let id = st.save_connection(c, server.password.clone(), None).await.unwrap().id;
+        let pg = kind == crate::store::DbKind::Postgres;
+        let run = |sql: &str| tokio::time::timeout(Duration::from_secs(40), st.run_query(id.clone(), sql.into(), None, None));
+        run("drop table if exists qurry_t135_once").await.unwrap().unwrap();
+        run("create table qurry_t135_once (v int)").await.unwrap().unwrap();
+
+        // Only the CLI dies while the INSERT runs
+        let (cli, _) = cli_and_plugin(fake.path());
+        let kill = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            signal(&cli, "-KILL");
+        });
+        let insert = if pg { "insert into qurry_t135_once select 1 from pg_sleep(1)" } else { "insert into qurry_t135_once select sleep(1)" };
+        let r = run(insert).await.expect("doesn't hang");
+        kill.await.unwrap();
+        println!("{kind:?}: the INSERT whose CLI died: {:?}", r.as_ref().map(|_| "ok"));
+        let n = run("select count(*) from qurry_t135_once").await.unwrap().expect("count through a new tunnel").rows[0][0].to_string();
+        assert_eq!(n.trim_matches('"'), "1", "run once");
+
+        // A long read, and a Disconnect while it runs
+        let read = if pg { "select count(*) from generate_series(1, 20000000)" } else { "select count(*) from information_schema.columns a cross join information_schema.columns b" };
+        let (r, ()) = tokio::join!(tokio::time::timeout(Duration::from_secs(40), st.run_read_only(id.clone(), read.into(), 10)), async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            st.disconnect(id.clone()).await.unwrap();
+        });
+        println!("{kind:?}: the read during the Disconnect: {:?}", r.expect("doesn't hang").map(|_| "ok"));
+        // Longer than the tunnel watch, so a read that would run again has done so
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(st.pools.read().await.is_empty(), "no pool opened again");
+        assert_eq!(crate::app::tunnel_port(&st, &id).await, None, "no tunnel opened again");
+
+        run("drop table qurry_t135_once").await.unwrap().unwrap();
+        st.disconnect(id).await.unwrap();
+        gone(fake.path()).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn writes_and_disconnects_are_not_run_again_pg() {
+        writes_and_disconnects_are_not_run_again(crate::store::DbKind::Postgres).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn writes_and_disconnects_are_not_run_again_my() {
+        writes_and_disconnects_are_not_run_again(crate::store::DbKind::Mysql).await;
+    }
+
     /// The tab's cursor as if unread for longer than CURSOR_IDLE
     async fn age_cursor(st: &crate::app::AppState, tab: &str) {
         let s = st.sessions.read().await.get(tab).expect("a console session").session.clone();

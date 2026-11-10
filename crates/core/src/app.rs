@@ -465,14 +465,23 @@ struct Connecting {
     used: std::sync::Mutex<Option<(std::time::SystemTime, u64)>>,
     /// Its last tunnel was closed because it stopped or stopped answering: the next one opened replaces it (AppState::reconnecting)
     dead: std::sync::atomic::AtomicBool,
+    /// The generation the last close not for a dead tunnel counted up to (Disconnect, the idle drop, saved settings): a read
+    /// through a pool from before it isn't run again on a new one (with_pool), which would connect the source again
+    disconnected: std::sync::atomic::AtomicU64,
 }
 
 impl Connecting {
+    /// Whether a read through the pool of generation `g` may run again on a new pool: no disconnect came since
+    fn may_rerun(&self, g: u64) -> bool {
+        self.disconnected.load(SeqCst) <= g
+    }
+
     /// Whether the source's pools and tunnel are checked before their next use (settle): the Mac slept since they were last used,
-    /// or they sat unused for POOL_IDLE by the wall clock (sqlx's own POOL_IDLE counts on an Instant). Otherwise this counts as a use
-    fn stale(&self, wakes: u64) -> bool {
+    /// or, through a tunnel, they sat unused for POOL_IDLE by the wall clock (sqlx's own POOL_IDLE counts on an Instant; a keep-alive
+    /// that got through counts as a use: pinged). Otherwise this counts as a use
+    fn stale(&self, wakes: u64, tunneled: bool) -> bool {
         let mut used = self.used.lock().unwrap();
-        let stale = used.is_none_or(|(at, w)| w < wakes || idle_for(at, db::POOL_IDLE));
+        let stale = used.is_none_or(|(at, w)| w < wakes || (tunneled && idle_for(at, db::POOL_IDLE)));
         if !stale {
             *used = Some((std::time::SystemTime::now(), wakes));
         }
@@ -481,6 +490,14 @@ impl Connecting {
 
     fn settled(&self, wakes: u64) {
         *self.used.lock().unwrap() = Some((std::time::SystemTime::now(), wakes));
+    }
+
+    /// The keep-alive got through the source's tunnel: a use, though not a check after a wake (its other idle connections may be
+    /// from before the sleep)
+    fn pinged(&self) {
+        if let Some((at, _)) = self.used.lock().unwrap().as_mut() {
+            *at = std::time::SystemTime::now();
+        }
     }
 }
 
@@ -496,10 +513,7 @@ impl AppState {
 /// (autocommit, the rest of the transaction gone): that use says so once and sends nothing (tab_session)
 pub(crate) async fn drop_pool_logged(state: &AppState, id: &str, word: &str) {
     let cfg = state.source(id).ok();
-    let tabs = close_all(state, id, cfg.as_ref().map(|c| tx_lost_error(c, word)).as_deref()).await;
-    if let Some(c) = state.connecting.lock().unwrap().get(split_target(id).0) {
-        c.dead.store(word == crate::audit::BY_SERVER, SeqCst);
-    }
+    let tabs = close_all(state, id, cfg.as_ref().map(|c| tx_lost_error(c, word)).as_deref(), word == crate::audit::BY_SERVER).await;
     let Some(cfg) = cfg else { return };
     for (t, conn) in tabs {
         if let Err(e) = state.audit.tx_closed(&conn, &cfg.name, &t, word) {
@@ -534,18 +548,21 @@ fn settle_lost(state: &AppState, tab: &str, in_tx: bool) {
 
 /// Close all DB pools, sessions and tunnels of the Data Source. → the consoles whose sessions it closed (tab id, connection id)
 pub async fn drop_pool(state: &AppState, id: &str) -> Vec<(String, String)> {
-    close_all(state, id, None).await
+    close_all(state, id, None, false).await
 }
 
 /// drop_pool. lost = what a console whose session it closes with a transaction open says on its next use (LostTx): marked as the
 /// session is taken out, so a statement that ends with the tunnel meanwhile and says what became of it (recover, settle_lost)
-/// always comes after the mark
-async fn close_all(state: &AppState, id: &str, lost: Option<&str>) -> Vec<(String, String)> {
+/// always comes after the mark. dead = for a tunnel that stopped or stopped answering (drop_pool_logged with BY_SERVER)
+async fn close_all(state: &AppState, id: &str, lost: Option<&str>, dead: bool) -> Vec<(String, String)> {
     // No entry: no connect of it has started, so none to stop
     if let Some(c) = state.connecting.lock().unwrap().get(split_target(id).0) {
+        // Before the count: a read that sees the new generation knows whether it may run again (with_pool)
+        c.dead.store(dead, SeqCst);
+        if !dead {
+            c.disconnected.fetch_max(c.generation.load(SeqCst) + 1, SeqCst);
+        }
         c.generation.fetch_add(1, SeqCst);
-        // Not a tunnel that stopped answering, unless drop_pool_logged says so
-        c.dead.store(false, SeqCst);
     }
     // The tunnel goes before the pools: a connect that saw this generation and kept its pool while it was still open (keep_pool)
     // has that pool closed below
@@ -757,6 +774,9 @@ pub async fn housekeeping(state: &AppState) -> Vec<(String, String)> {
                 .await;
                 // Not held while the tunnel is closed: closing a pool waits for its connections to come back
                 drop((pools, sessions));
+                if pinged.iter().chain(&pinged_sessions).all(|ok| *ok) && c.generation.load(SeqCst) == g {
+                    c.pinged();
+                }
                 // Through a tunnel that carries nothing any more (sleep, a network change), it is closed now (drop_dead_tunnel): a
                 // statement waiting through it ends, and the next use opens a new one
                 if cfg.tunneled() && pinged.iter().chain(&pinged_sessions).any(|ok| !ok) {
@@ -838,34 +858,46 @@ async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppRes
 
 /// Runs `f` on the pool of `id` (ensure_pool). When a pool that was already open times out getting a connection through the
 /// source's tunnel (nothing reached the server), the tunnel may have stopped forwarding while its process runs on: it is opened
-/// again and `f` runs once more on a new connect. So it does, once, when the pool is closed under it (another caller found the
-/// tunnel dead, a disconnect: closed_under) or its tunnel stops while it runs (unless_stopped). Only for an `f` that may run
-/// again: a read, or opening a connection
+/// again and `f` runs once more on a new connect. So it does, once, when the pool is closed under it because its tunnel was found
+/// dead (closed_under) or its tunnel stops while it runs (unless_stopped), but not after a disconnect (Disconnect, the idle drop):
+/// that would connect the source again. Only for an `f` that may run again: a read, or opening a connection
 pub(crate) async fn with_pool<T, Fut: std::future::Future<Output = AppResult<T>>>(state: &AppState, id: &str, f: impl Fn(Pool) -> Fut) -> AppResult<T> {
-    with_pool_after(state, id, None, f).await
+    with_pool_after(state, id, None, true, f).await
 }
 
 /// with_pool. stale = the generation whose dead tunnel this call closed already (tab_session): opening a new one was its one
-/// retry, so `f` runs once and its timeout is the error
-async fn with_pool_after<T, Fut: std::future::Future<Output = AppResult<T>>>(state: &AppState, id: &str, stale: Option<u64>, f: impl Fn(Pool) -> Fut) -> AppResult<T> {
+/// retry, so `f` runs once and its timeout is the error. read = `f` may run again after it reached the server; otherwise (a
+/// statement that may change data) only a connect that timed out, when nothing reached the server, is tried again
+async fn with_pool_after<T, Fut: std::future::Future<Output = AppResult<T>>>(state: &AppState, id: &str, stale: Option<u64>, read: bool, f: impl Fn(Pool) -> Fut) -> AppResult<T> {
     if let Some(g) = stale {
         let cfg = state.source(id)?;
         return f(open_pool(state, id, Some(g)).await?).await.map_err(|e| timeout_error(&cfg, e, true));
     }
     let base = split_target(id).0;
     // The generation the open pool belongs to (drop_pool closes the pools when it counts up)
-    let generation = || state.connecting.lock().unwrap().get(base).map(|c| c.generation.load(SeqCst));
-    let before = generation();
-    let open = state.pools.read().await.contains_key(id).then_some(before).flatten();
+    let open = state.pools.read().await.contains_key(id);
+    let open = open.then(|| state.connecting.lock().unwrap().get(base).map(|c| c.generation.load(SeqCst))).flatten();
     let again = async || {
         let cfg = state.source(id)?;
         f(ensure_pool(state, id).await?).await.map_err(|e| timeout_error(&cfg, e, true))
     };
-    let e = match unless_stopped(state, base, f(ensure_pool(state, id).await?)).await {
-        None => return again().await,
-        Some(Err(e)) if timed_out(&e) => e,
-        Some(Err(e)) if closed_under(&e, before, generation(), tunnel_alive(state, base).await == Some(false)) => return again().await,
-        Some(r) => return r,
+    let pool = ensure_pool(state, id).await?;
+    // Read after the pool: the generation it belongs to, or a newer one (then a close under it isn't noticed: its error stays)
+    let c = state.connecting.lock().unwrap().get(base).cloned().filter(|_| read);
+    let r = match c {
+        Some(c) => {
+            let g = c.generation.load(SeqCst);
+            match unless_stopped(state, &c, base, g, f(pool)).await {
+                None => return again().await,
+                Some(Err(e)) if closed_under(&e, &c, g, tunnel_alive(state, base).await == Some(false)) => return again().await,
+                Some(r) => r,
+            }
+        }
+        None => f(pool).await,
+    };
+    let e = match r {
+        Err(e) if timed_out(&e) => e,
+        r => return r,
     };
     let cfg = state.source(id)?;
     match open.filter(|_| cfg.tunneled()) {
@@ -895,31 +927,28 @@ fn timed_out(e: &AppError) -> bool {
 }
 
 /// A read failed because its pool was closed under it (with_pool): it waited for a connection or used one when another caller
-/// closed the source (a dead tunnel, a disconnect), which counted the generation up from `before` to `now`, or the tunnel it
-/// went through stopped (`stopped`: the SSH server ended the session, the aws CLI exited). The pool then says PoolClosed, a
-/// connection through the closed tunnel an I/O error (connection reset)
-fn closed_under(e: &AppError, before: Option<u64>, now: Option<u64>, stopped: bool) -> bool {
-    matches!(e, AppError::Db(sqlx::Error::PoolClosed | sqlx::Error::Io(_))) && (before != now || stopped)
+/// found the tunnel dead and closed the source, which counted the generation up from `before`, or the tunnel it went through
+/// stopped (`stopped`: the SSH server ended the session, the aws CLI exited). The pool then says PoolClosed, a connection through
+/// the closed tunnel an I/O error (connection reset). Not after a disconnect (Connecting::may_rerun)
+fn closed_under(e: &AppError, c: &Connecting, before: u64, stopped: bool) -> bool {
+    matches!(e, AppError::Db(sqlx::Error::PoolClosed | sqlx::Error::Io(_))) && c.may_rerun(before) && (c.generation.load(SeqCst) != before || stopped)
 }
 
 /// How often a read through a tunnel looks whether the tunnel stopped meanwhile (unless_stopped)
 const TUNNEL_WATCH: std::time::Duration = std::time::Duration::from_millis(200);
 
-/// Runs `work`, a read on the source's pool, unless the source's tunnel stops first (its process exited) or the source is closed
-/// (another caller found the tunnel dead, a disconnect): None then. Through a tunnel whose port nobody holds any more, sqlx would
-/// try to connect again and again until its 10s acquire_timeout (it takes ConnectionRefused for a server starting up). Without a
-/// tunnel it just runs
-async fn unless_stopped<T>(state: &AppState, base: &str, work: impl std::future::Future<Output = T>) -> Option<T> {
-    let c = state.connecting.lock().unwrap().get(base).cloned();
-    let Some(c) = c else { return Some(work.await) };
+/// Runs `work`, a read on the source's pool of generation `g`, unless the source's tunnel stops first (its process exited) or
+/// another caller finds the tunnel dead and closes the source: None then. Through a tunnel whose port nobody holds any more, sqlx
+/// would try to connect again and again until its 10s acquire_timeout (it takes ConnectionRefused for a server starting up).
+/// After a disconnect it runs on and ends with what the closed pool says. Without a tunnel it just runs
+async fn unless_stopped<T>(state: &AppState, c: &Connecting, base: &str, g: u64, work: impl std::future::Future<Output = T>) -> Option<T> {
     if tunnel_alive(state, base).await != Some(true) {
         return Some(work.await);
     }
-    let g = c.generation.load(SeqCst);
     let stopped = async {
         loop {
             tokio::time::sleep(TUNNEL_WATCH).await;
-            if c.generation.load(SeqCst) != g || tunnel_alive(state, base).await != Some(true) {
+            if c.may_rerun(g) && (c.generation.load(SeqCst) != g || tunnel_alive(state, base).await == Some(false)) {
                 break;
             }
         }
@@ -932,16 +961,18 @@ async fn unless_stopped<T>(state: &AppState, base: &str, work: impl std::future:
 }
 
 /// How long a tunnel whose process runs gets to carry a new connection again before its first use after the Mac woke or a long
-/// idle (settle). After a wake the network and the SSM plugin's connection to AWS come back within seconds: measured with the
-/// fake aws (crates/core/tests/fake_aws.py), a CLI and plugin stopped for 3s answer 3.0s in, and this leaves a second more. A
-/// tunnel that is really dead costs this plus a new tunnel, instead of the 10s acquire_timeout and a check (about 12s)
+/// idle (settle). A judgement, not a measured resume time: after a wake the network (Wi-Fi rejoining, DHCP) and the SSM
+/// plugin's or SSH session's connection usually come back within a few seconds, and nothing here measured a real aws CLI, plugin
+/// or SSH session resuming. The fake aws (crates/core/tests/fake_aws.py) only shows the mechanism: a CLI and plugin the test
+/// stops for 3s answer one round trip after it resumes them. A tunnel that is really dead costs this plus a new tunnel, instead
+/// of the 10s acquire_timeout and a check (about 12s)
 pub(crate) const TUNNEL_GRACE: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// How long a tunnel check waits while closing the tunnel would lose work (in_use): a busy tunnel is slower to carry a new connection
 const BUSY_CHECK: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Before the first use of a source's pools after the Mac woke, or after they sat unused for POOL_IDLE by the wall clock
-/// (Connecting::stale): its tunnel may carry nothing while everything looks open (the aws CLI or the SSH accept loop runs on), and
+/// Before the first use of a source's pools after the Mac woke, or after they sat unused through a tunnel for POOL_IDLE by the
+/// wall clock (Connecting::stale): its tunnel may carry nothing while everything looks open (the aws CLI or the SSH accept loop runs on), and
 /// sqlx would hand out idle connections from before the sleep (its POOL_IDLE counts on an Instant), waiting out the 10s
 /// acquire_timeout on a dead one. So the tunnel is checked first: one whose process stopped is closed at once, and one that runs
 /// gets TUNNEL_GRACE to carry a new connection (resumes) and is closed if it doesn't. A tunnel that answers is kept, and the
@@ -951,13 +982,14 @@ const BUSY_CHECK: std::time::Duration = std::time::Duration::from_secs(5);
 async fn settle(state: &AppState, base: &str) -> Option<qurry_shared::errors::Disconnected> {
     use qurry_shared::errors::Disconnected;
     let c = state.connecting(base);
-    if !c.stale(state.wakes()) {
+    let tunneled = state.tunnels.read().await.contains_key(base);
+    if !c.stale(state.wakes(), tunneled) {
         return None;
     }
     let _connecting = c.failed.lock().await;
     // Checked meanwhile by a caller that waited for the same lock
     let wakes = state.wakes();
-    if !c.stale(wakes) {
+    if !c.stale(wakes, tunneled) {
         return None;
     }
     let g = c.generation.load(SeqCst);
@@ -1323,7 +1355,7 @@ async fn new_session(state: &AppState, id: &str, tab_id: &str, stale: Option<u64
         e.session.lock().await.discard().await;
     }
     // Opening one runs nothing of the user's: through a tunnel that stopped forwarding, it opens again on a new one
-    let mut s = with_pool_after(state, id, stale, |p| async move { Session::open(&p).await }).await?;
+    let mut s = with_pool_after(state, id, stale, true, |p| async move { Session::open(&p).await }).await?;
     // Production: a read in Manual mode doesn't open the transaction (Session::set_reads_outside_tx)
     s.set_reads_outside_tx(state.source(id).is_ok_and(|c| c.options.confirm_changes));
     // If the tab is Manual, the new session is Manual too (silently becoming Auto after a reconnect would commit the next change right away)
@@ -1734,9 +1766,10 @@ impl AppState {
     /// Run in the console's session (or on the pool). undo = also keep undo SQL: the snapshot runs in the change's transaction (Session::run_with_snapshot).
     /// → (result, undo SQL or why there is none, what happened to the console's transaction)
     async fn run_with_undo(&self, id: &str, cfg: &ConnectionConfig, sql: &str, limit: usize, tab: Option<&str>, undo: bool) -> (AppResult<QueryResult>, Option<Result<String, String>>, TxSeen) {
-        // On the pool, nothing reached the server when getting a connection timed out: through a dead tunnel it goes on through a new one
+        // On the pool, nothing reached the server when getting a connection timed out: through a dead tunnel it goes on through a
+        // new one. Never after it reached the server: it may change data (an INSERT, DDL, a Redis command), and would run twice
         if tab.is_none() && !undo {
-            return (with_pool(self, id, |p| async move { p.run_query(sql, limit).await }).await, None, TxSeen::default());
+            return (with_pool_after(self, id, None, false, |p| async move { p.run_query(sql, limit).await }).await, None, TxSeen::default());
         }
         // The session first: opening it, or checking one that sat unused (tab_session), replaces a tunnel that stopped forwarding,
         // and the pool is then the new one
@@ -2612,6 +2645,28 @@ pub(crate) mod tests {
         }
     }
 
+    /// A source is checked before its next use after a wake, and through a tunnel after POOL_IDLE unused by the wall clock, but
+    /// not when a keep-alive got through meanwhile; a source without a tunnel only after a wake (sqlx's POOL_IDLE does the rest)
+    #[test]
+    fn a_source_is_checked_after_a_wake_or_a_long_idle_through_a_tunnel() {
+        let c = Connecting::default();
+        assert!(c.stale(0, false), "never used");
+        c.settled(0);
+        assert!(!c.stale(0, true));
+        assert!(c.stale(1, false), "the Mac slept");
+        c.settled(1);
+        let idle = |c: &Connecting| c.used.lock().unwrap().as_mut().unwrap().0 -= db::POOL_IDLE;
+        idle(&c);
+        assert!(!c.stale(1, false), "no tunnel");
+        idle(&c);
+        assert!(c.stale(1, true), "through a tunnel");
+        c.settled(1);
+        idle(&c);
+        c.pinged();
+        assert!(!c.stale(1, true), "the keep-alive got through");
+        assert!(c.stale(2, true), "but a wake still is checked");
+    }
+
     /// A wake is the wall clock running ahead of an Instant between two reads by WAKE_GAP or more; a clock set back is none
     #[test]
     fn a_wake_is_the_wall_clock_running_ahead_of_an_instant() {
@@ -2639,20 +2694,29 @@ pub(crate) mod tests {
     }
 
     /// with_pool runs a read once more only when its pool was closed under it: PoolClosed or an I/O error after another caller
-    /// counted the generation up, or when its tunnel stopped. Not its own pool's errors, a timeout (it has its own retry) or any
-    /// other error
+    /// closed the source for a dead tunnel, or when its tunnel stopped. Not after a disconnect, nor for its own pool's errors, a
+    /// timeout (it has its own retry) or any other error
     #[test]
     fn a_read_is_run_again_only_when_its_pool_was_closed_under_it() {
         let io = || AppError::Db(sqlx::Error::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset)));
         let closed = || AppError::Db(sqlx::Error::PoolClosed);
-        assert!(closed_under(&closed(), Some(1), Some(2), false));
-        assert!(closed_under(&io(), Some(1), Some(2), false));
-        assert!(closed_under(&io(), Some(1), Some(1), true), "the SSH server ended the session");
-        assert!(!closed_under(&closed(), Some(1), Some(1), false), "nobody else closed it");
-        assert!(!closed_under(&io(), Some(1), Some(1), false));
-        assert!(!closed_under(&AppError::Db(sqlx::Error::PoolTimedOut), Some(1), Some(2), true));
-        assert!(!closed_under(&AppError::Db(sqlx::Error::RowNotFound), Some(1), Some(2), true));
-        assert!(!closed_under(&AppError::Msg("syntax error at or near \"fro\"".into()), Some(1), Some(2), true));
+        // At generation `now`, the last disconnect counted up to `disconnected`
+        let at = |now: u64, disconnected: u64| {
+            let c = Connecting::default();
+            c.generation.store(now, SeqCst);
+            c.disconnected.store(disconnected, SeqCst);
+            c
+        };
+        assert!(closed_under(&closed(), &at(2, 0), 1, false), "closed for a dead tunnel");
+        assert!(closed_under(&io(), &at(2, 1), 1, false));
+        assert!(closed_under(&io(), &at(1, 0), 1, true), "the SSH server ended the session");
+        assert!(!closed_under(&closed(), &at(1, 0), 1, false), "nobody else closed it");
+        assert!(!closed_under(&io(), &at(1, 0), 1, false));
+        assert!(!closed_under(&closed(), &at(2, 2), 1, false), "a disconnect closed it");
+        assert!(!closed_under(&io(), &at(3, 2), 1, true), "a disconnect, then a tunnel that stopped");
+        assert!(!closed_under(&AppError::Db(sqlx::Error::PoolTimedOut), &at(2, 0), 1, true));
+        assert!(!closed_under(&AppError::Db(sqlx::Error::RowNotFound), &at(2, 0), 1, true));
+        assert!(!closed_under(&AppError::Msg("syntax error at or near \"fro\"".into()), &at(2, 0), 1, true));
     }
 
     /// While Qurry waits for or replaces a source's tunnel, reconnecting() lists it with qurry_shared::errors::reconnecting's
@@ -3347,8 +3411,9 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// with_pool runs a read once more, on a new pool, when another caller closed its pool under it (the generation counted up),
-    /// and only once; not when the same error comes without that, nor for other errors. PostgreSQL and MySQL:
+    /// with_pool runs a read once more, on a new pool, when another caller closed its pool under it for a dead tunnel, and only
+    /// once; not when the same error comes without that or after a disconnect (which leaves the source closed), nor for other
+    /// errors. PostgreSQL and MySQL:
     /// QURRY_TEST_PG=… QURRY_TEST_MY=… cargo test -p qurry-core a_read_whose_pool_closes -- --ignored
     async fn a_read_whose_pool_closes_under_it_runs_again(kind: crate::store::DbKind) {
         use std::sync::atomic::AtomicUsize;
@@ -3360,13 +3425,14 @@ pub(crate) mod tests {
         let id = st.save_connection(c, server.password.clone(), None).await.unwrap().id;
         ensure_pool(&st, &id).await.unwrap();
         let (st, id, runs) = (&st, id.as_str(), &AtomicUsize::new(0));
-        // A read whose first `fails` runs fail with `e`, closing the source first when `close` (as another caller would)
-        let read = |fails: usize, close: bool, e: fn() -> AppError| {
+        // A read whose first `fails` runs fail with `e`, closing the source first when `close`: as another caller that found the
+        // tunnel dead would (BY_SERVER), or a Disconnect
+        let read = |fails: usize, close: Option<&'static str>, e: fn() -> AppError| {
             runs.store(0, SeqCst);
             move |p: Pool| async move {
                 if runs.fetch_add(1, SeqCst) < fails {
-                    if close {
-                        drop_pool(st, id).await;
+                    if let Some(word) = close {
+                        drop_pool_logged(st, id, word).await;
                     }
                     return Err(e());
                 }
@@ -3375,15 +3441,20 @@ pub(crate) mod tests {
         };
         let pool_closed: fn() -> AppError = || AppError::Db(sqlx::Error::PoolClosed);
         let reset: fn() -> AppError = || AppError::Db(sqlx::Error::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset)));
+        let (dead, disconnect) = (Some(crate::audit::BY_SERVER), Some(crate::audit::DISCONNECTED));
         for e in [pool_closed, reset] {
-            assert!(with_pool(st, id, read(1, true, e)).await.is_ok(), "on a new pool");
+            assert!(with_pool(st, id, read(1, dead, e)).await.is_ok(), "on a new pool");
             assert_eq!(runs.load(SeqCst), 2);
-            assert!(with_pool(st, id, read(2, true, e)).await.is_err());
+            assert!(with_pool(st, id, read(2, dead, e)).await.is_err());
             assert_eq!(runs.load(SeqCst), 2, "once only");
-            assert!(with_pool(st, id, read(1, false, e)).await.is_err());
+            assert!(with_pool(st, id, read(1, None, e)).await.is_err());
             assert_eq!(runs.load(SeqCst), 1, "nobody closed it");
+            assert!(with_pool(st, id, read(1, disconnect, e)).await.is_err());
+            assert_eq!(runs.load(SeqCst), 1, "disconnected");
+            assert!(st.pools.read().await.is_empty(), "the disconnect stays");
+            ensure_pool(st, id).await.unwrap();
         }
-        assert!(with_pool(st, id, read(1, true, || AppError::Msg("syntax error".into()))).await.is_err());
+        assert!(with_pool(st, id, read(1, dead, || AppError::Msg("syntax error".into()))).await.is_err());
         assert_eq!(runs.load(SeqCst), 1, "not for other errors");
         st.disconnect(id.into()).await.unwrap();
     }
