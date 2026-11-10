@@ -521,7 +521,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
             <option value="disable">Disable</option>
           </Select>
           <label>Time zone</label>
-          <TextInput value={opt.timeZone ?? ""} placeholder="Database default (e.g. Asia/Seoul, UTC)" onChange={(e) => setOpt("timeZone", e.target.value || null)} />
+          <TextInput value={opt.timeZone ?? ""} placeholder="UTC (e.g. Asia/Seoul, +09:00)" onChange={(e) => setOpt("timeZone", e.target.value || null)} />
           <span />
           <div className="ui-row">
             <Checkbox checked={!!opt.keepAliveSecs} onChange={(v) => setOpt("keepAliveSecs", v ? 60 : null)}>

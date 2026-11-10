@@ -435,7 +435,7 @@ async fn run_limited(pool: &Pool, kind: DbKind, sql: &str, secs: u32) -> AppResu
                 Err(e) if e.to_string().contains("transaction blocks not allowed") => return pool.run_query(sql, REPORT_ROWS).await,
                 Err(e) => return Err(e.into()),
             };
-            let r = crate::db::run_pg_on(&mut tx, sql, REPORT_ROWS).await;
+            let r = crate::db::run_pg_on(&mut tx, sql, REPORT_ROWS, None).await;
             let _ = tx.rollback().await;
             r
         }

@@ -3,6 +3,7 @@ use crate::keys::disp;
 use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind, WARNING};
 use crate::tree::NodeKind;
 use qurry_core::keymap::Scope;
+use qurry_core::statusbar::{self, Segment};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap};
 use serde_json::Value;
@@ -1004,12 +1005,29 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
     (ctx.into_iter().flatten().collect(), glob.into_iter().flatten().collect())
 }
 
-/// One hint line: screen keys · … │ global keys · … (if wider than w, drop screen keys from the end)
-fn hint_line(mut ctx: Vec<(String, &'static str)>, glob: Vec<(String, &'static str)>, w: usize) -> Line<'static> {
+/// The status line's right side: key hints (screen keys · … │ global keys · …), then the focused grid's items (item │ item │ Position,
+/// qurry_shared::statusbar), fitted into `w` cells: the screen keys go first (from the end), then the global keys but the last (⌃k
+/// actions, where the items are chosen), then items in qurry_shared::statusbar::DROP order, then that last key; Position stays.
+/// Also says whether an item had to go
+fn status_right(mut ctx: Vec<(String, &'static str)>, mut glob: Vec<(String, &'static str)>, mut segs: Vec<Segment>, w: usize) -> (Line<'static>, bool) {
+    let all = segs.len();
     use unicode_width::UnicodeWidthStr;
-    let width = |v: &[(String, &str)]| v.iter().map(|(k, l)| k.width() + 1 + l.width() + 3).sum::<usize>();
-    while !ctx.is_empty() && width(&ctx) + width(&glob) + 1 > w {
-        ctx.pop();
+    let hints = |v: &[(String, &str)]| v.iter().map(|(k, l)| k.width() + 1 + l.width()).sum::<usize>() + v.len().saturating_sub(1) * 3;
+    let items = |v: &[Segment]| v.iter().map(|g| g.label.as_ref().map_or(0, |l| l.width() + 2) + g.value.width()).sum::<usize>() + v.len().saturating_sub(1) * 3;
+    let width = |ctx: &[_], glob: &[_], segs: &[Segment]| hints(ctx) + if ctx.is_empty() || glob.is_empty() { 0 } else { 3 } + hints(glob) + if segs.is_empty() { 0 } else { 3 + items(segs) } + 1;
+    while width(&ctx, &glob, &segs) > w {
+        if ctx.pop().is_some() {
+            continue;
+        }
+        if glob.len() > 1 {
+            glob.remove(0);
+        } else if let Some(i) = statusbar::DROP.iter().find_map(|d| segs.iter().position(|g| g.id == *d)) {
+            segs.remove(i);
+        } else if !glob.is_empty() {
+            glob.clear();
+        } else {
+            break;
+        }
     }
     let mut spans = vec![];
     let push = |v: Vec<(String, &'static str)>, spans: &mut Vec<Span<'static>>| {
@@ -1021,14 +1039,28 @@ fn hint_line(mut ctx: Vec<(String, &'static str)>, glob: Vec<(String, &'static s
             spans.push(muted(format!(" {l}")));
         }
     };
+    let dropped = segs.len() < all;
     let has_ctx = !ctx.is_empty();
+    let has_glob = !glob.is_empty();
     push(ctx, &mut spans);
-    if has_ctx {
+    if has_ctx && has_glob {
         spans.push(Span::styled(" │ ", Style::default().fg(DIM)));
     }
     push(glob, &mut spans);
+    if !segs.is_empty() {
+        spans.push(Span::raw("   "));
+    }
+    for (i, g) in segs.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" │ ", Style::default().fg(DIM)));
+        }
+        if let Some(l) = g.label {
+            spans.push(muted(format!("{l}: ")));
+        }
+        spans.push(Span::styled(g.value, Style::default().fg(Color::Gray)));
+    }
     spans.push(Span::raw(" "));
-    Line::from(spans)
+    (Line::from(spans), dropped)
 }
 
 fn draw_status(f: &mut Frame, app: &mut App, area: Rect) {
@@ -1043,19 +1075,15 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect) {
         let ms = app.run_elapsed(app.active).unwrap_or_default().as_millis() as u64;
         format!("▕{}▏ {what}… {} · {} cancel", bounce(ms), crate::app::elapsed_text(ms), app.keys.label(crate::app::Action::Cancel))
     });
+    // A run's or a transfer's line is never cut below its length (up to half the line) to make room for the items
+    let progress = busy.is_some() || !app.jobs.is_empty();
     let status = match busy {
         Some(b) => b,
         None if app.jobs.is_empty() => disp(&app.status),
         None => app.jobs.iter().map(|(_, label, j)| job_line(label, j.progress())).collect::<Vec<_>>().join("  ·  "),
     };
-    // Status text claims up to half the screen width first (so error·result messages aren't cut)
-    let sw = (status.chars().count() as u16 + 2).clamp(12, area.width / 2);
-    let hints = hint_line(ctx, glob, area.width.saturating_sub(bw + sw) as usize);
-    let hw = (hints.width() as u16).min(area.width.saturating_sub(bw + 12));
-    let [u, l, r] = Layout::horizontal([Constraint::Length(bw), Constraint::Min(10), Constraint::Length(hw)]).areas(area);
-    if let Some(b) = badge {
-        f.render_widget(Paragraph::new(b).style(Style::default().fg(Color::Black).bg(WARN)), u);
-    }
+    // Status text claims up to half the screen width first (so error·result messages aren't cut); only a third when an item of the
+    // focused grid would otherwise go (not for a run's or a transfer's line)
     // Badge before the status text if the current tab's Data Source is production · read-only
     let conn = app.tabs.get(app.active).and_then(|t| app.conn(&t.conn));
     let mut line = vec![Span::raw(" ")];
@@ -1069,9 +1097,43 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect) {
             line.push(Span::raw(" "));
         }
     }
-    line.push(Span::raw(status));
+    let lead = Line::from(line.clone()).width() as u16;
+    let segs = app.status_segments();
+    let sw = |cap: u16| (lead + status.chars().count() as u16 + 1).clamp(12, cap.max(12));
+    let right = |sw: u16| status_right(ctx.clone(), glob.clone(), segs.clone(), area.width.saturating_sub(bw + sw) as usize);
+    let (mut hints, dropped) = right(sw(area.width / 2));
+    if dropped && !progress {
+        hints = right(sw(area.width / 3)).0;
+    }
+    let hw = (hints.width() as u16).min(area.width.saturating_sub(bw + 12));
+    let [u, l, r] = Layout::horizontal([Constraint::Length(bw), Constraint::Min(10), Constraint::Length(hw)]).areas(area);
+    if let Some(b) = badge {
+        f.render_widget(Paragraph::new(b).style(Style::default().fg(Color::Black).bg(WARN)), u);
+    }
+    // Cut with … and a space before the key hints when it doesn't fit
+    let room = (l.width as usize).saturating_sub(lead as usize + 1);
+    line.push(Span::raw(if unicode_width::UnicodeWidthStr::width(status.as_str()) > room { cut(&status, room) } else { status }));
     f.render_widget(Paragraph::new(Line::from(line)).style(Style::default().fg(Color::Gray).bg(SURFACE)), l);
     f.render_widget(Paragraph::new(hints).style(Style::default().bg(SURFACE)), r);
+}
+
+/// `s` cut to `w` cells, the last one an …
+fn cut(s: &str, w: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if used + cw + 1 > w {
+            break;
+        }
+        used += cw;
+        out.push(ch);
+    }
+    if w > 0 {
+        out.push('…');
+    }
+    out
 }
 
 /// "Export users ▕████░░░░░░▏ 1,234 rows · 42%". If the total is unknown the bar bounces back and forth
@@ -1335,7 +1397,14 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 .collect();
             p.sel = sel;
             let ddl = app.keys.keys(crate::app::Action::Ddl).first().map(|k| disp(k)).unwrap_or_else(|| "—".into());
-            let hint = if p.title.starts_with("Go to") || p.title == "Search Everywhere" { format!(" Enter open · {ddl} DDL · Esc ") } else { " Enter · Esc ".into() };
+            let check = p.items.iter().all(|i| matches!(i.action, crate::app::PAction::StatusItem(_)));
+            let hint = if p.title.starts_with("Go to") || p.title == "Search Everywhere" {
+                format!(" Enter open · {ddl} DDL · Esc ")
+            } else if check {
+                " ↑↓ move · Space toggle · Esc close ".into()
+            } else {
+                " Enter · Esc ".into()
+            };
             f.render_widget(List::new(items).block(panel(hint, true)), list);
         }
         Popup::ConnForm(form) => draw_conn_form(f, area, form),

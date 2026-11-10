@@ -830,6 +830,24 @@ impl Store {
         Ok(next)
     }
 
+    /// The status bar items on (GUI status bar and Settings › Appearance, TUI ⌃k › Status Bar Items…): the defaults until changed
+    pub fn status_bar_items(&self) -> Vec<crate::statusbar::Item> {
+        crate::statusbar::items(self.settings().get("statusBarItems"))
+    }
+
+    /// Turn one item on or off, on what the file holds now (the GUI and the TUI may both have changed it). Returns what is saved
+    pub fn set_status_bar_item(&self, item: crate::statusbar::Item, on: bool) -> AppResult<Vec<crate::statusbar::Item>> {
+        let next = crate::statusbar::toggled(&self.status_bar_items(), item, on);
+        self.set_setting("statusBarItems", serde_json::to_value(&next)?)?;
+        Ok(next)
+    }
+
+    /// Restore Defaults: the key goes, so a later version's defaults apply
+    pub fn reset_status_bar_items(&self) -> AppResult<Vec<crate::statusbar::Item>> {
+        self.remove_setting("statusBarItems")?;
+        Ok(self.status_bar_items())
+    }
+
     /// The settings.json "columnWidths" entries: one per table that has set widths
     fn column_width_entries(&self) -> Vec<serde_json::Value> {
         match self.settings().remove("columnWidths") {
@@ -968,10 +986,20 @@ impl Store {
     fn set_setting(&self, key: &str, value: serde_json::Value) -> AppResult<()> {
         let mut all = self.settings();
         all.insert(key.into(), value);
+        self.write_settings(&all)
+    }
+
+    fn remove_setting(&self, key: &str) -> AppResult<()> {
+        let mut all = self.settings();
+        all.remove(key);
+        self.write_settings(&all)
+    }
+
+    fn write_settings(&self, all: &serde_json::Map<String, serde_json::Value>) -> AppResult<()> {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
-        crate::secrets::write_private(&self.file("settings.json"), serde_json::to_string_pretty(&all)?.as_bytes())
+        crate::secrets::write_private(&self.file("settings.json"), serde_json::to_string_pretty(all)?.as_bytes())
     }
 
     fn write(&self, all: &[ConnectionConfig]) -> AppResult<()> {
@@ -1105,6 +1133,34 @@ mod tests {
         let path = dir.path().join("cfg/settings.json");
         fs::write(&path, r#"{"gridAlign": {"null": "left", "number": "justify"}}"#).unwrap();
         assert_eq!(store.grid_align(), Alignments::from([(ValueClass::Null, Align::Left)]));
+    }
+
+    /// Status bar items: the defaults until changed, a change keeps what another app saved meanwhile, all off stays off, Restore
+    /// Defaults removes the key (other settings kept)
+    #[test]
+    fn status_bar_items_setting() {
+        use crate::statusbar::{Item, DEFAULTS};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        assert_eq!(store.status_bar_items(), DEFAULTS);
+        store.set_update_channel(crate::update::Channel::Beta).unwrap();
+        assert_eq!(store.set_status_bar_item(Item::Sum, true).unwrap(), [Item::Sum, Item::ShownColumns, Item::Position]);
+        // The other app turned Size on meanwhile: turning Position off keeps it
+        Store::new(dir.path().join("cfg")).set_status_bar_item(Item::Size, true).unwrap();
+        assert_eq!(store.set_status_bar_item(Item::Position, false).unwrap(), [Item::Sum, Item::Size, Item::ShownColumns]);
+        let path = dir.path().join("cfg/settings.json");
+        assert!(fs::read_to_string(&path).unwrap().contains(r#""statusBarItems": [
+    "sum",
+    "size",
+    "shownColumns"
+  ]"#));
+        for i in [Item::Sum, Item::Size, Item::ShownColumns] {
+            store.set_status_bar_item(i, false).unwrap();
+        }
+        assert!(store.status_bar_items().is_empty(), "all off stays off");
+        assert_eq!(store.reset_status_bar_items().unwrap(), DEFAULTS);
+        assert!(!fs::read_to_string(&path).unwrap().contains("statusBarItems"));
+        assert_eq!(store.update_channel(), crate::update::Channel::Beta);
     }
 
     /// Column widths per table: none until set, merged with what another app saved meanwhile, kept in range, other tables and

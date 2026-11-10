@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { alignOf, setGridAlign, useGridAlign, VALUE_CLASSES } from "../../lib/gridAlign";
-import { useSharedReady, type Align, type KeywordCase } from "../../lib/shared";
+import { shared, useSharedReady, type Align, type KeywordCase } from "../../lib/shared";
+import { loadStatusItems, resetStatusItems, setStatusItem, useStatusItems } from "../../lib/statusbar";
 import { setKeywordCase, useKeywordCase } from "../../lib/keywordCase";
 import { api, secretKey, setUpdateCheckEnabled, UpdateInfo, updateCheckEnabled } from "../../lib/api";
 import type { FontFamily, UpdateChannel } from "../../lib/api";
@@ -78,6 +79,63 @@ export function GridAlignField() {
           </Fragment>
         ))}
       </div>
+    </Field>
+  );
+}
+
+/** Settings › Appearance › Status bar: the items the status bar shows for the focused grid, by group (the status bar's right-click
+ *  checklist, shared with the TUI through settings.json) */
+export function StatusBarField() {
+  const on = useStatusItems();
+  const ready = useSharedReady();
+  const [err, setErr] = useState<string | null>(null);
+  // The TUI may have changed them since
+  useEffect(() => void loadStatusItems(), []);
+  const save = (p: Promise<void>) => {
+    setErr(null);
+    p.catch((e) => setErr(String(e)));
+  };
+  const info = ready ? shared().statusBarInfo() : null;
+  const groups = info ? [...new Set(info.items.map((i) => i.group))] : [];
+  return (
+    <Field
+      label="Status bar"
+      group
+      error={err ?? undefined}
+      hint={ready ? "Position and Shown columns are on by default." : "The status bar items need WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk."}
+      info={[
+        "Which items the status bar shows on the right, for the focused grid.",
+        "Position: the current cell (Row 3, Col 4), or the selected rows and columns (Rows 5–26 (22) · Col 4; 22 rows when they aren't one range).",
+        "Not null: the selected cells that have a value.",
+        "Sum, Avg, Min, Max: over the numbers in the selection.",
+        "Size: the current cell's size in bytes and its column's declared limit, when the table's metadata gives it (a table tab, or a console result of a table). The bytes are UTF-8 as sent (binary: its length), which can differ from what the server stores in another character set (latin1).",
+        "Right-click the status bar to change them there. Shared with the TUI.",
+      ]}
+    >
+      {info && (
+        <div className="sb-field">
+          {groups.map((g) => (
+            <Fragment key={g}>
+              <span className="sb-field-label">{g}</span>
+              <div className="sb-field-row">
+                {info.items
+                  .filter((i) => i.group === g)
+                  .map((i) => (
+                    <Checkbox key={i.id} checked={on.includes(i.id)} onChange={(v) => save(setStatusItem(i.id, v))}>
+                      {i.id === "size" ? `${i.label} (${i.hint})` : i.label}
+                    </Checkbox>
+                  ))}
+              </div>
+            </Fragment>
+          ))}
+          <span />
+          <div>
+            <Button size="sm" onClick={() => save(resetStatusItems())}>
+              Restore Defaults
+            </Button>
+          </div>
+        </div>
+      )}
     </Field>
   );
 }
@@ -314,6 +372,7 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
             <FontField target="grid" label="Grid font" installed={fonts} onOpen={loadFonts} />
             <KeywordCaseField />
             <GridAlignField />
+            <StatusBarField />
             <Field label="Updates" hint={updMsg ?? undefined}>
               <div className="ui-row">
                 <Checkbox

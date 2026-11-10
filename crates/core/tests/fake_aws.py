@@ -81,8 +81,10 @@ if MODE in ("ok", "silent"):
         f.write(f"{os.getpid()}\n")
     print("\nStarting session with SessionId: qurry-test-0123456789abcdef", flush=True)
     p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--plugin", params["host"], params["portNumber"], params["localPortNumber"]])
-    with open(os.path.join(HERE, "pids"), "w") as f:
+    # Atomically: a test reading pids mid-write would see the CLI's pid alone
+    with open(os.path.join(HERE, "pids.tmp"), "w") as f:
         f.write(f"{os.getpid()} {p.pid}")
+    os.replace(os.path.join(HERE, "pids.tmp"), os.path.join(HERE, "pids"))
     sys.exit(p.wait())
 if MODE == "stuck":
     print("\nStarting session with SessionId: qurry-test-0123456789abcdef", flush=True)

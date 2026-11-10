@@ -74,6 +74,51 @@ export interface FilterSuggestions {
   items: CompletionItem[];
 }
 
+/** A status bar item the user turns on or off (qurry_shared::statusbar::Item, the ids settings.json keeps) */
+export type StatusItemId = "notNull" | "sum" | "avg" | "min" | "max" | "size" | "shownColumns" | "position";
+/** What a status bar segment shows: an item, or the column limit that goes with Size (qurry_shared::statusbar::Part) */
+export type StatusPart = StatusItemId | "limit";
+/** The items, as the checklists list them, the defaults, and which segment goes first when the bar is narrow */
+export interface StatusBarInfo {
+  items: { id: StatusItemId; label: string; hint: string; group: string }[];
+  defaults: StatusItemId[];
+  drop: StatusPart[];
+  /** The most selected cells Not null, Sum, Avg, Min and Max go over */
+  maxCells: number;
+}
+/** Rows or columns of a selection, 1-based (qurry_shared::statusbar::Span) */
+export interface StatusSpan {
+  first: number;
+  last: number;
+  count: number;
+}
+/** Not null, Sum, Avg, Min, Max of the selected cells (qurry_shared::statusbar::Stats) */
+export interface SelectionStats {
+  notNull: number;
+  nums: number;
+  sum: number;
+  min: number;
+  max: number;
+}
+/** What a focused grid tells the status bar (qurry_shared::statusbar::Status) */
+export interface GridStatus {
+  kind?: DbKind;
+  /** The selected rows and columns, or the current cell */
+  pos?: [StatusSpan, StatusSpan];
+  /** 2+ cells selected */
+  stats?: SelectionStats;
+  /** The current cell when it is the only one; column: its table column's declared type, when known */
+  cell?: { typeName: string; value: Cell; column?: { dataType: string; charset?: string | null } };
+  /** Shown columns: first, last, total (1-based) */
+  shown?: [number, number, number];
+}
+/** One part of the status bar: a muted label and its value */
+export interface StatusSegment {
+  id: StatusPart;
+  label?: string;
+  value: string;
+}
+
 /** A value spot read from the text before the cursor (qurry_shared::complete::Ctx) */
 export interface HintContext {
   /** alias or table (if absent, find the column among the statement's tables) */
@@ -203,8 +248,12 @@ const api = {
   errorPosition: (msg: string, sql: string): number | undefined => wasm.errorPosition(msg, sql),
   /** The error without the position the core adds to it, for its mark in the editor (qurry_shared::errors::without_position) */
   withoutPosition: (msg: string): string => wasm.withoutPosition(msg),
-  /** The result grid's shown columns ("cols 3–8 of 14", 1-based), or undefined when every column fits (qurry_shared::format::shown_cols, the TUI's words) */
-  shownCols: (first: number, last: number, total: number): string | undefined => wasm.shownCols(first, last, total),
+  /** The status bar's items, their defaults and the order they go when narrow (qurry_shared::statusbar) */
+  statusBarInfo: (): StatusBarInfo => wasm.statusBarInfo(),
+  /** The status bar's segments for the items on (qurry_shared::statusbar::segments, the TUI's words) */
+  statusSegments: (on: StatusItemId[], status: GridStatus): StatusSegment[] => wasm.statusSegments(on, status),
+  /** Not null, Sum, Avg, Min, Max of the selected cells' values */
+  selectionStats: (cells: Cell[]): SelectionStats => wasm.selectionStats(cells),
   /** The DBA report's database picker when the databases can't be listed (qurry_shared::errors::db_list_failed, the TUI's words) */
   dbListFailed: (msg: string): string => wasm.dbListFailed(msg),
   /** Result word of a Production log entry ("outcome unknown", "failed", "committed" …), or undefined when its rows say it */

@@ -23,6 +23,11 @@ pub fn from_source(exe: &Path) -> bool {
     parts.windows(2).any(|w| w[0] == "target" && (w[1] == "release" || w[1] == "debug"))
 }
 
+/// from_source, or a debug build (releases are always built with --release), wherever cargo put it (a CARGO_TARGET_DIR of any name)
+pub fn built_from_source(exe: &Path) -> bool {
+    cfg!(debug_assertions) || from_source(exe)
+}
+
 pub fn current_exe() -> Option<PathBuf> {
     std::env::current_exe().ok().and_then(|p| p.canonicalize().ok())
 }
@@ -71,7 +76,7 @@ fn source_build_note(exe: &Path) -> Option<String> {
     if exe.components().any(|c| c.as_os_str() == "Cellar") {
         return Some("This qurry-tui was installed with Homebrew. Update it with: brew upgrade qurry".into());
     }
-    from_source(exe).then(|| format!("This qurry-tui was built from source ({}). Update it with: git pull && cargo build --release -p qurry-tui -p qurry-mcp", exe.display()))
+    built_from_source(exe).then(|| format!("This qurry-tui was built from source ({}). Update it with: git pull && cargo build --release -p qurry-tui -p qurry-mcp", exe.display()))
 }
 
 /// Download the newest release of the channel and swap it in place of the running executable. quiet = inside the TUI screen (prints nothing)
@@ -256,7 +261,7 @@ mod tests {
         let note = super::source_build_note(Path::new("/opt/homebrew/Cellar/qurry/0.1.19/bin/qurry-tui")).unwrap();
         assert!(note.contains("brew upgrade qurry"), "{note}");
         assert!(super::source_build_note(Path::new("/home/linuxbrew/.linuxbrew/Cellar/qurry/0.1.19/bin/qurry-tui")).is_some());
-        assert!(super::source_build_note(Path::new("/Users/me/.local/bin/qurry-tui")).is_none());
+        assert_eq!(super::source_build_note(Path::new("/Users/me/.local/bin/qurry-tui")).is_some(), cfg!(debug_assertions), "a debug build is always from source");
     }
 
     #[test]

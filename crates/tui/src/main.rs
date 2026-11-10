@@ -61,7 +61,7 @@ async fn main() -> std::io::Result<()> {
     if cli.update {
         return selfupdate::run_update(qurry_core::store::Store::new(cfg_dir).update_channel()).await;
     }
-    let check_update = !cli.no_update_check && !qurry_core::update::disabled() && !selfupdate::current_exe().is_some_and(|e| selfupdate::from_source(&e));
+    let check_update = !cli.no_update_check && !qurry_core::update::disabled() && !selfupdate::current_exe().is_some_and(|e| selfupdate::built_from_source(&e));
     // Before the screen is taken: a bad URL says why on the terminal
     let temporary = cli.start.as_ref().map(cli::temporary).transpose().unwrap_or_else(|e| fail(&e));
     // Also on the terminal, where it stays after qurry-tui exits (the status line is one row)

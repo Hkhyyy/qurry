@@ -8,6 +8,7 @@ use serde_json::Value;
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::{Column, Either, Executor, Row, TypeInfo, ValueRef};
 use std::time::{Duration, Instant};
+use crate::zone::Zone;
 
 #[derive(Clone)]
 pub enum Pool {
@@ -179,10 +180,13 @@ impl Pool {
 }
 
 /// Run one statement on an already acquired connection (transaction). With 0 rows the columns come from describe
-pub(crate) async fn run_pg_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> AppResult<QueryResult> {
+/// `pool`: where to read the session's time zone for timestamptz when the result is cut off at `limit` (a connection of the same
+/// pool has the same zone, and reading it on `conn` would first wait for the rest of the result); None reads it on `conn` (a
+/// transaction that ends right after reads the rest anyway)
+pub(crate) async fn run_pg_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize, pool: Option<&PgPool>) -> AppResult<QueryResult> {
     let start = Instant::now();
     let mut columns = Vec::new();
-    let mut rows: Vec<Vec<Value>> = Vec::new();
+    let mut rows: Vec<PgRow> = Vec::new();
     let mut rows_affected = 0u64;
     let mut truncated = false;
     let mut has_result_set = false;
@@ -204,11 +208,16 @@ pub(crate) async fn run_pg_on(conn: &mut sqlx::PgConnection, sql: &str, limit: u
                         truncated = true;
                         break;
                     }
-                    rows.push((0..row.len()).map(|i| pg_value(&row, i)).collect());
+                    rows.push(row);
                 }
             }
         }
     }
+    let mut zone = None;
+    if let Some(p) = pool.filter(|_| truncated && columns.iter().any(|c| zoned(&c.type_name))) {
+        zone = pool_zone(p).await;
+    }
+    let rows = pg_values(conn, &columns, &rows, &mut zone).await;
     // With 0 rows the column info is unknown, so fill it in with describe.
     if !has_result_set {
         if let Ok(desc) = conn.describe(sql).await {
@@ -242,7 +251,7 @@ pub(crate) async fn run_pg_on(conn: &mut sqlx::PgConnection, sql: &str, limit: u
 pub async fn run_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> AppResult<QueryResult> {
     let start = Instant::now();
     let mut columns = Vec::new();
-    let mut rows: Vec<Vec<Value>> = Vec::new();
+    let mut rows: Vec<PgRow> = Vec::new();
     let mut truncated = false;
     {
         let mut stream = sqlx::query(sql).persistent(false).fetch(&mut *conn);
@@ -254,21 +263,27 @@ pub async fn run_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> A
                 truncated = true;
                 break;
             }
-            rows.push((0..row.len()).map(|i| pg_value(&row, i)).collect());
+            rows.push(row);
         }
     }
+    let rows = pg_values(conn, &columns, &rows, &mut None).await;
     Ok(QueryResult { columns, rows, rows_affected: 0, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set: true, in_transaction: false, warning: None, editable: None })
 }
 
-/// Export on an already acquired connection (possibly a read-only transaction)
-pub async fn export_pg_on(conn: &mut sqlx::PgConnection, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
+/// Export on an already acquired connection of `pool` (possibly a read-only transaction). The time zone for timestamptz is read
+/// on another connection of the pool (same after_connect settings), when the first row has such a column: `conn` is busy streaming
+pub async fn export_pg_on(conn: &mut sqlx::PgConnection, pool: &PgPool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
+    let mut zone = Zone::UTC;
     let mut stream = sqlx::query(sql).persistent(false).fetch(&mut *conn);
     while let Some(row) = stream.try_next().await? {
         if !out.has_header() {
             let names: Vec<String> = row.columns().iter().map(|c| c.name().to_string()).collect();
             out.header(&names).await?;
+            if row.columns().iter().any(|c| zoned(c.type_info().name())) {
+                zone = pool_zone(pool).await.unwrap_or(Zone::UTC);
+            }
         }
-        let vals: Vec<Value> = (0..row.len()).map(|i| pg_value(&row, i)).collect();
+        let vals: Vec<Value> = (0..row.len()).map(|i| pg_value(&row, i, &zone)).collect();
         out.row(&vals).await?;
     }
     drop(stream);
@@ -313,7 +328,38 @@ pub(crate) fn int_value(v: i64) -> Value {
     }
 }
 
-pub(crate) fn pg_value(row: &PgRow, i: usize) -> Value {
+/// Whether a column's text needs the session's time zone (pg_zone)
+fn zoned(ty: &str) -> bool {
+    matches!(ty, "TIMESTAMPTZ" | "TIMESTAMPTZ[]")
+}
+
+/// The session's time zone: its TimeZone setting, and the offset the server says it has now (for a setting the tz database here
+/// doesn't name, such as `+09:00`). None when it couldn't be read
+pub(crate) async fn pg_zone(conn: &mut sqlx::PgConnection) -> Option<Zone> {
+    let (name, now): (String, i32) = sqlx::query_as("select pg_catalog.current_setting('TimeZone'), extract(timezone from pg_catalog.now())::int4")
+        .persistent(false)
+        .fetch_one(conn)
+        .await
+        .ok()?;
+    Some(Zone::new(&name, now))
+}
+
+/// The time zone of the pool's sessions, read on a connection of its own
+async fn pool_zone(pool: &PgPool) -> Option<Zone> {
+    pg_zone(&mut *pool.acquire().await.ok()?).await
+}
+
+/// Rows read on `conn` → values. The session's time zone is read (once, into `zone`) only when a column is timestamptz, after
+/// the rows: the connection is free then
+pub(crate) async fn pg_values(conn: &mut sqlx::PgConnection, columns: &[ColumnInfo], rows: &[PgRow], zone: &mut Option<Zone>) -> Vec<Vec<Value>> {
+    if zone.is_none() && !rows.is_empty() && columns.iter().any(|c| zoned(&c.type_name)) {
+        *zone = pg_zone(conn).await;
+    }
+    let z = zone.as_ref().unwrap_or(&Zone::UTC);
+    rows.iter().map(|r| (0..r.len()).map(|i| pg_value(r, i, z)).collect()).collect()
+}
+
+pub(crate) fn pg_value(row: &PgRow, i: usize, zone: &Zone) -> Value {
     use chrono::NaiveTime;
     let raw = match row.try_get_raw(i) {
         Ok(r) => r,
@@ -346,10 +392,10 @@ pub(crate) fn pg_value(row: &PgRow, i: usize) -> Value {
             .map(Value::from),
         "UUID" => get!(uuid::Uuid).map(|u| Value::from(u.to_string())),
         "JSON" | "JSONB" => get!(Value).map(|j| Value::from(j.to_string())),
-        "TIMESTAMP" | "TIMESTAMPTZ" | "DATE" => raw.as_bytes().ok().and_then(|b| pg_datetime(&ty, b)).map(Value::from),
+        "TIMESTAMP" | "TIMESTAMPTZ" | "DATE" => raw.as_bytes().ok().and_then(|b| pg_datetime(&ty, b, zone)).map(Value::from),
         "TIMESTAMP[]" | "TIMESTAMPTZ[]" | "DATE[]" => {
             let elem = ty.trim_end_matches("[]");
-            raw.as_bytes().ok().and_then(|b| pg_array(b, &|e| pg_datetime(elem, e))).map(Value::from)
+            raw.as_bytes().ok().and_then(|b| pg_array(b, &|e| pg_datetime(elem, e, zone))).map(Value::from)
         }
         "TIME" => get!(NaiveTime).map(|t| Value::from(t.to_string())),
         "BYTEA" => get!(Vec<u8>).map(|b| {
@@ -369,9 +415,9 @@ pub(crate) fn pg_value(row: &PgRow, i: usize) -> Value {
 
 /// PostgreSQL timestamp / timestamptz / date (binary) → text. Decoded here, not with sqlx's chrono types, which panic on
 /// infinity (i64::MAX / i64::MIN microseconds, i32::MAX / i32::MIN days) and past chrono's range. Shows infinity / -infinity
-/// as psql does; None for anything chrono can't hold
-fn pg_datetime(ty: &str, b: &[u8]) -> Option<String> {
-    use chrono::{Local, NaiveDate, NaiveTime, TimeDelta};
+/// as psql does; None for anything chrono can't hold. timestamptz shows in the session's time zone (`zone`) with its offset, as psql
+fn pg_datetime(ty: &str, b: &[u8], zone: &Zone) -> Option<String> {
+    use chrono::{NaiveDate, NaiveTime, TimeDelta};
     let epoch = NaiveDate::from_ymd_opt(2000, 1, 1)?;
     match ty {
         "TIMESTAMP" | "TIMESTAMPTZ" => match i64::from_be_bytes(b.try_into().ok()?) {
@@ -379,10 +425,10 @@ fn pg_datetime(ty: &str, b: &[u8]) -> Option<String> {
             i64::MIN => Some("-infinity".into()),
             us => {
                 let t = epoch.and_time(NaiveTime::MIN).checked_add_signed(TimeDelta::microseconds(us))?;
-                Some(match ty {
-                    "TIMESTAMP" => t.format("%Y-%m-%d %H:%M:%S%.f").to_string(),
-                    _ => t.and_utc().with_timezone(&Local).format("%Y-%m-%d %H:%M:%S%.f %:z").to_string(),
-                })
+                match ty {
+                    "TIMESTAMP" => Some(t.format("%Y-%m-%d %H:%M:%S%.f").to_string()),
+                    _ => zone.format(t),
+                }
             }
         },
         "DATE" => match i32::from_be_bytes(b.try_into().ok()?) {
@@ -635,17 +681,18 @@ mod tests {
     fn pg_datetime_infinity_and_range() {
         let ts = |v: i64| v.to_be_bytes().to_vec();
         let d = |v: i32| v.to_be_bytes().to_vec();
+        let utc = Zone::UTC;
         for ty in ["TIMESTAMP", "TIMESTAMPTZ"] {
-            assert_eq!(pg_datetime(ty, &ts(i64::MAX)).as_deref(), Some("infinity"));
-            assert_eq!(pg_datetime(ty, &ts(i64::MIN)).as_deref(), Some("-infinity"));
-            assert_eq!(pg_datetime(ty, &ts(i64::MAX - 1)), None);
+            assert_eq!(pg_datetime(ty, &ts(i64::MAX), &utc).as_deref(), Some("infinity"));
+            assert_eq!(pg_datetime(ty, &ts(i64::MIN), &utc).as_deref(), Some("-infinity"));
+            assert_eq!(pg_datetime(ty, &ts(i64::MAX - 1), &utc), None);
         }
-        assert_eq!(pg_datetime("TIMESTAMP", &ts(86_400_000_000 + 1_500_000)).as_deref(), Some("2000-01-02 00:00:01.500"));
-        assert_eq!(pg_datetime("DATE", &d(i32::MAX)).as_deref(), Some("infinity"));
-        assert_eq!(pg_datetime("DATE", &d(i32::MIN)).as_deref(), Some("-infinity"));
-        assert_eq!(pg_datetime("DATE", &d(-1)).as_deref(), Some("1999-12-31"));
-        assert_eq!(pg_datetime("DATE", &d(i32::MAX - 1)), None);
-        assert_eq!(pg_datetime("DATE", &[0, 1]), None, "short value");
+        assert_eq!(pg_datetime("TIMESTAMP", &ts(86_400_000_000 + 1_500_000), &utc).as_deref(), Some("2000-01-02 00:00:01.500"));
+        assert_eq!(pg_datetime("DATE", &d(i32::MAX), &utc).as_deref(), Some("infinity"));
+        assert_eq!(pg_datetime("DATE", &d(i32::MIN), &utc).as_deref(), Some("-infinity"));
+        assert_eq!(pg_datetime("DATE", &d(-1), &utc).as_deref(), Some("1999-12-31"));
+        assert_eq!(pg_datetime("DATE", &d(i32::MAX - 1), &utc), None);
+        assert_eq!(pg_datetime("DATE", &[0, 1], &utc), None, "short value");
         // date[] [[infinity, NULL], [2000-01-01, -infinity]]: ndim, has_null, elem oid, (len, lbound) per dimension, elements
         let mut b = [2, 1, 1082, 2, 1, 2, 1].iter().flat_map(|v: &i32| v.to_be_bytes()).collect::<Vec<u8>>();
         for e in [Some(i32::MAX), None, Some(0), Some(i32::MIN)] {
@@ -654,12 +701,168 @@ mod tests {
                 None => b.extend((-1i32).to_be_bytes()),
             }
         }
-        let date = |e: &[u8]| pg_datetime("DATE", e);
+        let date = |e: &[u8]| pg_datetime("DATE", e, &utc);
         assert_eq!(pg_array(&b, &date).as_deref(), Some("{{infinity,NULL},{2000-01-01,-infinity}}"));
         assert_eq!(pg_array(&[0; 12], &date).as_deref(), Some("{}"), "empty array");
         assert_eq!(pg_array(&b[..b.len() - 2], &date), None, "cut short");
         let huge = [3, 0, 1082, i32::MAX, 1, i32::MAX, 1, i32::MAX, 1].iter().flat_map(|v: &i32| v.to_be_bytes()).collect::<Vec<u8>>();
         assert_eq!(pg_array(&huge, &date), None, "dimensions whose product overflows");
+    }
+
+    /// timestamptz is shown in the session's zone with its offset (not this computer's), timestamp as stored (#133)
+    #[test]
+    fn pg_timestamptz_in_the_session_zone() {
+        // 2026-11-09 04:00:00.25 UTC, in microseconds from 2000-01-01
+        let us = (chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap().and_hms_opt(4, 0, 0).unwrap() - chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap())
+            .num_microseconds()
+            .unwrap()
+            + 250_000;
+        let b = us.to_be_bytes();
+        assert_eq!(pg_datetime("TIMESTAMPTZ", &b, &Zone::UTC).as_deref(), Some("2026-11-09 04:00:00.250 +00:00"));
+        assert_eq!(pg_datetime("TIMESTAMPTZ", &b, &Zone::Fixed(9 * 3600)).as_deref(), Some("2026-11-09 13:00:00.250 +09:00"));
+        assert_eq!(pg_datetime("TIMESTAMP", &b, &Zone::Fixed(9 * 3600)).as_deref(), Some("2026-11-09 04:00:00.250"), "timestamp has no zone");
+        // Past chrono's range only once the offset is added: None (shown as <TIMESTAMPTZ>), never a panic
+        let last = (chrono::NaiveDateTime::MAX - chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap()).num_microseconds().unwrap();
+        assert_eq!(pg_datetime("TIMESTAMPTZ", &last.to_be_bytes(), &Zone::Fixed(3600)), None);
+        assert!(pg_datetime("TIMESTAMPTZ", &last.to_be_bytes(), &Zone::Fixed(-3600)).is_some());
+    }
+
+    /// The session's zone on each path: a data source without the Time zone option (sqlx starts every session in UTC), Asia/Seoul
+    /// and `+09:00` through the option, Europe/Berlin across its DST change, arrays, infinity, the MCP read-only path and CSV export (#133)
+    #[tokio::test]
+    #[ignore]
+    async fn pg_timestamptz_session_zone() {
+        let Some(s) = crate::testenv::pg() else { return };
+        let at = |tz: Option<&str>| {
+            let mut c = s.cfg.clone();
+            c.options.time_zone = tz.map(String::from);
+            c
+        };
+        let q = "select '2026-11-09 04:00:00+00'::timestamptz, '2026-11-09 04:00:00'::timestamp";
+        for (tz, want) in [(None, "2026-11-09 04:00:00 +00:00"), (Some("UTC"), "2026-11-09 04:00:00 +00:00"), (Some("Asia/Seoul"), "2026-11-09 13:00:00 +09:00"), (Some("+09:00"), "2026-11-09 13:00:00 +09:00"), (Some("-05:30"), "2026-11-08 22:30:00 -05:30")] {
+            let pool = connect(&at(tz), s.password.as_deref()).await.expect("connect");
+            let r = pool.run_query(q, 10).await.unwrap();
+            assert_eq!(r.rows[0], vec![Value::from(want), Value::from("2026-11-09 04:00:00")], "{tz:?}");
+            // The server's own text agrees on the offset (psql shows the same moment)
+            let own = pool.run_query("select to_char('2026-11-09 04:00:00+00'::timestamptz, 'YYYY-MM-DD HH24:MI:SS TZH:TZM')", 1).await.unwrap();
+            assert_eq!(own.rows[0][0], Value::from(want), "{tz:?}");
+        }
+        let pool = connect(&at(Some("Europe/Berlin")), s.password.as_deref()).await.expect("connect");
+        let dst = "select '2026-10-25 00:30:00+00'::timestamptz a, '2026-10-25 01:30:00+00'::timestamptz b,                    array['2026-10-25 00:30:00+00', null, '2026-10-25 01:30:00+00', 'infinity', '-infinity']::timestamptz[] c,                    'infinity'::timestamptz d";
+        let summer = "2026-10-25 02:30:00 +02:00";
+        let winter = "2026-10-25 02:30:00 +01:00";
+        let array = format!("{{\"{summer}\",NULL,\"{winter}\",infinity,-infinity}}");
+        let want = vec![Value::from(summer), Value::from(winter), Value::from(array.as_str()), Value::from("infinity")];
+        assert_eq!(pool.run_query(dst, 10).await.unwrap().rows[0], want);
+        let Pool::Pg(p) = &pool else { unreachable!() };
+        assert_eq!(crate::backend::Backend::run_read_only(p, dst, 10).await.unwrap().rows[0], want, "MCP's read-only path");
+        let path = std::env::temp_dir().join(format!("qurry_tz_{}.csv", std::process::id()));
+        pool.export_csv(dst, &path).await.unwrap();
+        let csv = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(csv.lines().nth(1), Some(format!("{summer},{winter},\"{{\"\"{summer}\"\",NULL,\"\"{winter}\"\",infinity,-infinity}}\",infinity").as_str()), "{csv}");
+    }
+
+    /// `SET TIME ZONE` in a console applies to that console's later results; SET LOCAL ends with its transaction, and a value read
+    /// in the statement that changes the zone already shows in the new one (#133)
+    #[tokio::test]
+    #[ignore]
+    async fn pg_set_time_zone_in_console() {
+        let Some(s) = crate::testenv::pg() else { return };
+        let pool = connect(&s.cfg, s.password.as_deref()).await.expect("connect");
+        let mut c = crate::session::Session::open(&pool).await.unwrap();
+        let ts = "select '2026-11-09 04:00:00+00'::timestamptz";
+        let mut shown = async |sql: &str| c.run(sql, 10).await.unwrap().rows.first().map(|r| r[0].clone());
+        assert_eq!(shown(ts).await, Some(Value::from("2026-11-09 04:00:00 +00:00")));
+        shown("set time zone 'Asia/Seoul'").await;
+        assert_eq!(shown(ts).await, Some(Value::from("2026-11-09 13:00:00 +09:00")));
+        // '+09:00' typed in a console is PostgreSQL's POSIX reading, 9 hours west: shown as the server shows it
+        shown("SET TIME ZONE '+09:00'").await;
+        assert_eq!(shown(ts).await, Some(Value::from("2026-11-08 19:00:00 -09:00")));
+        shown("set timezone to 'Asia/Seoul'").await;
+        shown("begin").await;
+        shown("set local time zone 'Europe/Berlin'").await;
+        assert_eq!(shown(ts).await, Some(Value::from("2026-11-09 05:00:00 +01:00")));
+        shown("rollback").await;
+        assert_eq!(shown(ts).await, Some(Value::from("2026-11-09 13:00:00 +09:00")));
+        assert_eq!(shown("select '2026-11-09 04:00:00+00'::timestamptz, set_config('TimeZone', 'UTC', false)").await, Some(Value::from("2026-11-09 04:00:00 +00:00")));
+        assert_eq!(shown("select array['2026-11-09 04:00:00+00']::timestamptz[]").await, Some(Value::from("{\"2026-11-09 04:00:00 +00:00\"}")));
+        shown("reset time zone").await;
+        assert_eq!(shown(ts).await, Some(Value::from("2026-11-09 04:00:00 +00:00")));
+        c.discard().await;
+    }
+
+    /// The Time zone option is never SQL: a name is bound, also for a role with standard_conforming_strings = off (where `\'` doesn't
+    /// end a string, so quoting by doubling quotes could be escaped)
+    #[tokio::test]
+    #[ignore]
+    async fn pg_time_zone_option_is_not_sql() {
+        let Some(s) = crate::testenv::pg() else { return };
+        let admin = connect(&s.cfg, s.password.as_deref()).await.expect("connect");
+        let pw = s.password.clone().unwrap_or_else(|| "qurry_tz_pw".into());
+        for q in ["drop table if exists public.qurry_tz_pwn".to_string(), "drop role if exists qurry_tz_scs".into(), format!("create role qurry_tz_scs login password '{pw}'"), "grant create on schema public to qurry_tz_scs".into(), "alter role qurry_tz_scs set standard_conforming_strings = off".into()] {
+            admin.run_query(&q, 1).await.unwrap();
+        }
+        let mut cfg = s.cfg.clone();
+        cfg.user = "qurry_tz_scs".into();
+        cfg.options.time_zone = Some(r"Asia/Seoul\'; create table public.qurry_tz_pwn(); --".into());
+        let r = match connect(&cfg, Some(&pw)).await {
+            Ok(p) => p.run_query("select 1", 1).await.map(|_| ()),
+            Err(e) => Err(e),
+        };
+        assert!(r.is_err(), "not a time zone");
+        cfg.options.time_zone = Some("Asia/Seoul".into());
+        let p = connect(&cfg, Some(&pw)).await.unwrap();
+        let row = p.run_query("select current_setting('TimeZone'), current_setting('standard_conforming_strings')", 1).await.unwrap().rows;
+        assert_eq!(row[0], vec![Value::from("Asia/Seoul"), Value::from("off")]);
+        p.close().await;
+        let made = admin.run_query("select to_regclass('public.qurry_tz_pwn') is not null", 1).await.unwrap().rows;
+        admin.run_query("revoke create on schema public from qurry_tz_scs", 1).await.unwrap();
+        admin.run_query("drop role qurry_tz_scs", 1).await.unwrap();
+        assert_eq!(made[0][0], Value::from(false), "the option's text ran as SQL");
+    }
+
+    /// A result cut off at the row limit doesn't wait for the rest of it to read the time zone: the pool reads it on another
+    /// connection, a console before the statement (#133). Loose: compared with the same rows as numbers
+    #[tokio::test]
+    #[ignore]
+    async fn pg_cut_off_timestamptz_returns_at_once() {
+        let Some(s) = crate::testenv::pg() else { return };
+        let pool = connect(&s.cfg, s.password.as_deref()).await.expect("connect");
+        let rows = |e: &str| format!("select {e} from generate_series(1, 3000000) g");
+        let (num, tz) = (rows("g::int8"), rows("'2026-01-01'::timestamptz + g * interval '1 second'"));
+        let timed = async |r: AppResult<QueryResult>| {
+            let r = r.unwrap();
+            assert!(r.truncated && r.rows.len() == 500);
+            r.elapsed_ms
+        };
+        // Each on a pool of its own, closed after: a cut-off result is read to its end when its connection goes back to the pool,
+        // which would slow the next query in this test's runtime
+        let once = async |q: &str| {
+            let p = connect(&s.cfg, s.password.as_deref()).await.expect("connect");
+            let t = Instant::now();
+            timed(p.run_query(q, 500).await).await;
+            let d = t.elapsed();
+            p.close().await;
+            d
+        };
+        let base = once(&num).await;
+        let zoned = once(&tz).await;
+        assert!(zoned < base * 2 + Duration::from_millis(100), "pool: {zoned:?} vs {base:?} without timestamptz");
+        // A console's statement DECLARE can't take (a data-modifying WITH) runs without a cursor
+        let mut c = crate::session::Session::open(&pool).await.unwrap();
+        c.run("create temp table qurry_none (x int)", 1).await.unwrap();
+        let direct = |q: &str| format!("with d as (delete from qurry_none returning x) {q}");
+        let t = Instant::now();
+        assert!(c.run(&direct(&num), 500).await.unwrap().truncated);
+        let base = t.elapsed();
+        c.run("select 1", 1).await.unwrap();
+        let t = Instant::now();
+        let r = c.run(&direct(&tz), 500).await.unwrap();
+        let zoned = t.elapsed();
+        assert!(r.truncated && r.rows[0][0] == "2026-01-01 00:00:01 +00:00", "{:?}", r.rows[0]);
+        assert!(zoned < base * 2 + Duration::from_millis(100), "console: {zoned:?} vs {base:?} without timestamptz");
+        c.discard().await;
     }
 
     /// PostgreSQL's infinity / -infinity in timestamp, timestamptz and date (also in arrays, next to NULLs) show as text; sqlx's chrono decode panicked on them (#84)

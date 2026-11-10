@@ -49,6 +49,8 @@ pub struct Grid {
     pub anchor: Option<(usize, usize)>,
     /// Rows added to the selection one by one (m: the GUI's ⌘-click on a row number). Moving keeps them, Esc clears them
     pub marked: BTreeSet<usize>,
+    /// The columns the last frame showed: first, last, total (1-based; the status line's Shown columns)
+    pub shown: Option<(usize, usize, usize)>,
     /// Original position of each row while sorted on screen (restored when sorting is cleared)
     orig: Vec<usize>,
 }
@@ -144,7 +146,7 @@ static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), before_fit: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), orig: vec![] };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), before_fit: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), shown: None, orig: vec![] };
         g.compute_widths();
         g
     }
@@ -782,6 +784,7 @@ impl Grid {
         // shown range at its right end, before the load-more message. Click or drag the track to move
         self.hbar = Rect::default();
         let last = self.col_off + full.max(1);
+        self.shown = Some((self.col_off + 1, last.min(self.cols()), self.cols()));
         if let Some(text) = qurry_shared::format::shown_cols(self.col_off + 1, last, self.cols()) {
             let accent = if focused { Color::Cyan } else { Color::Gray };
             let label = format!(" ◀ {text} ▶ ");

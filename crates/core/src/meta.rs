@@ -47,6 +47,9 @@ pub struct ColumnMeta {
     pub default_value: Option<String>,
     pub comment: Option<String>,
     pub is_pk: bool,
+    /// MySQL: a text column's character set (the status bar's Size words its limit in bytes with it); None elsewhere
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charset: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

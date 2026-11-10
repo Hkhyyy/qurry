@@ -506,9 +506,17 @@ mod tests {
     #[test]
     #[ignore]
     fn install_fails_cleanly_for_a_missing_release() {
+        // GitHub answering 5xx (or not at all) says nothing about missing releases: skip instead of failing CI on its outage
+        let flaky = |e: &str| e.contains("returned error: 5") || e.contains("timed out") || e.contains("Could not resolve");
         let e = install_blocking("sqlite", "0.0.0").unwrap_err().to_string();
+        if flaky(&e) {
+            return eprintln!("skip: GitHub unreachable: {e}");
+        }
         assert!(e.contains("Could not download"), "{e}");
         let e = install_blocking("sqlite", "0.0.0-nope").unwrap_err().to_string();
+        if flaky(&e) {
+            return eprintln!("skip: GitHub unreachable: {e}");
+        }
         assert!(e.contains("(v0.0.0-nope) was removed"), "{e}");
     }
 

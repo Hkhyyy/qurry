@@ -260,6 +260,10 @@ impl App {
                 self.set_grid_align(c, a);
                 self.palette_grid_align(c);
             }
+            PAction::StatusItem(i) => {
+                let at = i.map_or(qurry_core::statusbar::ITEMS.len(), |i| qurry_core::statusbar::ITEMS.iter().position(|x| x.id == i).unwrap_or(0));
+                self.toggle_status_item(i, at);
+            }
             PAction::Theme(t) => self.set_theme(t),
             PAction::ImportFrom(path) => self.ds_import_location(path),
             PAction::ImportPath => self.ds_import_path(),

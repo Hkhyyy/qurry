@@ -124,6 +124,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::PasswordKey, hint: "", run: |app| app.password_key() },
     ActionDef { action: Action::KeywordCase, hint: "", run: |app| app.palette_keyword_case() },
     ActionDef { action: Action::GridAlign, hint: "", run: |app| app.palette_grid_align(qurry_core::format::ValueClass::String) },
+    ActionDef { action: Action::StatusBarItems, hint: "", run: |app| app.palette_status_items(0) },
     ActionDef { action: Action::Theme, hint: "", run: |app| app.palette_theme() },
     ActionDef { action: Action::CheckUpdate, hint: "", run: |app| app.check_update() },
     ActionDef { action: Action::UpdateChannel, hint: "", run: |app| app.palette_update_channel() },
