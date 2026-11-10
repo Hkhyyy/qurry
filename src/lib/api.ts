@@ -70,6 +70,8 @@ export interface ConnOptions {
   allowPlaintext?: boolean;
   /** Whether it is visible to the MCP server (missing on older sources: Production hidden, others read·write) */
   mcp?: "off" | "read" | "write" | null;
+  /** Production: MCP's dba_report may read its Database Admin reports (core ConnectionConfig::mcp_dba_report_allowed; off when missing) */
+  mcpDbaReports?: boolean;
   startupScript?: string;
   /** Oracle Instant Client folder */
   oracleClient?: string | null;

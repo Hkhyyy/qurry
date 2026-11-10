@@ -103,6 +103,24 @@ mod tests {
         assert_eq!(saved.options.startup_script, "SET search_path = shop");
     }
 
+    /// MCP's DBA reports on a Production source (no field in this form yet): editing and saving the source keeps the setting
+    #[tokio::test]
+    async fn conn_form_keeps_mcp_dba_reports() {
+        let mut h = Harness::new().await;
+        let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "p1", "name": "prod", "kind": "postgres", "host": "localhost", "port": 5432,
+            "user": "postgres", "options": { "confirmChanges": true, "mcp": "read", "mcpDbaReports": true } })).unwrap();
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.app.conn_form(Some(cfg));
+        let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
+        f.fields.iter_mut().find(|x| x.label == "Name").unwrap().value = "prod renamed".into();
+        h.key("Enter");
+        h.settle().await;
+        let saved = h.app.state.store.get("p1").unwrap().unwrap();
+        assert_eq!(saved.name, "prod renamed");
+        assert!(saved.options.confirm_changes && saved.options.mcp_dba_reports && saved.mcp_dba_report_allowed());
+    }
+
     /// A new Data Source starts hidden from MCP. Saves the MCP value shown in the form as is
     #[tokio::test]
     async fn conn_form_mcp_default() {
