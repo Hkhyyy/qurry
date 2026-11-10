@@ -598,7 +598,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     g.render_value_panel(f, side, value_keys);
                 }
             } else {
-                let msg = if tt.error.is_some() { "" } else { "Loading…" };
+                // Nothing while nothing loads: a failed load says why on the status line, a cancelled one how to load again
+                let msg = if tt.error.is_some() || !tt.running { "" } else { "Loading…" };
                 f.render_widget(Paragraph::new(msg).block(panel(format!(" {}.{} ", tt.schema, tt.table), focused)), grid);
             }
         }
@@ -1071,10 +1072,17 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect) {
     let (ctx, glob) = status_hints(app);
     // While the active tab runs or loads more rows: a moving bar, what it does and for how long (as the GUI's status bar), cancel
     // with the Cancel key. While export·import runs, a progress bar (stop with ⌃K › Cancel Export/Import). Else the status text
-    let busy = app.tabs.get(app.active).and_then(|t| t.busy()).map(|what| {
-        let ms = app.run_elapsed(app.active).unwrap_or_default().as_millis() as u64;
-        format!("▕{}▏ {what}… {} · {} cancel", bounce(ms), crate::app::elapsed_text(ms), app.keys.label(crate::app::Action::Cancel))
-    });
+    // A source that reconnects while a load waits on it says so first, with its own time (#135; the GUI's running indicator too)
+    let reconnect = app.reconnect_line();
+    // Its time and Cancel key come after the source's name: it may take up to three quarters of the line
+    let cap = if reconnect.is_some() { area.width * 3 / 4 } else { area.width / 2 };
+    let busy = match reconnect {
+        Some((line, ms)) => Some(format!("▕{}▏ {line}", bounce(ms))),
+        None => app.tabs.get(app.active).and_then(|t| t.busy()).map(|what| {
+            let ms = app.run_elapsed(app.active).unwrap_or_default().as_millis() as u64;
+            format!("▕{}▏ {what}… {} · {} cancel", bounce(ms), crate::app::elapsed_text(ms), app.keys.label(crate::app::Action::Cancel))
+        }),
+    };
     // A run's or a transfer's line is never cut below its length (up to half the line) to make room for the items
     let progress = busy.is_some() || !app.jobs.is_empty();
     let status = match busy {
@@ -1101,7 +1109,7 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect) {
     let segs = app.status_segments();
     let sw = |cap: u16| (lead + status.chars().count() as u16 + 1).clamp(12, cap.max(12));
     let right = |sw: u16| status_right(ctx.clone(), glob.clone(), segs.clone(), area.width.saturating_sub(bw + sw) as usize);
-    let (mut hints, dropped) = right(sw(area.width / 2));
+    let (mut hints, dropped) = right(sw(cap));
     if dropped && !progress {
         hints = right(sw(area.width / 3)).0;
     }

@@ -155,8 +155,9 @@ impl AppState {
             .collect()
     }
 
-    /// Counts a wait for, or an open of, the source's tunnel as reconnecting until the guard drops
-    fn reconnecting_now(&self, base: &str) -> Running<'_> {
+    /// Counts a wait for, or an open of, the source's tunnel as reconnecting until the guard drops (public for the apps' tests and
+    /// screens, which show a source reconnecting)
+    pub fn reconnecting_now(&self, base: &str) -> Running<'_> {
         count(&self.reconnecting, base)
     }
     /// The consoles of Production data sources whose transaction has been open and unused for TX_IDLE_REMIND: (tab id, what to
@@ -652,7 +653,7 @@ async fn in_use(state: &AppState, base: &str) -> bool {
 
 /// Something on a data source, counted while it runs: a long job (AppState::job_running), a wait for or an open of its tunnel
 /// (AppState::reconnecting)
-pub(crate) struct Running<'a>(&'a std::sync::Mutex<HashMap<String, usize>>, String);
+pub struct Running<'a>(&'a std::sync::Mutex<HashMap<String, usize>>, String);
 
 impl Drop for Running<'_> {
     fn drop(&mut self) {

@@ -969,8 +969,65 @@ async fn all_scenes() -> Vec<Value> {
     h.app.auto_light = false;
     h.app.popup = None;
     tab_bars(&mut scenes).await;
+    reconnect_scenes(&mut scenes).await;
     scenes.push(temporary_scene().await);
     scenes
+}
+
+/// #135: a table tab and an explorer node waiting on [PROD] rentalpay while it reconnects through AWS SSM: the status line says so with
+/// the time and the Cancel key (past 10 s why), a failure opens the Message popup, Cancel leaves how to load again (the GUI's toast)
+async fn reconnect_scenes(scenes: &mut Vec<Value>) {
+    use crate::app::{Action, TabKind, WaitFor};
+    let mut h = Harness::new().await;
+    explorer(&mut h).await;
+    let mut ssm = conn("prod", "[PROD] rentalpay", "#6e2a2a", true);
+    ssm.ssm = Some(qurry_core::store::SsmConfig { enabled: true, profile: "prod".into(), region: String::new(), target: "i-0a1b2c3d4e5f".into() });
+    h.app.state.store.save(&ssm).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    let st = h.app.state.clone();
+    let shown = st.reconnecting_now("prod");
+    let tab = h.app.tabs.iter().find(|t| t.conn == "prod").map(|t| t.id).unwrap();
+    let load = |h: &mut Harness| {
+        if let Some(TabKind::Table(tt)) = h.app.tabs.iter_mut().find(|t| t.id == tab).map(|t| &mut t.kind) {
+            (tt.grid, tt.running) = (None, true);
+        }
+        h.app.spawn_wait("prod", WaitFor::Table(tab), std::future::pending::<()>(), |_, _, _| {});
+    };
+    // Shown since `secs` ago (drawn right after, so the time reads the same on every run)
+    let since = |h: &mut Harness, secs: f64| {
+        h.app.reconnect_line();
+        *h.app.reconnect_since.get_mut("prod").unwrap() = std::time::Instant::now() - std::time::Duration::from_secs_f64(secs);
+    };
+    load(&mut h);
+    (h.app.focus, h.app.status) = (crate::app::Focus::Grid, String::new());
+    since(&mut h, 3.2);
+    scenes.push(app_scene(&mut h, "Reconnect: table tab waiting", "A table tab opens at once and loads inside it; while its source reconnects through AWS SSM the status line says so, how long, and that the Cancel key stops it (the GUI's running indicator and toast)", 120, 22));
+    since(&mut h, 14.0);
+    scenes.push(app_scene(&mut h, "Reconnect: slow", "Past 10 s: why it may take a while, after the Cancel key (a narrower line cuts the note, never the key)", 160, 22));
+    h.app.run_action(Action::Cancel);
+    scenes.push(app_scene(&mut h, "Reconnect: cancelled", "The Cancel key stops the loads waiting on the source (the connect they wait on is dropped); the tab stays, r loads it again", 120, 22));
+    let r = h.app.state.reconnecting().pop().unwrap();
+    h.app.reconnect_failed(&r, "aws ssm start-session: TargetNotConnected (i-0a1b2c3d4e5f is not connected). Check that the instance is running and its SSM agent is online.", true);
+    scenes.push(app_scene(&mut h, "Reconnect: failed", "A load that waited on the reconnect failed: the Message popup says why and that r in the table tab loads it again; the status line keeps it", 120, 22));
+    h.app.popup = None;
+    // The explorer: a schema expanding while the source reconnects shows only its loading mark
+    let key = "prod|rentalpay|public";
+    let tables = h.app.tree.children.remove(key);
+    h.app.tree.loading.insert(key.into());
+    h.app.spawn_wait("prod", WaitFor::Tree(key.into()), std::future::pending::<()>(), |_, _, _| {});
+    (h.app.focus, h.app.tree.sel, h.app.status) = (crate::app::Focus::Tree, 2, String::new());
+    since(&mut h, 4.1);
+    scenes.push(app_scene(&mut h, "Reconnect: explorer expand", "Expanding a schema while its source reconnects: the tree shows only that it loads, the status line says why", 120, 22));
+    h.app.run_action(Action::Cancel);
+    h.app.tree.children.insert(key.into(), tables.unwrap());
+    h.app.themes.theme = Some("light".into());
+    load(&mut h);
+    (h.app.focus, h.app.status) = (crate::app::Focus::Grid, String::new());
+    since(&mut h, 3.2);
+    scenes.push(app_scene(&mut h, "Reconnect: table tab waiting (light)", "Theme Light: the same line on a light terminal", 120, 22));
+    h.app.run_action(Action::Cancel);
+    drop(shown);
 }
 
 /// `qurry-tui --read-only postgres://…`: the temporary source at the top of the explorer, its mark before the long URL name

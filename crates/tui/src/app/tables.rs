@@ -79,7 +79,10 @@ impl App {
         let (session, schema, table) = (tt.session.clone(), tt.schema.clone(), tt.table.clone());
         let (t_target, t_schema, t_table) = (target.clone(), schema.clone(), table.clone());
         let st = self.state.clone();
-        self.spawn(
+        let wait_target = target.clone();
+        self.spawn_wait(
+            &wait_target,
+            super::WaitFor::Table(id),
             async move {
                 // Send both together (if the connection fails, waiting on each would take twice as long)
                 let (cols, r) = tokio::join!(st.table_detail(target.clone(), schema, table), st.run_query(target, sqls, Some(500), Some(session)));
@@ -89,7 +92,7 @@ impl App {
                 let r = r.map_err(err);
                 (pk, types, r)
             },
-            move |a, (pk, types, r)| {
+            move |a, (pk, types, r), seen| {
                 // The status line's Size reads the column types from here, fresh on each load; when they couldn't be read, Size asks
                 // for them itself (status_items::table_cols)
                 if !types.is_empty() {
@@ -142,7 +145,11 @@ impl App {
                             tt.grid = Some(g);
                         }
                         tt.error = Some(e.clone());
-                        a.status = e;
+                        a.status = e.clone();
+                        // It waited on a reconnect that failed: why, and r retries (the Message popup)
+                        if let Some(rc) = seen {
+                            a.reconnect_failed(&rc, &e, true);
+                        }
                     }
                 }
                 if let Some(e) = tls_err {

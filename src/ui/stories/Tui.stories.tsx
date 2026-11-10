@@ -28,6 +28,12 @@ export const ScreenConsole = { ...by("Console & result"), name: "Screen · Conso
 export const ScreenConsoleRunning = { ...by("Console gutter marks"), name: "Screen · Console running: [■ Cancel] and gutter marks" };
 export const ScreenConsoleEditable ={ ...by("Console result: editable"), name: "Screen · Console result: editable" };
 export const ScreenConsoleReadOnly = { ...by("Console result: read-only"), name: "Screen · Console result: read-only (why)" };
+// #135: a load waiting on a source that reconnects (the GUI's status bar and toast)
+export const ScreenReconnectWaiting = { ...by("Reconnect: table tab waiting"), name: "Screen · Reconnect: table tab waiting" };
+export const ScreenReconnectSlow = { ...by("Reconnect: slow"), name: "Screen · Reconnect: slow (over 10 s)" };
+export const ScreenReconnectFailed = { ...by("Reconnect: failed"), name: "Screen · Reconnect: failed (Message popup)" };
+export const ScreenReconnectCancelled = { ...by("Reconnect: cancelled"), name: "Screen · Reconnect: cancelled" };
+export const ScreenReconnectExplorer = { ...by("Reconnect: explorer expand"), name: "Screen · Reconnect: explorer expand" };
 export const ScreenConsoleJoin = { ...by("Console result: join"), name: "Screen · Console result: join (per table, outer side read-only)" };
 export const ScreenConsoleProductionTx = { ...by("Console: Production transaction open"), name: "Screen · Console: Production transaction open (pending, reminder)" };
 export const ScreenConsoleFkJoin = { ...by("Console: FK join"), name: "Screen · Console: FK join completion" };
@@ -102,6 +108,7 @@ export const LightGridEdits = { ...by("Light: grid edits"), name: "Light · grid
 export const LightGridJson = { ...by("Light: grid JSON"), name: "Light · grid JSON" };
 export const LightProductionConfirm = { ...by("Light: production confirm"), name: "Light · Production confirm" };
 export const LightTabBar = { ...by("Tab bar: light"), name: "Light · tab bar" };
+export const LightReconnect = { ...by("Reconnect: table tab waiting (light)"), name: "Light · Reconnect: table tab waiting" };
 // Each built-in theme (⌃k › Theme…, shared with the GUI): Dark, Light and High contrast on the terminal's background, the others on their own
 export const ThemeDark = { ...by("Theme: Dark"), name: "Theme · Dark" };
 export const ThemeLight = { ...by("Theme: Light"), name: "Theme · Light" };
