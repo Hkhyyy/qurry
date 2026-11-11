@@ -515,6 +515,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             f.render_widget(&c.editor, ed);
             // tui-textarea doesn't expose its scroll position → use the cursor cell just drawn
             let drawn = find_caret(f, ed);
+            c.colors.update(&text, kind);
+            draw_sql_colors(f, c, ed, drawn);
             draw_marks(f, c, ed, drawn);
             draw_names(f, c, ed, drawn);
             draw_unbalanced(f, c, ed, drawn, &text, &open);
@@ -734,6 +736,50 @@ fn find_caret(f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
         }
     }
     None
+}
+
+/// The console's SQL colors (Console::colors in kit::sql_style) on the rows on screen, under the marks and underlines drawn after.
+/// Rows and columns are counted from the cursor cell just drawn, as for the gutter marks; a tab spans up to the next stop, as
+/// tui-textarea draws it. Cells with a background (selection, search matches) and the caret's keep their look
+fn draw_sql_colors(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>) {
+    use unicode_width::UnicodeWidthChar;
+    // Each character's byte, display column and width
+    fn cells(l: &str, tab: i64) -> impl Iterator<Item = (usize, i64, i64)> + '_ {
+        let mut col = 0i64;
+        l.char_indices().map(move |(b, ch)| {
+            let w = if ch == '\t' { tab - col % tab } else { ch.width().unwrap_or(0) as i64 };
+            col += w;
+            (b, col - w, w)
+        })
+    }
+    let Some((cx, cy)) = caret else { return };
+    let (lines, (crow, ccol), tab) = (c.editor.lines(), c.editor.cursor(), c.editor.tab_length().max(1) as i64);
+    let cells = |l| cells(l, tab);
+    let top = crow as i64 - (cy as i64 - ed.y as i64 - 1);
+    let caret_col = lines.get(crow).map_or(0, |l| cells(l).nth(ccol).map_or_else(|| cells(l).last().map_or(0, |(_, x, w)| x + w), |(_, x, _)| x));
+    let shift = cx as i64 - caret_col;
+    let (left, right) = (ed.x as i64 + 1, ed.right() as i64 - 1);
+    let buf = f.buffer_mut();
+    for y in ed.y + 1..ed.bottom().saturating_sub(1) {
+        let row = top + (y - ed.y - 1) as i64;
+        let (Some(line), Some(spans)) = (lines.get(row.max(0) as usize).filter(|_| row >= 0), c.colors.rows.get(row.max(0) as usize)) else { continue };
+        let mut spans = spans.iter().peekable();
+        for (b, col, w) in cells(line) {
+            while spans.peek().is_some_and(|s| s.1 <= b) {
+                spans.next();
+            }
+            let Some(style) = spans.peek().filter(|s| s.0 <= b).and_then(|s| sql_style(s.2)) else { continue };
+            for x in (shift + col..shift + col + w).filter(|x| (left..right).contains(x)) {
+                let cell = &mut buf[(x as u16, y)];
+                if cell.bg == Color::Reset && !cell.modifier.contains(Modifier::REVERSED) {
+                    cell.set_style(style);
+                }
+            }
+            if shift + col >= right {
+                break;
+            }
+        }
+    }
 }
 
 /// Gutter marks (✓ done, ✗ failed, … running) in the blank first cell of the line-number column, on each run statement's first line.
@@ -1443,7 +1489,7 @@ fn textarea_scroll(prev: u16, caret: u16, width: u16) -> u16 {
 /// SQL colors over a one-line input's text as drawn in `inner` from column `scroll`: only the color changes (comments italic), and
 /// the caret's cell (character `caret`) keeps the input's look. A tab (pasted) spans up to the next stop of `tab`, as tui-textarea draws it
 fn color_sql(buf: &mut Buffer, inner: Rect, line: &str, caret: usize, scroll: u16, tab: u8, kind: qurry_shared::DbKind) {
-    use qurry_shared::highlight::{Class, highlight};
+    use qurry_shared::highlight::highlight;
     use unicode_width::UnicodeWidthChar;
     let spans = highlight(line, kind);
     let (mut col, mut next) = (0u16, 0);
@@ -1452,14 +1498,7 @@ fn color_sql(buf: &mut Buffer, inner: Rect, line: &str, caret: usize, scroll: u1
         while spans.get(next).is_some_and(|s| s.end <= b) {
             next += 1;
         }
-        let style = match spans.get(next).filter(|s| s.start <= b).map(|s| s.class) {
-            Some(Class::Keyword) => Some(Style::default().fg(JSON_KEYWORD)),
-            Some(Class::Function) => Some(Style::default().fg(C_ROUTINE)),
-            Some(Class::Number) => Some(Style::default().fg(SQL_NUMBER)),
-            Some(Class::String) => Some(Style::default().fg(JSON_STRING)),
-            Some(Class::Comment) => Some(Style::default().fg(SQL_COMMENT).add_modifier(Modifier::ITALIC)),
-            _ => None,
-        };
+        let style = spans.get(next).filter(|s| s.start <= b).and_then(|s| sql_style(s.class));
         if let Some(style) = style.filter(|_| i != caret) {
             for x in (col..col + w).filter(|x| (scroll..scroll + inner.width).contains(x)) {
                 buf[(inner.x + x - scroll, inner.y)].set_style(style);
