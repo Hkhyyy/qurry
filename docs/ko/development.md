@@ -53,8 +53,8 @@ drivers/*     드라이버 프로그램 (SQLite, DuckDB, SQL Server, ClickHouse,
 
 단위 테스트와 실제 PostgreSQL · MySQL · Redis 컨테이너로 도는 테스트를 실행하는 방법: [CONTRIBUTING › Tests](../../CONTRIBUTING.md#tests) (영어). 모든 풀 리퀘스트에서 CI 워크플로 (`.github/workflows/ci.yml`) 가 돕니다:
 
-- `rust`: Rust 단위 테스트와 PostgreSQL (pgvector 포함) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus 컨테이너로 통합 테스트
-- `compat`: 같은 테스트를 옛 서버 (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017) 로
+- `rust`: clippy (`-D warnings`. GUI 크레이트 `qurry` 는 Linux 에서 webkit 이 필요해서 macOS 에서 `cargo clippy -p qurry --all-targets` 로 돌립니다), Rust 단위 테스트, PostgreSQL (pgvector · pg_stat_statements 포함) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus 컨테이너로 통합 테스트: core 것을 돌고 이어서 TUI · MCP 것. 빠지는 것: SSL · TLS · Sentinel · Cluster · SSH 터널 테스트 (따로 서버가 필요), SSM 터널 테스트, 접속을 거부하는 DB 의 리포트 테스트 (`QURRY_TEST_PG_REFUSED`), 스냅숏 생성기와 벤치마크. MySQL 백업 테스트는 `mysqldump` 가 없으면 그냥 끝나는데 러너에는 없습니다
+- `compat`: core 통합 테스트를 옛 서버 (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017) 로
 - `web`: vitest, 웹 빌드, Storybook 빌드
 - `e2e (chromium)` 과 `e2e (webkit)`: mock 앱에 대한 Playwright. 브라우저마다 두 조각 (shard) 으로 나눠 동시에 돌고, 두 조각이 다 통과하면 그 브라우저의 검사가 통과합니다
 

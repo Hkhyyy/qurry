@@ -268,10 +268,10 @@ pub fn simple_dml(sql: &str, kind: DbKind) -> Option<SimpleDml> {
                 left = false;
             } else if left && x.word {
                 last = Some(x);
-            } else if left && x.text == "," && x.depth == 1 {
-                if let Some(l) = last.take() {
-                    set_cols.push(name(l));
-                }
+            } else if left && x.text == "," && x.depth == 1
+                && let Some(l) = last.take()
+            {
+                set_cols.push(name(l));
             }
             i += 1;
         }
@@ -983,7 +983,7 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
     }
     // An expiry (even 1 ms) or popping many elements amounts to deleting data
     let expiry = cmd == "SET" && args.iter().skip(3).any(|a| ["EX", "PX", "EXAT", "PXAT"].contains(&a.to_uppercase().as_str()));
-    let many = matches!(cmd.as_str(), "LPOP" | "RPOP") && args.get(2).is_some_and(|n| n.parse::<i64>().map_or(true, |n| n != 1));
+    let many = matches!(cmd.as_str(), "LPOP" | "RPOP") && args.get(2).is_some_and(|n| n.parse::<i64>() != Ok(1));
     if expiry || many {
         return Some(format!("{cmd} with that option can delete data — refused over MCP"));
     }

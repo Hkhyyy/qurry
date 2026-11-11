@@ -353,7 +353,7 @@ impl App {
             let gkey = format!("{parent}|g:{label}");
             let kids = items
                 .iter()
-                .map(|r| mk_obj(&gkey, &r.name, if r.kind == "key" { "key" } else { &r.kind }, if r.kind == "key" { r.comment.clone().unwrap_or_default() } else { r.comment.clone().unwrap_or_default() }))
+                .map(|r| mk_obj(&gkey, &r.name, if r.kind == "key" { "key" } else { &r.kind }, r.comment.clone().unwrap_or_default()))
                 .collect();
             // Redis keys are grouped into folders by ":"
             let kids = if label == "keys" { crate::tree::key_folders(&mut self.tree.children, &gkey, kids) } else { kids };

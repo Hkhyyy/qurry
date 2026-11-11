@@ -466,7 +466,8 @@ mod tests {
     #[test]
     fn limit_per_type_and_engine() {
         use DbKind::*;
-        let cases: [(DbKind, &str, Option<&str>, Option<(&str, &str)>); 18] = [
+        type Case = (DbKind, &'static str, Option<&'static str>, Option<(&'static str, &'static str)>);
+        let cases: [Case; 18] = [
             (Postgres, "character varying(8)", None, Some(("varchar(8)", "up to 8 chars (32 bytes in UTF-8)"))),
             (Postgres, "character(8)", None, Some(("char(8)", "always 8 chars (padded)"))),
             (Postgres, "text", None, Some(("text", "no limit (up to 1 GB)"))),

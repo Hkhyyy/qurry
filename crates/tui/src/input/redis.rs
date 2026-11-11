@@ -130,10 +130,10 @@ pub(super) fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
                 let depth = match row {
                     crate::app::KRow::Folder { depth, .. } | crate::app::KRow::Key { depth, .. } => *depth,
                 };
-                if depth > 0 {
-                    if let Some(p) = rows[..r.sel].iter().rposition(|x| matches!(x, crate::app::KRow::Folder { depth: d, .. } if *d == depth - 1)) {
-                        r.sel = p;
-                    }
+                if depth > 0
+                    && let Some(p) = rows[..r.sel].iter().rposition(|x| matches!(x, crate::app::KRow::Folder { depth: d, .. } if *d == depth - 1))
+                {
+                    r.sel = p;
                 }
             }
             None => {}

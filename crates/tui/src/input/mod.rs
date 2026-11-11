@@ -410,7 +410,7 @@ mod tests {
         h.table_tab("a", &["id"], &[&["1"]], &["id"]);
         h.table_tab("b", &["id"], &[&["1"]], &["id"]);
         h.app.run_action(Action::SplitDown);
-        let pct = |h: &mut Harness| h.app.panes.pct_mut(&vec![]).map(|p| *p);
+        let pct = |h: &mut Harness| h.app.panes.pct_mut(&[]).map(|p| *p);
         let before = pct(&mut h).unwrap();
         h.app.run_action(Action::SplitGrow);
         assert_eq!(pct(&mut h), Some(before + 5));

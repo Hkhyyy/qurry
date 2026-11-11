@@ -696,6 +696,11 @@ impl ConnForm {
     }
 }
 
+/// Input's on_ok: called with the entered text
+pub type OnInput = Box<dyn FnOnce(&mut App, String)>;
+
+// One popup is open at a time, so its size doesn't add up; boxing the bigger ones would only add derefs at every use
+#[allow(clippy::large_enum_variant)]
 pub enum Popup {
     /// F1 keymap. The Commands section at the top is selectable (sel). record = waiting for a new key (true = add to existing keys)
     /// sel counts the top Commands and the fixed key list below as one sequence (only Commands can be changed)
@@ -705,7 +710,7 @@ pub enum Popup {
     Note { title: String, text: String, back: Box<Popup> },
     /// Single-line input. filter = a table tab's WHERE / ORDER BY completes like the console, complete = its open list
     /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
-    Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, filter: Option<FilterSource>, redis: Option<RedisPrompt>, complete: Option<Completion> },
+    Input { title: String, body: String, input: TextArea<'static>, on_ok: OnInput, filter: Option<FilterSource>, redis: Option<RedisPrompt>, complete: Option<Completion> },
     /// `opened` is set when the confirm comes up on its own (open_after_notices, or a notice over it closing): then, as for
     /// AllowPlaintext, y / Enter count only after TLS_ASK_GRACE without any key, so typing meant for the editor or a form never answers it
     Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: Option<std::time::Instant> },

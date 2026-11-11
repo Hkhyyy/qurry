@@ -83,12 +83,11 @@ impl App {
             return;
         }
         let s = crate::workspace::to_json(self).to_string();
-        if s != self.saved_ws {
-            if let Ok(v) = serde_json::from_str(&s) {
-                if self.state.store.save_workspace("tui", &v).is_ok() {
-                    self.saved_ws = s;
-                }
-            }
+        if s != self.saved_ws
+            && let Ok(v) = serde_json::from_str(&s)
+            && self.state.store.save_workspace("tui", &v).is_ok()
+        {
+            self.saved_ws = s;
         }
     }
 

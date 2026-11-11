@@ -1055,8 +1055,10 @@ fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) 
     f.render_widget(List::new(items).block(panel(title, true)).style(Style::default().bg(POPUP_BG)), r);
 }
 
+type Hints = Vec<(String, &'static str)>;
+
 /// Bottom hints: (keys used on this screen, common global keys). Rebindable commands use their first key in the current keymap
-fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'static str)>) {
+fn status_hints(app: &App) -> (Hints, Hints) {
     use crate::app::Action as A;
     let key = |a: A| app.keys.keys(a).first().map(|k| disp(k));
     let fixed = |k: &str, l: &'static str| Some((disp(k), l));

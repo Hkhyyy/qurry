@@ -373,7 +373,7 @@ fn cased_keyword(toks: &[crate::guard::Tok], i: usize, full: bool) -> bool {
         && !t.quoted
         && known
         && !prev.is_some_and(|p| p.text == "." || (p.end == t.start && matches!(p.text.as_str(), "@" | ":")))
-        && !next.is_some_and(|n| n.text == ".")
+        && next.is_none_or(|n| n.text != ".")
 }
 
 /// Reformat Code's keyword case: `sql` with its keywords (CASE_KEYWORDS and REFORMAT_KEYWORDS) in `case` (Off: as written)

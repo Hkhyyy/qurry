@@ -171,7 +171,7 @@ pub fn select_shape(sql: &str, kind: DbKind) -> Result<Shape, String> {
     // A word that starts a join here (not a name after a dot, not a function such as left(…))
     let joins_at = |i: usize| {
         t.get(i).is_some_and(|x| x.word && !x.quoted && x.depth == 0 && JOIN_WORDS.contains(&x.text.as_str()))
-            && !t.get(i + 1).is_some_and(|n| n.text == "(")
+            && t.get(i + 1).is_none_or(|n| n.text != "(")
             && !(i > 0 && t[i - 1].text == ".")
     };
     let mut from = Vec::new();
@@ -213,7 +213,7 @@ pub fn select_shape(sql: &str, kind: DbKind) -> Result<Shape, String> {
         if kw(i, "using") {
             using = true;
             i += 1;
-            if !t.get(i).is_some_and(|x| x.text == "(") {
+            if t.get(i).is_none_or(|x| x.text != "(") {
                 return Err(e::EDIT_NOT_PLAIN.into());
             }
             i += 1;

@@ -2,12 +2,12 @@ use super::*;
 
 pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
     // Esc: if there's a selection (a range, marked rows), clear just that first
-    if k.code == KeyCode::Esc {
-        if let Some(g) = app.grid_mut().filter(|g| g.anchor.is_some() || !g.marked.is_empty()) {
-            g.anchor = None;
-            g.marked.clear();
-            return;
-        }
+    if k.code == KeyCode::Esc
+        && let Some(g) = app.grid_mut().filter(|g| g.anchor.is_some() || !g.marked.is_empty())
+    {
+        g.anchor = None;
+        g.marked.clear();
+        return;
     }
     // The grid's commands (n set NULL, a add row …: pane keys, F1 › Data grid keys), in table data and query results
     let grid = match app.tabs.get(app.active).map(|t| &t.kind) {

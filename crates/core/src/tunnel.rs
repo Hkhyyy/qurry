@@ -7,9 +7,11 @@ use russh::keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+type PendingKeys = HashMap<(String, u16), Option<russh::keys::PublicKey>>;
+
 /// Unknown server keys: (host, port) → key. Added to known_hosts when the user checks the fingerprint and calls trust_host_key.
 /// None = a different key arrived after the fingerprint was shown (could be a MITM, so it isn't added)
-static PENDING_KEYS: Mutex<Option<HashMap<(String, u16), Option<russh::keys::PublicKey>>>> = Mutex::new(None);
+static PENDING_KEYS: Mutex<Option<PendingKeys>> = Mutex::new(None);
 
 /// Remembers the key awaiting confirmation. If a different key is already waiting, trust neither
 fn remember_pending(host: &str, port: u16, key: &russh::keys::PublicKey) {

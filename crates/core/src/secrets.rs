@@ -1,6 +1,7 @@
 //! Password store: an encrypted file in the app config folder (to avoid keychain popups).
 //! - secrets.json: { key: base64(nonce(12) || AES-256-GCM ciphertext) }
 //! - secret.key  : 32-byte random key
+//!
 //! Both files have permission 0600. Anyone reading the files as the same user can decrypt them (DBeaver level).
 //! In settings, the master key can be moved to the OS keychain (macOS Keychain · Secret Service · Windows Credential Manager):
 //! then a secret.key.keychain marker file remains instead of secret.key, and only the key is in the keychain (passwords stay in secrets.json).
@@ -103,7 +104,7 @@ pub fn move_key(dir: &Path, to: KeyLocation, vault: &dyn KeyVault) -> AppResult<
             if let Err(e) = write_private(&key_path, KEY_MOVED_NOTE.as_bytes()) {
                 let _ = fs::remove_file(&marker);
                 let _ = vault.delete(&account);
-                return Err(e.into());
+                return Err(e);
             }
         }
         (KeyLocation::Keychain, KeyLocation::File) => {
