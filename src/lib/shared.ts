@@ -274,6 +274,8 @@ const api = {
   explainAnalyzeAsk: (sql: string, kind: DbKind): string | undefined => wasm.explainAnalyzeAsk(sql, kind),
   /** [warn, text after "Explain Analyse "] */
   explainAnalyzeNote: (sql: string, kind: DbKind): [boolean, string] | undefined => wasm.explainAnalyzeNote(sql, kind),
+  /** The Explain statement for the kind (qurry_shared::explain::explain_sql), or why the kind has none */
+  explainSql: (sql: string, kind: DbKind, analyze: boolean, json: boolean): { Ok: string } | { Err: string } => wasm.explainSql(sql, kind, analyze, json),
   splitStatements: (text: string, kind: DbKind, opts: SplitOptions): [number, number][] => wasm.splitStatements(text, kind, opts),
   splitScript: (text: string, kind: DbKind, opts: SplitOptions): [number, number][] => wasm.splitScript(text, kind, opts),
   planExecution: (text: string, offset: number, segs: Segment[], kind: DbKind, settings: ExecSettings): ExecPlan | undefined => wasm.planExecution(text, offset, segs, kind, settings),

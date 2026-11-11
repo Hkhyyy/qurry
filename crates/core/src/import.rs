@@ -818,21 +818,7 @@ pub(crate) fn kind_name(k: DbKind, driver: &str) -> String {
     if k == DbKind::Mysql && driver.contains("maria") {
         return "MariaDB".into();
     }
-    match k {
-        DbKind::Postgres => "PostgreSQL",
-        DbKind::Mysql => "MySQL",
-        DbKind::Redis => "Redis",
-        DbKind::Sqlite => "SQLite",
-        DbKind::Mssql => "SQL Server",
-        DbKind::Clickhouse => "ClickHouse",
-        DbKind::Duckdb => "DuckDB",
-        DbKind::Mongodb => "MongoDB",
-        DbKind::Oracle => "Oracle",
-        DbKind::Qdrant => "Qdrant",
-        DbKind::Chroma => "Chroma",
-        DbKind::Milvus => "Milvus",
-    }
-    .into()
+    k.label().into()
 }
 
 /// The name of a kind Qurry doesn't have, from the driver id or the URL

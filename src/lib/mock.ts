@@ -12,6 +12,13 @@ const conns = [
   { id: "local", name: "[LOCAL] TestServer", kind: "postgres", host: "localhost", port: 5432, user: "dev", database: "", color: null, hasPassword: false, connected: false },
   // A remote server without TLS: connects only after allow_plaintext. window.__mockLanProd (set before load) makes it Production
   { id: "lan", name: "LAN dev", kind: "postgres", host: "10.0.0.12", port: 5432, user: "dev", database: "lan_app", color: null, hasPassword: true, connected: false, options: { confirmChanges: !!(globalThis as any).__mockLanProd, allowPlaintext: false } },
+  // Driver sources, only with window.__mockDrivers (set before load): the other tests' lists stay as they are
+  ...((globalThis as any).__mockDrivers
+    ? [
+        { id: "lite", name: "[SQLite] app", kind: "sqlite", host: "", port: 0, user: "", database: "/tmp/app.db", color: null, hasPassword: false, connected: true },
+        { id: "ms", name: "[MSSQL] erp", kind: "mssql", host: "127.0.0.1", port: 1433, user: "sa", database: "erp", color: null, hasPassword: true, connected: true },
+      ]
+    : []),
 ];
 // The core's NEEDS_TLS for PostgreSQL (qurry_shared::errors::needs_tls_pg); the GUI recognises it through wasm tlsOptIn
 const NEEDS_TLS =
@@ -392,7 +399,9 @@ const handlers: Record<string, (a: any) => unknown> = {
       : [{ value: "k0", count: 15 }, { value: "k1", count: 15 }],
   // A statement on no_such_table fails (console gutter marks) at its position, as PostgreSQL says it (qurry_shared::errors::with_position)
   run_query: (a: any) =>
-    /\bno_such_table\b/i.test(a.sql) ? Promise.reject(`ERROR: relation "no_such_table" does not exist (position ${[...a.sql.slice(0, a.sql.search(/\bno_such_table\b/i))].length + 1})`) : (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN/i.test(a.sql)
+    // Each statement as it was sent (e2e reads it)
+    (((window as any).__mockRan ??= []).push(a.sql),
+    /\bno_such_table\b/i.test(a.sql) ? Promise.reject(`ERROR: relation "no_such_table" does not exist (position ${[...a.sql.slice(0, a.sql.search(/\bno_such_table\b/i))].length + 1})`) : (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN \(FORMAT JSON/i.test(a.sql)
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }
       : /^\s*(insert|update|delete)/i.test(a.sql)
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
@@ -406,7 +415,7 @@ const handlers: Record<string, (a: any) => unknown> = {
           ? { ...payments, inTransaction: (globalThis as any).__mockManual === true }
           : /\bvoc\b[\s\S]*\bjoin\b/i.test(a.sql)
           ? { ...vocJoin, inTransaction: (globalThis as any).__mockManual === true }
-          : { ...(usersLimit(a.sql) ?? { ...result, ...consoleEdit(a.sql) }), inTransaction: (globalThis as any).__mockManual === true }),
+          : { ...(usersLimit(a.sql) ?? { ...result, ...consoleEdit(a.sql) }), inTransaction: (globalThis as any).__mockManual === true })),
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
   commit_tx: () => {

@@ -58,6 +58,8 @@ pub mod zone;
 pub use qurry_shared::complete;
 /// Grid and search helpers shared with the GUI through WASM (time fractions, tab labels, extractors, fuzzy scores, key folders, auto-map)
 pub use qurry_shared::{automap, extract, format, fuzzy, keytree, labels, statusbar, theme};
+/// The Explain statement per kind (the GUI's through WASM, the TUI's, MCP's)
+pub use qurry_shared::explain;
 
 /// Same config folder as the Tauri app (shares the Data Source list·encrypted passwords)
 /// macOS: ~/Library/Application Support/com.hyunkyo.dbtool

@@ -44,6 +44,12 @@ pub fn explain_analyze_note(sql: &str, kind: JsValue) -> Result<JsValue, JsError
     to(&qurry_shared::guard::explain_analyze_note(sql, parse_kind(kind)?))
 }
 
+/// The Explain statement for the kind (qurry_shared::explain::explain_sql, the TUI's and MCP's): { Ok: statement } or { Err: why there is none }
+#[wasm_bindgen(js_name = explainSql)]
+pub fn explain_sql(sql: &str, kind: JsValue, analyze: bool, json: bool) -> Result<JsValue, JsError> {
+    to(&qurry_shared::explain::explain_sql(sql, parse_kind(kind)?, analyze, json))
+}
+
 /// UI only, not a security check: the statement changes structure (reload the explorer tree)
 #[wasm_bindgen(js_name = isDdl)]
 pub fn is_ddl(sql: &str, kind: JsValue) -> Result<bool, JsError> {

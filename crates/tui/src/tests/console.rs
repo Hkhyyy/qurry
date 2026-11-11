@@ -301,6 +301,78 @@ async fn explain_analyze_in_a_transaction_on_a_read_only_source_runs() {
     assert!(c.in_tx, "still in the transaction the user opened");
 }
 
+/// A console on a source of `kind` (saved, so its kind is known) with `sql`, its caret at the start
+async fn kind_console(kind: &str, sql: &str) -> Harness {
+    let mut h = Harness::new().await;
+    // In the test's folder: a file DB's path is opened (an empty file is made) when the console loads its metadata
+    let db = h.app.import_home.with_file_name("d.db");
+    let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "k", "name": "K", "kind": kind, "host": "127.0.0.1", "port": 1, "user": "u", "database": db
+    }))
+    .unwrap();
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    let id = h.app.restore_console("k", "d".into(), "console".into(), sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    h
+}
+
+/// Explain sends the kind's statement (qurry_shared::explain, the GUI's and MCP's), without the trailing ;
+#[tokio::test]
+async fn explain_sends_the_kinds_statement() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    // One row with PostgreSQL's JSON plan, whatever the kind
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        let plan = r#"[{"Plan": {"Node Type": "Seq Scan", "Relation Name": "t", "Total Cost": 1.0, "Plan Rows": 1, "Plan Width": 4}}]"#;
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "QUERY PLAN".into(), type_name: "json".into() }], rows: vec![vec![plan.into()]], has_result_set: true, ..fake("x")? })
+    }
+    for (kind, want, column) in [
+        ("postgres", "EXPLAIN (FORMAT JSON) select * from t", "operation"),
+        ("mysql", "EXPLAIN select * from t", "QUERY PLAN"),
+        ("sqlite", "EXPLAIN QUERY PLAN select * from t", "QUERY PLAN"),
+    ] {
+        let mut h = kind_console(kind, "select * from t;").await;
+        h.app.fake_db = Some(record);
+        SEEN.lock().unwrap().clear();
+        h.app.run_action(crate::app::Action::Explain);
+        h.settle().await;
+        assert_eq!(*SEEN.lock().unwrap(), [want], "{kind}");
+        // Only PostgreSQL's JSON becomes the plan tree; the others' rows are shown as they came
+        let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!() };
+        assert_eq!(c.results.tabs[0].grid.result.columns[0].name, column, "{kind}");
+    }
+}
+
+/// Redis has no Explain: Output, the status line and the statement's mark say so, and nothing is sent (it used to run as is).
+/// Output comes in front of an earlier run's result, so the reason is what shows
+#[tokio::test]
+async fn explain_on_redis_says_it_isnt_available_and_sends_nothing() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "value".into(), type_name: "string".into() }], rows: vec![vec!["v".into()]], has_result_set: true, ..fake(q)? })
+    }
+    let mut h = kind_console("redis", "GET k").await;
+    h.app.fake_db = Some(record);
+    h.app.execute(false);
+    h.settle().await;
+    assert!(console(&h).results.shown.is_some(), "the run's result is shown");
+    SEEN.lock().unwrap().clear();
+    let before = h.console_output().len();
+    h.app.run_action(crate::app::Action::Explain);
+    h.settle().await;
+    assert!(SEEN.lock().unwrap().is_empty(), "{:?}", SEEN.lock().unwrap());
+    let msg = "Explain isn't available for Redis: run the statement without Explain";
+    assert_eq!(h.console_output()[before..], ["K> GET k", msg]);
+    assert!(console(&h).results.shown.is_none(), "Output with the reason is in front");
+    assert_eq!(h.app.status, msg);
+    assert_eq!(console(&h).marks.at(0), Some(crate::app::MarkState::Err));
+}
+
 /// ⌃Space lists columns after "alias." (from the loaded metadata); Enter replaces the typed prefix with the picked one
 #[tokio::test]
 async fn completion_popup_lists_and_inserts() {

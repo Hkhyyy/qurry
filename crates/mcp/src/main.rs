@@ -7,6 +7,7 @@ use qurry_core::app::{AppState, ConnectionView};
 use qurry_core::db::QueryResult;
 use qurry_core::dba;
 use qurry_core::erd::Erd;
+use qurry_core::explain::explain_sql;
 use qurry_core::plan::PlanNode;
 use qurry_core::sql;
 use qurry_core::store::{DbKind, McpAccess};
@@ -94,8 +95,8 @@ impl Server {
             ),
             tool(
                 "explain",
-                "Show the execution plan of a statement (PostgreSQL: EXPLAIN (FORMAT TEXT); MySQL: EXPLAIN). PostgreSQL adds a second content item, JSON {\"plan_analysis\": …}: the plan tree with each node's share of the estimated cost and warnings (Seq Scan on a big table, sorts and hashes spilled to disk …), from a separate EXPLAIN (FORMAT JSON) that never runs the statement.",
-                ds_props(json!({ "sql": { "type": "string" }, "analyze": { "type": "boolean", "description": "EXPLAIN ANALYZE (runs the query inside a read-only transaction)" } })),
+                "Show the execution plan of a statement (PostgreSQL: EXPLAIN (FORMAT TEXT); MySQL, DuckDB, ClickHouse: EXPLAIN; SQLite: EXPLAIN QUERY PLAN; not available for SQL Server, Oracle, MongoDB, Redis and vector databases). PostgreSQL adds a second content item, JSON {\"plan_analysis\": …}: the plan tree with each node's share of the estimated cost and warnings (Seq Scan on a big table, sorts and hashes spilled to disk …), from a separate EXPLAIN (FORMAT JSON) that never runs the statement.",
+                ds_props(json!({ "sql": { "type": "string" }, "analyze": { "type": "boolean", "description": "EXPLAIN ANALYZE (runs the query inside a read-only transaction; not for SQLite or ClickHouse)" } })),
                 &["data_source", "sql"],
                 true,
             ),
@@ -462,20 +463,16 @@ impl Server {
         let st = &self.state;
         let (t, kind, ..) = self.target(a).await?;
         let q = a.get("sql").and_then(|v| v.as_str()).ok_or("sql is required")?;
-        let q = q.trim().trim_end_matches(';');
+        let q = q.trim();
         let analyze = a.get("analyze").and_then(|v| v.as_bool()).unwrap_or(false);
-        let sqlq = match kind {
-            DbKind::Postgres => format!("EXPLAIN ({}FORMAT TEXT) {q}", if analyze { "ANALYZE, BUFFERS, " } else { "" }),
-            DbKind::Mysql => format!("EXPLAIN {}{q}", if analyze { "ANALYZE " } else { "" }),
-            DbKind::Redis => return Err("EXPLAIN is not available for Redis".into()),
-            _ => format!("EXPLAIN {q}"),
-        };
+        // The consoles' statement (qurry_shared::explain), as TEXT: a kind without one says so and nothing runs
+        let sqlq = explain_sql(q, kind, analyze, false)?;
         let r = st.run_read_only(t.clone(), sqlq, MAX_ROWS).await.map_err(|e| e.to_string())?;
         if kind != DbKind::Postgres {
             return Ok(vec![result_json(&r)]);
         }
         let text = Value::String(r.rows.iter().filter_map(|row| row.first().and_then(|v| v.as_str())).collect::<Vec<_>>().join("\n"));
-        let plan = st.run_read_only(t, format!("EXPLAIN (FORMAT JSON) {q}"), 1).await.ok().and_then(|r| {
+        let plan = st.run_read_only(t, explain_sql(q, kind, false, true)?, 1).await.ok().and_then(|r| {
             let cell = r.rows.first()?.first()?.clone();
             qurry_core::plan::parse_pg(&cell.as_str().map(String::from).unwrap_or_else(|| cell.to_string())).ok()
         });
@@ -1014,6 +1011,15 @@ mod tests {
         assert_eq!(serde_json::from_str::<Value>(&text(&r, 1)).unwrap()["plan_analysis"]["basis"], "cost");
         assert_eq!(ran().await, n0 + 1, "executed once");
 
+        // The consoles' statements (the GUI and the TUI send them through AppState::run_query): JSON plans that parse, with actual
+        // rows under Analyze
+        for analyze in [false, true] {
+            let r = run(&explain_sql(&format!("{counted};"), DbKind::Postgres, analyze, true).unwrap()).await.unwrap();
+            let cell = r.rows[0][0].clone();
+            let p = qurry_core::plan::parse_pg(&cell.as_str().map(String::from).unwrap_or_else(|| cell.to_string())).unwrap();
+            assert_eq!(p.actual_rows.is_some(), analyze, "{p:?}");
+        }
+
         run("drop schema qurry_mcp cascade").await.unwrap();
         server.state.disconnect("pg".into()).await.unwrap();
         let _ = std::fs::remove_dir_all(dir);
@@ -1052,7 +1058,43 @@ mod tests {
         let r = call("explain", json!({ "data_source": "Demo MySQL", "sql": "select 1" })).await;
         assert_eq!(r["content"].as_array().unwrap().len(), 1, "{r}");
         assert!(text(&r).contains("\"columns\""), "{r}");
+        let r = call("explain", json!({ "data_source": "Demo MySQL", "sql": "select 1;", "analyze": true })).await;
+        assert!(text(&r).contains("actual time"), "{r}");
+        // The consoles' statements through AppState::run_query (the GUI's and the TUI's path)
+        for analyze in [false, true] {
+            let r = server.state.run_query("my".into(), explain_sql("select 1;", DbKind::Mysql, analyze, true).unwrap(), None, None).await.unwrap();
+            assert!(r.has_result_set && !r.rows.is_empty(), "{r:?}");
+        }
         server.state.disconnect("my".into()).await.unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Only the SQLite driver (cargo build --manifest-path drivers/sqlite/Cargo.toml --target-dir target), cargo test -p qurry-mcp
+    /// sqlite_explain -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn sqlite_explain() {
+        let (server, dir) = server_with(&[]);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut c = source("lite", "Demo SQLite", Some("read"), false).config;
+        (c.kind, c.host, c.port, c.user, c.database) = (DbKind::Sqlite, String::new(), 0, String::new(), dir.join("app.db").to_string_lossy().into());
+        server.state.save_connection(c, None, None).await.unwrap();
+        let server = Arc::new(server);
+        let st = server.state.clone();
+        st.run_query("lite".into(), "create table t (id integer primary key, name text)".into(), None, None).await.unwrap();
+        let call = |name: &'static str, a: Value| {
+            let s = server.clone();
+            async move { handle(s, json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": a } })).await.unwrap()["result"].clone() }
+        };
+        let r = call("explain", json!({ "data_source": "Demo SQLite", "sql": "select * from t where id = 1;" })).await;
+        assert!(r["content"][0]["text"].as_str().unwrap().contains("SEARCH t USING INTEGER PRIMARY KEY"), "{r}");
+        let r = call("explain", json!({ "data_source": "Demo SQLite", "sql": "select * from t", "analyze": true })).await;
+        assert_eq!(r["isError"], json!(true), "{r}");
+        assert_eq!(r["content"][0]["text"], "SQLite has no Explain that runs the statement: use Explain without Analyze");
+        // The consoles' statement through AppState::run_query (the GUI's and the TUI's path)
+        let r = st.run_query("lite".into(), explain_sql("select * from t where id = 1;", DbKind::Sqlite, false, true).unwrap(), None, None).await.unwrap();
+        assert!(r.rows.iter().flatten().any(|v| v.as_str().is_some_and(|s| s.contains("SEARCH t"))), "{r:?}");
+        st.disconnect("lite".into()).await.unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }
 
