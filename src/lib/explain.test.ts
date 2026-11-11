@@ -13,7 +13,7 @@ describe("explainSql (qurry_shared::explain through WASM)", () => {
   });
 
   it("says why a kind has none", () => {
-    expect(explainSql("select 1", "sqlite", true, true)).toEqual({ err: "SQLite has no Explain that runs the statement: use Explain Plan" });
+    expect(explainSql("select 1", "sqlite", true, true)).toEqual({ err: "SQLite has no Explain that runs the statement: use Explain without Analyze" });
     expect(explainSql("GET k", "redis", false, true)).toEqual({ err: "Explain isn't available for Redis: run the statement without Explain" });
     expect(explainSql("select 1", "mssql", false, true)).toEqual({ err: "Explain isn't available for SQL Server: run the statement without Explain" });
   });

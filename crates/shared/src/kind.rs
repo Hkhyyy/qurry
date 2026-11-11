@@ -37,6 +37,24 @@ impl DbKind {
         }
     }
 
+    /// Display name (one per kind; callers that know MariaDB from MySQL say so themselves)
+    pub fn label(self) -> &'static str {
+        match self {
+            DbKind::Postgres => "PostgreSQL",
+            DbKind::Mysql => "MySQL",
+            DbKind::Redis => "Redis",
+            DbKind::Sqlite => "SQLite",
+            DbKind::Mssql => "SQL Server",
+            DbKind::Clickhouse => "ClickHouse",
+            DbKind::Duckdb => "DuckDB",
+            DbKind::Mongodb => "MongoDB",
+            DbKind::Oracle => "Oracle",
+            DbKind::Qdrant => "Qdrant",
+            DbKind::Chroma => "Chroma",
+            DbKind::Milvus => "Milvus",
+        }
+    }
+
     /// The DB is the schema (no schema level in the tree)
     pub fn flat(self) -> bool {
         matches!(self, DbKind::Mysql | DbKind::Redis | DbKind::Sqlite | DbKind::Clickhouse | DbKind::Mongodb | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus)

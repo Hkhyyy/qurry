@@ -14,9 +14,9 @@ pub fn explain_sql(sql: &str, kind: DbKind, analyze: bool, json: bool) -> Result
         (DbKind::Mysql | DbKind::Duckdb, false) | (DbKind::Clickhouse, false) => "EXPLAIN ".into(),
         (DbKind::Mysql | DbKind::Duckdb, true) => "EXPLAIN ANALYZE ".into(),
         (DbKind::Sqlite, false) => "EXPLAIN QUERY PLAN ".into(),
-        (DbKind::Sqlite | DbKind::Clickhouse, true) => return Err(format!("{} has no Explain that runs the statement: use Explain Plan", label(kind))),
+        (DbKind::Sqlite | DbKind::Clickhouse, true) => return Err(format!("{} has no Explain that runs the statement: use Explain without Analyze", kind.label())),
         (DbKind::Redis | DbKind::Mssql | DbKind::Oracle | DbKind::Mongodb | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus, _) => {
-            return Err(format!("Explain isn't available for {}: run the statement without Explain", label(kind)));
+            return Err(format!("Explain isn't available for {}: run the statement without Explain", kind.label()));
         }
     };
     Ok(prefix + body)
@@ -25,23 +25,6 @@ pub fn explain_sql(sql: &str, kind: DbKind, analyze: bool, json: bool) -> Result
 /// How many bytes explain_sql puts before the statement (an error position in what was sent, minus this, is one in the statement)
 pub fn explain_prefix_len(kind: DbKind, analyze: bool, json: bool) -> usize {
     explain_sql("", kind, analyze, json).map_or(0, |s| s.len())
-}
-
-fn label(kind: DbKind) -> &'static str {
-    match kind {
-        DbKind::Postgres => "PostgreSQL",
-        DbKind::Mysql => "MySQL / MariaDB",
-        DbKind::Redis => "Redis",
-        DbKind::Sqlite => "SQLite",
-        DbKind::Mssql => "SQL Server",
-        DbKind::Clickhouse => "ClickHouse",
-        DbKind::Duckdb => "DuckDB",
-        DbKind::Mongodb => "MongoDB",
-        DbKind::Oracle => "Oracle",
-        DbKind::Qdrant => "Qdrant",
-        DbKind::Chroma => "Chroma",
-        DbKind::Milvus => "Milvus",
-    }
 }
 
 #[cfg(test)]
@@ -64,13 +47,13 @@ mod tests {
         assert_eq!(explain_sql("select 1", Duckdb, false, true).unwrap(), "EXPLAIN select 1");
         assert_eq!(explain_sql("select 1", Duckdb, true, false).unwrap(), "EXPLAIN ANALYZE select 1");
         assert_eq!(explain_sql("select 1", Clickhouse, false, true).unwrap(), "EXPLAIN select 1");
-        assert_eq!(explain_sql("select 1", Clickhouse, true, true).unwrap_err(), "ClickHouse has no Explain that runs the statement: use Explain Plan");
+        assert_eq!(explain_sql("select 1", Clickhouse, true, true).unwrap_err(), "ClickHouse has no Explain that runs the statement: use Explain without Analyze");
     }
 
     #[test]
     fn sqlite_is_the_query_plan_and_has_no_analyze() {
         assert_eq!(explain_sql("select 1", Sqlite, false, true).unwrap(), "EXPLAIN QUERY PLAN select 1");
-        assert_eq!(explain_sql("select 1", Sqlite, true, true).unwrap_err(), "SQLite has no Explain that runs the statement: use Explain Plan");
+        assert_eq!(explain_sql("select 1", Sqlite, true, true).unwrap_err(), "SQLite has no Explain that runs the statement: use Explain without Analyze");
     }
 
     #[test]

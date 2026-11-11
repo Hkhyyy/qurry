@@ -133,7 +133,7 @@ test.describe("Explain on other kinds", () => {
     await explainMenu(page);
     const item = page.getByRole("menuitem", { name: "Explain Analyse" });
     await expect(item).toBeDisabled();
-    await expect(item).toHaveAttribute("title", "SQLite has no Explain that runs the statement: use Explain Plan");
+    await expect(item).toHaveAttribute("title", "SQLite has no Explain that runs the statement: use Explain without Analyze");
   });
 
   test("a kind without Explain says so and sends nothing", async ({ page }) => {

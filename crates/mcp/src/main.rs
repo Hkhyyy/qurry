@@ -1090,7 +1090,7 @@ mod tests {
         assert!(r["content"][0]["text"].as_str().unwrap().contains("SEARCH t USING INTEGER PRIMARY KEY"), "{r}");
         let r = call("explain", json!({ "data_source": "Demo SQLite", "sql": "select * from t", "analyze": true })).await;
         assert_eq!(r["isError"], json!(true), "{r}");
-        assert_eq!(r["content"][0]["text"], "SQLite has no Explain that runs the statement: use Explain Plan");
+        assert_eq!(r["content"][0]["text"], "SQLite has no Explain that runs the statement: use Explain without Analyze");
         // The consoles' statement through AppState::run_query (the GUI's and the TUI's path)
         let r = st.run_query("lite".into(), explain_sql("select * from t where id = 1;", DbKind::Sqlite, false, true).unwrap(), None, None).await.unwrap();
         assert!(r.rows.iter().flatten().any(|v| v.as_str().is_some_and(|s| s.contains("SEARCH t"))), "{r:?}");
