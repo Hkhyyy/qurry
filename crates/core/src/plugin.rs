@@ -236,11 +236,6 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, port: Optio
     Ok(c)
 }
 
-/// Whether this DB kind has no driver
-pub fn is_plugin(kind: DbKind) -> bool {
-    kind.driver().is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

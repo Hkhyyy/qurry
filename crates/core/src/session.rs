@@ -171,11 +171,6 @@ impl PgSession {
         let _ = self.conn.execute("select 1").await;
     }
 
-    #[allow(dead_code)]
-    pub fn has_more(&self) -> bool {
-        self.cursor_open
-    }
-
     /// Whether a user-opened transaction exists (Manual mode once a statement opened it, or BEGIN run directly in Auto). The cursor
     /// then only uses savepoints and never ends the user's transaction with COMMIT/ROLLBACK. A read that runs before it (Production,
     /// reads_outside_tx) has a cursor transaction of its own, as in Auto
@@ -966,7 +961,6 @@ mod tests {
         assert_eq!(r2.rows[0][0], Value::from(501));
         let r3 = s.fetch(500).await.unwrap();
         assert_eq!((r3.rows.len(), r3.truncated), (200, false));
-        assert!(!s.has_more());
 
         // A 0-row SELECT must still return columns
         let e = s.run("select relname from pg_class where false", 500).await.unwrap();

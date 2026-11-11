@@ -6,8 +6,6 @@ import TABLE from "../../crates/shared/src/themes.json";
 import { api } from "./api";
 
 export type Kind = "dark" | "light" | "hc";
-/** The kind of the theme drawn (what styles that differ by kind go by) */
-export type Theme = Kind;
 
 export interface ThemeToken {
   key: string;
@@ -20,8 +18,6 @@ export interface ThemeToken {
   checks?: [string, string, number][];
 }
 export const TOKENS = TABLE.tokens as ThemeToken[];
-/** The TUI's tokens (crates/tui/src/kit/atoms.rs) and the theme token each one draws with */
-export const TUI_TOKENS = TABLE.tui as Record<string, string>;
 
 export type Palette = Record<string, string>;
 export interface ThemeDef {
@@ -246,8 +242,6 @@ export function useThemeState(): { settings: ThemeSettings; current: ThemeDef } 
     () => snapshot,
   );
 }
-/** The kind of the theme drawn (re-renders on change) */
-export const useTheme = (): Theme => useThemeState().current.kind;
 /** Subscribe to every change of the theme drawn (monaco.ts redefines its theme) */
 export const onTheme = (f: (t: ThemeDef) => void) => {
   const g = () => f(current);

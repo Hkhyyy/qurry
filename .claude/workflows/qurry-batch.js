@@ -155,15 +155,8 @@ const lensesFor = (it) => {
   return keys.map((k) => LENSES[k] || LENSES.correctness)
 }
 
-// Resume support: items whose round-1 review ran under the older four-lens rule keep it for round 1 (cache hits)
-const legacyLensesFor = (it) => [
-  { key: 'security', type: 'qurry-security', focus: 'security and data safety (credentials, what reaches a database or an AI tool, injection, temp files), and who this breaks after an update' },
-  ...(it.userVisible ? [{ key: 'ui', type: 'qurry-ui', focus: 'UI/UX and GUI–TUI parity, Storybook updated, themes, keyboard flow, error/empty/loading states' }] : []),
-  ...(it.runtime ? [{ key: 'perf', type: 'qurry-perf', focus: 'performance and resources (blocking in async, leaks, unbounded growth, per-frame cost, large data)' }] : []),
-  { key: 'correctness', type: 'general-purpose', focus: 'correctness: does it do what the task asked, edge cases, tests that actually prove it, regressions in nearby behavior; and design — YAGNI (speculative options/abstractions), KISS (needless complexity), DRY (duplicated logic or rules that should have one home)' },
-]
 const review = async (it, round) => {
-  const lenses = round === 1 && (A.legacyR1 || []).includes(it.slug) ? legacyLensesFor(it) : lensesFor(it)
+  const lenses = lensesFor(it)
   let head = ''
   const found = (
     await parallel(

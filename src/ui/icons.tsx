@@ -248,7 +248,6 @@ export const IcSearch = () => (
   </L>
 );
 export const IcExport = () => <L d="M8 2.5v8M5 7.5l3 3 3-3M3 13h10" />;
-export const IcImport = () => <L d="M8 10.5v-8M5 5.5l3-3 3 3M3 13h10" />;
 export const IcView = () => (
   <L>
     <path d="M1.8 8s2.3-4.3 6.2-4.3S14.2 8 14.2 8 11.9 12.3 8 12.3 1.8 8 1.8 8Z" />
