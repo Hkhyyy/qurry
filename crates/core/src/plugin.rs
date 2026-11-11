@@ -295,7 +295,7 @@ mod tests {
         // The bundled SQLite has the fix for RUSTSEC-2026-0459 (3.54+)
         let v: String = PluginConn::start("sqlite").await.unwrap().call("version", Value::Null).await.unwrap();
         let minor = v.strip_prefix("SQLite 3.").and_then(|r| r.split('.').next()).and_then(|m| m.parse::<u32>().ok());
-        assert!(minor.is_some_and(|m| m >= 54), "{v} (from {:?}): rebuild the driver (cargo build --manifest-path drivers/sqlite/Cargo.toml --target-dir target)", driver_path("sqlite"));
+        assert!(minor.is_some_and(|m| m >= 54), "{v} at {:?}: if that is not target/debug, an older driver (QURRY_DRIVERS_DIR or the app's drivers folder) is found first: remove it or set QURRY_DRIVERS_DIR to target/debug; otherwise rebuild the driver (cargo build --manifest-path drivers/sqlite/Cargo.toml --target-dir target)", driver_path("sqlite"));
         let file = std::env::temp_dir().join(format!("qurry-{}.db", uuid::Uuid::new_v4()));
         conformance(file_cfg("sqlite", &file), None, "main", &[
             "create table parent (id integer primary key, name text not null)",
