@@ -522,12 +522,29 @@ impl App {
     }
 
     /// The run key in a console's grid after a failed load: the shown result's own statement again (as the GUI's Run Again), not
-    /// the one at the editor cursor. An Explain result never loads more, so it never runs here
+    /// the one at the editor cursor. An Explain result never loads more, so it never runs here. Pending grid edits ask first, as
+    /// execute() does
     pub fn rerun_result(&mut self) -> bool {
-        let Some(TabKind::Console(c)) = self.tabs.get(self.active).map(|t| &t.kind) else { return false };
+        let Some(tab) = self.tabs.get(self.active) else { return false };
+        let id = tab.id;
+        let TabKind::Console(c) = &tab.kind else { return false };
         let Some(t) = c.results.shown_tab().filter(|t| t.grid.more_error.is_some()) else { return false };
         let at = result_tabs::RunAt { stmt: t.stmt, sql: t.sql.clone(), into: Some(t.id) };
-        self.run_stmts(vec![at.sql.clone()], vec![at], false, false);
+        let n: usize = c.results.tabs.iter().map(|t| t.grid.pending()).sum();
+        if n == 0 {
+            self.run_stmts(vec![at.sql.clone()], vec![at], false, false);
+            return true;
+        }
+        self.popup = Some(Popup::Confirm {
+            opened: None,
+            text: self.pending_text(n, "run the statement"),
+            on_yes: Self::in_console(id, move |a| {
+                if let Some(TabKind::Console(c)) = a.tabs.get_mut(a.active).map(|t| &mut t.kind) {
+                    c.results.tabs.iter_mut().for_each(|t| t.grid.revert());
+                }
+                a.run_stmts(vec![at.sql.clone()], vec![at], false, false)
+            }),
+        });
         true
     }
 

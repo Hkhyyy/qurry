@@ -1020,3 +1020,32 @@ async fn run_key_in_the_grid_after_a_failed_load_runs_the_results_statement() {
     h.settle().await;
     assert_eq!(*SEEN.lock().unwrap(), ["select id from t"]);
 }
+
+/// The run key in the grid after a failed load, with a pending edit, asks first as the editor's run does: no keeps the edit, yes
+/// drops it and runs the result's statement again
+#[tokio::test]
+async fn rerun_after_a_failed_load_with_pending_edits_asks_first() {
+    let mut h = prod_console("select id, user_name as name from users").await;
+    h.key("a");
+    assert_eq!(console(&h).grid().unwrap().pending(), 1);
+    let g = console_mut(&mut h).results.grid_mut().unwrap();
+    g.result.truncated = true;
+    g.row = g.rows() - 1;
+    h.app.fetch_more();
+    h.settle().await;
+    assert!(console(&h).results.grid().is_some_and(|g| g.more_error.is_some()), "the load failed");
+    h.app.focus = crate::app::Focus::Grid;
+    let before = h.console_output().len();
+    h.key("F5");
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    assert_eq!(text, "1 pending change(s) are not saved to the database (⌃s submits them). Discard them and run the statement?");
+    h.key("n");
+    assert_eq!(console(&h).grid().unwrap().pending(), 1, "the edit stays");
+    assert_eq!(h.console_output().len(), before, "nothing ran");
+    h.key("F5");
+    h.key("y");
+    h.settle().await;
+    assert!(h.console_output().len() > before, "it ran");
+    assert_eq!(console(&h).grid().unwrap().pending(), 0);
+    assert!(console(&h).results.grid().is_some_and(|g| g.more_error.is_none()));
+}
