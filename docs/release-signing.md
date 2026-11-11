@@ -1,0 +1,74 @@
+# Releases and signing
+
+English | [한국어](ko/release-signing.md)
+
+For maintainers: how releases are made, and how the key that signs them is kept, rotated and replaced.
+
+## How releases are made
+
+`.github/workflows/release.yml` builds, signs and publishes:
+
+- **Merge to `main`** → a beta pre-release `vX.Y.Z-beta.N`. `X.Y.Z` is the next stable version: the patch after the newest stable tag, or the version in `crates/core/Cargo.toml` when a PR raised it. `N` counts up for each merge.
+- **Version tag on `main`** → the stable release `vX.Y.Z`, marked latest, with notes since the previous stable release, and the Homebrew formula. Tag the commit of the beta you want to ship: `git tag vX.Y.Z <sha> && git push origin vX.Y.Z`. A tag that is not on `main`, or is lower than the newest stable release, is refused and the run says how to fix it (delete the tag with `git push --delete origin vX.Y.Z` and push the right one).
+- **Pull request changing the workflow** → builds only, nothing is published.
+
+Every stable release gets the macOS 13 warning at the top of its notes, because apps from before 0.3.0 show only the "What's Changed" items and can be offered any stable release; apps from 0.3.0 on leave that item out. The `.deb` of a beta has the package version `X.Y.Z~beta.N`, so `dpkg` and `apt` sort it below the stable `X.Y.Z`.
+
+Both channels get the same files, signatures, `SHA256SUMS` and build provenance attestations ([Safety](safety.md)).
+
+## Release signing key
+
+One key signs everything Qurry installs over the network: the GUI's in-app update bundles (their signatures go into each release's `latest.json`) and each release's `SHA256SUMS` (as `SHA256SUMS.sig`), which `qurry-tui --update` and the driver plugin download check. It is a [Tauri updater](https://v2.tauri.app/plugin/updater/) (minisign) key pair, and Qurry has one maintainer who holds it.
+
+### Where it lives
+
+- The private key and its password are GitHub Actions secrets of this repository, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. They are never committed. `.github/workflows/release.yml` passes them only to the Sign step of the `publish` job, which runs only for pushes to `main` and version tags on `main`, not to the build jobs or to pull requests.
+- Secrets can't be read back from GitHub, so keep an offline backup of the private key file and its password outside GitHub (without it, a lost key can't be recovered; see below).
+- The public key is in the repository, in two places that must match (the test `sums_must_be_signed_with_the_update_key` in `crates/tui/src/selfupdate.rs` checks this):
+  - `plugins.updater.pubkey` in `src-tauri/tauri.conf.json` (the GUI updater, one key)
+  - the first key of `UPDATE_PUBKEYS` in `crates/core/src/update.rs` (`qurry-tui --update` and driver plugins accept a `SHA256SUMS` signed with any key in this list). The list holds only that key, except during a key rotation, when the old key follows it.
+
+An installed version trusts only the public keys it was built with, so changing the key needs a bridge release. Installed versions update in the app only to the release marked **Latest** (or, on the beta channel, the newest beta), so a version reaches the bridge in the app only while the bridge (or a beta built like it) is the newest release it is offered.
+
+### Rotating the key
+
+1. Make a new key pair: `pnpm tauri signer generate -w <file>`, with a password. Back it up offline.
+2. In a pull request, put the new public key in `plugins.updater.pubkey` and first in `UPDATE_PUBKEYS`, with the old key after it. Re-sign the test signature in `sums_must_be_signed_with_the_update_key` (a signature of `hello\n`) with the new key (`pnpm tauri signer sign -f <file> <hello file>`, then use the `.sig` contents) so the test passes.
+3. Merge the pull request and release it as a stable version (tag its merge commit on `main`, `git tag vX.Y.Z <sha> && git push origin vX.Y.Z`) while the secrets still hold the **old** key. This bridge release is signed with the old key, so every installed version accepts it. From then on its GUI updater trusts only the new key, and `qurry-tui --update` and driver plugins trust both, so driver plugins install from the bridge's own release (signed with the old key) as before.
+4. Keep the bridge as Latest for two weeks, so installed versions find it in the app. Don't release another stable version in that time, and avoid merging to `main`: every merge publishes a beta signed with the old key, which the bridge's GUI updater no longer trusts, so GUI users on the beta channel who have the bridge can't update in the app until the step 5 beta (`qurry-tui --update` and driver plugins are fine, since they trust both keys). Two weeks is a trade-off: a longer window lets more people update in the app, a shorter one ends this sooner.
+5. Switch to the new key and release the next stable version:
+   1. Replace both secrets with the new key. Every release from now on (beta and stable) is signed with it.
+   2. In a pull request, remove the old key from `UPDATE_PUBKEYS` (so later versions no longer accept it), add the key notice from "If the private key is lost" at the top of `.github/release-notes.md` (for the versions older than the bridge, which can't install this release), and merge it. Its beta is the first one signed with the new key.
+   3. Tag that merge commit (or any later commit on `main`) with a version higher than the bridge: `git tag vX.Y.Z <sha> && git push origin vX.Y.Z`. Stable releases come only from version tags on `main`, and the workflow refuses a tag lower than the newest stable release. This works even when nothing else changed on `main` since the bridge.
+6. Once the release from step 5 is Latest, destroy every copy of the old private key, the offline backup included. The bridge and the betas built like it list the old key in `UPDATE_PUBKEYS`, so their `qurry-tui --update` and driver plugins accept a `SHA256SUMS` signed with it for as long as people stay on them.
+
+Versions older than the bridge release can't verify releases signed with the new key. Once the release from step 5 is Latest they are offered only that one, and their in-app update and `qurry-tui --update` fail at the signature check, so there is no in-app path for them any more. Users still on them reinstall as described below; the key notice in the update window tells them so.
+
+### If the private key is lost
+
+Installed versions can't accept anything signed with another key, so there is no in-app path to a new key. Make a new key pair, put it in both secrets and in both public key places in place of the old key (the old one is useless, so `UPDATE_PUBKEYS` lists only the new key), put the notice below in `.github/release-notes.md`, and release. Users of every earlier version must reinstall once from the [Releases](https://github.com/Hkhyyy/qurry/releases) page (GUI: the DMG, AppImage or deb; TUI and MCP: `brew upgrade qurry` or the `qurry-cli_…` archive); their data sources, passwords and settings are kept. After that, updates work as before.
+
+Tell them in the update window, which shows only the items under `## What's Changed` in the release notes (GUI, TUI and versions before 0.3.0 alike): an old version shows it when it finds the update, before the install fails at the signature check. Put this at the very top of `.github/release-notes.md` (the test `release_signing_key_notice_shows_in_update_window` in `crates/core/src/update.rs` reads this block, so keep it the only `markdown` block in this file):
+
+```markdown
+## What's Changed
+* [breaking] The update signing key changed. If updating fails with a signature error, that is expected, not an attack: download Qurry again from https://github.com/Hkhyyy/qurry/releases (your data sources, passwords and settings are kept)
+```
+
+Text elsewhere in the notes only shows on the release page. Also pin an issue or discussion with the same text.
+
+Keep the notice in `.github/release-notes.md`, so it is on every release, for six months after the first release signed with the new key, then remove it (and unpin the issue) in a pull request. An old version shows the notes of the release it is offered when it checks, which can be any later stable release, so the notice has to stay on all of them for as long as people may still open an old version.
+
+### If the private key leaks
+
+A leaked key lets whoever holds it sign updates that every installed version accepts, if they can also get them served from this repository's releases.
+
+1. Contain: check the repository and the maintainer's GitHub account for releases, tags, workflow changes, secrets and access tokens you didn't make. Delete those releases and revoke those tokens.
+2. Rotate right away, as in "Rotating the key", skipping the two weeks in step 4 and leaving the leaked key out of `UPDATE_PUBKEYS` in step 2 (the bridge then can't install driver plugins from its own release, signed with the leaked key, until the release from step 5, which follows right away): the bridge release is still signed with the leaked key (the only key installed versions accept), and the secrets are replaced with the new key as soon as it is published. Then destroy every copy of the leaked key. Without the window, almost no one reaches the bridge in the app, so expect every user to reinstall.
+3. Tell users: publish a [security advisory](https://github.com/Hkhyyy/qurry/security/advisories) that says which releases may be affected, that every version older than the bridge must be reinstalled from the [Releases](https://github.com/Hkhyyy/qurry/releases) page (the in-app update and `qurry-tui --update` fail there with a signature error), and how to check a download against its build provenance attestation (`gh attestation verify <file> --repo Hkhyyy/qurry`). The key notice from "If the private key is lost" goes into `.github/release-notes.md` in step 5 as usual.
+
+Versions older than the bridge release keep trusting the leaked key until they are reinstalled, so the advisory should say this plainly. If the leaked key is a previous key that a bridge listed second in `UPDATE_PUBKEYS` (step 6 of a rotation didn't destroy it), that bridge and the betas built like it also trust it for `qurry-tui --update` and driver plugins (not for their GUI updater), so the advisory must tell users still on them to update to the latest release too.
+
+---
+
+[← Development](development.md)

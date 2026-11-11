@@ -25,8 +25,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Whether the pull request changes more than docs: every changed file under docs/ or a .md file (but SECURITY.md, which a Rust test
-  # reads) skips rust, compat and e2e. A skipped job reports as passing, so the required checks (rust, web) don't wait. Pushes to main
+  # Whether the pull request changes more than docs: every changed file under docs/ or a .md file (but docs/release-signing.md, which a
+  # Rust test reads) skips rust, compat and e2e. A skipped job reports as passing, so the required checks (rust, web) don't wait. Pushes to main
   # and manual runs always run everything
   changes:
     runs-on: ubuntu-latest
@@ -44,11 +44,11 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           if [ "$EVENT" != pull_request ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-          # --no-renames: a moved file lists its old path too (SECURITY.md moved into docs/, or code renamed to .md, is a code change)
+          # --no-renames: a moved file lists its old path too (docs/release-signing.md moved elsewhere, or code renamed to .md, is a code change)
           files=$(git diff --name-only --no-renames HEAD^1 HEAD)
           printf '%s\n' "$files"
           # An empty list (nothing to compare) counts as code too
-          code=$(printf '%s\n' "$files" | awk '$0 == "SECURITY.md" || ($0 !~ /^docs\// && $0 !~ /\.md$/) { c = 1 } END { print c ? "true" : "false" }')
+          code=$(printf '%s\n' "$files" | awk '$0 == "docs/release-signing.md" || ($0 !~ /^docs\// && $0 !~ /\.md$/) { c = 1 } END { print c ? "true" : "false" }')
           echo "code=$code" >> "$GITHUB_OUTPUT"
           [ "$code" = true ] || echo "::notice::Docs-only change: rust, compat and e2e are skipped"
 

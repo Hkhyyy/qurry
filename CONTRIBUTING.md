@@ -101,7 +101,7 @@ Shortcuts are written with the ⌘ ⌥ ⌃ ⇧ glyphs (`⇧⌘A`). After changin
 
 - Commit messages start with the kind of change in brackets, then a short summary: `[feat] Copy a query plan as text`, `[fix] Keep the selection after refresh`. Also used: `[test]`, `[docs]`, `[refactor]`, `[perf]`, `[ci]`, `[chore]`.
 - One topic per commit. Don't commit screenshots, generated files (`src/wasm/pkg`, `storybook-static`) or local config.
-- Pull requests go to `main`. CI runs the Rust tests with the real-server tests, vitest, the web and Storybook builds and Playwright (two shards per browser, one `e2e (<browser>)` check each); it has to pass before a merge. A new push to the pull request cancels the run of the previous one. A pull request that only changes `docs/` or `.md` files (other than `SECURITY.md`) skips the Rust and Playwright jobs; their checks still pass.
+- Pull requests go to `main`. CI runs the Rust tests with the real-server tests, vitest, the web and Storybook builds and Playwright (two shards per browser, one `e2e (<browser>)` check each); it has to pass before a merge. A new push to the pull request cancels the run of the previous one. A pull request that only changes `docs/` or `.md` files (other than `docs/release-signing.md`, which a Rust test reads) skips the Rust and Playwright jobs; their checks still pass.
 
 ## Dependencies
 

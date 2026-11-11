@@ -58,7 +58,7 @@ How to run the unit tests and the tests against real PostgreSQL, MySQL and Redis
 - `web`: vitest, the web build and the Storybook build
 - `e2e (chromium)` and `e2e (webkit)`: Playwright against the mock app, each browser in two shards that run side by side; each check passes when both of its shards pass
 
-A pull request that only changes files under `docs/` or `.md` files (other than `SECURITY.md`, which a Rust test reads) skips `rust`, `compat` and e2e; their checks still pass. A new push to a pull request cancels the run of the previous push; runs on `main` always run everything and never cancel each other.
+A pull request that only changes files under `docs/` or `.md` files (other than `docs/release-signing.md`, which a Rust test reads) skips `rust`, `compat` and e2e; their checks still pass. A new push to a pull request cancels the run of the previous push; runs on `main` always run everything and never cancel each other.
 
 The Audit workflow (`.github/workflows/audit.yml`) checks the lockfiles for known vulnerabilities (`cargo deny check advisories`, `pnpm audit --prod`) on pull requests that change a lockfile and every week on `main`. It is not a required check. What to do when it fails: [CONTRIBUTING › Dependencies](../CONTRIBUTING.md#dependencies). Dependabot opens weekly update pull requests for Cargo, npm and GitHub Actions.
 
@@ -77,6 +77,8 @@ The GUI is built from the shared components in `src/ui` (buttons, toolbars, dial
 ## Docs
 
 The user guide is in English (`docs/`) and Korean (`docs/ko/`), chapter for chapter. A change to a feature updates both. After changing a shortcut, regenerate the tables in both languages' [shortcuts-gui.md](shortcuts-gui.md) and [shortcuts-tui.md](shortcuts-tui.md) with `python3 scripts/gen-keymap-docs.py`. Rebindable commands of both apps (ids, names, default keys) are one table, `crates/shared/src/keymap-table.json`; an id is what keymap.json stores, so it never changes.
+
+How releases are made and how the key that signs them is kept and rotated (maintainers): [Releases and signing](release-signing.md).
 
 ---
 

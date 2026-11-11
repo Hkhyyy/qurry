@@ -58,7 +58,7 @@ drivers/*     드라이버 프로그램 (SQLite, DuckDB, SQL Server, ClickHouse,
 - `web`: vitest, 웹 빌드, Storybook 빌드
 - `e2e (chromium)` 과 `e2e (webkit)`: mock 앱에 대한 Playwright. 브라우저마다 두 조각 (shard) 으로 나눠 동시에 돌고, 두 조각이 다 통과하면 그 브라우저의 검사가 통과합니다
 
-`docs/` 아래 파일이나 `.md` 파일만 바꾼 풀 리퀘스트 (`SECURITY.md` 는 Rust 테스트가 읽어서 빼고) 는 `rust`, `compat`, e2e 를 건너뜁니다. 그 검사들은 그래도 통과로 나옵니다. 풀 리퀘스트에 새로 push 하면 이전 push 의 실행은 취소됩니다. `main` 에서는 언제나 전부 돌고 서로 취소하지 않습니다.
+`docs/` 아래 파일이나 `.md` 파일만 바꾼 풀 리퀘스트 (`docs/release-signing.md` 는 Rust 테스트가 읽어서 빼고) 는 `rust`, `compat`, e2e 를 건너뜁니다. 그 검사들은 그래도 통과로 나옵니다. 풀 리퀘스트에 새로 push 하면 이전 push 의 실행은 취소됩니다. `main` 에서는 언제나 전부 돌고 서로 취소하지 않습니다.
 
 Audit 워크플로 (`.github/workflows/audit.yml`) 는 lockfile 의 알려진 취약점을 검사합니다 (`cargo deny check advisories`, `pnpm audit --prod`). lockfile 을 바꾼 풀 리퀘스트와 매주 `main` 에서 돌고, 필수 검사는 아닙니다. 실패했을 때 할 일: [CONTRIBUTING › Dependencies](../../CONTRIBUTING.md#dependencies) (영어). Dependabot 이 매주 Cargo · npm · GitHub Actions 업데이트 풀 리퀘스트를 엽니다.
 
@@ -77,6 +77,8 @@ GUI 는 `src/ui` 의 공통 컴포넌트 (버튼, 도구 막대, 대화상자, �
 ## 문서
 
 사용설명서는 영어 (`docs/`) 와 한국어 (`docs/ko/`) 가 장마다 짝입니다. 기능이 바뀌면 둘 다 고칩니다. 단축키를 바꾼 뒤에는 `python3 scripts/gen-keymap-docs.py` 로 두 언어의 [shortcuts-gui.md](shortcuts-gui.md) · [shortcuts-tui.md](shortcuts-tui.md) 표를 다시 만듭니다. 두 앱의 바꿀 수 있는 명령 (id · 이름 · 기본 키) 은 표 하나, `crates/shared/src/keymap-table.json` 에 있습니다. id 는 keymap.json 에 저장되는 이름이라 바꾸지 않습니다.
+
+릴리스가 만들어지는 방식과 릴리스에 서명하는 키를 보관하고 바꾸는 방법 (메인테이너용): [릴리스와 서명](release-signing.md).
 
 ---
 
