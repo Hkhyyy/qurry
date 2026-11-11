@@ -73,6 +73,7 @@ test("a source whose Database is 3 opens its tab on db3: picker, keys and the te
   await expect(work(page).locator(".rd-term-in")).toContainText("db3>");
 });
 
+// Restored on load, before the shared module is ready, so the tab keeps "db3"; the dropped-default path is in workspaces/layout.test.ts
 test("a workspace's Redis tab on the source's own database (3) reopens on db3", async ({ page }) => {
   await page.addInitScript(() => ((window as any).__mockRedisDb = "3"));
   const tab = { kind: "redis", title: "[Redis] cache [db3]", connId: "rd", database: "db3", group: 0, sql: "", where: "", orderBy: "" };
