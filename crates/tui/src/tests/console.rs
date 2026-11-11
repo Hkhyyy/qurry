@@ -347,21 +347,28 @@ async fn explain_sends_the_kinds_statement() {
     }
 }
 
-/// Redis has no Explain: Output, the status line and the statement's mark say so, and nothing is sent (it used to run as is)
+/// Redis has no Explain: Output, the status line and the statement's mark say so, and nothing is sent (it used to run as is).
+/// Output comes in front of an earlier run's result, so the reason is what shows
 #[tokio::test]
 async fn explain_on_redis_says_it_isnt_available_and_sends_nothing() {
     static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     fn record(q: &str) -> Result<QueryResult, String> {
         SEEN.lock().unwrap().push(q.to_string());
-        fake(q)
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "value".into(), type_name: "string".into() }], rows: vec![vec!["v".into()]], has_result_set: true, ..fake(q)? })
     }
     let mut h = kind_console("redis", "GET k").await;
     h.app.fake_db = Some(record);
+    h.app.execute(false);
+    h.settle().await;
+    assert!(console(&h).results.shown.is_some(), "the run's result is shown");
+    SEEN.lock().unwrap().clear();
+    let before = h.console_output().len();
     h.app.run_action(crate::app::Action::Explain);
     h.settle().await;
     assert!(SEEN.lock().unwrap().is_empty(), "{:?}", SEEN.lock().unwrap());
     let msg = "Explain isn't available for Redis: run the statement without Explain";
-    assert_eq!(h.console_output(), ["K> GET k", msg]);
+    assert_eq!(h.console_output()[before..], ["K> GET k", msg]);
+    assert!(console(&h).results.shown.is_none(), "Output with the reason is in front");
     assert_eq!(h.app.status, msg);
     assert_eq!(console(&h).marks.at(0), Some(crate::app::MarkState::Err));
 }

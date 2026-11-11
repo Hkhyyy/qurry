@@ -300,6 +300,8 @@ impl App {
                 c.log(true, e.clone());
                 c.marks.set(c.editor.lines(), 0, MarkState::Err);
                 self.status = e;
+                // Output (with the reason) in front of an earlier result
+                c.results.show(None);
                 return;
             }
         };
