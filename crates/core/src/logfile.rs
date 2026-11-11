@@ -20,9 +20,11 @@ pub fn dir() -> PathBuf {
     }
 }
 
-/// The current log file (older ones: qurry.1.log, qurry.2.log next to it)
+/// The current log file (older ones: qurry.1.log, qurry.2.log next to it): the one `init` opened (DIR/logs with `--config-dir`),
+/// else the one in `dir()`
 pub fn path() -> PathBuf {
-    dir().join("qurry.log")
+    let g = SINK.lock().unwrap_or_else(|e| e.into_inner());
+    g.as_ref().map_or_else(dir, |s| s.dir.clone()).join("qurry.log")
 }
 
 /// A file grows to this, then it is renamed to qurry.1.log (and that one to qurry.2.log)
@@ -578,6 +580,8 @@ mod tests {
         let _one = SET.blocking_lock();
         let t = tempfile::tempdir().unwrap();
         init_at(t.path(), "gui");
+        // Show Log reveals the file init opened
+        assert_eq!(path(), t.path().join("qurry.log"));
         crate::log!("[qurry] save_connection dsn=postgres://app:Pw-s3cret-1@db.local:5432/x password=Pw-s3cret-1");
         crate::log!("[qurry] save ssh {{\"host\":\"bastion\",\"passphrase\":\"s3cret-phrase\",\"key\":\"-----BEGIN OPENSSH PRIVATE KEY-----\\nAAAAs3cret\\n-----END OPENSSH PRIVATE KEY-----\"}}");
         crate::log!("[qurry] run failed: insert into t (a, b) values ('s3cret-literal', 42)");
