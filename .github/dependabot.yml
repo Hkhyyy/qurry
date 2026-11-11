@@ -1,6 +1,8 @@
 # Monthly update pull requests, so locked versions and pinned action SHAs get reviewed updates instead of going stale.
-# Actions updates come in one pull request (majors included); Cargo and npm group minor and patch updates, one pull request
-# per ecosystem, and a major update gets its own (it may need code changes).
+# Each ecosystem (Cargo, npm, Actions) comes as one pull request with all its updates, majors included: at most three a month.
+# A major that needs code changes shows as failing CI on that grouped pull request; fix it on that pull request, or split it
+# out by hand (put that crate or package back to its old version on the pull request and update it in its own branch).
+# Closing a Dependabot pull request skips the versions it proposed; they come back only with a newer release.
 # In between, the weekly audit workflow (.github/workflows/audit.yml) still fails on known vulnerabilities; when it does,
 # update the flagged dependency by hand or run Dependabot early (Insights > Dependency graph > Dependabot > Check for updates).
 version: 2
@@ -11,7 +13,7 @@ updates:
       interval: monthly
     groups:
       cargo:
-        update-types: [minor, patch]
+        update-types: [major, minor, patch]
 
   - package-ecosystem: npm
     directory: /
@@ -19,7 +21,7 @@ updates:
       interval: monthly
     groups:
       npm:
-        update-types: [minor, patch]
+        update-types: [major, minor, patch]
 
   # Workflows and the composite actions in .github/actions (all pinned by SHA; the comment after the SHA is updated with it)
   - package-ecosystem: github-actions
