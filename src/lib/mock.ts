@@ -734,6 +734,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     return { added: n, updated: 0, message: `Imported ${n} data source${n === 1 ? "" : "s"} — passwords are asked on the first connect` };
   },
   save_keymap: () => null,
+  show_log: () => null,
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
   update_channel: () => updateChannel,
   // Fonts that ship with macOS (the specs run as on macOS), one of them proportional

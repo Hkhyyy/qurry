@@ -177,6 +177,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | macOS | Action |
 |---|---|
 | `—` | Edit Keymap… |
+| `—` | Show Log |
 | `—` | Export Data Sources… |
 | `—` | Import Data Sources… |
 | `—` | Theme: Dark |

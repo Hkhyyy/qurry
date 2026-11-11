@@ -14,6 +14,7 @@
   {"gui": "maximize", "title": "Maximize Editor", "guiDesc": "Maximize editor (also: double-click a tab)", "scope": "global", "guiKeys": ["Mod+Shift+F12"]},
   {"gui": "settings", "title": "Settings", "guiDesc": "Settings (theme, fonts)", "scope": "global", "guiKeys": ["Mod+,"]},
   {"gui": "keymap.edit", "title": "Edit Keymap…", "scope": "global"},
+  {"gui": "showLog", "tui": "ShowLog", "title": "Show Log", "scope": "global"},
   {"gui": "ds.export", "title": "Export Data Sources…", "scope": "global"},
   {"gui": "ds.import", "tui": "ImportDataSources", "title": "Import Data Sources…", "tuiTitle": "Import Data Sources… (DataGrip, IntelliJ, DBeaver, a Qurry export)", "scope": "global"},
   {"gui": "theme", "title": "Quick Switch Theme", "guiDesc": "Quick switch theme (built-in and custom themes, Sync with OS)", "scope": "global", "guiKeys": ["Ctrl+`"]},

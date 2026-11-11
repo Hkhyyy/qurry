@@ -50,12 +50,19 @@ pub fn run() {
             let window_menu = SubmenuBuilder::new(app, "Window").minimize().fullscreen().build()?;
             // Help › Keymap Reference (the shortcut ⇧⌘/ is handled in the webview — a menu accelerator would run it twice)
             let keymap = tauri::menu::MenuItemBuilder::with_id("keymap", "Keymap Reference").build(app)?;
-            let help_menu = SubmenuBuilder::new(app, "Help").item(&keymap).build()?;
+            // Help › Show Log: opened here in Rust, no webview round-trip (Find Action runs the same commands::show_log)
+            let show_log = tauri::menu::MenuItemBuilder::with_id("show-log", "Show Log").build(app)?;
+            let help_menu = SubmenuBuilder::new(app, "Help").item(&keymap).item(&show_log).build()?;
             app.set_menu(MenuBuilder::new(app).items(&[&app_menu, &edit_menu, &window_menu, &help_menu]).build()?)?;
             app.on_menu_event(|app, ev| {
                 use tauri::Emitter;
+                use tauri_plugin_dialog::DialogExt;
                 if ev.id() == "keymap" {
                     let _ = app.emit("open-keymap", ());
+                } else if ev.id() == "show-log" {
+                    if let Err(e) = commands::show_log() {
+                        app.dialog().message(e.to_string()).title("Show Log").kind(tauri_plugin_dialog::MessageDialogKind::Error).show(|_| {});
+                    }
                 } else if ev.id() == "settings" {
                     let _ = app.emit("open-settings", ());
                 } else if ev.id() == "check-update" {
@@ -221,6 +228,7 @@ pub fn run() {
             fonts::remove_font_file,
             fonts::font_file,
             commands::install_update,
+            commands::show_log,
         ])
         .build(app_context())
         .expect("error while running tauri application")

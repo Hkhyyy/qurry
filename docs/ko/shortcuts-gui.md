@@ -177,6 +177,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | macOS | Action |
 |---|---|
 | `—` | Edit Keymap… |
+| `—` | Show Log |
 | `—` | Export Data Sources… |
 | `—` | Import Data Sources… |
 | `—` | Theme: Dark |
