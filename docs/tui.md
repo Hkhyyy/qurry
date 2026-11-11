@@ -45,7 +45,7 @@ When the line is too narrow, the screen's keys go first, then the common keys bu
 
 ## Log file
 
-**⌃k › Show Log** reveals the log file in Finder (on Linux it opens its folder) and puts its path on the status line: `~/Library/Logs/Qurry/qurry.log` on macOS, `~/.local/state/qurry/qurry.log` on Linux (`$XDG_STATE_HOME`). Over SSH nothing opens on your screen; read that path there (`tail -f`). The GUI's is **Help › Show Log**.
+**⌃k › Show Log** reveals the log file in Finder (on Linux it opens its folder) and puts its path on the status line ([where it is and what it holds](getting-started.md#where-qurry-keeps-your-settings)). Over SSH nothing opens on your screen; read that path there (`tail -f`). The GUI's is **Help › Show Log**.
 
 ## Colors
 

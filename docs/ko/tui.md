@@ -45,7 +45,7 @@ URL 에 없는 부분은 `psql` · `mysql` · `redis-cli` 처럼 환경에서 �
 
 ## 로그 파일
 
-**⌃k › Show Log** 는 Finder 에서 로그 파일을 보여 주고 (Linux 에서는 그 폴더를 엽니다) 상태 줄에 경로를 띄웁니다: macOS 는 `~/Library/Logs/Qurry/qurry.log`, Linux 는 `~/.local/state/qurry/qurry.log` (`$XDG_STATE_HOME`). SSH 로 접속했을 때는 내 화면에 아무것도 열리지 않으니 그 경로를 그쪽에서 읽으세요 (`tail -f`). GUI 에서는 **Help › Show Log** 입니다.
+**⌃k › Show Log** 는 Finder 에서 로그 파일을 보여 주고 (Linux 에서는 그 폴더를 엽니다) 상태 줄에 경로를 띄웁니다 ([위치와 담기는 것](getting-started.md#설정이-저장되는-곳)). SSH 로 접속했을 때는 내 화면에 아무것도 열리지 않으니 그 경로를 그쪽에서 읽으세요 (`tail -f`). GUI 에서는 **Help › Show Log** 입니다.
 
 ## 색
 
