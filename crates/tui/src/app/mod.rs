@@ -68,6 +68,45 @@ pub struct Console {
     pub run_error: Option<RunError>,
     /// Replacements (Reformat Code, keyword case) that ⌃u / ⌃r undo and redo as one step (reformat.rs)
     pub joined: Vec<reformat::Joined>,
+    /// The text's SQL colors, highlighted again only when the text changes
+    pub colors: SqlColors,
+}
+
+/// qurry_shared::highlight of the whole console text (a string or comment can span lines), split per line: each line's byte ranges
+/// and classes, names and symbols left out. Kept for the text and source kind it was made for
+#[derive(Default)]
+pub struct SqlColors {
+    text: String,
+    kind: Option<DbKind>,
+    pub rows: Vec<Vec<(usize, usize, qurry_shared::highlight::Class)>>,
+}
+
+impl SqlColors {
+    /// Highlight `text` (the editor's lines joined by \n) unless it is the text last highlighted
+    pub fn update(&mut self, text: &str, kind: DbKind) {
+        use qurry_shared::highlight::{Class, highlight};
+        if self.kind == Some(kind) && self.text == text {
+            return;
+        }
+        let starts: Vec<usize> = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
+        let mut rows = vec![vec![]; starts.len()];
+        let mut r = 0;
+        for s in highlight(text, kind).into_iter().filter(|s| s.class != Class::Other) {
+            while starts.get(r + 1).is_some_and(|&n| n <= s.start) {
+                r += 1;
+            }
+            // A span over several lines: its piece on each
+            loop {
+                let end = starts.get(r + 1).map_or(text.len(), |&n| n - 1);
+                rows[r].push((s.start.max(starts[r]) - starts[r], s.end.min(end) - starts[r], s.class));
+                if s.end <= end + 1 || r + 1 == starts.len() {
+                    break;
+                }
+                r += 1;
+            }
+        }
+        *self = SqlColors { text: text.to_string(), kind: Some(kind), rows };
+    }
 }
 
 /// What the console shows about the text near the caret: the signature of the call it's in (the hint line) and the tables and

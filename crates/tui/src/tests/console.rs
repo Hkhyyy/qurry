@@ -808,3 +808,151 @@ async fn a_picked_subquery_goes_through_the_guards() {
     assert_eq!(out[0], "> with d as (delete from payment where id = 4 returning id) select id from d");
     assert!(out[1].contains("Read-only"), "{out:?}");
 }
+
+/// The theme's color of a highlight token (keyword, number, string, function, comment)
+fn token(h: &Harness, tok: &str) -> ratatui::style::Color {
+    let t = h.app.themes.resolve(qurry_shared::theme::SYSTEM, !h.app.auto_light);
+    let (r, g, b) = qurry_shared::theme::rgb(t.color(tok)).unwrap();
+    ratatui::style::Color::Rgb(r, g, b)
+}
+
+/// The cell where `pat` (a part of `after`) is, on the first screen row holding `after`
+fn cell_at<'a>(buf: &'a ratatui::buffer::Buffer, after: &str, pat: &str) -> &'a ratatui::buffer::Cell {
+    let (w, ht) = (buf.area.width, buf.area.height);
+    let row = |y: u16| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    let y = (0..ht).find(|&y| row(y).contains(after)).unwrap_or_else(|| panic!("no row with {after:?}"));
+    let r = row(y);
+    let at = r[..r.find(after).unwrap()].chars().count() + after[..after.find(pat).unwrap()].chars().count();
+    &buf[(at as u16, y)]
+}
+
+const COLORED: &str = "select count(*), 'it''s' from t where id = 42; -- tail\n/* block\n   inside the comment */\ncreate function f() returns int as $$\n  select 1 from body;\n$$ language sql; select 2;";
+
+/// #150: the console draws its SQL in the theme's colors, as the GUI console and the table filter do; a block comment and a
+/// dollar-quoted body keep their color on every line they span
+#[tokio::test]
+async fn console_draws_sql_in_colors() {
+    use ratatui::style::Modifier;
+    let mut h = Harness::new().await;
+    for theme in ["dark", "light"] {
+        h.app.themes.theme = Some(theme.into());
+        h.console_with(COLORED, 3, 0);
+        let buf = h.buffer(100, 30);
+        let fg = |after: &str, pat: &str| cell_at(&buf, after, pat).fg;
+        assert_eq!(fg("select count", "select"), token(&h, "keyword"), "{theme}");
+        assert_eq!(fg("t where id", "where"), token(&h, "keyword"), "{theme}");
+        assert_eq!(fg("select count", "count"), token(&h, "function"), "{theme}");
+        assert_eq!(fg("= 42", "42"), token(&h, "number"), "{theme}");
+        assert_eq!(fg("'it''s'", "'it"), token(&h, "string"), "{theme}");
+        assert_eq!(fg("'it''s'", "''s'"), token(&h, "string"), "{theme}");
+        assert_eq!(fg("-- tail", "--"), token(&h, "comment"), "{theme}");
+        assert!(cell_at(&buf, "-- tail", "tail").modifier.contains(Modifier::ITALIC), "{theme}");
+        // Lines inside a block comment and a $$ body
+        assert_eq!(fg("inside the comment", "inside"), token(&h, "comment"), "{theme}");
+        assert_eq!(fg("the comment */", "*/"), token(&h, "comment"), "{theme}");
+        assert_eq!(fg("select 1 from body", "select"), token(&h, "string"), "{theme}");
+        assert_eq!(fg("select 1 from body", "1"), token(&h, "string"), "{theme}");
+        assert_eq!(fg("; select 2", "select"), token(&h, "keyword"), "{theme}");
+        // Names and symbols keep the text color
+        let colored = ["keyword", "function", "number", "string", "comment"].map(|t| token(&h, t));
+        for (after, pat) in [("t where", "t"), ("id = 42", "id"), ("id = 42", "="), ("function f()", "f")] {
+            assert!(!colored.contains(&fg(after, pat)), "{theme}: {after}");
+        }
+        h.app.close_tab_now(h.app.active);
+    }
+}
+
+/// The selection, search matches and the caret keep their look over the colors
+#[tokio::test]
+async fn console_colors_give_way_to_selection_search_and_caret() {
+    use ratatui::style::Modifier;
+    use tui_textarea::CursorMove;
+    let mut h = Harness::new().await;
+    h.console_with(COLORED, 0, 0);
+    let plain = cell_at(&h.buffer(100, 30), "select count", "elect").clone();
+    {
+        let c = console_mut(&mut h);
+        c.editor.start_selection();
+        c.editor.move_cursor(CursorMove::Jump(0, 6));
+        let _ = c.editor.set_search_pattern("where");
+    }
+    let buf = h.buffer(100, 30);
+    let kw = token(&h, "keyword");
+    assert_eq!(plain.fg, kw);
+    let sel = cell_at(&buf, "select count", "elect");
+    assert_ne!(sel.fg, kw, "selected text is drawn as selected");
+    assert_ne!(sel.bg, plain.bg, "the selection has its background");
+    let found = cell_at(&buf, "t where", "where");
+    assert_ne!(found.fg, kw, "a search match is drawn as a match");
+    assert_ne!(found.bg, plain.bg);
+    // The caret right after the selection (on the space) and an unselected keyword elsewhere
+    assert!(cell_at(&buf, "select count", " count").modifier.contains(Modifier::REVERSED));
+    assert_eq!(cell_at(&buf, "; select 2", "select").fg, kw);
+}
+
+/// Scrolled down and sideways (tui-textarea's scroll, read from the caret): the colors stay on their characters, a block comment
+/// opened above the first row on screen included
+#[tokio::test]
+async fn console_colors_follow_the_scroll() {
+    let mut h = Harness::new().await;
+    let mut sql = String::from("/* opened far above\n");
+    sql += &"   still the comment\n".repeat(60);
+    sql += "end */ select 1;\n";
+    sql += &(0..40).map(|i| format!("{i} as n{i}, 'v{i}'")).collect::<Vec<_>>().join(", ");
+    sql += " from t;";
+    let last = sql.lines().count() as u16 - 1;
+    let screen = |buf: &ratatui::buffer::Buffer| (0..30).map(|y| (0..80).map(|x| buf[(x, y)].symbol()).collect::<String>() + "\n").collect::<String>();
+    // Scrolled down to the comment's end: the rows above it on screen are inside the comment
+    h.console_with(&sql, last - 1, 0);
+    let buf = h.buffer(80, 30);
+    assert!(!screen(&buf).contains("opened far above") && screen(&buf).contains("still the comment"), "{}", screen(&buf));
+    assert_eq!(cell_at(&buf, "still the comment", "still").fg, token(&h, "comment"));
+    assert_eq!(cell_at(&buf, "still the comment", "comment").fg, token(&h, "comment"));
+    assert_eq!(cell_at(&buf, "end */ select", "*/").fg, token(&h, "comment"));
+    assert_eq!(cell_at(&buf, "end */ select", "select").fg, token(&h, "keyword"));
+    assert_eq!(cell_at(&buf, "select 1;", "1;").fg, token(&h, "number"));
+    // The end of the long last line: scrolled sideways, its tail on screen
+    h.app.close_tab_now(h.app.active);
+    h.console_with(&sql, last, u16::MAX);
+    let buf = h.buffer(80, 30);
+    assert!(screen(&buf).contains("from t;") && !screen(&buf).contains("end */ select"), "{}", screen(&buf));
+    assert_eq!(cell_at(&buf, "from t;", "from").fg, token(&h, "keyword"));
+    assert_eq!(cell_at(&buf, "'v39'", "'v39'").fg, token(&h, "string"));
+    assert_eq!(cell_at(&buf, "'v39'", "39'").fg, token(&h, "string"));
+    assert_eq!(cell_at(&buf, "39 as", "39").fg, token(&h, "number"));
+    assert_eq!(cell_at(&buf, "39 as", "as").fg, token(&h, "keyword"));
+}
+
+/// A pasted tab is drawn up to the next stop: the colors after it stay on their characters
+#[tokio::test]
+async fn console_colors_after_a_tab() {
+    let mut h = Harness::new().await;
+    h.console_with("x\tselect\t\t42 from t;", 0, 0);
+    let buf = h.buffer(100, 30);
+    assert_eq!(cell_at(&buf, "select", "select").fg, token(&h, "keyword"));
+    assert_eq!(cell_at(&buf, "select", "elect").fg, token(&h, "keyword"));
+    assert_eq!(cell_at(&buf, "42 from", "42").fg, token(&h, "number"));
+    assert_eq!(cell_at(&buf, "42 from", "from").fg, token(&h, "keyword"));
+}
+
+/// NO_COLOR draws the console without colors; 16 colors only with the terminal's own (no truecolor or 256 escapes)
+#[tokio::test]
+async fn console_colors_without_truecolor() {
+    use crate::theme::ColorMode;
+    use ratatui::style::Color;
+    let mut h = Harness::new().await;
+    h.console_with(COLORED, 3, 0);
+    // The editor's text cells (inside its border, past the line numbers)
+    let text = |buf: &ratatui::buffer::Buffer| {
+        let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
+        let y0 = (0..30).find(|&y| row(y).contains("select count")).unwrap();
+        let x0 = row(y0).find("select").unwrap() as u16;
+        (y0..y0 + 6).flat_map(|y| (x0..90).map(move |x| (x, y))).map(|p| buf[p].clone()).collect::<Vec<_>>()
+    };
+    h.app.color = ColorMode::NoColor;
+    assert!(text(&h.buffer(100, 30)).iter().all(|c| c.fg == Color::Reset), "NO_COLOR: no fg colors");
+    h.app.color = ColorMode::Ansi16;
+    let cells = text(&h.buffer(100, 30));
+    assert!(cells.iter().all(|c| !matches!(c.fg, Color::Rgb(..) | Color::Indexed(_))), "16 colors: no truecolor or 256 escapes");
+    assert!(cells.iter().any(|c| c.fg != Color::Reset), "16 colors still tell the classes apart");
+}

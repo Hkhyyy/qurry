@@ -50,6 +50,21 @@ pub const R_SET: Color = Color::Rgb(208, 139, 76);
 pub const R_ZSET: Color = Color::Rgb(201, 96, 92);
 pub const R_STREAM: Color = Color::Rgb(90, 164, 105);
 
+/// The look of a piece of SQL (qurry_shared::highlight) in the console and the WHERE / ORDER BY inputs: only the color (comments
+/// italic); names and symbols keep the text's
+pub fn sql_style(class: qurry_shared::highlight::Class) -> Option<Style> {
+    use qurry_shared::highlight::Class;
+    let fg = |c: Color| Some(Style::default().fg(c));
+    match class {
+        Class::Keyword => fg(JSON_KEYWORD),
+        Class::Function => fg(C_ROUTINE),
+        Class::Number => fg(SQL_NUMBER),
+        Class::String => fg(JSON_STRING),
+        Class::Comment => Some(Style::default().fg(SQL_COMMENT).add_modifier(Modifier::ITALIC)),
+        Class::Other => None,
+    }
+}
+
 /// Selected row background
 pub fn selected(focused: bool) -> Color {
     if focused {

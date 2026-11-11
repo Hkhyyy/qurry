@@ -441,6 +441,15 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.key("End");
     scenes.push(app_scene(h, "Console: unknown name", "A table or column the statement's scope lacks is underlined (none for CTEs, aliases, functions, unloaded databases); on it the hint line names the closest names and ⌥↩ lists them", 120, 22));
     h.app.close_tab_now(h.app.active);
+    // #150: the console's SQL in the theme's colors (qurry_shared::highlight of the whole text: a comment or $$ body spans lines)
+    let mixed = "-- Paid card payments per brand\nselect card_brand, count(*) as payments, round(avg(amount), 2)\n  from payment\n where status = 'paid' and amount > 1000 /* KRW */\n group by 1 order by 2 desc;\n/* refunds are\n   counted apart */\ncreate function refunds() returns bigint as $$\n  select count(*) from refund;\n$$ language sql;";
+    for (theme, name) in [(None, "Console: SQL colors"), (Some("light"), "Console: SQL colors (light)")] {
+        h.app.themes.theme = theme.map(String::from);
+        h.console_with(mixed, 4, 26);
+        scenes.push(app_scene(h, name, "Keywords, functions, numbers, strings and comments in the theme's colors, as in the GUI console and the table filter; a block comment or a $$ body keeps its color on every line. Selection, search matches, the caret and error marks are drawn over them", 120, 32));
+        h.app.close_tab_now(h.app.active);
+    }
+    h.app.themes.theme = None;
     // Quotes and brackets: typed pairs close themselves; one left open is marked with its line number, the border says what
     h.console_with("select user_id, count(*\n  from payment\n where card_brand in ('VISA', 'MASTER')\n group by 1;", 0, 23);
     scenes.push(app_scene(h, "Console: unclosed bracket", "' \" ( [ close themselves as you type (a closing one types over, ⌫ in an empty pair removes both, around a selection they wrap it); one left open is underlined in red with its line number, and on its line the bottom border says what is open", 120, 22));

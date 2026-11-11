@@ -84,3 +84,32 @@ async fn perf_large_console() {
     let text = h.console_text();
     assert!(text.ends_with("x.col_00 = 1"), "typed text: {:?}", &text[text.len().saturating_sub(80)..]);
 }
+
+/// A 5,000-line script (statements, block comments, dollar-quoted bodies): redraws, typing at the end and in the middle
+#[tokio::test]
+#[ignore]
+async fn perf_console_5k_lines() {
+    let mut h = Harness::new().await;
+    let block = "select a.col_00, count(*) from t_0001 a where a.col_03 > 10 and a.note = 'x';\n/* a block\n   comment */\ncreate function f() returns int as $$\n  select 1;\n$$ language sql;\n-- line comment\nupdate t set v = 2.5 where id = 7;\n\n\n";
+    let script = block.repeat(500);
+    let lines = script.lines().count() as u16;
+    assert_eq!(lines, 5000);
+    h.console_with(&script, lines, u16::MAX);
+    let mut term = Terminal::new(TestBackend::new(W, H)).unwrap();
+    let t = Instant::now();
+    term.draw(|f| crate::ui::draw(f, &mut h.app)).unwrap();
+    row("console 5k lines: first frame", vec![t.elapsed()]);
+    let idle: Vec<Duration> = (0..200)
+        .map(|_| {
+            let t = Instant::now();
+            term.draw(|f| crate::ui::draw(f, &mut h.app)).unwrap();
+            t.elapsed()
+        })
+        .collect();
+    row("console 5k lines: redraw, nothing changed", idle);
+    let typed: Vec<String> = " select 1".chars().map(|c| if c == ' ' { "Space".into() } else { c.to_string() }).collect();
+    let typed: Vec<&str> = typed.iter().map(String::as_str).collect();
+    keys_and_frames(&mut h, &mut term, &typed, "console 5k lines: typing at the end");
+    keys_and_frames(&mut h, &mut term, &["PgUp"; 60], "console 5k lines: PgUp");
+    keys_and_frames(&mut h, &mut term, &typed, "console 5k lines: typing in the middle");
+}
