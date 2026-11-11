@@ -122,7 +122,7 @@ GUI 와 TUI 는 같은 엔진으로 자동완성하므로 같은 후보를 같�
 
 ## 실행 계획
 
-GUI · TUI 콘솔 (그리고 MCP `explain` 도구) 은 종류마다 맞는 문장을 보냅니다: PostgreSQL 은 `EXPLAIN (FORMAT JSON)` 이고 트리로 그립니다. MySQL · DuckDB · ClickHouse 는 `EXPLAIN`, SQLite 는 `EXPLAIN QUERY PLAN` 이고 계획을 행으로 보여 줍니다. SQLite · ClickHouse 에는 Explain Analyze 가 없습니다. SQL Server · Oracle · MongoDB · Redis · 벡터 DB 는 Qurry 에서 Explain 이 안 됩니다: 콘솔이 그렇다고 말하고 아무것도 보내지 않으니, Explain 없이 실행하세요.
+GUI · TUI 콘솔 (그리고 MCP `explain` 도구) 은 종류마다 맞는 문장을 보냅니다: PostgreSQL 은 콘솔에서 `EXPLAIN (FORMAT JSON)` 이고 트리로 그리며, MCP 도구는 `EXPLAIN (FORMAT TEXT)` 입니다. MySQL · DuckDB · ClickHouse 는 `EXPLAIN`, SQLite 는 `EXPLAIN QUERY PLAN` 이고 계획을 행으로 보여 줍니다. SQLite · ClickHouse 에는 Explain Analyze 가 없습니다. SQL Server · Oracle · MongoDB · Redis · 벡터 DB 는 Qurry 에서 Explain 이 안 됩니다: 콘솔이 그렇다고 말하고 아무것도 보내지 않으니, Explain 없이 실행하세요.
 
 PostgreSQL 에서는 노드마다 자기 몫의 시간 (Explain Analyze) 또는 비용을 보여 주고, 볼 만한 것을 표시합니다 — 큰 테이블의 Seq Scan, 10배 이상 틀린 행 수 추정, 대부분의 행을 버리는 필터, 디스크로 넘친 정렬 · 해시. TUI: `⌥e` Explain, `⌃k` › Explain Analyze.
 

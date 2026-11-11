@@ -122,7 +122,7 @@ Query history and snippets are kept in the config folder and shared by the GUI a
 
 ## Explain plan
 
-The GUI and TUI consoles (and the MCP `explain` tool) send the statement each kind has: PostgreSQL `EXPLAIN (FORMAT JSON)`, drawn as a tree; MySQL, DuckDB and ClickHouse `EXPLAIN`; SQLite `EXPLAIN QUERY PLAN`. Those plans are shown as rows. SQLite and ClickHouse have no Explain Analyze. SQL Server, Oracle, MongoDB, Redis and the vector databases have no Explain in Qurry: the console says so and sends nothing, so run the statement without Explain.
+The GUI and TUI consoles (and the MCP `explain` tool) send the statement each kind has: PostgreSQL `EXPLAIN (FORMAT JSON)` in the consoles, drawn as a tree, and `EXPLAIN (FORMAT TEXT)` from the MCP tool; MySQL, DuckDB and ClickHouse `EXPLAIN`; SQLite `EXPLAIN QUERY PLAN`. Those plans are shown as rows. SQLite and ClickHouse have no Explain Analyze. SQL Server, Oracle, MongoDB, Redis and the vector databases have no Explain in Qurry: the console says so and sends nothing, so run the statement without Explain.
 
 On PostgreSQL each node shows its own share of the time (Explain Analyze) or cost, and flags what is worth a look — a Seq Scan over a big table, row estimates off by 10× or more, filters that throw away most rows, sorts and hashes spilled to disk. TUI: `⌥e` Explain, `⌃k` › Explain Analyze.
 
