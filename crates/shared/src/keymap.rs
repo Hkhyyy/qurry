@@ -397,6 +397,8 @@ mod tests {
             ("editor.quickFix", "QuickFix"),
             ("editor.cancel", "Cancel"),
             ("editor.history", "QueryHistory"),
+            ("result.pin", "PinResult"),
+            ("result.close", "CloseResult"),
             ("ws.new", "WsNew"),
             ("ws.rename", "WsRename"),
             ("ws.delete", "WsDelete"),
