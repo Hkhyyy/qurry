@@ -675,6 +675,7 @@ async fn main() -> std::io::Result<()> {
     // stdout is for the protocol only. Engine logs (stderr) only with --verbose
     qurry_core::QUIET.store(!args.iter().any(|a| a == "--verbose"), std::sync::atomic::Ordering::Relaxed);
     qurry_core::SANDBOX.store(true, std::sync::atomic::Ordering::Relaxed);
+    qurry_core::logfile::init("mcp");
     let mut state = qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?;
     state.mcp = true;
     // AWS SSM tunnels run the aws CLI: stop it when the host stops this server or it panics

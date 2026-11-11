@@ -70,6 +70,7 @@ async fn main() -> std::io::Result<()> {
     }
     // Keep engine logs from breaking the screen
     qurry_core::QUIET.store(true, std::sync::atomic::Ordering::Relaxed);
+    qurry_core::logfile::init("tui");
     let state = Arc::new(qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?);
     let start = temporary.map(|t| {
         let notes = t.notes.join(" ");

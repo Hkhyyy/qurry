@@ -63,6 +63,7 @@ pub fn run() {
                 }
             });
 
+            qurry_core::logfile::init("gui");
             app.manage(qurry_core::open_state(Some(app.path().app_config_dir()?))?);
             app.manage(commands::PendingImport::default());
             app.manage(commands::PendingData::default());
@@ -75,7 +76,6 @@ pub fn run() {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     let state = handle.state::<app::AppState>();
                     for (id, message) in app::housekeeping(&state).await {
-                        eprintln!("[qurry] {message} ({id})");
                         let _ = handle.emit("conn-disconnected", serde_json::json!({ "id": id, "message": message }));
                     }
                     // A Production console's transaction left open (#106)
