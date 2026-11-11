@@ -12,6 +12,7 @@ use qurry_shared::DbKind;
 use qurry_shared::complete::{self, Options};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use qurry_shared::chart::{self, Column};
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
@@ -134,6 +135,27 @@ pub fn edit_no_row(table: &str) -> String {
 #[wasm_bindgen(js_name = editJoinRows)]
 pub fn edit_join_rows() -> String {
     qurry_shared::errors::EDIT_JOIN_ROWS.into()
+}
+
+/// Submit's edits as JS sends them: [row, column, value (null = NULL)] per edited cell
+fn edits_of(edits: JsValue) -> Result<BTreeMap<(usize, usize), Option<String>>, JsError> {
+    Ok(from::<Vec<(usize, usize, Option<String>)>>(edits)?.into_iter().map(|(r, c, v)| ((r, c), v)).collect())
+}
+
+/// Submit's statements for one table (qurry_shared::result_edit::edit_statements, the TUI's): {Ok: statements} or {Err: why}.
+/// rows = the result rows' raw text (null = NULL), edits = [row, column, value], deleted = row indexes, added = per new row the
+/// [column, value] of each cell the user set
+#[wasm_bindgen(js_name = editStatements)]
+pub fn edit_statements(kind: JsValue, target: JsValue, rows: JsValue, edits: JsValue, deleted: JsValue, added: JsValue) -> Result<JsValue, JsError> {
+    let added: Vec<BTreeMap<usize, Option<String>>> = from::<Vec<Vec<(usize, Option<String>)>>>(added)?.into_iter().map(|r| r.into_iter().collect()).collect();
+    let deleted: BTreeSet<usize> = from::<Vec<usize>>(deleted)?.into_iter().collect();
+    to(&qurry_shared::result_edit::edit_statements(parse_kind(kind)?, &from(target)?, &from::<Vec<Vec<Option<String>>>>(rows)?, &edits_of(edits)?, &deleted, &added))
+}
+
+/// Submit's statements for a join result (qurry_shared::result_edit::join_statements, the TUI's); rows and edits as editStatements
+#[wasm_bindgen(js_name = joinStatements)]
+pub fn join_statements(kind: JsValue, edit: JsValue, rows: JsValue, edits: JsValue) -> Result<Vec<String>, JsError> {
+    Ok(qurry_shared::result_edit::join_statements(parse_kind(kind)?, &from(edit)?, &from::<Vec<Vec<Option<String>>>>(rows)?, &edits_of(edits)?))
 }
 
 /// What a Production console that starts in Manual mode says the first time (the TUI's words)
