@@ -735,6 +735,7 @@ pub enum Action {
     UpdateChannel,
     InstallUpdate,
     Help,
+    ShowLog,
     Quit,
 }
 
@@ -907,6 +908,8 @@ pub struct App {
     pub ran: Vec<Action>,
     /// Where Import Data Sources looks for DataGrip / IntelliJ / DBeaver settings (the home folder; tests use a fake one)
     pub import_home: std::path::PathBuf,
+    /// What Show Log reveals (qurry_core::logfile::path(); tests use a temporary one)
+    pub log_file: std::path::PathBuf,
 }
 
 /// Tests only (testkit): stands in for the database, answering each query by its text
@@ -992,6 +995,7 @@ impl App {
             #[cfg(test)]
             ran: vec![],
             import_home: qurry_core::import::home(),
+            log_file: qurry_core::logfile::path(),
             next_id: 1,
             exec: Default::default(),
             ddl_structure: false,

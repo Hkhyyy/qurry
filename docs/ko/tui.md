@@ -43,6 +43,10 @@ URL 에 없는 부분은 `psql` · `mysql` · `redis-cli` 처럼 환경에서 �
 
 줄이 좁으면 화면의 키가 먼저 빠지고, 그다음 `⌃k actions` 를 뺀 공통 키, 그다음 항목 (컬럼 한도, Max, Min, Avg, Sum, Not null, Size, Shown columns), 마지막으로 `⌃k actions` 가 빠집니다. Position 은 남습니다. 상태 글은 항목이 없을 때처럼 줄의 절반까지 차지합니다. 그러면 항목이 빠져야 할 때만 3 분의 1 까지 양보하고 `…` 로 잘립니다. 실행 중이거나 내보내기 · 가져오기 중인 줄은 항목 때문에 잘리지 않습니다.
 
+## 로그 파일
+
+**⌃k › Show Log** 는 Finder 에서 로그 파일을 보여 주고 (Linux 에서는 그 폴더를 엽니다) 상태 줄에 경로를 띄웁니다: macOS 는 `~/Library/Logs/Qurry/qurry.log`, Linux 는 `~/.local/state/qurry/qurry.log` (`$XDG_STATE_HOME`). SSH 로 접속했을 때는 내 화면에 아무것도 열리지 않으니 그 경로를 그쪽에서 읽으세요 (`tail -f`). GUI 에서는 **Help › Show Log** 입니다.
+
 ## 색
 
 TUI 는 시작할 때 아래 환경 변수로 색 모드를 하나 고릅니다 (먼저 맞는 줄이 이깁니다):

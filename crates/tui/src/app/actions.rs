@@ -130,6 +130,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::UpdateChannel, hint: "", run: |app| app.palette_update_channel() },
     ActionDef { action: Action::InstallUpdate, hint: "", run: install_update },
     ActionDef { action: Action::Help, hint: "", run: |app| app.popup = Some(Popup::Help { sel: 0, scroll: 0, record: None, message: None }) },
+    ActionDef { action: Action::ShowLog, hint: "", run: show_log },
     ActionDef { action: Action::Quit, hint: "", run: quit },
 ];
 
@@ -395,6 +396,29 @@ fn install_update(app: &mut App) {
         app.popup = Some(Popup::Confirm { opened: None, text: format!("{n} console(s) have uncommitted changes. Roll them back, update and restart?"), on_yes: Box::new(|a| a.install_update()) });
     } else {
         app.install_update();
+    }
+}
+
+/// Reveals the log file in Finder (`open -R`; its folder until the file exists), or opens the folder on Linux (`xdg-open`): fixed argv,
+/// no shell. The status line shows the file's path; over SSH (and in tests) nothing opens, the path is what matters
+fn show_log(app: &mut App) {
+    let file = app.log_file.clone();
+    let dir = file.parent().unwrap_or(&file);
+    app.status = format!("Show Log: {}", file.display());
+    let ssh = std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
+    if cfg!(test) || ssh {
+        return;
+    }
+    let mut cmd = std::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" });
+    match cfg!(target_os = "macos") && file.exists() {
+        true => cmd.arg("-R").arg(&file),
+        false => cmd.arg(dir),
+    };
+    let null = std::process::Stdio::null;
+    match std::fs::create_dir_all(dir).and_then(|_| cmd.stdin(null()).stdout(null()).stderr(null()).spawn()) {
+        // Reaped off the UI thread so it doesn't linger as a zombie
+        Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+        Err(e) => app.status = format!("Show Log: couldn't open it ({e}). Open it yourself: {}", file.display()),
     }
 }
 
