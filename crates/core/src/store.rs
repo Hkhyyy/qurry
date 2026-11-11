@@ -828,7 +828,7 @@ impl Store {
         self.set_setting("keywordCase", serde_json::to_value(case)?)
     }
 
-    /// Grid alignment per value class: only the classes the user changed (GUI Settings › Appearance › Alignment; the TUI reads it)
+    /// Grid alignment per value class: only the classes the user changed (GUI Settings › Appearance › Data grid › Alignment; the TUI reads it)
     pub fn grid_align(&self) -> crate::format::Alignments {
         self.settings().get("gridAlign").map(crate::format::alignments).unwrap_or_default()
     }
@@ -846,7 +846,7 @@ impl Store {
         Ok(next)
     }
 
-    /// The status bar items on (GUI status bar and Settings › Appearance, TUI ⌃k › Status Bar Items…): the defaults until changed
+    /// The status bar items on (GUI status bar and Settings › Appearance › Data grid, TUI ⌃k › Status Bar Items…): the defaults until changed
     pub fn status_bar_items(&self) -> Vec<crate::statusbar::Item> {
         crate::statusbar::items(self.settings().get("statusBarItems"))
     }

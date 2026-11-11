@@ -282,7 +282,7 @@ export function ResultGrid(p: Props) {
   // Time columns: align fractional-second digits within the column (values unchanged)
   const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows, wasmReady]);
   const shown = (v: Cell, ci: number) => (fracW[ci] && typeof v === "string" ? padFrac(v, fracW[ci]) : display(v));
-  // Value class of each cell and where it sits (Settings › Appearance › Alignment; the TUI grid's rule)
+  // Value class of each cell and where it sits (Settings › Appearance › Data grid › Alignment; the TUI grid's rule)
   const classOf = useMemo(() => cols.map((c) => cellClasses(c.typeName)), [cols, wasmReady]);
   const alignOverrides = useGridAlign();
   const aligns = useMemo(() => cols.map((c, ci) => alignTable(alignOverrides, c.typeName, result.rows, ci)), [cols, result.rows, alignOverrides, wasmReady]);

@@ -142,7 +142,7 @@ impl App {
     }
 }
 
-/// The GUI's names (Settings › Appearance › Keyword case)
+/// The GUI's names (Settings › Appearance › Console › Keyword case)
 pub(super) fn keyword_case_name(c: KeywordCase) -> &'static str {
     match c {
         KeywordCase::Off => "Off",

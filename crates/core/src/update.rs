@@ -11,7 +11,7 @@ pub const REPO: &str = "Hkhyyy/qurry";
 const CACHE_FILE: &str = "update-releases.json";
 const CHECK_EVERY_SECS: u64 = 60 * 60;
 
-/// Which releases to offer (GUI Settings › Appearance › Updates, TUI ⌃k › Update Channel…). Saved in the config folder, shared by the GUI and the TUI
+/// Which releases to offer (GUI Settings › Updates, TUI ⌃k › Update Channel…). Saved in the config folder, shared by the GUI and the TUI
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Channel {

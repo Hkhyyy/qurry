@@ -1,5 +1,5 @@
 //! Display formatting shared by the result grids: fractional seconds aligned within a time column, digit grouping,
-//! the value class of a cell and its alignment (Settings › Appearance › Alignment in grid; overrides kept in settings.json),
+//! the value class of a cell and its alignment (Settings › Appearance › Data grid › Alignment in grid; overrides kept in settings.json),
 //! the colors of a JSON cell, the widths a user gave columns (resize). And the SQL editors' formatting, the same in the GUI console
 //! (WASM) and the TUI editor: Reformat Code and the keyword case setting (as you type and in Reformat Code).
 
@@ -243,7 +243,7 @@ pub fn alignments(v: &Value) -> Alignments {
         .collect()
 }
 
-/// The class's setting (Settings › Appearance › Alignment shows it); NULL's may be `Align::Column`, which `cell_align` resolves
+/// The class's setting (Settings › Appearance › Data grid › Alignment shows it); NULL's may be `Align::Column`, which `cell_align` resolves
 pub fn align(class: ValueClass, overrides: &Alignments) -> Align {
     overrides.get(&class).copied().unwrap_or(class.default_align())
 }
@@ -306,7 +306,7 @@ pub fn column_widths(v: &Value) -> ColumnWidths {
     m.iter().filter_map(|(k, w)| Some((k.clone(), column_width(w.as_i64()?, 0)))).collect()
 }
 
-/// Settings.json "keywordCase" (GUI Settings › Appearance › Keyword case, TUI ⌃K › Keyword Case…): the letter case SQL keywords
+/// Settings.json "keywordCase" (GUI Settings › Appearance › Console › Keyword case, TUI ⌃K › Keyword Case…): the letter case SQL keywords
 /// get as you type and in Reformat Code. Off leaves typing alone, and Reformat Code writes keywords in upper case as before 0.3.2
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

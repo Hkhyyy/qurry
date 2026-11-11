@@ -1,5 +1,5 @@
 //! The status line's items for the focused grid (#132): which are on (settings.json "statusBarItems", shared with the GUI's status
-//! bar and Settings › Appearance) and what they say (qurry_shared::statusbar, the GUI's words). The TUI's selection is the marked rows
+//! bar and Settings › Appearance › Data grid) and what they say (qurry_shared::statusbar, the GUI's words). The TUI's selection is the marked rows
 //! (m) with the cursor's column, or a ⇧-arrow range; with neither, the cursor's cell
 use super::*;
 use qurry_core::editable::{ColumnEdit, Editable};
