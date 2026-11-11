@@ -432,7 +432,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let Some(d) = app.designer.as_ref() else { return };
     let w = 110u16.min(area.width.saturating_sub(2));
     let r = centered(area, w, area.height.saturating_sub(2));
-    let title = if d.before.is_some() { format!(" Modify Table: {} ", d.before.as_ref().unwrap().name) } else { " New Table ".into() };
+    let title = if let Some(b) = &d.before { format!(" Modify Table: {} ", b.name) } else { " New Table ".into() };
     let inner = popup(f, r, title);
     let mut lines: Vec<Line> = vec![];
     let schema = if d.def.schema.is_empty() { String::new() } else { format!("{}.", d.def.schema) };

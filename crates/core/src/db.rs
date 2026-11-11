@@ -238,20 +238,19 @@ pub(crate) async fn run_pg_on(conn: &mut sqlx::PgConnection, sql: &str, limit: u
     }
     let rows = pg_values(conn, &columns, &rows, &mut zone).await;
     // With 0 rows the column info is unknown, so fill it in with describe.
-    if !has_result_set {
-        if let Ok(desc) = conn.describe(sql).await {
-            if !desc.columns().is_empty() {
-                has_result_set = true;
-                columns = desc
-                    .columns()
-                    .iter()
-                    .map(|c| ColumnInfo {
-                        name: c.name().to_string(),
-                        type_name: c.type_info().name().to_string(),
-                    })
-                    .collect();
-            }
-        }
+    if !has_result_set
+        && let Ok(desc) = conn.describe(sql).await
+        && !desc.columns().is_empty()
+    {
+        has_result_set = true;
+        columns = desc
+            .columns()
+            .iter()
+            .map(|c| ColumnInfo {
+                name: c.name().to_string(),
+                type_name: c.type_info().name().to_string(),
+            })
+            .collect();
     }
     Ok(QueryResult {
         columns,
@@ -306,11 +305,11 @@ pub async fn export_pg_on(conn: &mut sqlx::PgConnection, pool: &PgPool, sql: &st
         out.row(&vals).await?;
     }
     drop(stream);
-    if !out.has_header() {
-        if let Ok(desc) = (&mut *conn).describe(sql).await {
-            let names: Vec<String> = desc.columns().iter().map(|c| c.name().to_string()).collect();
-            out.header(&names).await?;
-        }
+    if !out.has_header()
+        && let Ok(desc) = (&mut *conn).describe(sql).await
+    {
+        let names: Vec<String> = desc.columns().iter().map(|c| c.name().to_string()).collect();
+        out.header(&names).await?;
     }
     Ok(())
 }

@@ -139,7 +139,8 @@ impl Backend for PgPool {
     }
 
     async fn table_detail(&self, schema: &str, table: &str) -> AppResult<TableDetail> {
-        let cols: Vec<(String, String, bool, Option<String>, Option<String>, bool)> = sqlx::query_as(&format!(
+        type Col = (String, String, bool, Option<String>, Option<String>, bool);
+        let cols: Vec<Col> = sqlx::query_as(&format!(
             "select a.attname::text, format_type(a.atttypid, a.atttypmod), not a.attnotnull, \
                     pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum), \
                     coalesce(a.attnum = any(pk.conkey), false) \
@@ -448,7 +449,7 @@ impl Backend for PgPool {
             // It doesn't stop what a function does on another connection (dblink): that needs a role without it (docs/mcp-security.md)
             sqlx::query("set transaction read only").execute(&mut *tx).await?;
             sqlx::query("set local statement_timeout = '15s'").execute(&mut *tx).await?;
-            let res = crate::db::run_on(&mut *tx, &sql, r.limit.max(1)).await;
+            let res = crate::db::run_on(&mut tx, &sql, r.limit.max(1)).await;
             let _ = tx.rollback().await;
             match res {
                 Ok(result) if !result.rows.is_empty() => hits.push(FtsHit { schema, table, where_clause, result }),
@@ -478,7 +479,8 @@ impl Backend for PgPool {
     }
 
     async fn erd(&self, schemas: &[String]) -> AppResult<Erd> {
-        let rels: Vec<(String, String, String, Vec<String>, String, String, Vec<String>)> = sqlx::query_as(
+        type Rel = (String, String, String, Vec<String>, String, String, Vec<String>);
+        let rels: Vec<Rel> = sqlx::query_as(
             "select con.conname::text, fn.nspname::text, fc.relname::text,
                     (select array_agg(a.attname::text order by k.ord) from unnest(con.conkey) with ordinality k(n, ord) join pg_attribute a on a.attrelid = con.conrelid and a.attnum = k.n),
                     tn.nspname::text, tc.relname::text,
@@ -532,7 +534,8 @@ impl Backend for PgPool {
 
     async fn table_def(&self, schema: &str, table: &str) -> AppResult<TableDef> {
         let mut t = TableDef { schema: schema.into(), name: table.into(), ..Default::default() };
-        let cols: Vec<(String, String, bool, Option<String>, bool, Option<String>)> = sqlx::query_as(&format!(
+        type Col = (String, String, bool, Option<String>, bool, Option<String>);
+        let cols: Vec<Col> = sqlx::query_as(&format!(
             "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, pg_get_expr(d.adbin, d.adrelid), a.attidentity <> '', col_description(a.attrelid, a.attnum) \
              FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
              WHERE a.attrelid = {REL_OID} AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum"
@@ -573,7 +576,8 @@ impl Backend for PgPool {
             .into_iter()
             .map(|(name, unique, constraint, columns, complex, def)| IndexDef { orig: Some(name.clone()), name, columns: if complex { vec![] } else { columns }, unique, constraint, definition: complex.then_some(def) })
             .collect();
-        let fks: Vec<(String, Vec<String>, String, String, Vec<String>, String, String)> = sqlx::query_as(&format!(
+        type Fk = (String, Vec<String>, String, String, Vec<String>, String, String);
+        let fks: Vec<Fk> = sqlx::query_as(&format!(
             "SELECT c.conname::text, \
                array(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n, o) JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.n ORDER BY k.o), \
                rn.nspname::text, rc.relname::text, \

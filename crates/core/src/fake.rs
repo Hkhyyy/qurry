@@ -185,9 +185,7 @@ fn int_range(c: &Col, n: &str) -> (i64, i64) {
     };
     if seg(n, &["age"]) {
         (18, 80)
-    } else if seg(n, &["qty", "quantity", "count", "stock", "cnt"]) {
-        (0, 100.min(max))
-    } else if has(n, &["score", "rating", "rank", "level"]) {
+    } else if seg(n, &["qty", "quantity", "count", "stock", "cnt"]) || has(n, &["score", "rating", "rank", "level"]) {
         (0, 100.min(max))
     } else if has(n, &["price", "amount", "total", "cost", "fee", "balance", "salary"]) {
         (100, 100_000.min(max))

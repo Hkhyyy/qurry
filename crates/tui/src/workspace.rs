@@ -153,10 +153,10 @@ fn restore_one(app: &mut App, v: &Value, show: bool) {
         } else {
             None
         };
-        if let Some(id) = id {
-            if let Some(i) = app.tab_index(id) {
-                app.tabs[i].group = group;
-            }
+        if let Some(id) = id
+            && let Some(i) = app.tab_index(id)
+        {
+            app.tabs[i].group = group;
         }
         ids.push(id);
     }
@@ -198,10 +198,10 @@ impl App {
         }
         let active = self.active.min(self.tabs.len() - 1);
         for g in self.panes.leaves() {
-            if let Some(i) = self.group_tab(g) {
-                if i != active {
-                    self.activate(i);
-                }
+            if let Some(i) = self.group_tab(g)
+                && i != active
+            {
+                self.activate(i);
             }
         }
         self.activate(active);
@@ -836,7 +836,7 @@ mod tests {
         h.key("Enter");
         h.settle().await;
         let fresh = h.app.conns.iter().find(|c| c.config.name == "fresh").unwrap().config.id.clone();
-        assert_eq!(h.app.workspaces[0].conns, [fresh.clone()]);
+        assert_eq!(h.app.workspaces[0].conns, std::slice::from_ref(&fresh));
         assert!(!h.app.workspaces[1].conns.contains(&fresh), "not adopted into the current workspace");
     }
 

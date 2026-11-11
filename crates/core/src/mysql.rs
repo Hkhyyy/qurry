@@ -164,13 +164,12 @@ async fn run_on_with(conn: &mut sqlx::MySqlConnection, sql: &str, limit: usize, 
         }
     }
     // Column info for a 0-row SELECT
-    if !has_rs && is_select_like(sql) {
-        if let Ok(d) = conn.describe(sql).await {
-            if !d.columns().is_empty() {
-                has_rs = true;
-                columns = d.columns().iter().map(|c| ColumnInfo { name: c.name().to_string(), type_name: c.type_info().name().to_string() }).collect();
-            }
-        }
+    if !has_rs && is_select_like(sql)
+        && let Ok(d) = conn.describe(sql).await
+        && !d.columns().is_empty()
+    {
+        has_rs = true;
+        columns = d.columns().iter().map(|c| ColumnInfo { name: c.name().to_string(), type_name: c.type_info().name().to_string() }).collect();
     }
     Ok(query_result(columns, rows, affected, truncated, start, has_rs))
 }
@@ -681,7 +680,8 @@ pub async fn list_objects(p: &MySqlPool, schema: &str) -> AppResult<SchemaObject
 }
 
 pub async fn table_detail(p: &MySqlPool, schema: &str, table: &str) -> AppResult<TableDetail> {
-    let cols: Vec<(String, String, String, Option<String>, Option<String>, String, Option<String>)> = sqlx::query_as(
+    type Col = (String, String, String, Option<String>, Option<String>, String, Option<String>);
+    let cols: Vec<Col> = sqlx::query_as(
         "select cast(column_name as char), cast(column_type as char), cast(is_nullable as char), cast(column_default as char), \
            cast(nullif(column_comment, '') as char), cast(column_key as char), cast(character_set_name as char) \
          from information_schema.columns where table_schema = ? and table_name = ? order by ordinal_position",

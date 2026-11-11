@@ -77,10 +77,10 @@ impl App {
     // ───────── Connections ─────────
 
     pub fn connect(&mut self, conn: &str) {
-        if let Some(n) = self.tree.roots.iter().find(|n| n.conn == conn).cloned() {
-            if !self.tree.expanded.contains(&n.key) {
-                self.toggle_node(&n);
-            }
+        if let Some(n) = self.tree.roots.iter().find(|n| n.conn == conn).cloned()
+            && !self.tree.expanded.contains(&n.key)
+        {
+            self.toggle_node(&n);
         }
     }
 

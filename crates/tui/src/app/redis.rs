@@ -43,12 +43,11 @@ impl App {
             }
         };
         if let Some(k) = key {
-            if let Some(t) = self.tab_mut(id) {
-                if let TabKind::Redis(r) = &mut t.kind {
-                    if !r.reveal(&k) {
-                        r.want = Some(k.clone());
-                    }
-                }
+            if let Some(t) = self.tab_mut(id)
+                && let TabKind::Redis(r) = &mut t.kind
+                && !r.reveal(&k)
+            {
+                r.want = Some(k.clone());
             }
             self.redis_load_key(id, k);
         }

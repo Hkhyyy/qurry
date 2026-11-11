@@ -626,7 +626,7 @@ impl Grid {
         self.max_off = {
             let mut off = self.cols();
             let mut w = 0u16;
-            while off > 0 && w + self.widths[off - 1] + 1 <= avail {
+            while off > 0 && w + self.widths[off - 1] < avail {
                 off -= 1;
                 w += self.widths[off] + 1;
             }

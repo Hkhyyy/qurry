@@ -317,7 +317,7 @@ pub fn split_statements_with(text: &str, kind: DbKind, opts: SplitOptions) -> Ve
 /// REST request: from a line starting with a method like "GET /x" up to the next request (including JSON body). # · // lines are comments
 fn split_rest(text: &str) -> Vec<(usize, usize)> {
     let is_head = |l: &str| {
-        let w = l.trim_start().split_whitespace().next().unwrap_or("").to_uppercase();
+        let w = l.split_whitespace().next().unwrap_or("").to_uppercase();
         ["GET", "POST", "PUT", "PATCH", "DELETE", "SELECT"].contains(&w.as_str())
     };
     let mut out: Vec<(usize, usize)> = Vec::new();
