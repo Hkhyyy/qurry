@@ -107,7 +107,7 @@ async fn show_log_puts_the_path_on_the_status_line() {
 async fn open_github_puts_the_address_on_the_status_line() {
     use crate::app::{OPENER_FAILS, REPO_URL};
     let mut h = Harness::new().await;
-    for (fails, want) in [(None, format!("Opened {REPO_URL} in the browser")), (Some(std::io::ErrorKind::NotFound), format!("Couldn't open a browser: {REPO_URL} (entity not found)"))] {
+    for (fails, want) in [(None, format!("Opening {REPO_URL} in the browser")), (Some(std::io::ErrorKind::NotFound), format!("Couldn't open a browser: {REPO_URL} (entity not found)"))] {
         OPENER_FAILS.set(fails);
         h.app.status.clear();
         h.key("Ctrl+K");
