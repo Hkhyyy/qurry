@@ -86,6 +86,26 @@ test("one tab per statement: the caret shows it, a rerun replaces it, a pinned o
   await expect(labels(page)).toHaveText(["Output", /^1: users/, "2: payments", "1: users"]);
 });
 
+test("⌘⇧K on the caret's statement closes its tab and shows the tab of the statement now at the caret", async ({ page }) => {
+  await typeSql(page, "select * from users limit 2;\nselect * from payments;");
+  await caretTo(page, 1);
+  await run(page);
+  await caretTo(page, 2);
+  await run(page);
+  await caretTo(page, 1);
+  await expect(shown(page)).toHaveText("1: users");
+  // Deleted, the caret stays on line 1: statement 2 is there now, so its tab is shown, not Output
+  await page.keyboard.press("Meta+Shift+K");
+  await expect(editor(page)).toContainText("select * from payments;");
+  await expect(editor(page)).not.toContainText("users");
+  await expect(labels(page)).toHaveText(["Output", "1: payments"]);
+  await expect(shown(page), "after deleting a statement, move the caret into the next one to show its tab").toHaveText("1: payments");
+  // The last one deleted: the caret is in no statement, so its tab closes and the shown one is the store's choice (Output)
+  await page.keyboard.press("Meta+Shift+K");
+  await expect(labels(page)).toHaveText(["Output"]);
+  await expect(shown(page)).toHaveText("Output");
+});
+
 test("Settings › Result tabs: 0 isn't saved; past the number the least recently shown unpinned tab closes", async ({ page }) => {
   await openSettings(page, "Console");
   const field = dialog(page).getByRole("spinbutton", { name: "Result tabs" });
