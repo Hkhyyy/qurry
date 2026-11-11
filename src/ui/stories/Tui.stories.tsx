@@ -69,13 +69,15 @@ export const ScreenStatusNarrow = { ...by("Status line: narrow"), name: "Small �
 export const ScreenChart = { ...by("Chart"), name: "Screen · Chart" };
 export const ScreenGridLoadingMore = { ...by("Grid: loading more"), name: "Screen · Grid: loading more" };
 export const ScreenGridLoadingMoreNoColor = { ...by("Grid: loading more, NO_COLOR"), name: "Screen · Grid: loading more, NO_COLOR" };
+// #157: a failed load keeps its reason on the grid, wrapped, with the run key that runs the result's statement again
+export const ScreenConsoleLoadMoreFailed = { ...by("Console: load more failed"), name: "Small · Console: load more failed (80 columns)" };
 // The grid's horizontal scrollbar on its bottom border (#107)
 export const ScreenGridScrollbar = { ...by("Grid scrollbar: focused"), name: "Screen · Grid scrollbar: focused" };
 export const ScreenGridScrollbarBlur = { ...by("Grid scrollbar: not focused"), name: "Screen · Grid scrollbar: not focused" };
 export const ScreenGridScrollbarLight = { ...by("Grid scrollbar: light"), name: "Screen · Grid scrollbar: light" };
 export const ScreenGridScrollbar16 = { ...by("Grid scrollbar: 16 colors"), name: "Screen · Grid scrollbar: 16 colors" };
 export const ScreenGridScrollbarNoColor = { ...by("Grid scrollbar: NO_COLOR"), name: "Screen · Grid scrollbar: NO_COLOR" };
-export const ScreenGridScrollbarError = { ...by("Grid scrollbar: beside a failed load-more"), name: "Screen · Grid scrollbar: beside a failed load-more" };
+export const ScreenGridScrollbarError = { ...by("Grid scrollbar: with a failed load-more"), name: "Screen · Grid scrollbar: with a failed load-more" };
 export const ScreenProductionLog = { ...by("Production log"), name: "Screen · Production log" };
 export const ScreenProductionLogNote = { ...by("Production log · note"), name: "Screen · Production log · note" };
 export const ScreenTableDesigner = { ...by("Table designer"), name: "Screen · Table designer (⌃F6)" };

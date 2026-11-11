@@ -684,7 +684,8 @@ mod tests {
     }
 
     /// Loading more shows in the status line as a run does (bar, words, elapsed time; the Cancel key stops it). When it fails (#80)
-    /// the result stays unfinished ("+") and the status line and the grid's edge say why, the GUI's words; scrolling on doesn't ask again
+    /// the result stays unfinished ("+") and the status line and the grid's last line say why, the GUI's words with how to run it
+    /// again (a table tab: r); scrolling on doesn't ask again
     #[tokio::test]
     async fn a_failed_load_more_stays_in_the_grid() {
         let mut h = Harness::new().await;
@@ -703,8 +704,8 @@ mod tests {
         assert!(!screen.lines().any(|l| l.contains("Loading more") && l.contains('┗')), "{screen}");
         h.settle().await;
         let g = h.table(id).grid.as_ref().unwrap();
-        let why = qurry_shared::errors::more_rows_failed("Session closed");
-        assert_eq!((g.more_error.as_deref(), g.result.truncated, g.loading_more), (Some(why.as_str()), true, false));
+        let why = "Couldn't load more rows (r runs it again): Session closed";
+        assert_eq!((g.more_error.as_deref(), g.result.truncated, g.loading_more), (Some(why), true, false));
         assert!(h.screen(120, 30).contains(&format!("✗ {why}")), "{}", h.screen(120, 30));
         assert!(h.screen(120, 30).contains("2+ rows"));
         assert_eq!(h.app.status, why);
@@ -713,9 +714,10 @@ mod tests {
         assert!(!h.table(id).grid.as_ref().unwrap().loading_more, "not asked again");
     }
 
-    /// On a result wider than the grid, a failed load-more's words on the bottom edge stay whole beside the horizontal scrollbar and its range
+    /// On a result wider than the grid, a failed load-more's words sit on the grid's last line, above the bottom edge, which keeps the
+    /// whole horizontal scrollbar and its range
     #[tokio::test]
-    async fn the_load_more_error_stays_beside_the_horizontal_scrollbar() {
+    async fn the_load_more_error_sits_above_the_horizontal_scrollbar() {
         let mut h = Harness::new().await;
         let cols: Vec<String> = (0..40).map(|i| format!("column_{i}")).collect();
         let cols: Vec<&str> = cols.iter().map(String::as_str).collect();
@@ -730,9 +732,10 @@ mod tests {
         assert!(h.table(id).grid.as_ref().unwrap().loading_more);
         h.settle().await;
         let screen = h.screen(120, 30);
-        let edge = screen.lines().find(|l| l.contains('✗')).unwrap_or_else(|| panic!("{screen}"));
-        let why = qurry_shared::errors::more_rows_failed("Session closed");
-        assert!(edge.contains(&format!("▶  ✗ {why}")) && edge.contains("┗━━") && edge.contains("─ ◀ cols 1–"), "{edge}");
+        let lines: Vec<&str> = screen.lines().collect();
+        let at = lines.iter().position(|l| l.contains("✗ Couldn't load more rows (r runs it again): Session closed")).unwrap_or_else(|| panic!("{screen}"));
+        let edge = lines[at + 1];
+        assert!(edge.contains("┗━━") && edge.contains("─ ◀ cols 1–") && edge.contains("▶ ┛"), "{edge}");
     }
 
     /// A load-more answer that arrives after the tab ran again belongs to the grid it replaced: dropped

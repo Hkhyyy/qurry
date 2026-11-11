@@ -955,3 +955,68 @@ async fn console_colors_without_truecolor() {
     assert!(cells.iter().all(|c| !matches!(c.fg, Color::Rgb(..) | Color::Indexed(_))), "16 colors: no truecolor or 256 escapes");
     assert!(cells.iter().any(|c| c.fg != Color::Reset), "16 colors still tell the classes apart");
 }
+
+/// After a failed load (#157), the console's grid says why, wrapped, with the run key that runs its result's statement again: that
+/// key in the grid runs the result's own statement (as the GUI's Run Again), not the one at the editor cursor; a rebound run key shows
+#[tokio::test]
+async fn run_key_in_the_grid_after_a_failed_load_runs_the_results_statement() {
+    use crate::{app::Action, keys::Slot};
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    h.console_with("select id from t;\nupdate t set a = 1 where id = 2;", 0, 0);
+    let fail_a_load = |h: &mut Harness| {
+        let c = console_mut(h);
+        let g = c.results.grid_mut().unwrap();
+        g.result.truncated = true;
+        g.row = g.rows() - 1;
+        // The editor's cursor on the other statement: the run key in the editor would run that one
+        c.editor.move_cursor(tui_textarea::CursorMove::Jump(1, 0));
+        h.app.fetch_more();
+    };
+    // The run key in the editor asks which statement: the one at the cursor
+    h.key("F5");
+    h.key("Enter");
+    h.settle().await;
+    fail_a_load(&mut h);
+    h.settle().await;
+    let why = console(&h).results.grid().and_then(|g| g.more_error.clone()).expect("the load failed");
+    assert_eq!(why, "Couldn't load more rows (F5 in the grid runs it again): Session closed");
+    // In a narrow grid the reason wraps on the grid's last lines, and its end still shows
+    let s = h.screen(60, 30);
+    assert!(s.contains("│✗ Couldn't load more rows (F5 in│") && s.contains("│the grid runs it again): Session│") && s.contains("│closed "), "{s}");
+    h.app.focus = crate::app::Focus::Grid;
+    SEEN.lock().unwrap().clear();
+    h.key("F5");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["select id from t"], "the result's statement, not the editor's");
+    assert_eq!(console(&h).results.tabs.len(), 1, "into the same result tab");
+    assert!(console(&h).results.grid().is_some_and(|g| g.more_error.is_none()));
+    // Without a failed load, the run key in the grid runs the editor's statement as before
+    SEEN.lock().unwrap().clear();
+    h.key("F5");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(SEEN.lock().unwrap().len(), 1);
+    assert!(SEEN.lock().unwrap()[0].starts_with("update t"), "{:?}", SEEN.lock().unwrap());
+    // A rebound run key: the hint names it, and it runs the result's statement again
+    h.app.keys.bind(Slot::global(Action::Execute), "F9".into(), false);
+    h.app.focus = crate::app::Focus::Editor;
+    console_mut(&mut h).editor.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+    h.key("F9");
+    h.key("Enter");
+    h.settle().await;
+    fail_a_load(&mut h);
+    h.settle().await;
+    let why = console(&h).results.grid().and_then(|g| g.more_error.clone()).unwrap_or_default();
+    assert!(why.starts_with("Couldn't load more rows (F9 in the grid runs it again)"), "{why}");
+    h.app.focus = crate::app::Focus::Grid;
+    SEEN.lock().unwrap().clear();
+    h.key("F9");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["select id from t"]);
+}
