@@ -41,9 +41,10 @@ struct Sink {
 
 static SINK: Mutex<Option<Sink>> = Mutex::new(None);
 
-/// Starts writing the log file of `app` ("gui", "tui" or "mcp"): once, at startup
-pub fn init(app: &str) {
-    init_at(&dir(), app);
+/// Starts writing the log file of `app` ("gui", "tui" or "mcp"): once, at startup. With `--config-dir DIR` (a scratch or test
+/// run, another set of data sources), into DIR/logs instead of the shared folder
+pub fn init(app: &str, config_dir: Option<&Path>) {
+    init_at(&config_dir.map_or_else(dir, |d| d.join("logs")), app);
 }
 
 /// init, into `dir` (tests: a temporary folder)
@@ -74,15 +75,21 @@ fn open_private(path: &Path) -> std::io::Result<File> {
     Ok(f)
 }
 
+/// The log folder, 0700 (made again when someone deleted it while an app runs)
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+    b.create(dir)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+    Ok(())
+}
+
 impl Sink {
     fn open(dir: &Path, app: &str, cap: u64) -> std::io::Result<Sink> {
-        let mut b = std::fs::DirBuilder::new();
-        b.recursive(true);
-        #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
-        b.create(dir)?;
-        #[cfg(unix)]
-        std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+        private_dir(dir)?;
         Ok(Sink {
             file: open_private(&dir.join("qurry.log"))?,
             lock: open_private(&dir.join("qurry.log.lock"))?,
@@ -95,6 +102,12 @@ impl Sink {
 
     /// One line, in one write, under the lock shared with the other apps' processes
     fn write(&mut self, msg: &str) -> std::io::Result<()> {
+        // The folder was deleted: made again, with a lock file the other apps open too
+        let lock = self.dir.join("qurry.log.lock");
+        if !lock.exists() {
+            private_dir(&self.dir)?;
+            self.lock = open_private(&lock)?;
+        }
         let ts = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false);
         let msg = msg.strip_prefix("[qurry] ").unwrap_or(msg).replace('\r', "\\r").replace('\n', "\\n");
         let line = format!("{ts} [{} {}] {msg}\n", self.app, std::process::id());
@@ -135,8 +148,10 @@ pub fn log(msg: &str) {
     if let Some(s) = g.as_mut()
         && let Err(e) = s.write(&msg)
         && !std::mem::replace(&mut s.failed, true)
+        // Not over the TUI's screen (QUIET)
+        && !crate::QUIET.load(std::sync::atomic::Ordering::Relaxed)
     {
-        eprintln!("[qurry] can't write the log file {} ({e}). Free up disk space, or delete that folder (Qurry creates it again).", s.dir.join("qurry.log").display());
+        eprintln!("[qurry] can't write the log file {} ({e}). Free up disk space, or make that folder writable by you.", s.dir.join("qurry.log").display());
     }
 }
 
@@ -149,10 +164,14 @@ pub fn error_kind(e: &crate::error::AppError) -> String {
     }
 }
 
-/// Keys whose value is a secret (key=value, key: value, "key": "value", ?key=value), compared case-insensitively
+/// Keys whose value is a secret (key=value, key: value, "key": "value", ?key=value), compared case-insensitively. A key may end
+/// a longer name: PGPASSWORD, sslpassword, sshPassword, SessionToken, SecretAccessKey, AWS_SECRET_ACCESS_KEY
 const SECRET_KEYS: &[&str] = &[
-    "password", "passwd", "pwd", "pass", "passphrase", "secret", "token", "api_key", "apikey", "access_key", "secret_access_key", "session_token", "auth", "private_key",
+    "password", "passwd", "pwd", "pass", "passphrase", "secret", "token", "api_key", "apikey", "access_key", "accesskey", "auth", "authorization", "private_key", "privatekey",
 ];
+
+/// An auth header's scheme: the credential is the word after it (`Authorization: Bearer <token>`)
+const AUTH_SCHEMES: &[&str] = &["basic", "bearer", "digest", "negotiate"];
 
 /// The one redaction every log line goes through (stderr and the file): passwords, keys, tokens and SQL literals (values) are
 /// replaced, names, hosts and users are kept
@@ -210,7 +229,8 @@ fn word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// `password=x`, `Password: x`, `"token":"x"`, `?api_key=x&` → the value as ***. A key ends a word (`ssh_password`, not `passwords`)
+/// `password=x`, `Password: x`, `"token":"x"`, `?api_key=x&` → the value as ***. A key ends a word (`ssh_password`, `PGPASSWORD`, not
+/// `passwords`)
 fn key_values(s: &str) -> String {
     let lower = s.to_ascii_lowercase();
     let b = s.as_bytes();
@@ -219,8 +239,7 @@ fn key_values(s: &str) -> String {
     let mut i = 0;
     while i < s.len() {
         let key = SECRET_KEYS.iter().filter(|k| lower[i..].starts_with(**k)).max_by_key(|k| k.len());
-        let starts = i == 0 || !(b[i - 1] as char).is_alphanumeric();
-        let Some(key) = key.filter(|k| starts && !lower[i + k.len()..].starts_with(word)) else {
+        let Some(key) = key.filter(|k| !lower[i + k.len()..].starts_with(word)) else {
             i += s[i..].chars().next().map_or(1, char::len_utf8);
             continue;
         };
@@ -230,17 +249,19 @@ fn key_values(s: &str) -> String {
             j += 1;
         }
         let skip_ws = |mut j: usize| {
-            while b.get(j).is_some_and(|c| *c == b' ') {
+            while b.get(j).is_some_and(|c| *c == b' ' || *c == b'\t') {
                 j += 1;
             }
             j
         };
         j = skip_ws(j);
-        if !matches!(b.get(j), Some(b'=' | b':')) {
+        // MySQL's `(using password: YES)` only says whether one was sent
+        if !matches!(b.get(j), Some(b'=' | b':')) || lower[..i].ends_with("using ") {
             i += key.len();
             continue;
         }
         j = skip_ws(j + 1);
+        let unquoted = |j: usize| s[j..].find(|c: char| c.is_whitespace() || "&,;)}]".contains(c)).map_or(s.len(), |k| j + k);
         let end = match b.get(j) {
             Some(q @ (b'"' | b'\'')) => {
                 let mut k = j + 1;
@@ -249,7 +270,11 @@ fn key_values(s: &str) -> String {
                 }
                 (k + 1).min(b.len())
             }
-            _ => s[j..].find(|c: char| c.is_whitespace() || "&,;)}]".contains(c)).map_or(s.len(), |k| j + k),
+            _ => match unquoted(j) {
+                // `Basic <credential>`: the scheme and the word after it
+                e if AUTH_SCHEMES.contains(&&lower[j..e]) && skip_ws(e) > e && skip_ws(e) < s.len() => unquoted(skip_ws(e)),
+                e => e,
+            },
         };
         if end > j {
             out.push_str(&s[from..j]);
@@ -279,20 +304,25 @@ fn quotes(s: &str) -> String {
         let c = cs[i];
         if c == '\'' {
             let prev = i.checked_sub(1).map(|p| cs[p]);
-            // One letter before the quote is a prefix (E'…' takes backslash escapes)
+            // One letter before the quote is a prefix (N'…', E'…')
             let prefix = prev.is_some_and(char::is_alphabetic) && i.checked_sub(2).is_none_or(|p| !word(cs[p]));
-            let escaped = prefix && matches!(prev, Some('E' | 'e'));
             let suffix = cs[i + 1..].iter().take_while(|c| word(**c)).collect::<String>().to_lowercase();
             let contraction = !prefix
                 && prev.is_some_and(char::is_alphabetic)
                 && ["t", "s", "re", "ve", "ll", "d", "m"].contains(&suffix.as_str())
                 && cs.get(i + 1 + suffix.chars().count()) != Some(&'\'');
+            if let Some(n) = mysql_account(&cs, i) {
+                out.extend(&cs[i..i + n]);
+                i += n;
+                continue;
+            }
             if !contraction {
                 let mut k = i + 1;
                 loop {
                     match cs.get(k) {
                         None => break,
-                        Some('\\') if escaped => k += 2,
+                        // MySQL's literals and E'…': a backslash escapes. A PostgreSQL literal that ends in one hides more, never less
+                        Some('\\') => k += 2,
                         Some('\'') if cs.get(k + 1) == Some(&'\'') => k += 2,
                         Some('\'') => break,
                         _ => k += 1,
@@ -322,6 +352,22 @@ fn quotes(s: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// MySQL's `Access denied for user 'app'@'10.0.0.5'`: the account and the client host the server saw are kept (their length
+/// from the quote at `i`)
+fn mysql_account(cs: &[char], i: usize) -> Option<usize> {
+    const BEFORE: &str = "denied for user ";
+    let n = BEFORE.len();
+    if i < n || cs[i - n..i].iter().collect::<String>() != BEFORE {
+        return None;
+    }
+    let close = |from: usize| cs.get(from..)?.iter().position(|c| *c == '\'').map(|p| from + p);
+    let user = close(i + 1)?;
+    if cs.get(user + 1..user + 3) != Some(&['@', '\''][..]) {
+        return None;
+    }
+    Some(close(user + 3)? + 1 - i)
 }
 
 /// PostgreSQL's `Key (cols)=(values)` and `Failing row contains (values)` → the values as …
@@ -374,6 +420,19 @@ mod tests {
         assert_eq!(redact("?api_key=abc&x=1&ssh_passphrase=pp"), "?api_key=***&x=1&ssh_passphrase=***");
         assert_eq!(redact("AWS_SECRET_ACCESS_KEY: wJalr SESSION_TOKEN=xyz"), "AWS_SECRET_ACCESS_KEY: *** SESSION_TOKEN=***");
         assert_eq!(redact("pwd='a b' auth=Basic"), "pwd=*** auth=***");
+        // A key at the end of a longer name: libpq, env, camelCase JSON (AWS credentials, config)
+        assert_eq!(redact("postgres://u:pw@h/db?sslpassword=x&sslmode=require"), "postgres://u:***@h/db?sslpassword=***&sslmode=require");
+        assert_eq!(redact("PGPASSWORD=s3cret psql -h h"), "PGPASSWORD=*** psql -h h");
+        assert_eq!(
+            redact(r#"{"AccessKeyId":"AKIA","SecretAccessKey":"s3cret","SessionToken":"s3cret2","sshPassword":"s3cret3"}"#),
+            r#"{"AccessKeyId":"AKIA","SecretAccessKey":***,"SessionToken":***,"sshPassword":***}"#
+        );
+        assert_eq!(redact("password\t=\ts3cret"), "password\t=\t***");
+        // An auth scheme and the credential after it
+        assert_eq!(redact("Authorization: Bearer abc.def x"), "Authorization: *** x");
+        assert_eq!(redact("auth=Basic s3cretb64, next"), "auth=***, next");
+        // MySQL says only whether a password was sent
+        assert_eq!(redact("(using password: YES)"), "(using password: YES)");
         // Words that only start like a key are kept
         assert_eq!(redact("saved passwords: 2, Authentication failed"), "saved passwords: 2, Authentication failed");
         assert_eq!(redact("private_key: abc"), "private_key: ***");
@@ -401,6 +460,17 @@ mod tests {
         // Apostrophes in words are no quotes, but a prefixed literal is a literal
         assert_eq!(redact("the tunnel didn't answer; Bob's DB; they're"), "the tunnel didn't answer; Bob's DB; they're");
         assert_eq!(redact("note = N'secret' or c = _utf8mb4'abc'"), "note = N'…' or c = _utf8mb4'…'");
+        // MySQL's backslash escape in a plain literal
+        assert_eq!(redact("insert into t values ('it\\'s s3cret', 1)"), "insert into t values ('…', 1)");
+    }
+
+    #[test]
+    fn keeps_mysql_account_of_access_denied() {
+        assert_eq!(
+            redact("error returned from database: 1045 (28000): Access denied for user 'app'@'10.0.0.5' (using password: YES)"),
+            "error returned from database: 1045 (28000): Access denied for user 'app'@'10.0.0.5' (using password: YES)"
+        );
+        assert_eq!(redact("Access denied for user 'app'@'%' to database 'crm'"), "Access denied for user 'app'@'%' to database '…'");
     }
 
     #[test]
@@ -435,6 +505,23 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(dir.join("qurry.log")).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+    }
+
+    #[test]
+    fn makes_a_deleted_folder_again() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("logs");
+        let mut s = Sink::open(&dir, "tui", CAP).unwrap();
+        s.write("before").unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        s.write("after").unwrap();
+        assert_eq!(lines(&dir, "qurry.log").len(), 1);
+        assert!(dir.join("qurry.log.lock").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
         }
     }

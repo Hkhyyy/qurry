@@ -63,7 +63,7 @@ pub fn run() {
                 }
             });
 
-            qurry_core::logfile::init("gui");
+            qurry_core::logfile::init("gui", None);
             app.manage(qurry_core::open_state(Some(app.path().app_config_dir()?))?);
             app.manage(commands::PendingImport::default());
             app.manage(commands::PendingData::default());
