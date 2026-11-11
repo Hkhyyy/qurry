@@ -92,6 +92,7 @@ test("Settings › Result tabs: 0 isn't saved; past the number the least recentl
   await expect(field).toHaveValue("10");
   await field.fill("0");
   await expect(dialog(page)).toContainText("Enter 1 or more.");
+  await expect(field).toHaveValue("0");
   expect(await page.evaluate(() => localStorage.getItem("mock-resultTabs"))).toBeNull();
   await field.fill("2");
   await expect(dialog(page)).not.toContainText("Enter 1 or more.");

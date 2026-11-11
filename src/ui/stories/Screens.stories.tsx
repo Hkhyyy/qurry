@@ -135,8 +135,7 @@ export const SettingsResultTabsInvalid: S = {
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
     const field = await c.findByRole("spinbutton", { name: "Result tabs" });
-    await userEvent.clear(field);
-    await userEvent.type(field, "0");
+    await userEvent.type(field, "{backspace}{backspace}0");
     await c.findByText("Enter 1 or more.");
   },
 };
