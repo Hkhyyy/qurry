@@ -9,7 +9,7 @@ Qurry 가 내 컴퓨터에 두는 것, 네트워크로 보내는 것, 릴리스�
 - **비밀번호** 는 [설정 폴더](getting-started.md#설정이-저장되는-곳) 의 `secrets.json` 에, 값마다 따로 만든 무작위 nonce 로 AES-256-GCM 암호화해 저장합니다. 32바이트 키는 같은 폴더의 `secret.key` 에 있습니다. 폴더는 0700, 두 파일은 0600 이지만, 내 계정으로 파일을 읽을 수 있는 사람 (또는 백업처럼 이 폴더의 복사본을 가진 사람) 은 비밀번호를 풀 수 있습니다. 키를 OS 키체인 (macOS Keychain, 리눅스 Secret Service, Windows 자격 증명 관리자) 에 두려면: GUI **Settings › Passwords** · TUI `⌃k` › **Password Key…**. 옮겨지는 것은 키뿐입니다: 비밀번호는 `secrets.json` 에 그대로 있고, `secret.key.keychain` 파일이 키가 어디로 갔는지 알려 줍니다. AI 검색에 쓰는 OpenAI API 키도 같은 방식으로 저장합니다.
 - **네트워크로 나가는 것**: 나에 대한 것은 없습니다. Qurry 는 사용 데이터 · 충돌 보고를 보내지 않고, 분석 도구도 없습니다. 연결하는 곳은 다음뿐입니다:
   - 내 데이터베이스. 직접, 또는 그 Data Source 에 정한 SSH · AWS SSM 터널로;
-  - 업데이트 확인을 위한 GitHub: 앱이 시작할 때와 실행 중 한 시간마다 GitHub API 에 요청 하나 (두 채널의 릴리스를 함께 받아 옵니다). 답은 설정 폴더의 `update-releases.json` 에 두므로 GUI 와 TUI 를 합쳐 한 시간에 많아야 한 번 묻습니다. 끄려면 GUI **Settings › Appearance › Updates** 의 **Check for updates automatically**, `qurry-tui --no-update-check`, 또는 둘 다에 `QURRY_NO_UPDATE_CHECK=1`. MCP 서버는 확인하지 않습니다;
+  - 업데이트 확인을 위한 GitHub: 앱이 시작할 때와 실행 중 한 시간마다 GitHub API 에 요청 하나 (두 채널의 릴리스를 함께 받아 옵니다). 답은 설정 폴더의 `update-releases.json` 에 두므로 GUI 와 TUI 를 합쳐 한 시간에 많아야 한 번 묻습니다. 끄려면 GUI **Settings › Updates** 의 **Check for updates automatically**, `qurry-tui --no-update-check`, 또는 둘 다에 `QURRY_NO_UPDATE_CHECK=1`. MCP 서버는 확인하지 않습니다;
   - GitHub 릴리스 내려받기. 직접 시작할 때만: **Update & Restart** 나 `qurry-tui --update`, 드라이버의 **Install**;
   - 임베딩 서비스. 직접 만든 AI 검색 (RAG) 인덱스에만: 기본은 내 컴퓨터의 Ollama, OpenAI (또는 `OPENAI_BASE_URL` 의 서버) 는 골랐을 때만 ([벡터 DB](vector-and-rag.md)).
 

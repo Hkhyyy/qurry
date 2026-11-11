@@ -36,7 +36,7 @@ All three share the same data sources and passwords, so a connection created in 
 ## Trust
 
 - **Passwords** are kept in `secrets.json` in the config folder, encrypted with AES-256-GCM. The key is in `secret.key` in the same folder, or in the OS keychain if you move it there in **Settings › Passwords** (TUI: `⌃k` › Password Key…).
-- **Nothing about you goes over the network**: no usage data, no crash reports. Besides your databases, the apps ask GitHub for updates: one request to the GitHub API when the app starts and at most once an hour (what else may go out, such as a driver download you start, is listed in [Safety › Trust](docs/safety.md#trust)). Turn the check off with **Check for updates automatically** in Settings › Appearance › Updates, `qurry-tui --no-update-check` or `QURRY_NO_UPDATE_CHECK=1`.
+- **Nothing about you goes over the network**: no usage data, no crash reports. Besides your databases, the apps ask GitHub for updates: one request to the GitHub API when the app starts and at most once an hour (what else may go out, such as a driver download you start, is listed in [Safety › Trust](docs/safety.md#trust)). Turn the check off with **Check for updates automatically** in Settings › Updates, `qurry-tui --no-update-check` or `QURRY_NO_UPDATE_CHECK=1`.
 - **Releases** are built by GitHub Actions pinned to commit SHAs, with `SHA256SUMS`, a minisign signature and build provenance attestations, and the apps check the signature before installing an update.
 
 All of it in full: [Safety › Trust](docs/safety.md#trust). The MCP server's [threat model](docs/mcp-security.md), and how to report a vulnerability: [SECURITY.md](SECURITY.md).
