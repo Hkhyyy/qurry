@@ -65,9 +65,8 @@ async fn f5_runs_several_statements_in_order() {
     );
     let c = console(&h);
     assert!(!c.running);
-    assert_eq!(c.result_title, "Result 2: select id from t");
-    assert_eq!(c.grid.as_ref().map(|g| g.result.rows.len()), Some(2));
-    assert!(!c.show_output, "the result grid is shown, not Output");
+    assert_eq!(c.results.shown_tab().map(|t| t.label()), Some("2: t".into()));
+    assert_eq!(c.grid().map(|g| g.result.rows.len()), Some(2));
     assert_eq!(h.app.status, "3 row(s) affected in 7 ms");
 }
 
@@ -92,7 +91,7 @@ async fn f5_stops_at_the_first_error() {
             "Note: 1 earlier statement(s) of this run were already committed (Auto mode) and were not rolled back",
         ]
     );
-    assert!(console(&h).show_output);
+    assert!(console(&h).results.shown.is_none(), "Output is shown");
 }
 
 /// A statement that ran but whose result the Production log couldn't record: a later statement's status doesn't hide its warning
@@ -177,7 +176,7 @@ async fn explain_analyze_wraps_changes_in_a_rolled_back_transaction() {
     h.app.fake_db = Some(record);
     h.console_with("delete from t where a = 1", 0, 0);
     h.app.analyze_next = true;
-    h.app.run_stmts(vec!["delete from t where a = 1".into()], true, false);
+    h.app.run_stmts(vec!["delete from t where a = 1".into()], vec![], true, false);
     h.app.analyze_next = false;
     h.settle().await;
     assert_eq!(*SEEN.lock().unwrap(), ["BEGIN", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) delete from t where a = 1", "ROLLBACK"]);
@@ -196,7 +195,7 @@ async fn explain_analyze_asks_before_what_a_rollback_cant_undo() {
     let sql = "select nextval('s')";
     h.console_with(sql, 0, 0);
     h.app.analyze_next = true;
-    h.app.run_stmts(vec![sql.into()], true, false);
+    h.app.run_stmts(vec![sql.into()], vec![], true, false);
     h.app.analyze_next = false;
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
     assert!(text.contains("a rollback can't undo what it does outside the transaction: sequence values"), "{text}");
@@ -220,7 +219,7 @@ async fn explain_analyze_lists_each_statement_with_its_reason() {
     let mut h = Harness::new().await;
     h.console_with("select nextval('s'); delete from audit", 0, 0);
     h.app.analyze_next = true;
-    h.app.run_stmts(vec!["select nextval('s')".into(), "delete from audit".into()], true, false);
+    h.app.run_stmts(vec!["select nextval('s')".into(), "delete from audit".into()], vec![], true, false);
     h.app.analyze_next = false;
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
     assert!(text.starts_with("Explain Analyze really runs the statements, and 2 of them need a look:"), "{text}");
@@ -254,7 +253,7 @@ async fn explain_analyze_wraps_reads() {
     let sql = "select archive_old_orders()";
     h.console_with(sql, 0, 0);
     h.app.analyze_next = true;
-    h.app.run_stmts(vec![sql.into()], true, false);
+    h.app.run_stmts(vec![sql.into()], vec![], true, false);
     h.app.analyze_next = false;
     assert!(h.app.popup.is_none(), "a read that calls a user-defined function doesn't ask");
     h.settle().await;
@@ -262,7 +261,7 @@ async fn explain_analyze_wraps_reads() {
     SEEN.lock().unwrap().clear();
     let before = h.console_output().len();
     h.app.analyze_next = true;
-    h.app.run_stmts(vec!["select count(*) from t".into()], true, false);
+    h.app.run_stmts(vec!["select count(*) from t".into()], vec![], true, false);
     h.app.analyze_next = false;
     assert!(h.app.popup.is_none(), "a plain read doesn't ask");
     h.settle().await;
@@ -291,7 +290,7 @@ async fn explain_analyze_in_a_transaction_on_a_read_only_source_runs() {
         c.in_tx = true;
     }
     h.app.analyze_next = true;
-    h.app.run_stmts(vec![sql.into()], true, false);
+    h.app.run_stmts(vec![sql.into()], vec![], true, false);
     h.app.analyze_next = false;
     assert!(h.app.popup.is_none(), "a plain read doesn't ask");
     h.settle().await;
@@ -334,7 +333,7 @@ async fn failed_commit_is_in_output() {
     h.settle().await;
     // No session for this console: commit_tx fails
     assert_eq!(h.console_output(), ["Session closed"]);
-    assert!(console(&h).show_output);
+    assert!(console(&h).results.shown.is_none(), "Output is shown");
     assert_eq!(h.app.status, "Session closed");
     // And a notice to acknowledge, as in the GUI
     let Some(crate::app::Popup::Message { title, text }) = &h.app.popup else { panic!("no notice") };
@@ -432,7 +431,7 @@ async fn prod_console(sql: &str) -> Harness {
 async fn console_result_edits_and_submits_like_a_table() {
     let mut h = prod_console("select id, user_name as name from users").await;
     assert!(console(&h).tx_manual, "Production starts in Manual");
-    assert!(console(&h).grid.is_some(), "{}", h.app.status);
+    assert!(console(&h).grid().is_some(), "{}", h.app.status);
     h.key("Down");
     h.key("Right");
     h.key("Enter");
@@ -441,9 +440,9 @@ async fn console_result_edits_and_submits_like_a_table() {
     }
     h.type_str("LEE");
     h.key("Enter");
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 1);
+    assert_eq!(console(&h).grid().unwrap().pending(), 1);
     h.key("a");
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    assert_eq!(console(&h).grid().unwrap().pending(), 2);
     h.key("Ctrl+S");
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
     let sql = "\n\n  UPDATE public.users SET user_name = 'LEE' WHERE id = '2'\n  INSERT INTO public.users DEFAULT VALUES";
@@ -465,7 +464,7 @@ async fn console_join_result_edits_per_table() {
     use qurry_shared::errors as e;
     let mut h = prod_console("select vo.idx, vo.status, pu.idx, pu.role, upper(pu.role) as shout from crm.voc vo left join users pu on pu.idx = vo.user_idx").await;
     let edit = |h: &mut Harness, row: usize, col: usize, v: &str| {
-        let g = console_mut(h).grid.as_mut().unwrap();
+        let g = console_mut(h).grid_mut().unwrap();
         (g.row, g.col) = (row, col);
         h.key("Enter");
         if h.app.popup.is_some() {
@@ -475,7 +474,7 @@ async fn console_join_result_edits_per_table() {
     };
     edit(&mut h, 0, 1, "-done");
     edit(&mut h, 0, 3, "-x");
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    assert_eq!(console(&h).grid().unwrap().pending(), 2);
     // users' side of voc 2: no row matched
     edit(&mut h, 1, 3, "x");
     assert_eq!(h.app.status, e::edit_no_row("public.users"));
@@ -485,13 +484,13 @@ async fn console_join_result_edits_per_table() {
     assert_eq!(h.app.status, e::EDIT_JOIN_ROWS);
     h.key("d");
     assert_eq!(h.app.status, e::EDIT_JOIN_ROWS);
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    assert_eq!(console(&h).grid().unwrap().pending(), 2);
     // A paste reaching a read-only cell writes nothing
-    let g = console_mut(&mut h).grid.as_mut().unwrap();
+    let g = console_mut(&mut h).grid_mut().unwrap();
     (g.row, g.col) = (0, 3);
     h.app.paste_grid("a\tb");
     assert_eq!(h.app.status, e::edit_computed("shout"));
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    assert_eq!(console(&h).grid().unwrap().pending(), 2);
     h.key("Ctrl+S");
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
     assert!(text.ends_with("\n\n  UPDATE crm.voc SET status = 'open-done' WHERE idx = '1'\n  UPDATE public.users SET role = 'member-x' WHERE idx = '10'"), "{text}");
@@ -545,7 +544,7 @@ async fn console_result_read_only_says_why() {
         c.tx_manual = true;
     }
     h.key("a");
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 1);
+    assert_eq!(console(&h).grid().unwrap().pending(), 1);
 }
 
 /// Running again with pending edits asks first: no keeps them, yes drops them and runs
@@ -558,13 +557,13 @@ async fn console_rerun_with_pending_edits_asks_first() {
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
     assert_eq!(text, "1 pending change(s) are not saved to the database (⌃s submits them). Discard them and run the statement?");
     h.key("n");
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 1);
+    assert_eq!(console(&h).grid().unwrap().pending(), 1);
     let before = h.console_output().len();
     h.key("F5");
     h.key("y");
     h.settle().await;
     assert!(h.console_output().len() > before, "it ran");
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 0);
+    assert_eq!(console(&h).grid().unwrap().pending(), 0);
 }
 
 /// Metadata with a foreign key (orders.user_id → users.id) and a user function, for the console's target

@@ -102,6 +102,10 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::PrevTab, hint: "", run: |app| app.cycle_tab(-1) },
     ActionDef { action: Action::ToggleExplorer, hint: "", run: toggle_explorer },
     ActionDef { action: Action::ToggleOutput, hint: "", run: toggle_output },
+    ActionDef { action: Action::ResultNext, hint: "", run: |app| cycle_result(app, 1) },
+    ActionDef { action: Action::ResultPrev, hint: "", run: |app| cycle_result(app, -1) },
+    ActionDef { action: Action::PinResult, hint: "", run: pin_result },
+    ActionDef { action: Action::CloseResult, hint: "", run: close_result },
     ActionDef { action: Action::Complete, hint: "", run: complete },
     ActionDef { action: Action::Reformat, hint: "", run: |app| app.reformat() },
     ActionDef { action: Action::SplitRight, hint: "", run: |app| app.split_focused(SplitDir::Right) },
@@ -123,6 +127,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::TrustSshHost, hint: "", run: trust_ssh_host },
     ActionDef { action: Action::PasswordKey, hint: "", run: |app| app.password_key() },
     ActionDef { action: Action::KeywordCase, hint: "", run: |app| app.palette_keyword_case() },
+    ActionDef { action: Action::ResultTabs, hint: "", run: |app| app.palette_result_tabs() },
     ActionDef { action: Action::GridAlign, hint: "", run: |app| app.palette_grid_align(qurry_core::format::ValueClass::String) },
     ActionDef { action: Action::StatusBarItems, hint: "", run: |app| app.palette_status_items(0) },
     ActionDef { action: Action::Theme, hint: "", run: |app| app.palette_theme() },
@@ -331,10 +336,51 @@ fn toggle_explorer(app: &mut App) {
     }
 }
 
+/// ⌥o: Output, or back to the result tab shown last
 fn toggle_output(app: &mut App) {
     if let Some(Tab { kind: TabKind::Console(c), .. }) = app.tabs.get_mut(app.active) {
-        c.show_output = !c.show_output;
+        c.results.toggle_output();
     }
+}
+
+/// ⌥. / ⌥,: the next or previous result tab, Output included
+fn cycle_result(app: &mut App, d: isize) {
+    if let Some(Tab { kind: TabKind::Console(c), .. }) = app.tabs.get_mut(app.active) {
+        c.results.cycle(d);
+    }
+}
+
+/// Pin and Close act on the shown result tab: how to show one
+fn no_result_tab(keys: &crate::keys::Keymap) -> String {
+    format!("Show a result tab first ({} / {})", keys.label(Action::ResultNext), keys.label(Action::ResultPrev))
+}
+
+/// ⌃k › Pin Result Tab: the shown result tab is never overwritten and stops following its statement (again: unpinned)
+fn pin_result(app: &mut App) {
+    let Some(Tab { kind: TabKind::Console(c), .. }) = app.tabs.get_mut(app.active) else { return };
+    app.status = match c.results.shown_mut() {
+        Some(t) => {
+            t.pinned = !t.pinned;
+            format!("{} {}", if t.pinned { "Pinned" } else { "Unpinned" }, t.label())
+        }
+        None => no_result_tab(&app.keys),
+    };
+}
+
+/// ⌃k › Close Result Tab: the shown one (its grid's pending edits asked about first)
+fn close_result(app: &mut App) {
+    let Some(Tab { kind: TabKind::Console(c), id, .. }) = app.tabs.get(app.active) else { return };
+    let Some(t) = c.results.shown_tab() else { return app.status = no_result_tab(&app.keys) };
+    let (tab, rid, n) = (*id, t.id, t.grid.pending());
+    let close = move |a: &mut App| {
+        if let Some(TabKind::Console(c)) = a.tab_mut(tab).map(|t| &mut t.kind) {
+            c.results.close(rid);
+        }
+    };
+    if n == 0 {
+        return close(app);
+    }
+    app.popup = Some(Popup::Confirm { opened: None, text: app.pending_text(n, "close the result tab"), on_yes: Box::new(close) });
 }
 
 fn other_split(app: &mut App) {

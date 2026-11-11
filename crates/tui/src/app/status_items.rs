@@ -60,7 +60,7 @@ impl App {
         }
         let Some(tab) = self.tabs.get(self.active) else { return vec![] };
         let (grid, table) = match &tab.kind {
-            TabKind::Console(c) => (c.grid.as_ref(), None),
+            TabKind::Console(c) => (c.grid(), None),
             TabKind::Table(t) => (t.grid.as_ref(), Some((t.schema.clone(), t.table.clone()))),
             TabKind::Dba(d) => (d.grid.as_ref(), None),
             _ => return vec![],

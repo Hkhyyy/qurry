@@ -285,6 +285,7 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
         *r = Rect::default();
     }
     app.hits.tabs.clear();
+    app.hits.result_tabs.clear();
     app.hits.groups.clear();
     app.hits.splits.clear();
     if app.panes.is_split() {
@@ -531,7 +532,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 app.hits.console = body;
                 app.hits.divider = Rect { x: res.x, y: res.y, width: res.width, height: 1 };
             }
-            if c.show_output || c.grid.is_none() {
+            // The panel's title is the result tab strip: Output, then one tab per statement (click or ⌥. / ⌥, to pick)
+            let tabs_hit = if c.results.grid().is_none() {
                 let lines: Vec<Line> = c
                     .output
                     .iter()
@@ -540,21 +542,28 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     .rev()
                     .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.starts_with(WARNING) { WARN } else if s.contains("> ") { ACCENT } else { Color::Gray })))
                     .collect();
-                let block = panel(format!(" Output ({k_out}: result) "), focus == Focus::Grid);
+                let block = panel("", focus == Focus::Grid);
                 let inner = block.inner(res);
                 let p = Paragraph::new(if lines.is_empty() { vec![Line::styled(format!("Execute a statement ({k_run}) to see the output."), Style::default().fg(DIM))] } else { lines })
                     .wrap(Wrap { trim: false });
                 // A long line wraps onto several rows: scroll so the newest line ends on the bottom row
                 let rows = p.line_count(inner.width).min(u16::MAX as usize) as u16;
                 f.render_widget(p.scroll((rows.saturating_sub(inner.height), 0)).block(block), res);
-            } else if let Some(g) = &mut c.grid {
+                draw_result_strip(f, res, &c.results, format!(" ({k_out}: result) "))
+            } else {
+                let g = c.results.grid().unwrap();
                 let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.pending(), disp("⌃z")) } else { String::new() };
-                let t = format!(" {} — {}{} rows{pend} ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
+                let tail = format!(" — {}{} rows{pend} ({k_out}: output) ", g.rows(), if g.result.truncated { "+" } else { "" });
                 let (res, side) = value_split(res, value_panel);
-                g.render(f, res, t, focus == Focus::Grid, color, &align);
+                let g = c.results.grid_mut().unwrap();
+                g.render(f, res, String::new(), focus == Focus::Grid, color, &align);
                 if let Some(side) = side {
                     g.render_value_panel(f, side, value_keys);
                 }
+                draw_result_strip(f, res, &c.results, tail)
+            };
+            if focused {
+                app.hits.result_tabs = tabs_hit;
             }
             if let (Some((x, y)), Some(cmp)) = (caret, &c.complete) {
                 draw_completion(f, cmp, x, y);
@@ -716,6 +725,55 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
 /// Cursor (inverted cell) position in the editor
 /// Console cursor cell mark (invisible since underline isn't turned on)
 const CARET_MARK: Color = Color::Rgb(1, 2, 3);
+
+/// The result tab strip over the top border of `area` (result_strip); each label's area and its tab
+fn draw_result_strip(f: &mut Frame, area: Rect, r: &crate::app::Results, tail: String) -> Vec<(Rect, Option<usize>)> {
+    let width = area.width.saturating_sub(2);
+    let (line, hits) = result_strip(r, tail, width);
+    f.buffer_mut().set_line(area.x + 1, area.y, &line, width);
+    hits.into_iter().filter(|&(x, ..)| x < width).map(|(x, w, id)| (Rect { x: area.x + 1 + x, y: area.y, width: w.min(width - x), height: 1 }, id)).collect()
+}
+
+/// The console result panel's title: " Output │ 1: customers │ 2: orders" then `tail`, the shown tab accented, bold and underlined.
+/// Too many for `width`: the leftmost tabs other than the shown one fold into ‹n after Output. With each label's (x, width, tab id)
+fn result_strip(r: &crate::app::Results, tail: String, width: u16) -> (Line<'static>, Vec<(u16, u16, Option<usize>)>) {
+    use unicode_width::UnicodeWidthStr;
+    let mut all: Vec<(String, Option<usize>)> = std::iter::once(("Output".to_string(), None)).chain(r.tabs.iter().map(|t| (t.label(), Some(t.id)))).collect();
+    let sep = " │ ";
+    let total = |all: &[(String, Option<usize>)], hidden: usize| {
+        1 + all.iter().map(|(l, _)| l.width()).sum::<usize>() + sep.width() * (all.len() - 1) + if hidden > 0 { format!("‹{hidden}").width() + sep.width() } else { 0 }
+    };
+    let room = (width as usize).saturating_sub(tail.width());
+    let mut hidden = 0;
+    while total(&all, hidden) > room
+        && let Some(i) = all.iter().skip(1).position(|(_, id)| *id != r.shown).map(|i| i + 1)
+    {
+        all.remove(i);
+        hidden += 1;
+    }
+    let (on, off) = (Style::default().fg(ACCENT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED), Style::default().fg(Color::Gray));
+    let mut spans = vec![Span::raw(" ")];
+    let mut hits = vec![];
+    let mut x = 1u16;
+    for (i, (label, id)) in all.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(sep, Style::default().fg(DIM)));
+            x += sep.width() as u16;
+        }
+        if i == 1 && hidden > 0 {
+            let n = format!("‹{hidden}");
+            x += n.width() as u16 + sep.width() as u16;
+            spans.push(Span::styled(n, off));
+            spans.push(Span::styled(sep, Style::default().fg(DIM)));
+        }
+        let w = label.width() as u16;
+        hits.push((x, w, id));
+        x += w;
+        spans.push(Span::styled(label, if id == r.shown { on } else { off }));
+    }
+    spans.push(Span::styled(tail, off));
+    (Line::from(spans), hits)
+}
 
 /// A grid's area and, with the value panel on and room for both, the panel's on its right (40%; the grid keeps at least 30 columns)
 fn value_split(area: Rect, on: bool) -> (Rect, Option<Rect>) {

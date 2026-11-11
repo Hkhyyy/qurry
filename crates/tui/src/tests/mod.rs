@@ -12,6 +12,7 @@ mod notices;
 mod perf;
 mod reconnect;
 mod reformat;
+mod result_tabs;
 mod status_items;
 mod tabs;
 mod temporary;

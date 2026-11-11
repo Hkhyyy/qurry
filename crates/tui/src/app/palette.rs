@@ -408,6 +408,31 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: "Keyword Case".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
+    /// ⌃K › Result Tabs…: unpinned result tabs kept per console (the GUI's Settings › Result tabs, shared through settings.json).
+    /// Opens on the saved number, read again so a change made in the GUI shows here; a number that isn't 1 or more isn't saved
+    pub fn palette_result_tabs(&mut self) {
+        self.result_tabs = self.state.store.result_tabs();
+        self.result_tabs_input(&self.result_tabs.to_string(), "Unpinned result tabs kept per console; past it, the least recently shown closes.");
+    }
+
+    fn result_tabs_input(&mut self, value: &str, body: &str) {
+        self.input("Result tabs", value, |a, v| match v.trim().parse::<usize>() {
+            Ok(n) if n >= 1 => {
+                a.status = match a.state.store.set_result_tabs(n) {
+                    Ok(()) => {
+                        a.result_tabs = n;
+                        format!("Result tabs: {n} — saved for the GUI too")
+                    }
+                    Err(e) => format!("Couldn't save the result tabs: {e}"),
+                }
+            }
+            _ => a.result_tabs_input(&v, "Enter 1 or more."),
+        });
+        if let Some(Popup::Input { body: b, .. }) = &mut self.popup {
+            *b = body.into();
+        }
+    }
+
     /// ⌃K › Grid Alignment…: one row per value class with where it sits (the GUI's Settings › Appearance › Alignment, shared through
     /// settings.json). Reads the file again, so a change made in the GUI since the TUI started shows here and in the grids
     pub fn palette_grid_align(&mut self, sel: ValueClass) {

@@ -49,6 +49,17 @@ export const ScreenConsoleUnknownName = { ...by("Console: unknown name"), name: 
 export const ScreenConsoleUnclosed = { ...by("Console: unclosed bracket"), name: "Screen · Console: unclosed bracket" };
 export const ScreenConsoleRunSubquery = { ...by("Console: run a subquery"), name: "Screen · Console: run a subquery (F5)" };
 export const ScreenConsoleRunError = { ...by("Console: run error"), name: "Screen · Console: run error" };
+// #151: one result tab per statement in the result panel's title; the caret shows a statement's tab, ⌥. / ⌥, cycle, ⌃k › Result Tabs… caps them
+export const ScreenResultTabsTwoRuns = { ...by("Console result tabs: run 1, then 2"), name: "Screen · Console result tabs: run 1, then 2" };
+export const ScreenResultTabsCaretBack = { ...by("Console result tabs: caret back on 1"), name: "Screen · Console result tabs: caret back on 1" };
+export const LightResultTabsCaretBack = { ...by("Console result tabs: caret back on 1 (light)"), name: "Light · Console result tabs: caret back on 1" };
+export const ScreenResultTabsRerun = { ...by("Console result tabs: edit 1 and run again"), name: "Screen · Console result tabs: edit 1 and run again" };
+export const ScreenResultTabsPinned = { ...by("Console result tabs: pinned, run again"), name: "Screen · Console result tabs: pinned, run again" };
+export const ScreenResultTabsDeleted = { ...by("Console result tabs: statement deleted"), name: "Screen · Console result tabs: statement deleted" };
+export const ScreenResultTabsEleventh = { ...by("Console result tabs: 11th tab"), name: "Screen · Console result tabs: 11th tab" };
+export const ScreenResultTabsError = { ...by("Console result tabs: error"), name: "Screen · Console result tabs: error" };
+export const ScreenResultTabsSetting = { ...by("Console result tabs: Result Tabs… (default)"), name: "Screen · Console result tabs: Result Tabs…" };
+export const ScreenResultTabsSettingInvalid = { ...by("Console result tabs: Result Tabs… (invalid 0)"), name: "Screen · Console result tabs: Result Tabs… (invalid 0)" };
 export const ScreenGridMarked = { ...by("Grid: marked rows"), name: "Screen · Grid: marked rows (m)" };
 // Status line items (#132): the GUI status bar's items after the key hints, Position in the corner
 export const ScreenStatusSelection = { ...by("Status line: selection items"), name: "Screen · Status line: selection items (marked rows)" };

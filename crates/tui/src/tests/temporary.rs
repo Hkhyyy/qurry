@@ -41,7 +41,7 @@ async fn url_opens_a_connected_temporary_source_and_read_only_blocks_a_write() {
     h.key("F5");
     h.settle().await;
     let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!("console") };
-    assert!(c.grid.is_some(), "{:?}", h.console_output());
+    assert!(c.grid().is_some(), "{:?}", h.console_output());
 
     // Workspace actions don't take it: every workspace shows it and none lists it (the list is shared with the GUI)
     h.app.ws_add_conn_pick();
