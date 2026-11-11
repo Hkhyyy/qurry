@@ -277,7 +277,7 @@ impl Server {
                         None if c.config.kind == DbKind::Redis || c.config.options.single_db => vec![def.clone()],
                         None => match st.list_databases(c.config.id.clone()).await {
                             Ok(all) => {
-                                let v: Vec<String> = all.into_iter().filter(|d| c.config.scope.db_visible(d, &def)).filter(|d| !["template0", "template1", "rdsadmin", "information_schema", "performance_schema", "mysql", "sys"].contains(&d.as_str())).take(8).collect();
+                                let v = search_dbs(&c.config, all, &def);
                                 if v.is_empty() { vec![def.clone()] } else { v }
                             }
                             Err(err) => {
@@ -613,6 +613,11 @@ fn result_json(r: &QueryResult) -> Value {
     })
 }
 
+/// search_objects' databases of a source: the ones its tree shows (Schemas tab scope, system DBs hidden unless scoped), at most 8
+fn search_dbs(cfg: &qurry_core::store::ConnectionConfig, all: Vec<String>, def: &str) -> Vec<String> {
+    qurry_core::app::visible_dbs(cfg, all, def).into_iter().take(8).collect()
+}
+
 /// search_objects ranking: the TUI palette's score (qurry_shared::fuzzy); None = no match
 fn fuzzy(q: &str, text: &str) -> Option<i64> {
     qurry_core::fuzzy::score(q, text, Default::default()).map(|s| s as i64)
@@ -834,6 +839,37 @@ mod tests {
             state.store.save(&s.config).unwrap();
         }
         (Server { state: Arc::new(state), allow_write: false }, dir)
+    }
+
+    /// search_objects looks in the databases the app's tree shows: system DBs of every kind hidden, unless the Schemas tab scopes them
+    #[test]
+    fn search_skips_system_databases_unless_scoped() {
+        let cfg = |kind: &str, scope: Option<&[&str]>| {
+            let mut c = source("1", "S", Some("read"), false).config;
+            c.kind = serde_json::from_value(json!(kind)).unwrap();
+            c.database = "app".into();
+            c.scope.databases = scope.map(|s| s.iter().map(|d| d.to_string()).collect());
+            c
+        };
+        let v = |x: &[&str]| x.iter().map(|d| d.to_string()).collect::<Vec<_>>();
+        for (kind, system) in [
+            ("mssql", &["master", "tempdb", "model", "msdb"][..]),
+            ("mongodb", &["admin", "config", "local"][..]),
+            ("clickhouse", &["system", "information_schema", "INFORMATION_SCHEMA"][..]),
+            ("postgres", &["template0", "template1", "rdsadmin"][..]),
+            ("mysql", &["information_schema", "performance_schema", "mysql", "sys"][..]),
+        ] {
+            let all = [&["app", "sales"][..], system].concat();
+            let c = cfg(kind, None);
+            assert_eq!(search_dbs(&c, v(&all), &sql::default_db(&c)), v(&["app", "sales"]), "{kind}");
+            // Scoped in the Schemas tab: searched
+            let c = cfg(kind, Some(&[system[0], "app"]));
+            assert_eq!(search_dbs(&c, v(&all), &sql::default_db(&c)), v(&["app", system[0]]), "{kind} scoped");
+        }
+        // At most 8
+        let c = cfg("postgres", None);
+        let many: Vec<String> = (0..12).map(|i| format!("db{i}")).collect();
+        assert_eq!(search_dbs(&c, many.clone(), "app"), many[..8].to_vec());
     }
 
     #[test]
