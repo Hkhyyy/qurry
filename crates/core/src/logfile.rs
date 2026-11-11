@@ -594,12 +594,13 @@ mod tests {
     }
 
     /// A save and connect to a real server: the file has the connect with its time, never the password.
-    /// QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres:<password> cargo test -p qurry-core logfile_real_connect -- --ignored
+    /// QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres[:<password>] cargo test -p qurry-core logfile_real_connect -- --ignored
+    /// Without a password (CI's trust auth) a made-up one is saved: the server ignores it, and the file still must not show it.
     #[tokio::test]
     #[ignore]
     async fn logfile_real_connect() {
         let Some(pg) = crate::testenv::pg() else { return };
-        let password = pg.password.clone().expect("QURRY_TEST_PG with a password");
+        let password = pg.password.clone().unwrap_or_else(|| "Pw-trust-unused-1".into());
         let _one = SET.lock().await;
         let t = tempfile::tempdir().unwrap();
         init_at(&t.path().join("logs"), "tui");
