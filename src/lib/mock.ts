@@ -543,7 +543,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   dba_report: (a: any) =>
     (((globalThis as any).__mockDbaTargets ??= []).push(a.id),
     (globalThis as any).__mockDbRefuse && String(a.id).endsWith(`::${(globalThis as any).__mockDbRefuse}`)
-      ? Promise.reject(`Couldn't connect to database ${(globalThis as any).__mockDbRefuse}. Pick another database for this report (GUI: the database list in its toolbar · TUI: d).\n(permission denied for database "${(globalThis as any).__mockDbRefuse}")`)
+      ? Promise.reject(`Couldn't connect to database ${(globalThis as any).__mockDbRefuse}. Pick another database for this report (GUI: the database list in its toolbar · TUI: the report's database list).\n(permission denied for database "${(globalThis as any).__mockDbRefuse}")`)
       : a.report === "table_sizes"
       ? new Promise((ok) => setTimeout(() => ok(tableSizes(a.id)), 2000))
       : a.report === "roles"

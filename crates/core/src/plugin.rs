@@ -216,7 +216,7 @@ fn beta_release_gone(version: &str, e: AppError) -> AppError {
         return e;
     }
     AppError::Msg(format!(
-        "The release of this beta (v{version}) was removed, so its drivers can't be downloaded. Update Qurry (GUI: Update & Restart; TUI: ⌃k › Update Qurry & Restart), then install the driver again."
+        "The release of this beta (v{version}) was removed, so its drivers can't be downloaded. Update Qurry (GUI: Update & Restart; TUI: the command menu › Update Qurry & Restart), then install the driver again."
     ))
 }
 
@@ -250,7 +250,7 @@ mod tests {
     fn removed_beta_release_says_to_update() {
         let gone = || AppError::Msg("Could not download SHA256SUMS: curl: (22) The requested URL returned error: 404".into());
         let e = beta_release_gone("0.3.1-beta.2", gone()).to_string();
-        assert!(e.contains("v0.3.1-beta.2) was removed") && e.contains("Update & Restart") && e.contains("install the driver again"), "{e}");
+        assert!(e.contains("v0.3.1-beta.2) was removed") && e.contains("TUI: the command menu › Update Qurry & Restart") && e.contains("install the driver again"), "{e}");
         assert_eq!(beta_release_gone("0.3.1", gone()).to_string(), gone().to_string());
         let offline = AppError::Msg("Could not download SHA256SUMS: curl: (6) Could not resolve host: github.com".into());
         assert_eq!(beta_release_gone("0.3.1-beta.2", offline).to_string(), "Could not download SHA256SUMS: curl: (6) Could not resolve host: github.com");
