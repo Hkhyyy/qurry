@@ -102,6 +102,25 @@ async fn show_log_puts_the_path_on_the_status_line() {
     assert!(h.screen(120, 30).contains("Show Log: "), "the path is on the status line");
 }
 
+/// ⌃k › Open GitHub puts the address on the status line whether the browser started or not (SSH: no browser); nothing is launched
+#[tokio::test]
+async fn open_github_puts_the_address_on_the_status_line() {
+    use crate::app::{OPENER_FAILS, REPO_URL};
+    let mut h = Harness::new().await;
+    for (fails, want) in [(None, format!("Opening {REPO_URL} in the browser")), (Some(std::io::ErrorKind::NotFound), format!("Couldn't open a browser: {REPO_URL} (entity not found)"))] {
+        OPENER_FAILS.set(fails);
+        h.app.status.clear();
+        h.key("Ctrl+K");
+        h.type_str("Open GitHub");
+        h.key("Enter");
+        assert_eq!(h.app.ran.last(), Some(&Action::OpenGitHub));
+        assert_eq!(h.app.status, want);
+        let s = h.screen(120, 30);
+        assert!(s.contains(REPO_URL), "the address is on the status line:\n{s}");
+    }
+    OPENER_FAILS.set(None);
+}
+
 /// --help (and the F1 window, drawn from the same COMMANDS) lists the commands in keys::ORDER with the same names
 #[test]
 fn help_text_is_unchanged() {

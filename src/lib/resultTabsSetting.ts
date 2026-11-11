@@ -1,4 +1,4 @@
-// Result tabs (Settings › Result tabs): unpinned result tabs kept per console (lib/resultTabs). Kept in settings.json
+// Result tabs (Settings › Appearance › Console › Result tabs): unpinned result tabs kept per console (lib/resultTabs). Kept in settings.json
 // ("resultTabs"), which the TUI reads too
 import { useSyncExternalStore } from "react";
 import { api } from "./api";

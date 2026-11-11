@@ -205,7 +205,7 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
             }
           };
         };
-        // Keyword case as you type (Settings › Appearance › Keyword case): a space, newline or punctuation typed after a keyword
+        // Keyword case as you type (Settings › Appearance › Console › Keyword case): a space, newline or punctuation typed after a keyword
         // re-cases it, outside strings, comments and quoted names; in the keystroke's undo step
         ed.onDidChangeModelContent((e) => {
           const m = ed.getModel();

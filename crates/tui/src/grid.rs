@@ -1199,7 +1199,7 @@ mod tests {
         assert!(look(cell_of(&lines, &buf, "r1c1")).1);
     }
 
-    /// Cells sit where Settings › Appearance › Alignment says (qurry_shared::format, the GUI's rule): by default numbers on the
+    /// Cells sit where Settings › Appearance › Data grid › Alignment says (qurry_shared::format, the GUI's rule): by default numbers on the
     /// right and a NULL where its column's type sits, so it lines up with the values above it; an override moves only its own class
     #[test]
     fn cells_follow_the_alignment_setting() {

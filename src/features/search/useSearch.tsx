@@ -147,7 +147,7 @@ export function useSearch({
       { name: "Import Data Sources: File…", ...cmd("ds.import"), group: "File", run: () => importConns() },
       { name: "Import Data Sources: Folder…", group: "File", run: () => importFrom({ folder: true }) },
       ...importLocs.map((l) => ({ name: `Import Data Sources: ${l.label} (${l.count})`, group: "File", run: () => importFrom({ path: l.path }) })),
-      { name: "Settings…", ...cmd("settings"), group: "File", run: () => setSettingsOpen("appearance") },
+      { name: "Settings…", ...cmd("settings"), group: "File", run: () => setSettingsOpen(true) },
       { name: "Keymap Reference", ...cmd("keymap"), group: "Help", run: () => setKeymapOpen(true) },
       { name: "Edit Keymap…", ...cmd("keymap.edit"), group: "Help", run: () => setSettingsOpen("keymap") },
       { name: "Show Log", ...cmd("showLog"), group: "Help", run: () => api.showLog().catch((e) => setStatus(String(e))) },

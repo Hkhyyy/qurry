@@ -1,8 +1,8 @@
-import { dialog, editor, expect, openApp, openConsole, test, treeItem, typeSql, work } from "./app";
+import { dialog, editor, expect, openApp, openConsole, openSettings, test, treeItem, typeSql, work } from "./app";
 import type { Page } from "@playwright/test";
 
 // Status bar items (#132): each its own segment, Position carrying the selection, the optional Not null / Sum / Avg / Min / Max / Size,
-// chosen from the status bar's right-click checklist or Settings › Appearance › Status bar (one setting, settings.json — the mock's)
+// chosen from the status bar's right-click checklist or Settings › Appearance › Data grid › Status bar (one setting, settings.json — the mock's)
 
 test.beforeEach(async ({ page }) => {
   await openApp(page);
@@ -91,8 +91,8 @@ test("the checklist opened near the window's right edge stays inside it and abov
   await expect.poll(() => segments(page)).toEqual(["Row 3, Col 2"]);
 });
 
-test("Settings › Appearance › Status bar changes the same setting as the checklist", async ({ page }) => {
-  await page.keyboard.press("Meta+Comma");
+test("Settings › Appearance › Data grid › Status bar changes the same setting as the checklist", async ({ page }) => {
+  await openSettings(page, "Data grid");
   const d = dialog(page);
   await d.getByRole("checkbox", { name: "Not null" }).check();
   await d.getByRole("checkbox", { name: "Position" }).uncheck();

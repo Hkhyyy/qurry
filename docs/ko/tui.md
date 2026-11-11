@@ -37,7 +37,7 @@ URL 에 없는 부분은 `psql` · `mysql` · `redis-cli` 처럼 환경에서 �
 
 ## 상태 줄
 
-맨 아래 줄 왼쪽에는 상태 글이 (Production · Read-only 배지 다음에) 나오고, 그 뒤에 화면의 키와 공통 키, 그리고 포커스가 있는 결과 · 테이블 그리드라면 GUI 상태 표시줄의 항목이 나옵니다: `… ⌃k actions   Not null: 2 │ Sum: 1,329,000 │ cols 1–4 of 9 │ 2 rows · Col 3`. Position 은 맨 끝에 있습니다. **⌃k › Status Bar Items…** 에서 고르고 (기본은 Position 과 Shown columns. Not null, Sum, Avg, Min, Max, Size), GUI 와 같은 설정입니다 ([Settings › 상태 표시줄 항목](settings.md#상태-표시줄-항목)). `↑` `↓` 이동, `Space` 나 `Enter` 로 켜고 끄며 목록은 열려 있고, **Restore defaults** 는 기본으로 되돌립니다.
+맨 아래 줄 왼쪽에는 상태 글이 (Production · Read-only 배지 다음에) 나오고, 그 뒤에 화면의 키와 공통 키, 그리고 포커스가 있는 결과 · 테이블 그리드라면 GUI 상태 표시줄의 항목이 나옵니다: `… ⌃k actions   Not null: 2 │ Sum: 1,329,000 │ cols 1–4 of 9 │ 2 rows · Col 3`. Position 은 맨 끝에 있습니다. **⌃k › Status Bar Items…** 에서 고르고 (기본은 Position 과 Shown columns. Not null, Sum, Avg, Min, Max, Size), GUI 와 같은 설정입니다 ([Settings › Appearance › Data grid › 상태 표시줄 항목](settings.md#상태-표시줄-항목)). `↑` `↓` 이동, `Space` 나 `Enter` 로 켜고 끄며 목록은 열려 있고, **Restore defaults** 는 기본으로 되돌립니다.
 
 항목이 읽는 선택은 표시한 행 (`m`) 의 커서 컬럼, 또는 `⇧↑↓←→` (또는 드래그) 로 고른 범위입니다. 둘 다 없으면 Position 은 커서 셀이고 Size 도 그 셀입니다. 테이블 탭은 컬럼에 선언된 한도를 알고, 콘솔 결과는 그 컬럼이 테이블의 컬럼일 때만 압니다.
 

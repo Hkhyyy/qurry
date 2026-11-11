@@ -111,6 +111,7 @@ Theme	Theme… (the GUI's built-in and custom themes, or Sync with OS by the ter
 CheckUpdate	Check for Updates	—
 UpdateChannel	Update Channel… (stable releases only, or beta: also every merge to main)	—
 InstallUpdate	Update Qurry & Restart (download the latest release)	—
+OpenGitHub	Open GitHub	—
 Help	Keymap	F1
 ShowLog	Show Log	—
 Quit	Quit	⌃q

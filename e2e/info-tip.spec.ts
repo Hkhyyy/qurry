@@ -1,5 +1,5 @@
 import type { Locator } from "@playwright/test";
-import { dialog, expect, openApp, test, treeItem, treeNode, work } from "./app";
+import { dialog, expect, openApp, openSettings, test, treeItem, treeNode, work } from "./app";
 
 /** The ⓘ's size and its gap to what comes before it (the name) */
 async function placement(about: Locator) {
@@ -14,7 +14,7 @@ test.beforeEach(async ({ page }) => openApp(page));
 
 // Long explanations sit behind an ⓘ right after the name they explain (Named · InfoTip)
 test("ⓘ in Settings: click opens it, Esc closes only the popover and focus goes back to the ⓘ", async ({ page }) => {
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Console");
   const d = dialog(page);
   const about = d.getByRole("button", { name: "About Keyword case" });
   await expect(about).toHaveAttribute("aria-expanded", "false");
@@ -39,7 +39,7 @@ test("ⓘ in Settings: click opens it, Esc closes only the popover and focus goe
 });
 
 test("ⓘ from the keyboard: Space and Enter toggle it; a click outside closes it", async ({ page }) => {
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Updates");
   const d = dialog(page);
   const about = d.getByRole("button", { name: "About Channel" });
   await about.focus();
@@ -79,7 +79,7 @@ test("ⓘ beside a checkbox doesn't toggle it; Allow unencrypted warns while tic
 });
 
 test("a click on a field's name focuses the field and opens no ⓘ", async ({ page }) => {
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Console");
   const d = dialog(page);
   await d.locator(".ui-field-label", { hasText: "Keyword case" }).getByText("Keyword case").click();
   await expect(d.getByRole("combobox", { name: "Keyword case" })).toBeFocused();
@@ -99,18 +99,18 @@ test("a click on a field's name focuses the field and opens no ⓘ", async ({ pa
 });
 
 test("one ⓘ open at a time; the open one describes its ⓘ", async ({ page }) => {
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Data grid");
   const d = dialog(page);
-  const channel = d.getByRole("button", { name: "About Channel" });
-  await channel.focus();
+  const align = d.getByRole("button", { name: "About Alignment" });
+  await align.focus();
   await page.keyboard.press("Enter");
-  await expect(channel).toHaveAccessibleDescription(/Stable: releases made from a version tag/);
-  const kc = d.getByRole("button", { name: "About Keyword case" });
-  await kc.focus();
+  await expect(align).toHaveAccessibleDescription(/Where values sit in result grids/);
+  const sb = d.getByRole("button", { name: "About Status bar" });
+  await sb.focus();
   await page.keyboard.press("Space");
   await expect(page.getByRole("note")).toHaveCount(1);
-  await expect(page.getByRole("note", { name: "About Keyword case" })).toBeVisible();
-  await expect(channel).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("note", { name: "About Status bar" })).toBeVisible();
+  await expect(align).toHaveAttribute("aria-expanded", "false");
 });
 
 test("in a toolbar the ⓘ is the same size and as near its name as in a dialog", async ({ page }) => {

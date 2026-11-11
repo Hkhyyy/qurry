@@ -226,5 +226,6 @@
   {"tui": "Theme", "title": "Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background)"},
   {"tui": "CheckUpdate", "title": "Check for Updates"},
   {"tui": "UpdateChannel", "title": "Update Channel… (stable releases only, or beta: also every merge to main)"},
-  {"tui": "InstallUpdate", "title": "Update Qurry & Restart (download the latest release)"}
+  {"tui": "InstallUpdate", "title": "Update Qurry & Restart (download the latest release)"},
+  {"tui": "OpenGitHub", "title": "Open GitHub"}
 ]

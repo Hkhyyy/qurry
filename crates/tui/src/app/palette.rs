@@ -2,7 +2,7 @@ use super::*;
 use qurry_core::theme::{Kind, SYSTEM};
 use qurry_core::format::{align, Align, ValueClass};
 
-/// The GUI's names (Settings › Appearance › Alignment, src/lib/gridAlign.ts VALUE_CLASSES)
+/// The GUI's names (Settings › Appearance › Data grid › Alignment, src/lib/gridAlign.ts VALUE_CLASSES)
 fn class_name(c: ValueClass) -> &'static str {
     match c {
         ValueClass::String => "String",
@@ -389,7 +389,7 @@ impl App {
     }
 
     /// ⌃K › Keyword Case…: Off, UPPER or lower for SQL keywords as you type and in Reformat Code (the GUI's Settings › Appearance ›
-    /// Keyword case, shared through settings.json). Reads the file again, so a pick made in the GUI since the TUI started shows here
+    /// Console › Keyword case, shared through settings.json). Reads the file again, so a pick made in the GUI since the TUI started shows here
     pub fn palette_keyword_case(&mut self) {
         use qurry_core::format::KeywordCase;
         self.keyword_case = self.state.store.keyword_case();
@@ -408,7 +408,7 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: "Keyword Case".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
-    /// ⌃K › Result Tabs…: unpinned result tabs kept per console (the GUI's Settings › Result tabs, shared through settings.json).
+    /// ⌃K › Result Tabs…: unpinned result tabs kept per console (the GUI's Settings › Appearance › Console › Result tabs, shared through settings.json).
     /// Opens on the saved number, read again so a change made in the GUI shows here; a number that isn't 1 or more isn't saved
     pub fn palette_result_tabs(&mut self) {
         self.result_tabs = self.state.store.result_tabs();
@@ -433,7 +433,7 @@ impl App {
         }
     }
 
-    /// ⌃K › Grid Alignment…: one row per value class with where it sits (the GUI's Settings › Appearance › Alignment, shared through
+    /// ⌃K › Grid Alignment…: one row per value class with where it sits (the GUI's Settings › Appearance › Data grid › Alignment, shared through
     /// settings.json). Reads the file again, so a change made in the GUI since the TUI started shows here and in the grids
     pub fn palette_grid_align(&mut self, sel: ValueClass) {
         self.align = self.state.store.grid_align();

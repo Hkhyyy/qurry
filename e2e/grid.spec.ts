@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, editor, expect, menuItem, openApp, openConsole, openInTheme, runAll, spyCancels, test, treeItem, typeSql, work } from "./app";
+import { dialog, editor, expect, menuItem, openApp, openConsole, openInTheme, openSettings, runAll, spyCancels, test, treeItem, typeSql, work } from "./app";
 
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
 /** The mock's created_at alternates no fraction / .5 / .125 */
@@ -266,11 +266,11 @@ const aligns = (page: Page, col: number) =>
     .locator(".grid-row")
     .evaluateAll((rows, c) => rows.slice(0, 3).map((r) => getComputedStyle(r.querySelectorAll(".cell:not(.rownum)")[c]).textAlign), col);
 
-test("NULL sits where its column's type does by default; Settings › Appearance › Alignment puts it on the right, kept after a reload (#75, #95)", async ({ page }) => {
+test("NULL sits where its column's type does by default; Settings › Appearance › Data grid › Alignment puts it on the right, kept after a reload (#75, #95)", async ({ page }) => {
   // memo (TEXT): "note", <null>, <null>; amount (NUMERIC, arrives as text): a number
   await expect.poll(() => aligns(page, 4)).toEqual(["left", "left", "left"]);
   await expect.poll(() => aligns(page, 2)).toEqual(["right", "right", "right"]);
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Data grid");
   const nul = dialog(page).getByRole("combobox", { name: "NULL alignment" });
   await expect(nul).toHaveValue("column");
   await expect(nul.locator("option")).toHaveText(["Column type", "Left", "Center", "Right"]);
@@ -288,15 +288,15 @@ test("NULL sits where its column's type does by default; Settings › Appearance
   await expect(dialog(page).locator(".align-label.custom")).toHaveText(["NULL"]);
 });
 
-test("Settings › Appearance › Alignment that can't be saved goes back and says so", async ({ page }) => {
+test("Settings › Appearance › Data grid › Alignment that can't be saved goes back and says so", async ({ page }) => {
   await page.evaluate(() => ((window as any).__mockChannelSaveFails = true));
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Data grid");
   await dialog(page).getByRole("combobox", { name: "NULL alignment" }).selectOption("left");
   await expect(dialog(page).getByText(/Couldn't save the alignment \(.*permission denied\)\. It is back to what it was\./)).toBeVisible();
   await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("column");
 });
 
-test("a WebView that refuses WebAssembly: numbers stay on the right and Settings › Alignment says why it can't be changed", async ({ page }) => {
+test("a WebView that refuses WebAssembly: numbers stay on the right and Settings › Appearance › Data grid › Alignment says why it can't be changed", async ({ page }) => {
   await page.route((u) => u.pathname.endsWith(".wasm") && !u.search, (r) => r.abort());
   await openApp(page);
   await treeItem(page, "users").first().dblclick();
@@ -305,15 +305,15 @@ test("a WebView that refuses WebAssembly: numbers stay on the right and Settings
   await expect.poll(() => aligns(page, 0)).toEqual(["right", "right", "right"]);
   await expect.poll(() => aligns(page, 1)).toEqual(["start", "start", "start"]);
   await expect.poll(() => aligns(page, 4)).toEqual(["start", "start", "start"]);
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Data grid");
   const nul = dialog(page).getByRole("combobox", { name: "NULL alignment" });
   await expect(nul).toBeDisabled();
   await expect(nul).toHaveValue("");
   await expect(dialog(page).getByText("Alignment needs WebAssembly, which this WebView refused")).toBeVisible();
 });
 
-test("Settings › Alignment: clicking a kind's name focuses its own select, not the first one", async ({ page }) => {
-  await page.keyboard.press("Meta+Comma");
+test("Settings › Appearance › Data grid › Alignment: clicking a kind's name focuses its own select, not the first one", async ({ page }) => {
+  await openSettings(page, "Data grid");
   await dialog(page).locator(".align-label", { hasText: "NULL" }).click();
   await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toBeFocused();
   await dialog(page).getByText("Alignment", { exact: true }).click();

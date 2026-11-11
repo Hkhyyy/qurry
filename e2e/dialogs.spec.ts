@@ -1,22 +1,23 @@
 import { readFileSync } from "node:fs";
-import { dialog, expect, openApp, test, treeItem, work } from "./app";
+import { dialog, expect, openApp, openSettings, settingsRow, settingsTree, test, treeItem, work } from "./app";
 
 test.beforeEach(async ({ page }) => openApp(page));
 
-test("Settings (⌘,): sections, theme, Escape closes", async ({ page }) => {
+test("Settings (⌘,): pages, theme, Escape closes", async ({ page }) => {
   await page.keyboard.press("Meta+Comma");
   await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Settings");
-  await expect(dialog(page).getByRole("listbox").getByRole("option")).toHaveText(["Appearance", "Keymap", "Passwords"]);
-  await expect(dialog(page).getByRole("listbox").getByRole("option", { name: "Appearance" })).toHaveAttribute("aria-selected", "true");
+  await expect(settingsTree(page).getByRole("treeitem")).toHaveText(["Appearance", "Console", "Data grid", "Updates", "Keymap", "Passwords"]);
+  await expect(settingsRow(page, "Appearance")).toHaveAttribute("aria-selected", "true");
   await expect(dialog(page).getByRole("combobox", { name: "Theme", exact: true }).locator("option")).toHaveText(["Dark", "Light", "High contrast", "Dracula", "One Dark", "Solarized Dark", "Solarized Light"]);
   await expect(dialog(page).getByRole("combobox", { name: "Theme", exact: true })).toHaveValue("dark");
+  await settingsRow(page, "Updates").click();
   await expect(dialog(page).getByRole("checkbox", { name: /Check for updates automatically/ })).toBeChecked();
   await page.keyboard.press("Escape");
   await expect(dialog(page)).toHaveCount(0);
 });
 
 test("Settings › Updates › Channel: stable by default, beta is kept after reopening", async ({ page }) => {
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Updates");
   const channel = dialog(page).getByRole("combobox", { name: /Channel/ });
   await expect(channel.locator("option")).toHaveText(["Stable", "Beta"]);
   await expect(channel).toHaveValue("stable");
@@ -31,7 +32,7 @@ test("Settings › Updates › Channel: stable by default, beta is kept after re
 test("Settings › Updates › Channel with automatic checks off: saved without a request, Check Now looks", async ({ page }) => {
   await page.evaluate(() => localStorage.setItem("dbtool.updateCheck", "off"));
   await openApp(page);
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Updates");
   const field = dialog(page).locator(".ui-field-label", { hasText: "Channel" });
   // The label fits its column (not "Chan…")
   expect(await field.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
@@ -45,7 +46,7 @@ test("Settings › Updates › Check Now that finds nothing clears the status ba
   await expect(page.locator(".statusbar")).toContainText("⬆ v0.1.2 available");
   // The TUI switched the shared channel: nothing newer now
   await page.evaluate(() => ((window as any).__mockNoUpdate = true));
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Updates");
   await dialog(page).getByRole("button", { name: "Check Now" }).click();
   await expect(dialog(page).getByText("You have the latest stable version (0.1.0).")).toBeVisible();
   await expect(page.locator(".statusbar")).not.toContainText("available");
@@ -67,7 +68,7 @@ test("An update offer that goes away closes its window, and a later offer doesn'
   await expect(dialog(page)).toHaveCount(0);
   // Beta offers 0.1.2 again: the status bar shows it, the window stays closed
   await page.evaluate(() => ((window as any).__mockNoUpdate = false));
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Updates");
   await dialog(page).getByRole("combobox", { name: /Channel/ }).selectOption("beta");
   await expect(dialog(page).getByText("Qurry 0.1.2 is available on this channel.")).toBeVisible();
   await expect(page.locator(".statusbar")).toContainText("⬆ v0.1.2 available");
@@ -79,7 +80,7 @@ test("With update checks off, the hourly check keeps what Check Now found", asyn
   await page.addInitScript(() => ((window as any).__mockChecksOff = true));
   await openApp(page);
   await expect(page.locator(".statusbar")).not.toContainText("available");
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Updates");
   await dialog(page).getByRole("button", { name: "Check Now" }).click();
   await expect(page.locator(".statusbar")).toContainText("⬆ v0.1.2 available");
   await page.keyboard.press("Escape");
@@ -90,7 +91,7 @@ test("With update checks off, the hourly check keeps what Check Now found", asyn
 
 test("Settings › Updates › Channel: a channel that couldn't be saved isn't shown as picked", async ({ page }) => {
   await page.evaluate(() => ((window as any).__mockChannelSaveFails = true));
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Updates");
   const channel = dialog(page).getByRole("combobox", { name: /Channel/ });
   await channel.selectOption("beta");
   await expect(dialog(page).getByText("Couldn't save the settings: permission denied")).toBeVisible();

@@ -166,6 +166,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | — | Check for Updates |
 | — | Update Channel… (stable releases only, or beta: also every merge to main) |
 | — | Update Qurry & Restart (download the latest release) |
+| — | Open GitHub |
 
 ## Database Explorer keys (when the explorer has focus; change them in the F1 window)
 

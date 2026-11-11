@@ -1,8 +1,8 @@
 import type { Page } from "@playwright/test";
-import { dialog, editor, expect, menuItem, openApp, openConsole, resultTabs, runAll, spyRuns, test, typeSql, work } from "./app";
+import { dialog, editor, expect, menuItem, openApp, openConsole, openSettings, resultTabs, runAll, spyRuns, test, typeSql, work } from "./app";
 
 // A console's result tabs follow its statements (#151, lib/resultTabs): one per statement, shown when the caret enters it, replaced
-// by a rerun, closed with its statement, at most Settings › Result tabs unpinned
+// by a rerun, closed with its statement, at most Settings › Appearance › Console › Result tabs unpinned
 
 const cell = (page: Page, name: string) => work(page).getByRole("gridcell", { name, exact: true });
 const tab = (page: Page, label: string | RegExp) => resultTabs(page).filter({ hasText: label });
@@ -87,7 +87,7 @@ test("one tab per statement: the caret shows it, a rerun replaces it, a pinned o
 });
 
 test("Settings › Result tabs: 0 isn't saved; past the number the least recently shown unpinned tab closes", async ({ page }) => {
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Console");
   const field = dialog(page).getByRole("spinbutton", { name: "Result tabs" });
   await expect(field).toHaveValue("10");
   await field.fill("0");

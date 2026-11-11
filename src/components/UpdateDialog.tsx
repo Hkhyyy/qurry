@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, isReleaseUrl, UpdateInfo } from "../lib/api";
+import { api, isReleaseUrl, openExternal, UpdateInfo } from "../lib/api";
 import { Button, Hint, Modal, Notice, Spacer, Text } from "../ui";
 
 /** New version notice: release notes + Update & Restart (downloads, replaces and restarts in the app). If that fails, download from the release page */
@@ -9,10 +8,7 @@ import { Button, Hint, Modal, Notice, Spacer, Text } from "../ui";
 export function UpdateDialog({ info, onClose, beforeInstall }: { info: UpdateInfo; onClose: () => void; beforeInstall?: () => boolean | Promise<boolean> }) {
   const r = info.latest!;
   // Only open release URLs of this repository (otherwise the release list)
-  const open = (u: string) => {
-    const url = isReleaseUrl(u) ? u : "https://github.com/Hkhyyy/qurry/releases";
-    openUrl(url).catch(() => window.open(url, "_blank"));
-  };
+  const open = (u: string) => openExternal(isReleaseUrl(u) ? u : "https://github.com/Hkhyyy/qurry/releases");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

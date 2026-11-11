@@ -1,5 +1,5 @@
 // A console's result tabs follow its statements (#151): one tab per statement, kept while the statement is in the editor, at most
-// `cap` unpinned per console (Settings › Result tabs). The TUI keeps the same rules in crates/tui/src/app/result_tabs.rs
+// `cap` unpinned per console (Settings › Appearance › Console › Result tabs). The TUI keeps the same rules in crates/tui/src/app/result_tabs.rs
 import type { ResultEntry } from "../components/ConsolePane";
 
 /** What the model works on: a console tab's results and the one shown ("output" or an entry id) */

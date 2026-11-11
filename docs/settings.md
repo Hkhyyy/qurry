@@ -2,7 +2,16 @@
 
 English | [한국어](ko/settings.md)
 
-GUI **Settings** (`⌘,`, or the ⚙ button at the bottom of the workspace rail on the far left) has three pages: **Appearance**, **Keymap** and **Passwords**. Settings that the GUI and the TUI share are kept in `settings.json` in the config folder ([where that is](getting-started.md#where-qurry-keeps-your-settings)). The TUI has no settings window: its options are in `⌃k` (Find Action), and its font is the terminal's (see [TUI in your terminal › Fonts](tui.md#fonts)).
+GUI **Settings** (`⌘,`, or the ⚙ button at the bottom of the workspace rail on the far left) lists its pages in a tree on the left, as DataGrip does: **Appearance** (with **Console** and **Data grid** under it), **Updates**, **Keymap** and **Passwords**. Click a page, or use the keys below with the tree focused. Settings opens on the page you used last. Settings that the GUI and the TUI share are kept in `settings.json` in the config folder ([where that is](getting-started.md#where-qurry-keeps-your-settings)). The TUI has no settings window: its options are in `⌃k` (Find Action), and its font is the terminal's (see [TUI in your terminal › Fonts](tui.md#fonts)).
+
+| Key | In the pages tree |
+|---|---|
+| `↑` `↓` | Previous / next page |
+| `→` | Open a page's children; on an open one, go to its first child |
+| `←` | Close an open page; on a child, go to its parent |
+| `Home` / `End` | First / last page |
+
+Up to 0.3.3 all of Appearance, Updates and Channel were on one page. Every setting keeps its name, its values and its key in `settings.json`; only the page it is on changed.
 
 ## Appearance
 
@@ -11,24 +20,6 @@ GUI **Settings** (`⌘,`, or the ⚙ button at the bottom of the workspace rail 
 | Theme | Dark, Light, High contrast, Dracula, One Dark, Solarized Dark, Solarized Light or a custom theme, or **Sync with OS** with a dark and a light theme of your choice ([below](#themes)). Quick switch: `` ⌃` `` | Yes (TUI **⌃k › Theme…**) |
 | Editor font | Font family and size of the query console editor. Size 8–32 px (default 13); `⌃⇧.` / `⌃⇧,` change it too, and Settings shows the new size | No (the TUI uses the terminal's font) |
 | Grid font | Font family and size of the result and table grids. Size 9–16 px (default 12): rows keep their height, so larger text would be cut. Columns get wider with the size | No (the TUI uses the terminal's font) |
-| Keyword case | **Off** (default), **UPPER** or **lower** for SQL keywords as you type in a console and in **Reformat Code** ([below](#keyword-case-and-reformat-code)) | Yes (TUI **⌃k › Keyword Case…**) |
-| Result tabs | Unpinned result tabs kept per console, 10 by default ([below](#result-tabs)) | Yes (TUI **⌃k › Result Tabs…**) |
-| Alignment | Where cells sit in result grids, per kind of value (below) | Yes (TUI **⌃k › Grid Alignment…**) |
-| Status bar | Which items the status bar shows for the focused grid: Position, Shown columns, Not null, Sum, Avg, Min, Max, Size ([below](#status-bar-items)) | Yes (TUI **⌃k › Status Bar Items…**) |
-| Updates | Check for a new version when the app starts; **Check Now** | — |
-| Channel | Stable or beta releases ([Updates](updates.md)) | Yes |
-
-### Fonts
-
-Font changes apply at once, to every open console and grid.
-
-**Font family**: pick it from the list of fonts installed on this computer. **Monospaced only** (on by default) hides proportional fonts; turn it off to pick any installed font. Type to search the list (typing on the closed field opens it), `↑` `↓` to move, `↩` to pick, `⎋` to close the list. The field shows the chosen font in itself. **Default monospace**, at the top of the list, is JetBrains Mono, or Menlo when it isn't installed. The list is read again each time it opens, so a font you install while Qurry is running shows up without a restart. On macOS and Linux (`fc-list`) it lists the installed fonts; elsewhere it offers only the default and the saved font.
-
-A saved font that isn't installed (removed since, or chosen on another computer) never breaks the screen: Qurry falls back to the default monospace font, and the field and the top of the list show it as `<name> (not installed)`. Pick another font to replace it.
-
-**Add Font File…** (at the bottom of the list; not in DataGrip) uses a font without installing it on the computer: pick a `.ttf`, `.otf`, `.woff` or `.woff2` file of up to 20 MB, and Qurry copies it into the `fonts` folder inside the config folder and picks it for that field. The copy is named after the file (letters, digits, `-` and `_` kept, anything else becomes a space); if a font of that name was already added, the new one gets ` 2`, ` 3`… instead of replacing it. A file that isn't really a font (Qurry checks its first bytes, not its extension), or one that can't be loaded as a font (damaged or incomplete), is refused with the reason. Added fonts are listed in both fields right after **Default monospace**, marked `custom`, whether or not **Monospaced only** is on; one with the name of an installed font replaces it in the list. The `−` button on its row removes it (after asking): the copy is deleted, the file you added it from is kept, and a field set to it goes back to **Default monospace** (unless a font of that name is installed: it then shows in the installed one). Added fonts are loaded each time Qurry starts. The TUI uses the terminal's font, so added fonts don't apply there.
-
-The fonts are kept by the GUI on this computer (not in the config folder; only added font files are copied into its `fonts` folder), so they don't affect the TUI.
 
 ### Themes
 
@@ -50,6 +41,25 @@ The theme is saved in `settings.json` in the config folder (`"theme"`, `"themeSy
 
 In 0.3.2 Dark, Light and High contrast changed slightly where they missed the contrast minimum: text on the accent (primary buttons; High contrast's is now black), the Production stripe, Dark's dim text and NULL gray, Light's accent and link blue, its NULL gray, its Production and Green tints, and Light's error red.
 
+### Fonts
+
+Font changes apply at once, to every open console and grid.
+
+**Font family**: pick it from the list of fonts installed on this computer. **Monospaced only** (on by default) hides proportional fonts; turn it off to pick any installed font. Type to search the list (typing on the closed field opens it), `↑` `↓` to move, `↩` to pick, `⎋` to close the list. The field shows the chosen font in itself. **Default monospace**, at the top of the list, is JetBrains Mono, or Menlo when it isn't installed. The list is read again each time it opens, so a font you install while Qurry is running shows up without a restart. On macOS and Linux (`fc-list`) it lists the installed fonts; elsewhere it offers only the default and the saved font.
+
+A saved font that isn't installed (removed since, or chosen on another computer) never breaks the screen: Qurry falls back to the default monospace font, and the field and the top of the list show it as `<name> (not installed)`. Pick another font to replace it.
+
+**Add Font File…** (at the bottom of the list; not in DataGrip) uses a font without installing it on the computer: pick a `.ttf`, `.otf`, `.woff` or `.woff2` file of up to 20 MB, and Qurry copies it into the `fonts` folder inside the config folder and picks it for that field. The copy is named after the file (letters, digits, `-` and `_` kept, anything else becomes a space); if a font of that name was already added, the new one gets ` 2`, ` 3`… instead of replacing it. A file that isn't really a font (Qurry checks its first bytes, not its extension), or one that can't be loaded as a font (damaged or incomplete), is refused with the reason. Added fonts are listed in both fields right after **Default monospace**, marked `custom`, whether or not **Monospaced only** is on; one with the name of an installed font replaces it in the list. The `−` button on its row removes it (after asking): the copy is deleted, the file you added it from is kept, and a field set to it goes back to **Default monospace** (unless a font of that name is installed: it then shows in the installed one). Added fonts are loaded each time Qurry starts. The TUI uses the terminal's font, so added fonts don't apply there.
+
+The fonts are kept by the GUI on this computer (not in the config folder; only added font files are copied into its `fonts` folder), so they don't affect the TUI.
+
+## Appearance › Console
+
+| Setting | What it does | Shared with the TUI |
+|---|---|---|
+| Keyword case | **Off** (default), **UPPER** or **lower** for SQL keywords as you type in a console and in **Reformat Code** ([below](#keyword-case-and-reformat-code)) | Yes (TUI **⌃k › Keyword Case…**) |
+| Result tabs | Unpinned result tabs kept per console, 10 by default ([below](#result-tabs)) | Yes (TUI **⌃k › Result Tabs…**) |
+
 ### Keyword case and Reformat Code
 
 **Reformat Code** (GUI `⌘⌥l`, TUI `⌥⇧F` or **⌃k › Reformat Code**) lays out the selection, or without a selection the statement at the caret: one clause per line, its items indented by 4 spaces. Strings, comments and quoted names stay as written. One undo (`⌘z`, TUI `⌃u`) puts the text back as it was. The GUI and the TUI use the same formatter, so both lay out a statement the same way. Redis, MongoDB and vector database consoles aren't reformatted.
@@ -68,6 +78,13 @@ If your TUI `keymap.json` already gives `⌥⇧F` to another command, that comma
 Each statement a console runs gets its own result tab, which follows the statement as you edit the script ([Getting started](getting-started.md)). **Result tabs** is how many unpinned tabs a console keeps (10 by default, 1 or more); past it, the least recently shown one closes, never the one shown. Pinned tabs don't count. Each kept tab holds its rows in memory, so a lower number keeps less.
 
 Before 0.3.4 a run replaced the console's unpinned result tabs. To clear them yourself, use **Close All Unpinned** in a result tab's menu. In the TUI the setting is **⌃k › Result Tabs…**. The setting is saved in `settings.json` as `"resultTabs"`; the TUI reads it when it starts and again when you open that command. Results aren't saved in workspaces, so nothing saved changes.
+
+## Appearance › Data grid
+
+| Setting | What it does | Shared with the TUI |
+|---|---|---|
+| Alignment | Where cells sit in result grids, per kind of value (below) | Yes (TUI **⌃k › Grid Alignment…**) |
+| Status bar | Which items the status bar shows for the focused grid: Position, Shown columns, Not null, Sum, Avg, Min, Max, Size ([below](#status-bar-items)) | Yes (TUI **⌃k › Status Bar Items…**) |
 
 ### Alignment in result grids
 
@@ -112,11 +129,20 @@ The status bar shows, on the right, items for the focused result or table grid, 
 | Sum, Avg, Min, Max | Over the numbers among the selected cells (2 or more cells) |
 | Size | One cell: its size in bytes and characters (`Size: 11 bytes (7 chars)`; binary: its length) and, when the table's metadata gives it, its column's declared limit: `varchar(8): up to 8 chars (32 bytes in UTF-8)`, MySQL `up to 8 chars (32 bytes in utf8mb4)`, `char(8): always 8 chars (padded)`, `varbinary(16): up to 16 bytes`, `blob: up to 65,535 bytes`, `bytea: no limit (up to 1 GB)`. Not shown for numbers, dates / times and booleans |
 
-Choose them in **Settings › Appearance › Status bar**, or **right-click the status bar** (or click one of its items) for the same checklist: it stays open while you toggle items (`↑` `↓` move, `Space` or `↩` toggles, `⎋` closes); **Restore Defaults** goes back to Position and Shown columns. The choice is kept in `settings.json` as `"statusBarItems"` (the items that are on) and shared with the TUI, where **⌃k › Status Bar Items…** changes it ([TUI status line](tui.md#status-line)). Each app reads it when it starts and when you open its checklist, so a change made in the other app shows there.
+Choose them in **Settings › Appearance › Data grid › Status bar**, or **right-click the status bar** (or click one of its items) for the same checklist: it stays open while you toggle items (`↑` `↓` move, `Space` or `↩` toggles, `⎋` closes); **Restore Defaults** goes back to Position and Shown columns. The choice is kept in `settings.json` as `"statusBarItems"` (the items that are on) and shared with the TUI, where **⌃k › Status Bar Items…** changes it ([TUI status line](tui.md#status-line)). Each app reads it when it starts and when you open its checklist, so a change made in the other app shows there.
 
 Size counts the bytes of the value as Qurry sends it, in UTF-8. A column in another character set (MySQL `latin1`) can store it in fewer bytes; the limit is worded in the column's own character set. A table tab knows its columns' limits; a console result only where its column is a table's column (a result of one table with its key, or a join's column of a table), otherwise Size shows the bytes only. A binary value longer than the 64 bytes a grid receives shows as `over 64 bytes`.
 
 When the window is narrow, the status text gives way first (down to a short width), then UTF-8, the column limit, Max, Min, Avg, Sum, Not null, Size and Shown columns go, in that order; Position and Read-only always stay.
+
+## Updates
+
+| Setting | What it does | Shared with the TUI |
+|---|---|---|
+| Updates | Check for a new version when the app starts; **Check Now** | — |
+| Channel | Stable or beta releases ([Updates](updates.md)) | Yes |
+
+The GitHub button next to **Check Now** opens the project page, https://github.com/Hkhyyy/qurry, in your browser. In the TUI, **⌃k › Open GitHub** opens it and shows the address in the status line (over SSH no browser may open).
 
 ## Keymap
 

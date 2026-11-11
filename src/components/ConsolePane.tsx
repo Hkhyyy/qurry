@@ -51,7 +51,7 @@ export interface ResultEntry {
   stmt: number | null;
   /** The number in its label ("2: customers"): its statement's place + 1, kept as it was once the tab stops following */
   num: number;
-  /** When it last ran or was shown: past Settings › Result tabs the least recently shown unpinned tab closes */
+  /** When it last ran or was shown: past Settings › Appearance › Console › Result tabs the least recently shown unpinned tab closes */
   used: number;
   title: string;
   sql: string;

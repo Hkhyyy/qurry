@@ -37,7 +37,7 @@ What the URL leaves out comes from the environment, as `psql`, `mysql` and `redi
 
 ## Status line
 
-The bottom line shows the status text on the left (the Production and Read-only badges first), then the keys of the screen and the common keys, and for a focused result or table grid the GUI status bar's items: `… ⌃k actions   Not null: 2 │ Sum: 1,329,000 │ cols 1–4 of 9 │ 2 rows · Col 3`, Position in the corner. **⌃k › Status Bar Items…** chooses them (Position and Shown columns by default; Not null, Sum, Avg, Min, Max, Size), the same setting as the GUI's ([Settings › Status bar items](settings.md#status-bar-items)): `↑` `↓` move, `Space` or `Enter` toggles and the list stays open, **Restore defaults** goes back.
+The bottom line shows the status text on the left (the Production and Read-only badges first), then the keys of the screen and the common keys, and for a focused result or table grid the GUI status bar's items: `… ⌃k actions   Not null: 2 │ Sum: 1,329,000 │ cols 1–4 of 9 │ 2 rows · Col 3`, Position in the corner. **⌃k › Status Bar Items…** chooses them (Position and Shown columns by default; Not null, Sum, Avg, Min, Max, Size), the same setting as the GUI's ([Settings › Appearance › Data grid › Status bar](settings.md#status-bar-items)): `↑` `↓` move, `Space` or `Enter` toggles and the list stays open, **Restore defaults** goes back.
 
 The selection the items read is the marked rows (`m`) in the cursor's column, or a range selected with `⇧↑↓←→` (or dragged); with neither, Position is the cursor's cell and Size is about that cell. A table tab knows its columns' declared limits; a console result only where its column is a table's column.
 

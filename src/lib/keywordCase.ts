@@ -1,4 +1,4 @@
-// Keyword case (Settings › Appearance › Keyword case): the letter case SQL keywords get as you type in a console and in Reformat
+// Keyword case (Settings › Appearance › Console › Keyword case): the letter case SQL keywords get as you type in a console and in Reformat
 // Code. Kept in settings.json ("keywordCase"), which the TUI reads too; the rule itself is qurry_shared::format through WASM
 import { useSyncExternalStore } from "react";
 import { api } from "./api";

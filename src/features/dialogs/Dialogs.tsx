@@ -91,7 +91,7 @@ export function Dialogs({ conns, setStatus, openConsole, startBackup, startExpor
         })()}
       {settingsOpen && (
         <SettingsDialog
-          initialPage={settingsOpen}
+          initialPage={settingsOpen === true ? undefined : settingsOpen}
           onClose={() => setSettingsOpen(false)}
           onUpdate={(u) => {
             setUpdate(u);
