@@ -1,7 +1,7 @@
 //! Driver plugin host: launches the qurry-driver-<name> executable and exchanges one JSON line at a time over stdio (protocol: crates/driver).
 //! Executable location: QURRY_DRIVERS_DIR → config folder/drivers → next to this executable (dev builds)
 use crate::error::{AppError, AppResult};
-use crate::store::{ConnectionConfig, DbKind};
+use crate::store::ConnectionConfig;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::path::PathBuf;

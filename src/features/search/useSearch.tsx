@@ -192,7 +192,8 @@ export function useSearch({
           if (!t?.edit) return;
           setExplorerHidden(false);
           setMaximized(false);
-          revealInTree({ connId: t.connId, db: t.database || conns.find((x) => x.id === t.connId)?.database, schema: t.edit.schema, name: t.edit.table, kind: "table" });
+          const c = conns.find((x) => x.id === t.connId);
+          revealInTree({ connId: t.connId, db: t.database || (c ? defaultDbOf(c) : undefined), schema: t.edit.schema, name: t.edit.table, kind: "table" });
         },
         disabled: !t?.edit,
       },

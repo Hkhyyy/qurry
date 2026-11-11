@@ -1,6 +1,6 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { api, ConnectionView, defaultDbOf, dialectOf, meta, targetId } from "../../lib/api";
+import { api, ConnectionView, defaultDbOf, dialectOf, meta, redisDb, targetId } from "../../lib/api";
 import { askText } from "../../lib/dialogs";
 import { leaf, leaves, MAX_PANES, Pane, splitPane } from "../../lib/panes";
 import { connTabVars } from "../../lib/theme";
@@ -40,7 +40,7 @@ const follow = (id: string, f: (t: Tab) => Tab) => {
   const t = useTabsStore.getState().tabs.find((x) => x.id === id);
   if (t && f(t) !== t) updTab(id, f);
 };
-const tabDatabase = (t: { database?: string }, c?: ConnectionView) => t.database || c?.database || (c?.kind === "mysql" ? "" : "postgres");
+const tabDatabase = (t: { database?: string }, c?: ConnectionView) => t.database || (c ? defaultDbOf(c) : "");
 
 type Deps = {
   conns: ConnectionView[];
@@ -541,7 +541,7 @@ export function useEditorGroups({
                     target={t.target}
                     connId={t.connId}
                     connName={c?.name ?? ""}
-                    database={t.database ?? "db0"}
+                    database={t.database ?? redisDb(c?.database)}
                     readOnly={!!c?.readOnly}
                     production={!!c?.options?.confirmChanges}
                     initialKey={t.redisKey}

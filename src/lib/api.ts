@@ -511,8 +511,9 @@ export const meta = {
   warmSearchCache: (id: string) => invoke<void>("warm_search_cache", { id }),
   fullTextSearch: (id: string, req: FtsRequest) => invoke<FtsHit[]>("full_text_search", { id, req }),
 };
-/** Redis default DB name: "" / "3" / "db3" → "db3" */
-export const redisDb = (database?: string | null) => `db${String(database ?? "").replace(/^db/, "").trim() || "0"}`;
+/** Redis DB name: "" / "3" / "db3" → "db3" (qurry_shared::kind::default_db; before the module has loaded, a rough copy) */
+export const redisDb = (database?: string | null) =>
+  sharedOr(`db${String(database ?? "").trim().replace(/^db/, "") || "0"}`, (s) => s.defaultDb("redis", database ?? ""));
 export interface RedisKeyRow { key: string; type: string; ttl: number }
 export interface RedisKeyDetail { type: string; ttl: number; length: number; memory: number | null; encoding: string | null; value: unknown; truncated: boolean }
 export type RedisReply = null | number | string | boolean | { status: string } | RedisReply[];

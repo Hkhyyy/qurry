@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_PORT, defaultDbOf, KIND_LABEL, type DbKind } from "./api";
+import { DEFAULT_PORT, defaultDbOf, KIND_LABEL, redisDb, type DbKind } from "./api";
 import { shared } from "./shared";
 
 const KINDS = Object.keys(KIND_LABEL) as DbKind[];
@@ -28,6 +28,13 @@ describe("defaultDbOf", () => {
     expect(early({ kind: "mysql", database: "" })).toBe("");
     expect(early({ kind: "redis", database: "0" })).toBe("0");
     vi.doUnmock("./shared");
+  });
+});
+
+// A Redis database name from a tree node, a tab or the Database field: the same rule as defaultDbOf
+describe("redisDb", () => {
+  it("reads a name or a number as core does", () => {
+    for (const [d, want] of [["", "db0"], ["3", "db3"], ["db3", "db3"], [" 3 ", "db3"], ["x", "db0"], [null, "db0"]] as const) expect([d, redisDb(d)]).toEqual([d, want]);
   });
 });
 

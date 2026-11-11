@@ -186,7 +186,11 @@ export default function App() {
   const tabLabels = useMemo(
     () =>
       tableTabLabels(
-        tabs.flatMap((t) => (t.kind === "table" && t.edit ? [{ id: t.id, db: t.database || conns.find((c) => c.id === t.connId)?.database || "", schema: t.edit.schema, table: t.edit.table }] : [])),
+        tabs.flatMap((t) => {
+          if (t.kind !== "table" || !t.edit) return [];
+          const c = conns.find((x) => x.id === t.connId);
+          return [{ id: t.id, db: t.database || (c ? defaultDbOf(c) : ""), schema: t.edit.schema, table: t.edit.table }];
+        }),
       ),
     [tabs, conns, wasmReady],
   );

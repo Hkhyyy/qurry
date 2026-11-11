@@ -8,7 +8,8 @@ const conns = [
   { id: "prod", name: "[PROD] shop_app", kind: "postgres", host: "prod-db", port: 5432, user: "app", database: "shop_app", color: "#6e2a2a", hasPassword: true, connected: false, options: { confirmChanges: true },
     ssh: { enabled: true, host: "bastion.example.com", port: 22, user: "ec2-user", auth: "key", keyPath: "~/.ssh/id_ed25519" } },
   { id: "my", name: "[MySQL] shop", kind: "mysql", host: "127.0.0.1", port: 13306, user: "root", database: "shop", color: "#22524f", hasPassword: true, connected: true, options: { confirmChanges: true } },
-  { id: "rd", name: "[Redis] cache", kind: "redis", host: "127.0.0.1", port: 16379, user: "", database: "0", color: "#6e2a2a", hasPassword: false, connected: true },
+  // window.__mockRedisDb (set before load): [Redis] cache's Database field
+  { id: "rd", name: "[Redis] cache", kind: "redis", host: "127.0.0.1", port: 16379, user: "", database: (globalThis as any).__mockRedisDb ?? "0", color: "#6e2a2a", hasPassword: false, connected: true },
   { id: "local", name: "[LOCAL] TestServer", kind: "postgres", host: "localhost", port: 5432, user: "dev", database: "", color: null, hasPassword: false, connected: false },
   // A remote server without TLS: connects only after allow_plaintext. window.__mockLanProd (set before load) makes it Production
   { id: "lan", name: "LAN dev", kind: "postgres", host: "10.0.0.12", port: 5432, user: "dev", database: "lan_app", color: null, hasPassword: true, connected: false, options: { confirmChanges: !!(globalThis as any).__mockLanProd, allowPlaintext: false } },
@@ -197,9 +198,9 @@ export function importPlan(from: string, path: string) {
   return { title: "Import Data Sources", message: `Import these data sources from ${from}?\n${shown}\n\n5 to add, 2 skipped. ${IMPORT_NOTE}`, rows, importable: 5 };
 }
 
-/** [Redis] cache's keys: db0 (the default) and db3 */
+/** [Redis] cache's keys: db0 and db3 (a target without "::db" is on the source's Database) */
 const redisKeys = (id: string) =>
-  String(id).endsWith("::db3")
+  (String(id).split("::")[1] ?? `db${conns.find((c) => c.id === "rd")?.database}`) === "db3"
     ? [
         { key: "jobs:1", type: "hash", ttl: -1 },
         { key: "jobs:2", type: "hash", ttl: 600_000 },

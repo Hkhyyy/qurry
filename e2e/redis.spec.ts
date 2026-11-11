@@ -62,6 +62,28 @@ test("an old workspace with a Redis tab per database reopens one tab on the data
   await expect(picker(page)).toHaveValue("db3");
 });
 
+test("a source whose Database is 3 opens its tab on db3: picker, keys and the terminal prompt", async ({ page }) => {
+  await page.addInitScript(() => ((window as any).__mockRedisDb = "3"));
+  await openApp(page);
+  await treeItem(page, "db3 2").dblclick();
+  await expect(redisTabs(page)).toHaveText([/^\[Redis\] cache \[db3\]/]);
+  await expect(picker(page)).toHaveValue("db3");
+  await expect(work(page).getByRole("treeitem")).toHaveText(["jobs2"]);
+  await work(page).getByRole("tab", { name: "Terminal" }).click();
+  await expect(work(page).locator(".rd-term-in")).toContainText("db3>");
+});
+
+test("a workspace's Redis tab on the source's own database (3) reopens on db3", async ({ page }) => {
+  await page.addInitScript(() => ((window as any).__mockRedisDb = "3"));
+  const tab = { kind: "redis", title: "[Redis] cache [db3]", connId: "rd", database: "db3", group: 0, sql: "", where: "", orderBy: "" };
+  const file = { version: 2, shared: true, current: "w1", workspaces: [{ id: "w1", name: "Default", connIds: ["rd", "dev"], tabs: [tab], panes: { t: "leaf", g: 0 }, activeIds: [0, -1, -1, -1], focused: 0 }] };
+  await page.addInitScript((f) => localStorage.setItem("mock-ws", f), JSON.stringify(file));
+  await openApp(page);
+  await expect(redisTabs(page)).toHaveText([/^\[Redis\] cache \[db3\]/]);
+  await expect(picker(page)).toHaveValue("db3");
+  await expect(work(page).getByRole("treeitem")).toHaveText(["jobs2"]);
+});
+
 test("key tree: folder counts beside the name, the TTL column has key TTLs only (— without expiry); the filter is a SCAN pattern", async ({ page }) => {
   await openRedis(page);
   const keys = work(page).getByRole("treeitem");

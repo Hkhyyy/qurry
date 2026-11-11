@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { analyzePlan, api, auditLog, ConnectionView, dialectOf, DbKind, meta, previewImpact, QueryResult, targetId } from "../../lib/api";
+import { analyzePlan, api, auditLog, ConnectionView, defaultDbOf, dialectOf, DbKind, meta, previewImpact, QueryResult, targetId } from "../../lib/api";
 import { ask, notice } from "../../lib/dialogs";
 import { pushHistory } from "../../components/HistoryDialog";
 import type { OutputLine } from "../../components/ConsolePane";
@@ -73,7 +73,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     const c = conns.find((x) => x.id === tab.connId);
     if (!c) return;
     if (tab.inTx && !(await ask("This console has uncommitted changes. Switching the database rolls them back. Continue?", { okLabel: "Switch and Roll Back", danger: true }))) return;
-    const database = db !== (c.database || "postgres") ? db : undefined;
+    const database = db !== defaultDbOf(c) ? db : undefined;
     api.closeSession(tab.id).catch(() => {}); // The next run opens a session on the new DB
     patch(tab.id, { database, target: targetId(c.id, database), schema: undefined, inTx: false });
     setStatus(`Console switched to database ${db}`);
@@ -278,7 +278,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
         // Even on error a transaction may be open (e.g. first statement fails in Manual) → sync the Commit/Roll back buttons
         syncTx(tabId);
         // DDL among the earlier statements may already be applied
-        if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
+        if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c ? defaultDbOf(c) : ""));
         lastActive = "output";
         updTab(tabId, (t) => ({ ...t, running: false, activeResult: "output", pending: undefined }));
         setStatus(mark ? "Query failed: the error is marked in the editor and kept in Output — fix the statement and run it again" : "Query failed (see Output)");
@@ -289,7 +289,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     updTab(tabId, (t) => ({ ...t, running: false, activeResult: lastActive, lastSql: stmts[stmts.length - 1], pending: undefined }));
     setStatus(`${stmts.length} statement${stmts.length > 1 ? "s" : ""} executed${warned ? ` · ${warned} with a warning (see Output)` : ""}`);
     // If tables or columns were created, altered, or dropped, show it in the explorer right away
-    if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
+    if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c ? defaultDbOf(c) : ""));
     refresh();
   };
 
