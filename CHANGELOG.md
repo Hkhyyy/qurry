@@ -53,6 +53,10 @@ What changed in each Qurry version, for people who use it. The format follows [K
 - **Add Row, then scrolling to it loaded more rows** (GUI and TUI): the loaded rows came after the new one in the TUI, so Revert dropped the loaded rows and Submit inserted them again; in the GUI the selection stayed where the new row had been, so Delete Row or Revert Selected hit a loaded row. Loaded rows now go before the added ones, and the selection, the cell being edited and the Value Editor's draft move with them. In the TUI also with the on-screen sort (`s`) on: the added rows stay last, and edited and deleted rows keep their edits when the sort changes.
 - **A transaction the server ended because it sat idle** (PostgreSQL `idle_in_transaction_session_timeout`, MySQL `wait_timeout`) now says so by name on the next statement or Commit, and that it was rolled back (Commit no longer says its outcome is unknown); the Production log records "ROLLBACK (by the server)" (#106).
 
+### Security
+
+- **The SQLite driver bundles SQLite 3.54** (#147, RUSTSEC-2026-0459 / CVE-2026-119375): with the SQLite before 3.54, opening a crafted database file together with its `-wal` file could make queries return stale bytes from the driver's memory. A new install of the SQLite driver gets 3.54; an app update doesn't replace a driver already installed, so to get it: quit Qurry, delete `qurry-driver-sqlite` from the `drivers` folder in the config folder (macOS `~/Library/Application Support/com.hyunkyo.dbtool/drivers`, Linux `~/.config/com.hyunkyo.dbtool/drivers`), then expand a SQLite data source and choose **Install the SQLite driver** (the data source dialog: **Install**; TUI: confirm the download) ([Data sources › Drivers](docs/data-sources.md#drivers-added-when-you-need-them)). The data source test shows the version (`SQLite 3.54.1`).
+
 ## [0.3.1] - 2026-11-04
 
 ### Added

@@ -34,7 +34,7 @@ impl Sqlite {
             let n = st.execute([]).map_err(|e| e.to_string())?;
             return Ok(QueryOut { rows_affected: n as u64, ..Default::default() });
         }
-        let columns: Vec<Column> = st.columns().iter().map(|c| Column { name: c.name().to_string(), type_name: c.decl_type().unwrap_or("").to_uppercase() }).collect();
+        let columns: Vec<Column> = st.columns().map(|c| Column { name: c.name().to_string(), type_name: c.decl_type().unwrap_or("").to_uppercase() }).collect();
         let n = columns.len();
         let mut rows = st.query([]).map_err(|e| e.to_string())?;
         let mut out = QueryOut { columns, has_result_set: true, ..Default::default() };
