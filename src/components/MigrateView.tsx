@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ask, askText } from "../lib/dialogs";
-import { ConnectionView, DataDiff, meta, migrate, Migration, SchemaChange, targetId } from "../lib/api";
+import { ConnectionView, DataDiff, defaultDbOf, meta, migrate, Migration, SchemaChange, targetId } from "../lib/api";
 import { Button, Checkbox, CodeBlock, List, ListItem, Named, Notice, Row, Select, Spacer, Table, Tabs, Td, Text, Th } from "../ui";
 
 /** Compare·migration target: Data Source · DB · schema (· table) */
@@ -13,7 +13,7 @@ interface End {
 
 const isSql = (c: ConnectionView) => c.kind === "postgres" || c.kind === "mysql";
 /** Connection target id: conn::db for PG; in MySQL the DB is the schema */
-const tid = (c: ConnectionView | undefined, e: End) => (c ? targetId(c.id, c.kind === "postgres" && e.db && e.db !== (c.database || "postgres") ? e.db : undefined) : "");
+const tid = (c: ConnectionView | undefined, e: End) => (c ? targetId(c.id, c.kind === "postgres" && e.db && e.db !== defaultDbOf(c) ? e.db : undefined) : "");
 const schemaOf = (c: ConnectionView | undefined, e: End) => (c?.kind === "mysql" ? e.db : e.schema);
 
 function EndPicker({ label, conns, value, onChange, table, noSchema }: { label: string; conns: ConnectionView[]; value: End; onChange: (e: End) => void; table?: boolean; noSchema?: boolean }) {

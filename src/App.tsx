@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { api, ConnectionView, updateCheckEnabled } from "./lib/api";
+import { api, ConnectionView, defaultDbOf, updateCheckEnabled } from "./lib/api";
 import { ContextMenu, Explorer, MenuItem } from "./components/Explorer";
 import { migrateOldHistory } from "./components/HistoryDialog";
 import { WorkspaceBar } from "./components/WorkspaceBar";
@@ -186,7 +186,11 @@ export default function App() {
   const tabLabels = useMemo(
     () =>
       tableTabLabels(
-        tabs.flatMap((t) => (t.kind === "table" && t.edit ? [{ id: t.id, db: t.database || conns.find((c) => c.id === t.connId)?.database || "", schema: t.edit.schema, table: t.edit.table }] : [])),
+        tabs.flatMap((t) => {
+          if (t.kind !== "table" || !t.edit) return [];
+          const c = conns.find((x) => x.id === t.connId);
+          return [{ id: t.id, db: t.database || (c ? defaultDbOf(c) : ""), schema: t.edit.schema, table: t.edit.table }];
+        }),
       ),
     [tabs, conns, wasmReady],
   );
@@ -258,7 +262,8 @@ export default function App() {
         {activeConn ? (
           <>
             <Badge color={activeConn.color ?? undefined} className="tb-conn">{activeConn.name}</Badge>
-            <Badge className="tb-db">{active?.database || activeConn.database || "postgres"}</Badge>
+            {/* MySQL without a Database: none (the console sees every schema) */}
+            {(active?.database || defaultDbOf(activeConn)) && <Badge className="tb-db">{active?.database || defaultDbOf(activeConn)}</Badge>}
           </>
         ) : (
           <Text tone="muted">No console</Text>

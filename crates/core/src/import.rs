@@ -671,22 +671,6 @@ const SID: &str = "Oracle SID used as the service name";
 /// A URL Qurry recognizes but can't use as it is: the kind, and why
 pub(crate) type UrlError = (DbKind, String);
 
-fn default_port(k: DbKind) -> u16 {
-    match k {
-        DbKind::Postgres => 5432,
-        DbKind::Mysql => 3306,
-        DbKind::Redis => 6379,
-        DbKind::Mssql => 1433,
-        DbKind::Clickhouse => 8123,
-        DbKind::Mongodb => 27017,
-        DbKind::Oracle => 1521,
-        DbKind::Qdrant => 6333,
-        DbKind::Chroma => 8000,
-        DbKind::Milvus => 19530,
-        DbKind::Sqlite | DbKind::Duckdb => 0,
-    }
-}
-
 /// host[:port] of the first host in a list ("h1:5432,h2:5432", "[fd00::1]:5433")
 fn host_port(auth: &str) -> (String, Option<u16>) {
     let first = auth.split(',').next().unwrap_or_default();
@@ -859,7 +843,7 @@ fn new_mapped(name: &str, t: Target) -> Mapped {
         name: name.to_string(),
         kind: t.kind,
         host: t.host,
-        port: t.port.unwrap_or(default_port(t.kind)),
+        port: t.port.unwrap_or(t.kind.default_port()),
         user: String::new(),
         database: t.database,
         scope: Default::default(),

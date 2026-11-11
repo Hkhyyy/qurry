@@ -1,7 +1,7 @@
 //! Driver plugin host: launches the qurry-driver-<name> executable and exchanges one JSON line at a time over stdio (protocol: crates/driver).
 //! Executable location: QURRY_DRIVERS_DIR → config folder/drivers → next to this executable (dev builds)
 use crate::error::{AppError, AppResult};
-use crate::store::{ConnectionConfig, DbKind};
+use crate::store::ConnectionConfig;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -216,7 +216,7 @@ fn beta_release_gone(version: &str, e: AppError) -> AppError {
         return e;
     }
     AppError::Msg(format!(
-        "The release of this beta (v{version}) was removed, so its drivers can't be downloaded. Update Qurry (GUI: Update & Restart; TUI: ⌃k › Update Qurry & Restart), then install the driver again."
+        "The release of this beta (v{version}) was removed, so its drivers can't be downloaded. Update Qurry (GUI: Update & Restart; TUI: the command menu › Update Qurry & Restart), then install the driver again."
     ))
 }
 
@@ -236,11 +236,6 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, port: Optio
     Ok(c)
 }
 
-/// Whether this DB kind has no driver
-pub fn is_plugin(kind: DbKind) -> bool {
-    kind.driver().is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,7 +245,7 @@ mod tests {
     fn removed_beta_release_says_to_update() {
         let gone = || AppError::Msg("Could not download SHA256SUMS: curl: (22) The requested URL returned error: 404".into());
         let e = beta_release_gone("0.3.1-beta.2", gone()).to_string();
-        assert!(e.contains("v0.3.1-beta.2) was removed") && e.contains("Update & Restart") && e.contains("install the driver again"), "{e}");
+        assert!(e.contains("v0.3.1-beta.2) was removed") && e.contains("TUI: the command menu › Update Qurry & Restart") && e.contains("install the driver again"), "{e}");
         assert_eq!(beta_release_gone("0.3.1", gone()).to_string(), gone().to_string());
         let offline = AppError::Msg("Could not download SHA256SUMS: curl: (6) Could not resolve host: github.com".into());
         assert_eq!(beta_release_gone("0.3.1-beta.2", offline).to_string(), "Could not download SHA256SUMS: curl: (6) Could not resolve host: github.com");

@@ -275,6 +275,10 @@ const api = {
   ssmLocalHost: (host: string): string | undefined => wasm.ssmLocalHost(host),
   /** The connect error is one where "Allow unencrypted connection" for the source is the way forward (qurry_shared::errors::tls_opt_in) */
   tlsOptIn: (msg: string): boolean => wasm.tlsOptIn(msg),
+  /** The database a target without "::db" connects to (qurry_shared::kind::default_db) */
+  defaultDb: (kind: DbKind, database: string): string => wasm.defaultDb(kind, database),
+  /** A new data source's port for the kind, 0 for file DBs (qurry_shared::kind::DbKind::default_port) */
+  defaultPort: (kind: DbKind): number => wasm.defaultPort(kind),
   isRead: (sql: string, kind: DbKind): boolean => wasm.isRead(sql, kind),
   isDdl: (sql: string, kind: DbKind): boolean => wasm.isDdl(sql, kind),
   explainAnalyzeAsk: (sql: string, kind: DbKind): string | undefined => wasm.explainAnalyzeAsk(sql, kind),

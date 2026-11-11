@@ -582,7 +582,7 @@ impl AppState {
         let Some(db) = db.map(str::to_string).or_else(|| cfg.as_ref().map(crate::sql::default_db)).filter(|d| db_refused && !d.is_empty()) else { return e };
         match cfg.is_some_and(|c| c.options.single_db) {
             true => AppError::Msg(format!("Couldn't connect to database {db}.\n({e})")),
-            false => AppError::Msg(format!("Couldn't connect to database {db}. Pick another database for this report (GUI: the database list in its toolbar · TUI: d).\n({e})")),
+            false => AppError::Msg(format!("Couldn't connect to database {db}. Pick another database for this report (GUI: the database list in its toolbar · TUI: the report's database list).\n({e})")),
         }
     }
 
@@ -875,7 +875,7 @@ mod tests {
         q("d", "drop database qurry_dba_other with (force)").await.ok();
         q("d", "drop role qurry_dba_nc").await.ok();
         assert!(other.contains(&"qurry_only_here".to_string()) && !default.contains(&"qurry_only_here".to_string()), "{other:?} / {default:?}");
-        assert!(missing.starts_with("Couldn't connect to database qurry_dba_missing. Pick another database"), "{missing}");
+        assert!(missing.starts_with("Couldn't connect to database qurry_dba_missing. Pick another database") && missing.contains("TUI: the report's database list)"), "{missing}");
         assert_eq!((listed.0, listed.1.ok()), (true, Some(true)));
         assert!(refused.starts_with("Couldn't connect to database qurry_dba_other. Pick another database"), "{refused}");
         assert!(one.starts_with("Couldn't connect to database qurry_dba_other.\n("), "{one}");

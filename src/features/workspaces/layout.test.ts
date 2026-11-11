@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
-import type { ConnectionView } from "../../lib/api";
+import { redisDb, type ConnectionView } from "../../lib/api";
+import type { Tab } from "../tabs/types";
 import FIXTURE from "../../../e2e/fixtures/workspace-gui.json?raw";
 import { restoreWs, wsJson } from "./layout";
 
@@ -33,4 +34,17 @@ it("old per-database Redis tabs come back as one tab per data source, on the las
   const saved = JSON.parse(wsJson()).workspaces[0];
   expect(saved.tabs.map((t: { database: string }) => t.database)).toEqual(["db3"]);
   expect(saved.activeIds[0]).toBe(0);
+});
+
+// A saved Redis tab on the source's own database (Database "3", tab "db3") drops it as the default once the shared module is loaded
+// (e.g. a workspace switch after startup); the Redis browser then shows redisDb(c.database), so it stays on db3, not db0
+it("a Redis tab on the source's own database restores on the default target and still shows that database", () => {
+  const rd = conn("rd", "redis", "3");
+  const tab = { kind: "redis", title: "rd [db3]", connId: "rd", database: "db3", group: 0, sql: "", where: "", orderBy: "" };
+  const file = { version: 2, shared: true, current: "w1", workspaces: [{ id: "w1", name: "Default", connIds: ["rd"], tabs: [tab], panes: { t: "leaf", g: 0 }, activeIds: [0, -1, -1, -1], focused: 0 }] };
+  const restored: Tab[] = [];
+  restoreWs(file, [rd], (t) => restored.push(t));
+  expect(restored.map((t) => [t.database, t.target])).toEqual([[undefined, "rd"]]);
+  // useEditorGroups renders <RedisBrowser database={t.database ?? redisDb(c?.database)}>
+  expect(restored[0].database ?? redisDb(rd.database)).toBe("db3");
 });
