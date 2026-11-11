@@ -297,6 +297,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: drivers-${{ matrix.target }}
+          workspaces: |
+            . -> target
+            drivers/sqlite -> ../../target
 
       - name: Set version in manifests
         run: scripts/set-version.sh "$V"
@@ -304,8 +307,10 @@ jobs:
       - name: Build drivers
         run: |
           args=""
-          for d in $DRIVERS; do args="$args -p qurry-driver-$d"; done
+          for d in $DRIVERS; do [ "$d" = sqlite ] || args="$args -p qurry-driver-$d"; done
           cargo build --release --locked --target "$T" $args
+          # SQLite is its own workspace (see drivers/sqlite/Cargo.toml); --target-dir target keeps it in target/$T/release with the rest
+          cargo build --release --locked --target "$T" --manifest-path drivers/sqlite/Cargo.toml --target-dir target
 
       - name: Package
         run: |
