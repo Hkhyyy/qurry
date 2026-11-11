@@ -107,9 +107,9 @@ Shortcuts are written with the ⌘ ⌥ ⌃ ⇧ glyphs (`⇧⌘A`). After changin
 
 Dependabot opens weekly pull requests for Cargo, npm and the GitHub Actions (pinned by commit SHA), minor and patch updates grouped per ecosystem.
 
-The Audit workflow (`.github/workflows/audit.yml`) fails on a known vulnerability in `Cargo.lock` (`cargo deny check advisories`) or in the production npm dependencies (`pnpm audit --prod`). It runs on pull requests that change a lockfile and every week on `main`, so it can fail with nothing changed here. When it does:
+The Audit workflow (`.github/workflows/audit.yml`) fails on a known vulnerability in `Cargo.lock` or `drivers/sqlite/Cargo.lock` (the SQLite driver is its own Cargo workspace; `cargo deny check advisories`) or in the production npm dependencies (`pnpm audit --prod`). It runs on pull requests that change a lockfile and every week on `main`, so it can fail with nothing changed here. When it does:
 
-1. Update the affected package if a fixed version is in range (`cargo update -p <crate>`; for npm, update the package that brings it in, or add an override in `package.json`).
+1. Update the affected package if a fixed version is in range (`cargo update -p <crate>`, for the SQLite driver `cargo update --manifest-path drivers/sqlite/Cargo.toml -p <crate>`; for npm, update the package that brings it in, or add an override in `package.json`).
 2. If it can't be fixed yet, accept it with the reason it can't reach Qurry or why it waits: Rust advisories go in `ignore` in `deny.toml` (`{ id = "RUSTSEC-…", reason = "…" }`), npm ones in `auditConfig.ignoreGhsas` in `pnpm-workspace.yaml` (the GHSA ID with a comment). Remove the entry once the fix is in the lockfile.
 
-Run the checks locally with [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) (`cargo deny check advisories`, the version is in the workflow) and `pnpm audit --prod`.
+Run the checks locally with [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) (`cargo deny check advisories` and `cargo deny --manifest-path drivers/sqlite/Cargo.toml check advisories`, the version is in the workflow) and `pnpm audit --prod`.

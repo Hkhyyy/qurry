@@ -66,6 +66,8 @@ Redis TLS (16391), Sentinel (26392 → 16392), Cluster (17001-17003) 서버는 `
 
 드라이버 · 벡터 DB 테스트는 서버를 `host:port:user:password:database` 로 주면 (그리고 드라이버를 빌드했으면 — `cargo build -p qurry-driver-<name>`) 돕니다: `QURRY_TEST_CH`, `QURRY_TEST_MSSQL`, `QURRY_TEST_MONGO`, `QURRY_TEST_ORACLE`, `QURRY_TEST_QDRANT`, `QURRY_TEST_CHROMA`, `QURRY_TEST_MILVUS` (예: `QURRY_TEST_QDRANT=127.0.0.1:6333:::qdrant`). pgvector 와 RAG 테스트는 서버에 `vector` 확장이 있으면 (`pgvector/pgvector:pg16`) `QURRY_TEST_PG` 를 씁니다. RAG 테스트는 가짜 임베딩 서버를 써서 모델이 필요 없습니다.
 
+SQLite 드라이버 테스트 (`sqlite_driver_conformance`, 그리고 ignored 인 `form_listing_never_creates_a_file_db`) 는 서버 없이 드라이버만 있으면 됩니다. `drivers/sqlite` 는 자기 `Cargo.lock` 을 가진 별도 Cargo 워크스페이스라서 (이 SQLite 는 sqlx 가 루트 lock 에서 허용하는 것보다 새 `libsqlite3-sys` 가 필요합니다) 루트에서 `cargo build -p qurry-driver-sqlite` 는 실패합니다 ("did not match any packages"). `cargo build --manifest-path drivers/sqlite/Cargo.toml --target-dir target` 으로 빌드하세요 (`$CARGO_TARGET_DIR` 을 쓰면 `target` 대신 그 경로를 줍니다). 그러면 바이너리가 테스트와 같은 `target/debug` 에 놓입니다.
+
 TUI 테스트는 DB 없이 앱을 움직일 수 있습니다: `crates/tui/src/testkit.rs` 가 정해진 행으로 테이블 탭을 열고, 키를 보내고 (`h.key("Ctrl+A")`, `h.type_str("ban")`), 화면을 글로 그립니다 (`h.screen(120, 30)`). `crates/tui/src/tests/` 와 `crates/tui/src/input/` 안 키 처리 옆의 테스트를 보세요.
 
 ## UI 컴포넌트와 Storybook

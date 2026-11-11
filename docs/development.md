@@ -66,6 +66,8 @@ Redis TLS (16391), Sentinel (26392 → 16392) and Cluster (17001-17003) servers 
 
 Driver and vector database tests run when their server is given as `host:port:user:password:database` (and the driver is built — `cargo build -p qurry-driver-<name>`): `QURRY_TEST_CH`, `QURRY_TEST_MSSQL`, `QURRY_TEST_MONGO`, `QURRY_TEST_ORACLE`, `QURRY_TEST_QDRANT`, `QURRY_TEST_CHROMA`, `QURRY_TEST_MILVUS` (e.g. `QURRY_TEST_QDRANT=127.0.0.1:6333:::qdrant`). The pgvector and RAG tests use `QURRY_TEST_PG` when the server has the `vector` extension (`pgvector/pgvector:pg16`); RAG tests use a fake embedding server, so no model is needed.
 
+The SQLite driver tests (`sqlite_driver_conformance`, and the ignored `form_listing_never_creates_a_file_db`) need no server, only the driver. `drivers/sqlite` is its own Cargo workspace with its own `Cargo.lock` (its SQLite needs a newer `libsqlite3-sys` than sqlx allows in the root lock), so `cargo build -p qurry-driver-sqlite` from the root fails ("did not match any packages"). Build it with `cargo build --manifest-path drivers/sqlite/Cargo.toml --target-dir target` (pass your `$CARGO_TARGET_DIR` instead of `target` if you set one), so the binary lands in `target/debug` next to the tests.
+
 TUI tests can drive the app without a database: `crates/tui/src/testkit.rs` opens table tabs with fixed rows, sends keys (`h.key("Ctrl+A")`, `h.type_str("ban")`) and renders the screen to text (`h.screen(120, 30)`). See the tests in `crates/tui/src/tests/` and next to the key handling in `crates/tui/src/input/`.
 
 ## UI components and Storybook
