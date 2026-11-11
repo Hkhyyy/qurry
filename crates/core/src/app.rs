@@ -4097,13 +4097,13 @@ pub(crate) mod tests {
     }
 
     /// Listing a new SQLite data source never creates its file: a path that isn't there fails, an existing file lists.
-    /// cargo build -p qurry-driver-sqlite && cargo test -p qurry-core form_listing_never_creates -- --ignored
+    /// cargo build --manifest-path drivers/sqlite/Cargo.toml --target-dir target && cargo test -p qurry-core form_listing_never_creates -- --ignored
     #[tokio::test]
     #[ignore]
     async fn form_listing_never_creates_a_file_db() {
         // As the plugin conformance tests: skipped where the driver isn't built (CI's compat job runs ignored tests without it)
         if crate::plugin::driver_path("sqlite").is_none() {
-            eprintln!("skip: build qurry-driver-sqlite first");
+            eprintln!("skip: build the SQLite driver first: cargo build --manifest-path drivers/sqlite/Cargo.toml --target-dir target");
             return;
         }
         let dir = tempfile::tempdir().unwrap();

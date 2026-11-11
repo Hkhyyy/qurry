@@ -105,6 +105,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
+      # Caches the root workspace only. drivers/sqlite (its own workspace) builds into the same target directory, and listing it
+      # here too would make the save step keep only one workspace's dependencies; its few crates rebuild each run instead
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       # qurry-shared is built to WASM for the GUI and holds the read-only checks: it must not pull in a runtime or a DB client
@@ -124,7 +126,12 @@ jobs:
         run: docker run -d --name milvus -p 19530:19530 -e ETCD_USE_EMBED=true -e ETCD_DATA_DIR=/var/lib/milvus/etcd -e COMMON_STORAGETYPE=local -e DEPLOY_MODE=STANDALONE milvusdb/milvus:v2.5.4 milvus run standalone
 
       - name: Build drivers (plugin tests run against them)
-        run: cargo build --locked -p qurry-driver-sqlite -p qurry-driver-duckdb -p qurry-driver-clickhouse -p qurry-driver-mongodb -p qurry-driver-qdrant -p qurry-driver-chroma -p qurry-driver-milvus
+        # SQLite is its own workspace (see drivers/sqlite/Cargo.toml); --target-dir puts it in target/debug, where the tests find it.
+        # The SQLite tests skip without the binary, so its absence fails here instead
+        run: |
+          cargo build --locked -p qurry-driver-duckdb -p qurry-driver-clickhouse -p qurry-driver-mongodb -p qurry-driver-qdrant -p qurry-driver-chroma -p qurry-driver-milvus
+          cargo build --locked --manifest-path drivers/sqlite/Cargo.toml --target-dir target
+          test -x target/debug/qurry-driver-sqlite || { echo "::error::target/debug/qurry-driver-sqlite is missing: the SQLite driver tests would skip"; exit 1; }
 
       - name: Wait for Milvus
         run: for _ in $(seq 1 90); do curl -sf -XPOST localhost:19530/v2/vectordb/collections/list -d '{}' | grep -q '"code":0' && break; sleep 2; done

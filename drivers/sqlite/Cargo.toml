@@ -4,7 +4,21 @@ version = "0.3.1"
 edition = "2024"
 description = "Qurry driver plugin: SQLite (bundled)"
 
+# Its own workspace and Cargo.lock, outside the root one (the root Cargo.toml says why: sqlx's optional sqlx-sqlite pins
+# libsqlite3-sys 0.30 there, rusqlite 0.41 needs 0.39, and only one crate in a lock may link sqlite3). It can rejoin the root
+# workspace once sqlx accepts libsqlite3-sys >= 0.39.
+# Build: cargo build --manifest-path drivers/sqlite/Cargo.toml --target-dir target (docs/development.md)
+[workspace]
+
 [dependencies]
-qurry-driver = { workspace = true }
-serde_json = { workspace = true }
-rusqlite = { version = "0.32", features = ["bundled", "column_decltype"] }
+qurry-driver = { path = "../../crates/driver" }
+serde_json = "1"
+rusqlite = { version = "0.41", features = ["bundled", "column_decltype"] }
+
+# The root workspace's [profile.release], so the shipped plugin is built the same way
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

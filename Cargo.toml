@@ -1,5 +1,10 @@
 [workspace]
-members = ["src-tauri", "crates/core", "crates/tui", "crates/mcp", "crates/driver", "crates/shared", "crates/shared-wasm", "drivers/sqlite", "drivers/duckdb", "drivers/clickhouse", "drivers/mssql", "drivers/mongodb", "drivers/oracle", "drivers/qdrant", "drivers/chroma", "drivers/milvus"]
+members = ["src-tauri", "crates/core", "crates/tui", "crates/mcp", "crates/driver", "crates/shared", "crates/shared-wasm", "drivers/duckdb", "drivers/clickhouse", "drivers/mssql", "drivers/mongodb", "drivers/oracle", "drivers/qdrant", "drivers/chroma", "drivers/milvus"]
+# The SQLite driver is its own workspace with its own Cargo.lock: rusqlite 0.41 needs libsqlite3-sys 0.39 (SQLite 3.54), but
+# sqlx's optional sqlx-sqlite stays in this lock (feature off) on libsqlite3-sys 0.30, and only one crate in a lock may link
+# sqlite3. It can rejoin `members` once sqlx accepts libsqlite3-sys >= 0.39.
+# Build it: cargo build --manifest-path drivers/sqlite/Cargo.toml --target-dir target
+exclude = ["drivers/sqlite"]
 resolver = "2"
 
 [workspace.dependencies]

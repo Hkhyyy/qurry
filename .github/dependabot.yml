@@ -7,8 +7,9 @@
 # update the flagged dependency by hand or run Dependabot early (Insights > Dependency graph > Dependabot > Check for updates).
 version: 2
 updates:
+  # drivers/sqlite is its own workspace with its own Cargo.lock (see drivers/sqlite/Cargo.toml)
   - package-ecosystem: cargo
-    directory: /
+    directories: [/, /drivers/sqlite]
     schedule:
       interval: monthly
     groups:
