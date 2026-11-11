@@ -30,6 +30,8 @@ mod tables;
 mod tabs;
 
 pub use actions::{title, ACTIONS};
+#[cfg(test)]
+pub use actions::{OPENER_FAILS, REPO_URL};
 pub use tables::Resize;
 #[cfg(test)]
 pub(crate) use run::explain_analyze_ask_text;
@@ -773,6 +775,7 @@ pub enum Action {
     CheckUpdate,
     UpdateChannel,
     InstallUpdate,
+    OpenGitHub,
     Help,
     ShowLog,
     Quit,
@@ -927,9 +930,9 @@ pub struct App {
     /// The theme settings shared with the GUI (settings.json, read at startup and by ⌃k › Theme…) and whether this terminal is light (COLORFGBG, set at startup: Sync with OS goes by it)
     pub themes: qurry_core::theme::ThemeSettings,
     pub auto_light: bool,
-    /// Grid alignment per value class, shared with the GUI's Settings › Appearance › Alignment (settings.json, read at startup and by ⌃k › Grid Alignment…)
+    /// Grid alignment per value class, shared with the GUI's Settings › Appearance › Data grid › Alignment (settings.json, read at startup and by ⌃k › Grid Alignment…)
     pub align: qurry_core::format::Alignments,
-    /// Keyword case as you type and in Reformat Code, shared with the GUI's Settings › Appearance › Keyword case (settings.json, read at startup and by ⌃k › Keyword Case…)
+    /// Keyword case as you type and in Reformat Code, shared with the GUI's Settings › Appearance › Console › Keyword case (settings.json, read at startup and by ⌃k › Keyword Case…)
     pub keyword_case: qurry_core::format::KeywordCase,
     /// The status line's items for a grid, shared with the GUI's status bar (settings.json, read at startup and by ⌃k › Status Bar Items…)
     pub status_items: Vec<qurry_core::statusbar::Item>,

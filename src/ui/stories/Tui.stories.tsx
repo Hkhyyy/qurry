@@ -93,6 +93,7 @@ export const ScreenCopyRows80 = { ...by("Copy related rows: 80×24"), name: "Sma
 export const ScreenConfirmTooSmall = { ...by("Confirm: too small to answer"), name: "Small · Confirm too small to answer" };
 export const ScreenDataSourceForm80 = { ...by("Data source form: 80×24"), name: "Small · Data source form (80×24)" };
 export const ScreenUpdateChannel = { ...by("Update channel"), name: "Screen · Update channel" };
+export const ScreenOpenGitHub = { ...by("Open GitHub"), name: "Screen · Open GitHub" };
 export const ScreenTheme = { ...by("Theme"), name: "Screen · Theme" };
 export const ScreenThemeSyncLight = { ...by("Theme: Sync with OS on a light terminal"), name: "Screen · Theme: Sync with OS on a light terminal" };
 export const ScreenGridAlign = { ...by("Grid alignment"), name: "Screen · Grid alignment" };

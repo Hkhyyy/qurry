@@ -478,7 +478,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     scenes.push(app_scene(h, "Console: run error", "A failed statement's error is underlined where the server points (else the whole statement); the status line says where, Output keeps it, an edit or the next run clears it", 120, 22));
     h.app.status.clear();
     h.app.close_tab_now(h.app.active);
-    // Grid alignment (GUI Settings › Appearance › Alignment, read from settings.json)
+    // Grid alignment (GUI Settings › Appearance › Data grid › Alignment, read from settings.json)
     let id = h.console_with("select * from payment_check;", 1, 10);
     let res = qurry_core::db::QueryResult {
         columns: [("card_brand", "TEXT"), ("amount", "NUMERIC"), ("refunded", "BOOL"), ("paid_at", "TIMESTAMPTZ"), ("meta", "JSONB")].iter().map(|(n, t)| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
@@ -518,7 +518,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         h.app.state.store.set_grid_align(ValueClass::Null, Align::Left).unwrap();
         h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Center).unwrap();
     }
-    scenes.push(app_scene(h, "Grid alignment: changed", "settings.json \"gridAlign\": { \"null\": \"left\", \"boolean\": \"center\" } (GUI Settings › Appearance › Alignment); the other classes keep their default", 120, 22));
+    scenes.push(app_scene(h, "Grid alignment: changed", "settings.json \"gridAlign\": { \"null\": \"left\", \"boolean\": \"center\" } (GUI Settings › Appearance › Data grid › Alignment); the other classes keep their default", 120, 22));
     h.app.palette_grid_align(qurry_core::format::ValueClass::Null);
     scenes.push(app_scene(h, "Grid alignment palette", "⌃k › Grid Alignment…: where each kind of value sits, shared with the GUI; Enter picks Left / Center / Right (NULL also Column type)", 120, 22));
     h.key("Enter");
@@ -1003,6 +1003,13 @@ async fn all_scenes() -> Vec<Value> {
     scenes.push(app_scene(&mut h, "Workspaces", "워크스페이스가 둘 이상이면 위쪽 띠 (⌥1…9 · 눌러서 바꾸기)", 120, 22));
     h.app.palette_update_channel();
     scenes.push(app_scene(&mut h, "Update channel", "⌃k › Update Channel…: stable (version tags only, the default) or beta (also every merge to main), shared with the GUI", 120, 22));
+    // Run from the palette; a test launches no browser (the opener is stubbed)
+    h.app.popup = None;
+    h.key("Ctrl+K");
+    h.type_str("Open GitHub");
+    h.key("Enter");
+    scenes.push(app_scene(&mut h, "Open GitHub", "⌃k › Open GitHub: the project page opens in the browser; the status line shows its address for sessions where none opens (SSH)", 120, 22));
+    h.app.status.clear();
     h.app.palette_theme();
     scenes.push(app_scene(&mut h, "Theme", "⌃k › Theme…: the built-in and custom themes (shared with the GUI); Sync with OS (the default) takes the GUI's dark or light pick by the terminal background (COLORFGBG)", 120, 22));
     h.app.auto_light = true;

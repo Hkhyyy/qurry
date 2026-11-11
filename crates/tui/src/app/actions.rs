@@ -129,6 +129,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::CheckUpdate, hint: "", run: |app| app.check_update() },
     ActionDef { action: Action::UpdateChannel, hint: "", run: |app| app.palette_update_channel() },
     ActionDef { action: Action::InstallUpdate, hint: "", run: install_update },
+    ActionDef { action: Action::OpenGitHub, hint: "", run: open_github },
     ActionDef { action: Action::Help, hint: "", run: |app| app.popup = Some(Popup::Help { sel: 0, scroll: 0, record: None, message: None }) },
     ActionDef { action: Action::ShowLog, hint: "", run: show_log },
     ActionDef { action: Action::Quit, hint: "", run: quit },
@@ -420,6 +421,47 @@ fn show_log(app: &mut App) {
         Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
         Err(e) => app.status = format!("Show Log: couldn't open it ({e}). Open it yourself: {}", file.display()),
     }
+}
+
+/// The project page ⌃k › Open GitHub opens (the GUI's Settings › Updates › Open GitHub)
+pub const REPO_URL: &str = "https://github.com/Hkhyyy/qurry";
+
+/// Opens REPO_URL in the browser and always puts the address on the status line: over SSH no browser may open
+fn open_github(app: &mut App) {
+    app.status = match spawn_opener(REPO_URL) {
+        Ok(()) => format!("Opened {REPO_URL} in the browser"),
+        // The address before the reason: a long reason is what gets cut on a narrow status line
+        Err(e) => format!("Couldn't open a browser: {REPO_URL} ({e})"),
+    };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: what starting the browser gives (None: it started); nothing is launched
+    pub static OPENER_FAILS: std::cell::Cell<Option<std::io::ErrorKind>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn spawn_opener(_url: &str) -> std::io::Result<()> {
+    OPENER_FAILS.get().map_or(Ok(()), |k| Err(k.into()))
+}
+/// Starts the platform's opener for a URL: fixed argv, no shell (on Windows only cmd's built-in `start`)
+#[cfg(not(test))]
+fn spawn_opener(url: &str) -> std::io::Result<()> {
+    use std::process::{Command, Stdio};
+    let mut cmd = if cfg!(target_os = "macos") {
+        Command::new("open")
+    } else if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", ""]);
+        c
+    } else {
+        Command::new("xdg-open")
+    };
+    let mut child = cmd.arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    // Reaped off the UI thread so it doesn't linger as a zombie
+    drop(std::thread::spawn(move || child.wait()));
+    Ok(())
 }
 
 fn quit(app: &mut App) {
