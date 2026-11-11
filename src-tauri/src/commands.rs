@@ -850,6 +850,17 @@ pub fn set_keyword_case(state: State<'_, AppState>, case: qurry_core::format::Ke
     state.store.set_keyword_case(case)
 }
 
+/// Result tabs kept per console (Settings › Result tabs; the TUI shares it)
+#[tauri::command]
+pub fn result_tabs(state: State<'_, AppState>) -> usize {
+    state.store.result_tabs()
+}
+
+#[tauri::command]
+pub fn set_result_tabs(state: State<'_, AppState>, n: usize) -> AppResult<()> {
+    state.store.set_result_tabs(n)
+}
+
 /// Theme, Sync with OS and custom themes (Settings › Appearance › Theme; settings.json, shared with the TUI)
 #[tauri::command]
 pub fn theme_settings(state: State<'_, AppState>) -> qurry_core::theme::ThemeSettings {

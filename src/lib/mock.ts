@@ -121,6 +121,8 @@ const checkTheme = (t: any) => {
 };
 /** settings.json "keywordCase" (kept across a reload, as the file is) */
 let keywordCase = localStorage.getItem("mock-keywordCase") ?? "off";
+/** settings.json "resultTabs" (kept across a reload, as the file is) */
+let resultTabs = Number(localStorage.getItem("mock-resultTabs") ?? 10);
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
 let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
 /** settings.json "statusBarItems" (kept across a reload, as the file is; read on each call, so a test can change it as the TUI would).
@@ -807,6 +809,12 @@ const handlers: Record<string, (a: any) => unknown> = {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
     keywordCase = a.case;
     localStorage.setItem("mock-keywordCase", a.case);
+  },
+  result_tabs: () => resultTabs,
+  set_result_tabs: (a: any) => {
+    if (!(a.n >= 1)) throw "Enter 1 or more.";
+    resultTabs = a.n;
+    localStorage.setItem("mock-resultTabs", String(a.n));
   },
   grid_align: () => gridAlign,
   set_grid_align: (a: any) => {

@@ -3,10 +3,11 @@ import { alignOf, setGridAlign, useGridAlign, VALUE_CLASSES } from "../../lib/gr
 import { shared, useSharedReady, type Align, type KeywordCase } from "../../lib/shared";
 import { loadStatusItems, resetStatusItems, setStatusItem, useStatusItems } from "../../lib/statusbar";
 import { setKeywordCase, useKeywordCase } from "../../lib/keywordCase";
+import { setResultTabs, useResultTabs } from "../../lib/resultTabsSetting";
 import { api, secretKey, setUpdateCheckEnabled, UpdateInfo, updateCheckEnabled } from "../../lib/api";
 import type { FontFamily, UpdateChannel } from "../../lib/api";
 import { KeymapEditor } from "../../components/KeymapEditor";
-import { Button, Checkbox, cx, Field, List, ListItem, Modal, Select, Text } from "../../ui";
+import { Button, Checkbox, cx, Field, List, ListItem, Modal, Select, Text, TextInput } from "../../ui";
 import { allThemes, currentTheme, setThemePick, setThemeSync, SYSTEM, useThemeState, type ThemeDef } from "../../lib/theme";
 import { askDiscardColors, ThemeEditor } from "./ThemeEditor";
 import { FontTarget, setFont, SIZES, useFonts } from "../../lib/prefs";
@@ -169,6 +170,37 @@ export function KeywordCaseField() {
           <option value="upper">UPPER</option>
           <option value="lower">lower</option>
         </Select>
+      </div>
+    </Field>
+  );
+}
+
+/** Settings › Result tabs: unpinned result tabs kept per console (lib/resultTabs; shared with the TUI). Saved as typed; a value
+ *  that isn't a whole number of 1 or more says so and isn't saved */
+export function ResultTabsField() {
+  const n = useResultTabs();
+  const [text, setText] = useState(String(n));
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => setText(String(n)), [n]);
+  return (
+    <Field label="Result tabs" error={err ?? undefined} info={["Unpinned result tabs kept per console; past it, the least recently shown closes. Shared with the TUI."]}>
+      <div className="ui-row">
+        <TextInput
+          aria-label="Result tabs"
+          className="w-port"
+          type="number"
+          min={1}
+          value={text}
+          aria-invalid={!!err}
+          onChange={(e) => {
+            const v = e.target.value;
+            setText(v);
+            const k = Number(v);
+            if (v.trim() === "" || !Number.isInteger(k) || k < 1) return setErr("Enter 1 or more.");
+            setErr(null);
+            setResultTabs(k).catch((x) => setErr(`Couldn't save the result tabs (${x}). It is back to what it was.`));
+          }}
+        />
       </div>
     </Field>
   );
@@ -371,6 +403,7 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
             <FontField target="editor" label="Editor font" info={fontKeys ? [`In the editor, ${fontKeys} change the size too.`] : undefined} installed={fonts} onOpen={loadFonts} />
             <FontField target="grid" label="Grid font" installed={fonts} onOpen={loadFonts} />
             <KeywordCaseField />
+            <ResultTabsField />
             <GridAlignField />
             <StatusBarField />
             <Field label="Updates" hint={updMsg ?? undefined}>

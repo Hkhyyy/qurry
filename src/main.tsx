@@ -6,6 +6,7 @@ import { initShared } from "./lib/shared";
 import { loadGridAlign } from "./lib/gridAlign";
 import { loadStatusItems } from "./lib/statusbar";
 import { loadKeywordCase } from "./lib/keywordCase";
+import { loadResultTabs } from "./lib/resultTabsSetting";
 import { loadCustomFonts } from "./lib/prefs";
 import { initTheme } from "./lib/theme";
 import App from "./App";
@@ -20,6 +21,7 @@ async function boot() {
   loadGridAlign();
   loadStatusItems();
   loadKeywordCase();
+  loadResultTabs();
   // Awaited: the app starts in the theme shared with the TUI (settings.json), not in Dark first
   await initTheme();
   // Font files added in Settings: until registered, a font set to one renders with the default
