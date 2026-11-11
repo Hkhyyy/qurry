@@ -43,6 +43,10 @@ The selection the items read is the marked rows (`m`) in the cursor's column, or
 
 When the line is too narrow, the screen's keys go first, then the common keys but `⌃k actions`, then the items (the column limit, Max, Min, Avg, Sum, Not null, Size, Shown columns), then `⌃k actions`; Position stays. The status text keeps up to half the line, as without items; only when an item would otherwise go does it give way down to a third (cut with `…`). A run's or a transfer's line is never cut to make room for items.
 
+## Log file
+
+**⌃k › Show Log** reveals the log file in Finder (on Linux it opens its folder) and puts its path on the status line ([where it is and what it holds](getting-started.md#where-qurry-keeps-your-settings)). Over SSH nothing opens on your screen; read that path there (`tail -f`). The GUI's is **Help › Show Log**.
+
 ## Colors
 
 The TUI picks one color mode when it starts, from these environment variables (the first that applies wins):

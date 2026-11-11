@@ -87,6 +87,21 @@ async fn palette_list_is_unchanged() {
     golden("actions_palette.txt", &list);
 }
 
+/// ⌃k › Show Log says where the log file is on the status line (nothing is opened in a test)
+#[tokio::test]
+async fn show_log_puts_the_path_on_the_status_line() {
+    let mut h = Harness::new().await;
+    let file = std::env::temp_dir().join(format!("qurry-show-log-{}", uuid::Uuid::new_v4())).join("qurry.log");
+    h.app.log_file = file.clone();
+    h.key("Ctrl+K");
+    h.type_str("Show Log");
+    h.key("Enter");
+    assert_eq!(h.app.ran.last(), Some(&Action::ShowLog));
+    assert_eq!(h.app.status, format!("Show Log: {}", file.display()));
+    assert!(!file.parent().unwrap().exists(), "a test opens nothing and creates no folder");
+    assert!(h.screen(120, 30).contains("Show Log: "), "the path is on the status line");
+}
+
 /// --help (and the F1 window, drawn from the same COMMANDS) lists the commands in keys::ORDER with the same names
 #[test]
 fn help_text_is_unchanged() {

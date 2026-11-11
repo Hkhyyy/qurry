@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { ConnectionView, meta, targetId } from "../../lib/api";
+import { api, ConnectionView, meta, targetId } from "../../lib/api";
 import type { FtsRequest } from "../../lib/api";
 import { allThemes, getThemeSettings, setThemePick, SYSTEM } from "../../lib/theme";
 import { saveSnippet } from "../../components/HistoryDialog";
@@ -150,6 +150,7 @@ export function useSearch({
       { name: "Settings…", ...cmd("settings"), group: "File", run: () => setSettingsOpen("appearance") },
       { name: "Keymap Reference", ...cmd("keymap"), group: "Help", run: () => setKeymapOpen(true) },
       { name: "Edit Keymap…", ...cmd("keymap.edit"), group: "Help", run: () => setSettingsOpen("keymap") },
+      { name: "Show Log", ...cmd("showLog"), group: "Help", run: () => api.showLog().catch((e) => setStatus(String(e))) },
       // Every built-in and custom theme; Dark, Light and High contrast have a command a key can be bound to
       ...allThemes(getThemeSettings()).map((th) => ({ name: `Theme: ${th.name}`, ...({ dark: cmd("theme.dark"), light: cmd("theme.light"), hc: cmd("theme.hc") } as Record<string, object>)[th.id], group: "Appearance", run: () => pickTheme(th.id) })),
       { name: "Theme: Sync with OS", ...cmd("theme.system"), group: "Appearance", run: () => pickTheme(SYSTEM) },

@@ -246,6 +246,8 @@ export const api = {
   resetColumnWidths: (table: TableRef) => invoke<void>("reset_column_widths", { table }),
   /** Download the new version, swap it in, and restart the app (progress via the "update-progress" event) */
   installUpdate: () => invoke<void>("install_update"),
+  /** Help › Show Log: reveals the log file in Finder (its folder until the file exists) */
+  showLog: () => invoke<void>("show_log"),
   /** Open tabs·splits (restored on restart) */
   loadWorkspace: () => invoke<unknown>("load_workspace"),
   saveWorkspace: (ws: unknown) => invoke<void>("save_workspace", { ws }),

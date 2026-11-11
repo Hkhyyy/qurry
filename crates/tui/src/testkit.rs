@@ -31,6 +31,7 @@ impl Harness {
         let mut app = App::new(state, tx);
         // Import Data Sources never reads the real DataGrip / DBeaver settings in a test
         app.import_home = dir.join("home");
+        app.log_file = dir.join("logs/qurry.log");
         let mut h = Harness { app, rx, _dir: TempDir(dir) };
         h.settle().await;
         h

@@ -107,4 +107,5 @@ CheckUpdate	Check for Updates	—
 UpdateChannel	Update Channel… (stable releases only, or beta: also every merge to main)	—
 InstallUpdate	Update Qurry & Restart (download the latest release)	—
 Help	Keymap	F1
+ShowLog	Show Log	—
 Quit	Quit	⌃q

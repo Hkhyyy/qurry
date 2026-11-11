@@ -910,6 +910,15 @@ pub fn reset_column_widths(state: State<'_, AppState>, table: qurry_core::store:
     state.store.reset_column_widths(&table)
 }
 
+/// Help › Show Log and Find Action: reveals the log file in Finder, or opens its folder until the file exists
+#[tauri::command]
+pub fn show_log() -> AppResult<()> {
+    let (dir, file) = (qurry_core::logfile::dir(), qurry_core::logfile::path());
+    std::fs::create_dir_all(&dir)?;
+    let opened = if file.exists() { tauri_plugin_opener::reveal_item_in_dir(&file) } else { tauri_plugin_opener::open_path(&dir, None::<&str>) };
+    opened.map_err(|e| crate::error::AppError::Msg(format!("Couldn't open the log ({e}). Open it from Finder: {}", file.display())))
+}
+
 /// Saves the channel, then answers what it offers from the saved check only (no request): None if nothing was checked yet or checks are off
 #[tauri::command]
 pub fn set_update_channel(state: State<'_, AppState>, channel: qurry_core::update::Channel) -> AppResult<Option<UpdateInfo>> {
