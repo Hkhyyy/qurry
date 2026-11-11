@@ -37,6 +37,12 @@ async fn explain_wrap(st: &AppState, fake: Option<FakeDb>, target: &str, session
     }
 }
 
+/// A statement's line in Output as it starts: on one line, truncated if too long
+fn echo_line(name: &str, s: &str) -> String {
+    let echo: String = s.replace('\n', " ").chars().take(300).collect();
+    format!("{name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" })
+}
+
 /// The Explain Analyze ask for (statement preview, reason) pairs. Several: each statement with its own reason (as the GUI lists them)
 pub(crate) fn explain_analyze_ask_text(asks: &[(String, String)]) -> String {
     match asks {
@@ -283,6 +289,21 @@ impl App {
         // EXPLAIN ANALYZE actually runs the statement. PostgreSQL·MySQL run it inside a transaction and roll back (below); drivers may
         // not support transactions. Ask when the rollback may not undo it all or nothing does (guard::explain_analyze_ask, the GUI's rule and words)
         let wraps = matches!(kind, DbKind::Postgres | DbKind::Mysql);
+        // Each statement's Explain (qurry_shared::explain, the GUI's and MCP's): PostgreSQL as JSON for the plan tree, other kinds'
+        // rows as they come. A kind without it (it depends on the kind alone, so the first statement already fails) says so in
+        // Output, on the status line and on the statement's mark, and nothing is sent
+        let json = kind == DbKind::Postgres;
+        let built = match stmts.iter().filter(|_| explain).map(|s| qurry_shared::explain::explain_sql(s, kind, analyze, json)).collect::<Result<Vec<_>, _>>() {
+            Ok(b) => b,
+            Err(e) => {
+                c.log(false, echo_line(&conn_name, &stmts[0]));
+                c.log(true, e.clone());
+                c.marks.set(c.editor.lines(), 0, MarkState::Err);
+                self.status = e;
+                return;
+            }
+        };
+        let pre = if explain { qurry_shared::explain::explain_prefix_len(kind, analyze, json) } else { 0 };
         let asks: Vec<(String, String)> = match analyze && !confirmed {
             true => stmts.iter().filter_map(|s| qurry_core::guard::explain_analyze_ask(s, kind).map(|w| (s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect(), w))).collect(),
             false => vec![],
@@ -330,30 +351,14 @@ impl App {
                 };
                 for (i, s) in stmts2.into_iter().enumerate() {
                     // Put the running statement in Output right away (on one line, truncated if too long), and its gutter mark
-                    let echo: String = s.replace('\n', " ").chars().take(300).collect();
-                    let line = format!("{echo_name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" });
+                    let line = echo_line(&echo_name, &s);
                     let _ = tx.send(Box::new(move |a: &mut App| {
                         if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
                             c.log(false, line);
                         }
                     }));
                     mark(i, MarkState::Running);
-                    let q = if explain {
-                        let bare = s.trim_end_matches(';');
-                        match (kind, analyze) {
-                            // PG: fetch as JSON and turn it into a tree table (% · warnings)
-                            (DbKind::Postgres, false) => format!("EXPLAIN (FORMAT JSON) {bare}"),
-                            (DbKind::Postgres, true) => format!("EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) {bare}"),
-                            (DbKind::Mysql, false) => format!("EXPLAIN {bare}"),
-                            (DbKind::Mysql, true) => format!("EXPLAIN ANALYZE {bare}"),
-                            (DbKind::Redis, _) => s.clone(),
-                            // Drivers: most accept EXPLAIN (SQL Server uses SHOWPLAN, so it runs as is)
-                            (_, true) => format!("EXPLAIN ANALYZE {bare}"),
-                            (_, false) => format!("EXPLAIN {bare}"),
-                        }
-                    } else {
-                        s.clone()
-                    };
+                    let q = built.get(i).cloned().unwrap_or_else(|| s.clone());
                     // Explain Analyze: run inside a transaction (a savepoint if one may be open: AppState::explain_wrap) and always roll
                     // back. Reads too: a function a SELECT calls may write
                     let dry = analyze && wraps;
@@ -384,7 +389,6 @@ impl App {
                     let stop = r.is_err();
                     mark(i, if stop { MarkState::Err } else { MarkState::Ok });
                     // The server's spot, in the statement's own text (Explain sent it after its EXPLAIN …)
-                    let pre = if explain { q.len().saturating_sub(s.trim_end_matches(';').len()) } else { 0 };
                     let at = r.as_ref().err().and_then(|e| qurry_shared::errors::error_position(e, &q)).and_then(|p| p.checked_sub(pre));
                     out.push((s, r, dry, at));
                     if stop {
