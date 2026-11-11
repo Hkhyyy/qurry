@@ -203,7 +203,7 @@ test("Settings › Add Font File…: a font file that can't be loaded (damaged) 
 // #152: the pages tree (DataGrip's settings tree). Each page shows only its own fields; the dialog keeps one size
 const PAGES: [string, string[]][] = [
   ["Appearance", ["Theme", "Editor font", "Grid font"]],
-  ["Console", ["Keyword case"]],
+  ["Console", ["Keyword case", "Result tabs"]],
   ["Data grid", ["Alignment", "Status bar"]],
   ["Updates", ["Updates", "Channel"]],
   ["Keymap", []],
@@ -259,7 +259,7 @@ test("Settings › pages tree keys: ↑↓ move, → opens then goes to the firs
   // Focused from the keyboard: the ring shows
   expect(await tree.evaluate((e) => getComputedStyle(e).boxShadow)).not.toBe("none");
   await page.keyboard.press("ArrowUp");
-  await expect(labels(page)).toHaveText(["Keyword case"]);
+  await expect(labels(page)).toHaveText(["Keyword case", "Result tabs"]);
   await page.keyboard.press("ArrowLeft");
   await expect(settingsRow(page, "Appearance")).toHaveAttribute("aria-selected", "true");
   await expect(settingsRow(page, "Appearance")).toHaveAttribute("aria-expanded", "true");
@@ -271,7 +271,7 @@ test("Settings › pages tree keys: ↑↓ move, → opens then goes to the firs
   await expect(settingsRow(page, "Appearance")).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("ArrowRight");
   await expect(settingsRow(page, "Console")).toHaveAttribute("aria-selected", "true");
-  await expect(labels(page)).toHaveText(["Keyword case"]);
+  await expect(labels(page)).toHaveText(["Keyword case", "Result tabs"]);
   await page.keyboard.press("End");
   await expect(settingsRow(page, "Passwords")).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("Home");
