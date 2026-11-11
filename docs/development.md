@@ -53,8 +53,8 @@ The data sources and saved passwords are shared by the GUI, the TUI and the MCP 
 
 How to run the unit tests and the tests against real PostgreSQL, MySQL and Redis containers: [CONTRIBUTING › Tests](../CONTRIBUTING.md#tests). Every pull request runs the CI workflow (`.github/workflows/ci.yml`):
 
-- `rust`: Rust unit tests and integration tests against PostgreSQL (with pgvector) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus containers
-- `compat`: the same tests against older servers (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017)
+- `rust`: clippy (`-D warnings`; the GUI crate `qurry` needs webkit on Linux, so run `cargo clippy -p qurry --all-targets` on macOS), Rust unit tests, and integration tests against PostgreSQL (with pgvector and pg_stat_statements) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus containers: the core ones, then the TUI and MCP ones. Left out: SSL · TLS · Sentinel · Cluster · SSH tunnel tests (they need their own servers), the SSM tunnel test, the refused-database report test (`QURRY_TEST_PG_REFUSED`), the snapshot generators and the benches; the MySQL backup test returns without `mysqldump`, which the runner doesn't have
+- `compat`: the core integration tests against older servers (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017)
 - `web`: vitest, the web build and the Storybook build
 - `e2e (chromium)` and `e2e (webkit)`: Playwright against the mock app, each browser in two shards that run side by side; each check passes when both of its shards pass
 
