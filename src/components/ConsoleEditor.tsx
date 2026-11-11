@@ -233,36 +233,45 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
           );
           drawMarks();
         });
-        // ── Result tabs follow the statements (#151): the script is split once per text version (on a change, never on a caret move)
+        // ── Result tabs follow the statements (#151): the script is split once per text version, a pause after typing (a long script
+        // would make each keystroke wait) or right away for a run; a caret move only looks the statement up
         let stmts: { version: number; segs: { start: number; end: number }[]; texts: string[] } | null = null;
-        const statements = () => {
+        /** The statement the caret was in when last looked up (undefined: not yet): only entering another one shows its tab */
+        let last: number | null | undefined;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        /** Split again if the text changed (the tabs follow it), then show the tab of the statement the caret entered, if it did */
+        const sync = () => {
+          clearTimeout(timer);
+          timer = undefined;
           const m = ed.getModel();
           const fn = follow.current.split;
-          if (!m || !fn || !sharedReady()) return null;
+          const pos = ed.getPosition();
+          if (!m || !fn || !pos || !sharedReady()) return;
           if (stmts?.version !== m.getVersionId()) {
+            const before = stmts?.texts;
             const text = m.getValue();
             const segs = fn(text).map((s) => {
               const raw = text.slice(s.start, s.end);
               return { start: s.start + raw.length - raw.trimStart().length, end: s.end };
             });
-            stmts = { version: m.getVersionId(), segs, texts: segs.map((s) => text.slice(s.start, s.end).trim()) };
+            const after = segs.map((s) => text.slice(s.start, s.end).trim());
+            stmts = { version: m.getVersionId(), segs, texts: after };
+            if (before && (before.length !== after.length || before.some((t, i) => t !== after[i]))) follow.current.onStatements?.(before, after);
           }
-          return stmts;
+          const at = m.getOffsetAt(pos);
+          // Right after its `;` is still in it, as ⌘↩ plans it
+          const i = stmts.segs.findIndex((s) => s.start <= at && at <= s.end + 1);
+          const now = i < 0 ? null : i;
+          if (last !== undefined && now !== last) follow.current.onCaret?.(now);
+          last = now;
         };
-        statements();
+        sync();
         ed.onDidChangeModelContent(() => {
-          const before = stmts?.texts;
-          const after = statements()?.texts;
-          if (before && after && (before.length !== after.length || before.some((t, i) => t !== after[i]))) follow.current.onStatements?.(before, after);
+          clearTimeout(timer);
+          timer = setTimeout(sync, 150);
         });
-        ed.onDidChangeCursorPosition((e) => {
-          const m = ed.getModel();
-          const st = follow.current.onCaret && statements();
-          if (!m || !st) return;
-          const at = m.getOffsetAt(e.position);
-          const i = st.segs.findIndex((s) => s.start <= at && at <= s.end);
-          follow.current.onCaret?.(i < 0 ? null : i);
-        });
+        // While a split waits, it looks the caret up itself
+        ed.onDidChangeCursorPosition(() => timer === undefined && sync());
         ed.onMouseDown((e) => {
           if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
           const line = e.target.position?.lineNumber;
@@ -272,8 +281,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
         const run = (explain?: "plan" | "analyze") => {
           const m = ed.getModel();
           if (!m) return;
-          // The statements as of this run, so an edit after it moves its result tabs (the module may have loaded since the last split)
-          statements();
+          // The tabs as of this text, and the caret's statement as of this run: moving within it after the run keeps the tab picked
+          sync();
           const sel = ed.getSelection();
           const selection =
             sel && !sel.isEmpty() ? { text: m.getValueInRange(sel), start: m.getOffsetAt(sel.getStartPosition()), end: m.getOffsetAt(sel.getEndPosition()) } : null;
@@ -330,6 +339,7 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
         const offKeymap = onKeymapChange(register);
         // addAction's commands·shortcuts·menus stay in the global registry, so dispose them manually when the editor closes
         ed.onDidDispose(() => {
+          clearTimeout(timer);
           offKeymap();
           unbalanced?.dispose();
           setFocusWidgets(owner, undefined);

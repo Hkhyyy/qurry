@@ -67,7 +67,7 @@ If your TUI `keymap.json` already gives `⌥⇧F` to another command, that comma
 
 Each statement a console runs gets its own result tab, which follows the statement as you edit the script ([Getting started](getting-started.md)). **Result tabs** is how many unpinned tabs a console keeps (10 by default, 1 or more); past it, the least recently shown one closes, never the one shown. Pinned tabs don't count. Each kept tab holds its rows in memory, so a lower number keeps less.
 
-Before 0.3.4 a run replaced the console's unpinned result tabs. To get that back, set **Result tabs** to 1, or use **Close All Unpinned** in a result tab's menu. In the TUI it is **⌃k › Result Tabs…**. The setting is saved in `settings.json` as `"resultTabs"`; the TUI reads it when it starts and again when you open that command. Results aren't saved in workspaces, so nothing saved changes.
+Before 0.3.4 a run replaced the console's unpinned result tabs. To clear them yourself, use **Close All Unpinned** in a result tab's menu. In the TUI the setting is **⌃k › Result Tabs…**. The setting is saved in `settings.json` as `"resultTabs"`; the TUI reads it when it starts and again when you open that command. Results aren't saved in workspaces, so nothing saved changes.
 
 ### Alignment in result grids
 

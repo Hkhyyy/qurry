@@ -6,12 +6,16 @@ import type { ResultEntry } from "../components/ConsolePane";
 export interface Tabs {
   results: ResultEntry[];
   activeResult: string;
+  /** The run in progress: its statements, their places followed through edits (edited) until their results come */
+  pending?: RunStmt[];
 }
 
-/** A statement to run and its place in the script (null: not one of its statements, e.g. part of one selected) */
+/** A statement to run and its place in the script (null: not one of its statements, e.g. part of one selected). `into`: the tab it
+ *  runs again for (↻, submitted edits): its result goes there in place */
 export interface RunStmt {
   sql: string;
   stmt: number | null;
+  into?: string;
 }
 
 /** What a run puts in a tab */
@@ -25,11 +29,12 @@ export const tabOf = (s: Tabs, stmt: number) => s.results.find((r) => r.stmt ===
 
 /**
  * Statement `stmt` (its place in the script; null for a run that isn't one of its statements, e.g. part of one selected) returned
- * `c`: its unpinned tab gets it and keeps its id; none (or only a pinned one): a new tab `id`, bound to the statement. Shown either way
+ * `c`: tab `into` (a rerun of it, pinned or not) or else the statement's unpinned tab gets it and keeps its id; none (or only a pinned
+ * one): a new tab `id`, bound to the statement. Shown either way
  */
-export function ran<S extends Tabs>(s: S, cap: number, stmt: number | null, id: string, c: Content): S {
+export function ran<S extends Tabs>(s: S, cap: number, stmt: number | null, id: string, c: Content, into?: string): S {
   const used = tick(s);
-  const own = stmt === null ? undefined : s.results.find((r) => r.stmt === stmt && !r.pinned);
+  const own = s.results.find((r) => r.id === into) ?? (stmt === null ? undefined : s.results.find((r) => r.stmt === stmt && !r.pinned));
   if (own) return { ...s, activeResult: own.id, results: s.results.map((r) => (r.id === own.id ? { ...r, plan: undefined, planJson: undefined, ...c, used } : r)) };
   // A pinned tab of this statement stays as it is and no longer follows the statement: the new tab does
   const results = s.results.map((r) => (stmt !== null && r.stmt === stmt ? { ...r, stmt: null } : r));
@@ -86,38 +91,53 @@ export function remap(before: string[], after: string[]): (number | null)[] {
 }
 
 /** A statement's text as it is compared with what a tab ran (without the closing semicolon) */
-const bare = (sql: string) => sql.trim().replace(/;$/, "").trimEnd();
+export const bare = (sql: string) => sql.trim().replace(/;$/, "").trimEnd();
 
 /**
  * The script was edited: tabs follow their statements (remap); a statement that is gone closes its unpinned tab (a pinned one stays,
- * its number frozen). In the changed middle, a tab whose statement there now reads differently goes to the statement that reads
- * exactly as it ran, if one has no tab yet (a statement typed above it, split off on its `;`). The same object when nothing moved
+ * its number frozen, and so does tab `keep`: the shown grid with pending edits). A tab whose statement now reads differently goes to
+ * the statement that reads exactly as it ran, if one has no tab yet: in the changed middle (a statement typed above it, split off on
+ * its `;`), anywhere once its own is gone (the first of two identical statements deleted). A tab left on a statement that another tab
+ * ran exactly as it reads now closes (its own was merged into that one, then deleted). The run in progress follows the same way. The
+ * same object when nothing moved
  */
-export function edited<S extends Tabs>(s: S, before: string[], after: string[]): S {
+export function edited<S extends Tabs>(s: S, before: string[], after: string[], keep?: string): S {
   const map = remap(before, after);
   const { p, q } = unchanged(before, after);
-  const target = (r: ResultEntry) => (r.stmt === null ? null : (map[r.stmt] ?? null));
-  const taken = new Set(s.results.map(target));
-  let moved = false;
-  const results: ResultEntry[] = [];
-  for (const r of s.results) {
-    let to = target(r);
-    if (r.stmt !== null && (to === null || bare(after[to]) !== bare(r.sql))) {
-      const j = after.findIndex((t, k) => k >= p && k < after.length - q && !taken.has(k) && bare(t) === bare(r.sql));
+  const target = (stmt: number | null) => (stmt === null ? null : (map[stmt] ?? null));
+  const taken = new Set(s.results.map((r) => target(r.stmt)));
+  /** Where what ran `sql` as statement `stmt` goes; `tab`: one per statement (a statement still running takes none) */
+  const follow = (stmt: number | null, sql: string, tab: boolean) => {
+    let to = target(stmt);
+    if (stmt !== null && (to === null || bare(after[to]) !== bare(sql))) {
+      const gone = to === null;
+      const j = after.findIndex((t, k) => (gone || (k >= p && k < after.length - q)) && !(tab && taken.has(k)) && bare(t) === bare(sql));
       if (j >= 0) {
-        taken.add(j);
+        if (tab) taken.add(j);
         to = j;
       }
     }
+    return to;
+  };
+  const next = s.results.map((r) => ({ r, to: follow(r.stmt, r.sql, true) }));
+  const exact = new Set(next.filter((x) => x.to !== null && bare(after[x.to]) === bare(x.r.sql)).map((x) => x.to));
+  for (const x of next) if (x.to !== null && exact.has(x.to) && bare(after[x.to]) !== bare(x.r.sql)) x.to = null;
+  let moved = false;
+  const results: ResultEntry[] = [];
+  for (const { r, to } of next) {
     if (to === r.stmt) {
       results.push(r);
       continue;
     }
     moved = true;
-    if (to === null && !r.pinned) continue;
+    if (to === null && !r.pinned && r.id !== keep) continue;
     results.push({ ...r, stmt: to, num: to === null ? r.num : to + 1 });
   }
-  if (!moved) return s;
+  const pending = s.pending?.map((x) => {
+    const to = follow(x.stmt, x.sql, false);
+    return to === x.stmt ? x : { ...x, stmt: to };
+  });
+  if (!moved && !pending?.some((x, i) => x !== s.pending![i])) return s;
   const activeResult = s.activeResult === "output" || results.some((r) => r.id === s.activeResult) ? s.activeResult : "output";
-  return { ...s, results, activeResult };
+  return { ...s, results: moved ? results : s.results, activeResult, pending };
 }

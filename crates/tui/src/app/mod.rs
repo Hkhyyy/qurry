@@ -65,8 +65,6 @@ pub struct Console {
     /// Where the statements about to run are in the editor, and its lines then (run_marked; empty for a run of statements typed
     /// nowhere): the run's error is marked through them unless the text changed since (e.g. typed on while Production rows counted)
     pub run_spans: (Vec<Span>, Vec<String>),
-    /// Each statement about to run: its place in the script (its result tab follows it), None for one that isn't a script statement
-    pub run_at: Vec<Option<usize>>,
     /// The last run's error, underlined in the editor until its text changes or the next run starts
     pub run_error: Option<RunError>,
     /// Replacements (Reformat Code, keyword case) that ⌃u / ⌃r undo and redo as one step (reformat.rs)
@@ -76,14 +74,15 @@ pub struct Console {
 }
 
 /// The console's statements (qurry_shared::sql::split_script, as ⌃↩ plans them) for the lines and source kind they were split for:
-/// each one's byte range from its first non-blank character, its text, and the caret they were last looked up for
+/// each one's byte range from its first non-blank character, its text, and the caret last looked up and the statement it was in
 #[derive(Default)]
 pub struct Stmts {
     lines: Vec<String>,
     kind: Option<DbKind>,
     segs: Vec<(usize, usize)>,
     texts: Vec<String>,
-    caret: (usize, usize),
+    caret: Option<(usize, usize)>,
+    stmt: Option<usize>,
 }
 
 /// qurry_shared::highlight of the whole console text (a string or comment can span lines), split per line: each line's byte ranges
@@ -258,11 +257,12 @@ pub const WARNING: &str = "Warning: ";
 impl Console {
     /// A new console's state around its editor and session
     pub fn new(editor: TextArea<'static>, session: String, output: Vec<(bool, String)>, tx_manual: bool) -> Self {
-        Console { editor, session, results: Default::default(), stmts: Default::default(), output, running: false, tx_manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_at: vec![], run_error: None, joined: vec![], colors: Default::default() }
+        Console { editor, session, results: Default::default(), stmts: Default::default(), output, running: false, tx_manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![], colors: Default::default() }
     }
 
-    /// Result tabs follow the script (#151): after an edit they follow their statements, and the caret entering a statement shows
-    /// its tab (not while the shown grid has pending edits: that would drop them). Split again only when the text changed
+    /// Result tabs follow the script (#151): after an edit they follow their statements, and the caret entering another statement
+    /// shows its tab (moving within one keeps the tab picked; not while the shown grid has pending edits: that would drop them).
+    /// Split again only when the text changed
     pub fn follow_statements(&mut self, kind: DbKind) {
         let lines = self.editor.lines();
         let st = &mut self.stmts;
@@ -273,18 +273,20 @@ impl Console {
             if st.kind == Some(kind) && st.texts != texts {
                 self.results.edited(&st.texts, &texts);
             }
-            *st = Stmts { lines: lines.to_vec(), kind: Some(kind), segs, texts, caret: st.caret };
+            *st = Stmts { lines: lines.to_vec(), kind: Some(kind), segs, texts, caret: st.caret, stmt: st.stmt };
         }
         let caret = self.editor.cursor();
-        if st.caret == caret {
+        if st.caret == Some(caret) {
             return;
         }
-        st.caret = caret;
-        if self.results.grid().is_some_and(|g| g.pending() > 0) {
-            return;
-        }
+        st.caret = Some(caret);
         let at = byte_offset(lines, caret.0, caret.1);
-        self.results.caret(st.segs.iter().position(|&(s, e)| s <= at && at <= e));
+        // Right after its `;` is still in it, as ⌃↩ plans it
+        let stmt = st.segs.iter().position(|&(s, e)| s <= at && at <= e + 1);
+        if stmt == std::mem::replace(&mut st.stmt, stmt) || self.results.grid().is_some_and(|g| g.pending() > 0) {
+            return;
+        }
+        self.results.caret(stmt);
     }
 
     /// The shown result tab's grid (None while Output is shown)

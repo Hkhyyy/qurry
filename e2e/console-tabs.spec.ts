@@ -134,3 +134,57 @@ test("an error shows Output and the statement keeps its tab; a caret move never 
   await expect(shown(page)).toHaveText("Output");
   await expect(labels(page)).toHaveText(["Output", "1: users", "2: payments"]);
 });
+
+test("the caret moving within its statement keeps a tab picked by hand, and Output after an error; entering another statement shows its tab", async ({ page }) => {
+  await typeSql(page, "select * from users limit 3;\nselect * from payments;");
+  await caretTo(page, 1);
+  await run(page);
+  await caretTo(page, 2);
+  await run(page);
+  await expect(shown(page)).toHaveText("2: payments");
+  // Picked to compare, then back to typing in statement 2 (the caret where it was)
+  await tab(page, "1: users").click();
+  await editor(page).locator("textarea").first().focus();
+  await page.keyboard.press("End");
+  await page.keyboard.press("ArrowLeft");
+  await page.waitForTimeout(300);
+  await expect(shown(page)).toHaveText("1: users");
+  await page.keyboard.press("ArrowUp");
+  await expect(shown(page)).toHaveText("1: users");
+  await page.keyboard.press("ArrowDown");
+  await expect(shown(page)).toHaveText("2: payments");
+
+  // Statement 2 fails: Output stays while it is fixed
+  for (let i = 0; i < "payments".length; i++) await page.keyboard.press("Backspace");
+  await page.keyboard.type("no_such_table");
+  await run(page);
+  await expect(shown(page)).toHaveText("Output");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("Backspace");
+  await page.waitForTimeout(300);
+  await expect(shown(page)).toHaveText("Output");
+});
+
+test("↻ on a tab that follows no statement, or on a pinned one, refreshes it in place", async ({ page }) => {
+  await typeSql(page, "select * from users limit 3;\nselect * from payments;");
+  await caretTo(page, 1);
+  for (let i = 0; i < "select * from users".length; i++) await page.keyboard.press("Shift+ArrowRight");
+  await page.keyboard.press("Meta+Enter");
+  await expect(labels(page)).toHaveText(["Output", "1: users"]);
+  const id = await tab(page, "1: users").getAttribute("data-result");
+  const reload = work(page).getByRole("button", { name: /^Reload Page/ });
+  await reload.click();
+  await expect(cell(page, "user_3")).toBeVisible();
+  await reload.click();
+  await expect(cell(page, "user_3")).toBeVisible();
+  await expect(labels(page)).toHaveText(["Output", "1: users"]);
+  await expect(tab(page, "1: users")).toHaveAttribute("data-result", id!);
+
+  await tab(page, "1: users").click({ button: "right" });
+  await menuItem(page, "Pin Tab").click();
+  await reload.click();
+  await expect(cell(page, "user_3")).toBeVisible();
+  await expect(resultTabs(page)).toHaveCount(2);
+  await expect(resultTabs(page).nth(1).locator(".tab-pin")).toBeVisible();
+  await expect(resultTabs(page).nth(1)).toHaveAttribute("data-result", id!);
+});

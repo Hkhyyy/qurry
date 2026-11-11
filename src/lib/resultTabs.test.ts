@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { QueryResult } from "./api";
 import { caret, edited, prune, ran, remap, show, tabOf, type Content, type Tabs } from "./resultTabs";
+import { splitScript } from "./sqlSplit";
 
 const rows = (n: number): QueryResult => ({ columns: [{ name: "id", typeName: "INT8" }], rows: Array.from({ length: n }, (_, i) => [i + 1]), rowsAffected: 0, truncated: false, elapsedMs: 1, hasResultSet: true });
 const res = (title: string, n = 1, sql = `select * from ${title}`): Content => ({ title, sql, kind: "result", result: rows(n) });
@@ -140,6 +141,79 @@ describe("result tabs (#151)", () => {
     const s = ran(twoRuns(), 10, 2, "c", res("payments", 5));
     expect(labels(s)).toEqual(["1: customers", "2: orders", "3: payments"]);
     expect(s.activeResult).toBe("c");
+  });
+
+  it("a rerun of a tab (↻, submitted edits) puts its result in that tab in place, pinned or not following too", () => {
+    const sel = ran(twoRuns(), 10, null, "sel", res("users"));
+    const r = ran(sel, 10, null, "x", res("users", 4), "sel");
+    expect(r.results.map((x) => [x.id, x.stmt])).toEqual([["a", 0], ["b", 1], ["sel", null]]);
+    expect(r.results[2].result!.rows).toHaveLength(4);
+    const pinA = { ...twoRuns(), results: twoRuns().results.map((x) => (x.id === "a" ? { ...x, pinned: true } : x)) };
+    const p = ran(pinA, 10, 0, "x", res("customers", 2), "a");
+    expect(p.results.map((x) => [x.id, x.stmt, x.pinned])).toEqual([["a", 0, true], ["b", 1, false]]);
+    expect(p.results[0].result!.rows).toHaveLength(2);
+    expect(p.activeResult).toBe("a");
+    // The tab closed meanwhile: the statement's tab as for any run
+    expect(ran(twoRuns(), 10, 0, "x", res("customers", 2), "gone").results.map((x) => x.id)).toEqual(["a", "b"]);
+  });
+
+  it("the run in progress follows edits: a statement inserted above while it runs, its result still lands on its own tab", () => {
+    const two = [S3[0], S3[1]];
+    const running = { ...twoRuns(), pending: [{ sql: S3[1], stmt: 1 }] };
+    const e = edited(running, two, ["select 0", ...two]);
+    expect(e.pending).toEqual([{ sql: S3[1], stmt: 2 }]);
+    const r = ran(e, 10, e.pending![0].stmt, "x", res("orders", 3, S3[1]));
+    expect(r.results.map((x) => [x.id, x.stmt, x.title])).toEqual([["a", 1, "customers"], ["b", 2, "orders"]]);
+    // Typed above without its `;` first: once it splits, the run goes with the statement it ran
+    const typing = edited(running, two, [S3[0], "select 0\n" + S3[1]]);
+    const split = edited(typing, [S3[0], "select 0\n" + S3[1]], [S3[0], "select 0;", S3[1]]);
+    expect(split.pending).toEqual([{ sql: S3[1], stmt: 2 }]);
+    // Its statement deleted: a tab of its own
+    expect(edited(running, two, [S3[0]]).pending).toEqual([{ sql: S3[1], stmt: null }]);
+  });
+
+  /** Statement texts as the editor splits them */
+  const texts = (t: string) => splitScript(t).map((x) => t.slice(x.start, x.end).trim());
+  /** Backspace from the end of `line` of `text` until the line is gone, following each step */
+  const backspaceLine = (s: Tabs, text: string, line: number) => {
+    const lines = text.split("\n");
+    let at = lines.slice(0, line + 1).join("\n").length;
+    let cur = text;
+    for (let n = lines[line].length + 1; n > 0; n--, at--) {
+      const next = cur.slice(0, at - 1) + cur.slice(at);
+      s = edited(s, texts(cur), texts(next));
+      cur = next;
+    }
+    return s;
+  };
+
+  it("a statement backspaced away (merging with the next while it goes): only the next one's tab stays, on its statement", () => {
+    const s = ran(ran(empty, 10, 0, "a", res("users")), 10, 1, "b", res("payments"));
+    const e = backspaceLine(s, "select * from users;\nselect * from payments;", 0);
+    expect(e.results.map((r) => [r.id, r.stmt])).toEqual([["b", 0]]);
+    expect(tabOf(e, 0)!.id).toBe("b");
+  });
+
+  it("two statements merged, one edited, split again: one tab per statement", () => {
+    const s = ran(ran(empty, 10, 0, "a", res("t", 1, "select 1")), 10, 1, "b", res("t", 1, "select 2"));
+    const merged = edited(s, ["select 1", "select 2"], ["select 1 select 2"]);
+    expect(merged.results.map((r) => r.stmt)).toEqual([0, 0]);
+    const tail = edited(merged, ["select 1 select 2"], ["select 1 select 3"]);
+    const again = edited(tail, ["select 1 select 3"], ["select 1", "select 3"]);
+    expect(again.results.map((r) => [r.id, r.stmt])).toEqual([["a", 0]]);
+  });
+
+  it("the first of two identical statements deleted: the tab of the one left stays", () => {
+    const s = ran(empty, 10, 1, "b", res("t"));
+    const e = edited(s, ["select * from t", "select * from t"], ["select * from t"]);
+    expect(e.results.map((r) => [r.id, r.stmt, r.num])).toEqual([["b", 0, 1]]);
+  });
+
+  it("the shown grid has pending edits (keep): its statement deleted, the tab stays and stops following", () => {
+    const s = show(twoRuns(), "b");
+    const e = edited(s, [S3[0], S3[1]], [S3[0]], "b");
+    expect(e.results.map((r) => [r.id, r.stmt, r.num])).toEqual([["a", 0, 1], ["b", null, 2]]);
+    expect(e.activeResult).toBe("b");
   });
 
   it("error: the statement's tab keeps its last result (the console shows Output)", () => {

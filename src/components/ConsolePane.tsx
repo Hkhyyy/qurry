@@ -7,7 +7,7 @@ import { initShared, sharedReady } from "../lib/shared";
 import { cmd, eventSpec, keyTitle, runKey } from "../lib/shortcuts";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import type { MarkStmt } from "../lib/stmtMark";
-import type { RunStmt } from "../lib/resultTabs";
+import { bare, type RunStmt } from "../lib/resultTabs";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
 import { ask } from "../lib/dialogs";
@@ -114,8 +114,9 @@ interface Props {
   onExecute: (statements: RunStmt[], explain?: "plan" | "analyze", mark?: MarkStmt) => void;
   /** The caret moved into statement `stmt` (its place in the script; null: between statements): its result tab is shown */
   onCaret: (stmt: number | null) => void;
-  /** The script was edited: its statements' texts before and after, so the result tabs follow their statements */
-  onStatements: (before: string[], after: string[]) => void;
+  /** The script was edited: its statements' texts before and after, so the result tabs follow their statements; `keep`: the shown
+   *  tab, whose grid has pending edits (it stays even if its statement is gone) */
+  onStatements: (before: string[], after: string[], keep?: string) => void;
   onCancel: () => void;
   onSetActiveResult: (id: string) => void;
   onPin: (id: string, pinned: boolean) => void;
@@ -198,14 +199,14 @@ export function ConsolePane(p: Props) {
 
   /** ⌘↩ execution rules (DataGrip Query Execution settings) */
   const splitFn = p.dialect?.split ?? ((t: string) => splitScript(t, p.kind));
-  /** The script statement each range (in `text`) starts in; `whole`: only when the range is all of it (a selection's statement) */
+  /** The script statement each range (in `text`) runs; null for part of one (a subquery, part of one selected). `whole`: the range is
+   *  all of it (a selection; its `;` or not); else it may leave out the notes above it, as ⌘↩ plans it, but not its end */
   const places = (text: string, ranges: { start: number; end: number }[], whole: boolean): (number | null)[] => {
     if (!sharedReady()) return ranges.map(() => null);
     const segs = splitFn(text);
-    const body = (r: { start: number; end: number }) => text.slice(r.start, r.end).trim();
     return ranges.map((r) => {
       const i = segs.findIndex((s) => s.start <= r.start && r.start < s.end);
-      return i < 0 || (whole && body(segs[i]) !== body(r)) ? null : i;
+      return i >= 0 && bare(text.slice(whole ? segs[i].start : r.start, segs[i].end)) === bare(text.slice(r.start, r.end)) ? i : null;
     });
   };
   // The run waiting for the module calls the latest render's run, and is skipped if a run started meanwhile
@@ -429,7 +430,7 @@ export function ConsolePane(p: Props) {
               split={splitFn}
               // A caret move never asks to discard a grid's pending edits: the tab stays until it is picked (or the edits are done)
               onCaret={(stmt) => edits.current === 0 && p.onCaret(stmt)}
-              onStatements={p.onStatements}
+              onStatements={(before, after) => p.onStatements(before, after, edits.current > 0 ? shown : undefined)}
               onMarkClick={(out) => {
                 p.onSetActiveResult("output");
                 setMarkedOut({ out });
@@ -533,7 +534,7 @@ export function ConsolePane(p: Props) {
                   query={active.sql}
                   onFetchMore={() => p.onFetchMore(active.id)}
                   onSubmit={(st) => p.onSubmit(active.id, st)}
-                  onReload={() => void execute([{ sql: active.sql, stmt: active.stmt }])}
+                  onReload={() => void execute([{ sql: active.sql, stmt: active.stmt, into: active.id }])}
                   onCancel={p.onCancel}
                   onExport={() => p.onExport(active.sql)}
                   dialect={p.dialect}

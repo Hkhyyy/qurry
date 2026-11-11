@@ -64,7 +64,7 @@ impl App {
                             let cap = a.result_tabs;
                             if let Some(Tab { kind: TabKind::Console(c), .. }) = a.tabs.get_mut(a.active) {
                                 c.editor.insert_str(format!("-- AI Search ({}): {q}", idx.name));
-                                c.results.ran(cap, None, String::new(), format!("AI Search: {q}"), Grid::new(res));
+                                c.results.ran(cap, None, None, String::new(), format!("AI Search: {q}"), Grid::new(res));
                             }
                             a.focus = Focus::Grid;
                             a.status = "Closest rows first (score 1 = same meaning)".into();

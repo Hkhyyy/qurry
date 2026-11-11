@@ -430,7 +430,7 @@ export function useEditorGroups({
                     onCancel={() => cancel(t)}
                     onSetActiveResult={(id) => updTab(t.id, (x) => show(x, id))}
                     onCaret={(stmt) => follow(t.id, (x) => caret(x, stmt))}
-                    onStatements={(before, after) => follow(t.id, (x) => edited(x, before, after))}
+                    onStatements={(before, after, keep) => follow(t.id, (x) => edited(x, before, after, keep))}
                     onPin={(id, pinned) => setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.map((r) => (r.id === id ? { ...r, pinned } : r)) } : x)))}
                     onCloseResult={(id) =>
                       setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.filter((r) => r.id !== id), activeResult: x.activeResult === id ? "output" : x.activeResult } : x)))
@@ -439,7 +439,7 @@ export function useEditorGroups({
                     readOnly={!!c?.readOnly}
                     onSubmit={(entryId, st) => submitEdits(t, st, () => {
                       const e = t.results.find((r) => r.id === entryId);
-                      if (e) void executeConsole(t.id, [{ sql: e.sql, stmt: e.stmt }]);
+                      if (e) void executeConsole(t.id, [{ sql: e.sql, stmt: e.stmt, into: e.id }]);
                     })}
                     onExport={(sql) => exportCsv({ ...t, lastSql: sql })}
                     onHistory={() => (setHistoryTab("history"), setHistoryFor(t.id))}

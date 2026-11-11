@@ -150,6 +150,9 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId);
     const stmts = run.map((r) => r.sql);
     if (!tab || !stmts.length) return;
+    // The script may be edited until the results come (while rows are counted, while it runs): their places follow it (edited)
+    updTab(tabId, (t) => ({ ...t, pending: run }));
+    const drop = () => updTab(tabId, (t) => ({ ...t, pending: undefined }));
     const c = conns.find((x) => x.id === tab.connId);
     const kind = c?.kind ?? "postgres";
     // Confirm dangerous statements (UPDATE/DELETE without WHERE, DROP, TRUNCATE — same rules as the core guard). Not for Explain:
@@ -157,13 +160,13 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     if (!explain) {
       for (const s of stmts) {
         const why = await api.unsafeReason(kind, s).catch(() => null);
-        if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: s.slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return;
+        if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: s.slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return drop();
       }
     }
     // Explain Analyse really runs the statement: PostgreSQL · MySQL roll it back (below), other kinds don't. Ask first when the rollback
     // may not undo it all or nothing does (qurry_shared::guard::explain_analyze_ask, the TUI's rule and words)
     const wraps = kind === "postgres" || kind === "mysql";
-    if (explain === "analyze" && !(await askExplainAnalyze(c?.name, kind, stmts))) return;
+    if (explain === "analyze" && !(await askExplainAnalyze(c?.name, kind, stmts))) return drop();
     // Production: for data-changing statements, count the rows that will change, show it and ask (counted with SELECT count(*))
     if (c?.options?.confirmChanges && !explain) {
       // Same check as the TUI (core guard): a write keyword only inside a string or a comment (MySQL # too) doesn't make a read a write
@@ -181,7 +184,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
           detail.push({ text: w.replace(/\s+/g, " ").slice(0, 300), value, tone });
         }
         setStatus("Ready");
-        if (!(await ask("These statements change data. Run them?", { title: `Production: ${c.name}`, detail, okLabel: "Run", danger: true }))) return;
+        if (!(await ask("These statements change data. Run them?", { title: `Production: ${c.name}`, detail, okLabel: "Run", danger: true }))) return drop();
       }
     }
     // Each statement's result goes to its own tab (lib/resultTabs). While running, Output shows the statements as they run (a pinned
@@ -193,7 +196,8 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     const toTab = (i: number, content: Content, cursor = false) => {
       let id = "";
       updTab(tabId, (t) => {
-        const s = ran(t, cap, run[i].stmt, crypto.randomUUID(), content);
+        const at = t.pending?.[i] ?? run[i];
+        const s = ran(t, cap, at.stmt, crypto.randomUUID(), content, at.into);
         id = s.activeResult;
         return { ...s, activeResult: t.activeResult, cursorEntry: cursor ? id : t.cursorEntry };
       });
@@ -276,13 +280,13 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
         // DDL among the earlier statements may already be applied
         if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
         lastActive = "output";
-        updTab(tabId, (t) => ({ ...t, running: false, activeResult: "output" }));
+        updTab(tabId, (t) => ({ ...t, running: false, activeResult: "output", pending: undefined }));
         setStatus(mark ? "Query failed: the error is marked in the editor and kept in Output — fix the statement and run it again" : "Query failed (see Output)");
         refresh();
         return;
       }
     }
-    updTab(tabId, (t) => ({ ...t, running: false, activeResult: lastActive, lastSql: stmts[stmts.length - 1] }));
+    updTab(tabId, (t) => ({ ...t, running: false, activeResult: lastActive, lastSql: stmts[stmts.length - 1], pending: undefined }));
     setStatus(`${stmts.length} statement${stmts.length > 1 ? "s" : ""} executed${warned ? ` · ${warned} with a warning (see Output)` : ""}`);
     // If tables or columns were created, altered, or dropped, show it in the explorer right away
     if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));

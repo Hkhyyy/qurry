@@ -243,7 +243,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.results.ran(10, Some(0), String::new(), "payment".into(), crate::grid::Grid::new(res));
+        c.results.ran(10, Some(0), None, String::new(), "payment".into(), crate::grid::Grid::new(res));
     }
     h.app.focus = crate::app::Focus::Editor;
     h.app.status = "4 row(s) retrieved in 18 ms".into();
@@ -280,7 +280,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         let mut g = crate::grid::Grid::new(wide);
         (g.row, g.col, g.col_off) = (2, 4, 2);
-        c.results.ran(10, Some(0), String::new(), "payment".into(), g);
+        c.results.ran(10, Some(0), None, String::new(), "payment".into(), g);
     }
     let status = std::mem::replace(&mut h.app.status, "12 row(s) retrieved in 12 ms".into());
     use crate::theme::ColorMode;
@@ -333,7 +333,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         let mut g = crate::grid::Grid::new(users(qurry_core::editable::Editable::Table(target)));
         g.set_value(1, 1, "Lee".into());
         (g.row, g.col) = (1, 1);
-        c.results.ran(10, Some(0), String::new(), "users".into(), g);
+        c.results.ran(10, Some(0), None, String::new(), "users".into(), g);
     }
     h.app.focus = crate::app::Focus::Grid;
     h.app.status = "3 row(s) retrieved in 3 ms".into();
@@ -354,13 +354,13 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
             let mut g = crate::grid::Grid::new(joined);
             g.set_value(0, 3, "admin".into());
             (g.row, g.col) = (1, 3);
-            c.results.ran(10, Some(0), String::new(), "crm.voc".into(), g);
+            c.results.ran(10, Some(0), None, String::new(), "crm.voc".into(), g);
         }
     }
     h.key("Enter");
     scenes.push(app_scene(h, "Console result: join", "A join edits per table, each by its own primary key (users.role of voc 1 edited); a cell where no row of its table matched (outer join) is read-only, and the status line says why", 120, 22));
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.results.ran(10, Some(0), String::new(), "users".into(), crate::grid::Grid::new(users(qurry_core::editable::Editable::ReadOnly(qurry_shared::errors::edit_missing_pk("public.users", &["id".into()])))));
+        c.results.ran(10, Some(0), None, String::new(), "users".into(), crate::grid::Grid::new(users(qurry_core::editable::Editable::ReadOnly(qurry_shared::errors::edit_missing_pk("public.users", &["id".into()])))));
     }
     h.key("a");
     scenes.push(app_scene(h, "Console result: read-only", "An edit key on a result Qurry can't tie to table rows: the status line says why (here the key isn't in the result)", 120, 22));
@@ -489,7 +489,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.results.ran(10, Some(0), String::new(), "payment_check".into(), crate::grid::Grid::new(res));
+        c.results.ran(10, Some(0), None, String::new(), "payment_check".into(), crate::grid::Grid::new(res));
     }
     scenes.push(app_scene(h, "Grid alignment", "Numbers and NULL on the right by default (a NULL stays in line with the numbers); text, dates, booleans and JSON on the left", 120, 22));
     // Value panel (v): the cell's whole value beside the grid, jsonb pretty-printed and coloured (the GUI's Value Editor panel)
@@ -562,7 +562,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.results.ran(10, Some(0), String::new(), "webhook_event".into(), crate::grid::Grid::new(res));
+        c.results.ran(10, Some(0), None, String::new(), "webhook_event".into(), crate::grid::Grid::new(res));
     }
     scenes.push(app_scene(h, "Grid: JSON", "json / jsonb cells in colors (keys · strings · numbers · true/false/null · punctuation), still one line; a large value reads only what fits; binary (bytea) stays plain", 120, 22));
     h.app.color = crate::theme::ColorMode::Ansi16;

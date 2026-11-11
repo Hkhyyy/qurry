@@ -246,3 +246,59 @@ async fn a_caret_move_keeps_a_grid_with_pending_edits_shown() {
     h.key("Down");
     assert_eq!(tabs(&h).1.as_deref(), Some("1: customers"), "the edit isn't dropped");
 }
+
+#[tokio::test]
+async fn moving_within_a_statement_keeps_the_tab_picked_entering_another_shows_its_own() {
+    let mut h = open(S2).await;
+    run(&mut h).await;
+    h.key("Down");
+    run(&mut h).await;
+    h.key("Alt+,");
+    assert_eq!(tabs(&h).1.as_deref(), Some("1: customers"));
+    // Still in statement 2: the pick stays
+    h.key("Left");
+    h.key("End");
+    assert_eq!(tabs(&h).1.as_deref(), Some("1: customers"));
+    h.key("Up");
+    h.key("Alt+o");
+    h.key("Left");
+    assert_eq!(tabs(&h).1, None, "Output picked in statement 1 stays");
+    h.key("Down");
+    assert_eq!(tabs(&h).1.as_deref(), Some("2: orders"));
+}
+
+#[tokio::test]
+async fn fixing_a_failed_statement_keeps_output_shown() {
+    let mut h = open(S2).await;
+    run(&mut h).await;
+    h.key("End");
+    h.key("Backspace");
+    h.type_str(" join boom;");
+    run(&mut h).await;
+    assert_eq!(tabs(&h).1, None);
+    for k in ["Left", "Left", "Backspace", "Home"] {
+        h.key(k);
+    }
+    h.type_str("x");
+    assert_eq!(tabs(&h).1, None, "Output stays while the statement is fixed");
+}
+
+#[tokio::test]
+async fn edits_in_a_result_tab_not_shown_are_asked_about_before_a_run() {
+    let mut h = open(S2).await;
+    h.app.exec.inside = Inside::Whole;
+    run(&mut h).await;
+    h.key("Alt+.");
+    h.key("Alt+.");
+    assert_eq!(tabs(&h).1.as_deref(), Some("1: customers"));
+    if let TabKind::Console(c) = &mut h.app.tabs[h.app.active].kind {
+        c.grid_mut().unwrap().set_value(0, 0, "9".into());
+    }
+    h.key("Alt+.");
+    assert_eq!(tabs(&h).1.as_deref(), Some("2: orders"));
+    h.key("F5");
+    assert!(matches!(h.app.popup, Some(Popup::Confirm { .. })), "the edit in tab 1 is asked about");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(console(&h).results.tabs.iter().map(|t| t.grid.pending()).sum::<usize>(), 0);
+}

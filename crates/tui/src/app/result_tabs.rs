@@ -30,7 +30,18 @@ impl ResultTab {
 pub struct Results {
     pub tabs: Vec<ResultTab>,
     pub shown: Option<usize>,
+    /// The run about to start or in progress: its statements, their places followed through edits (edited) until their results come
+    pub pending: Vec<RunAt>,
     seq: usize,
+}
+
+/// A statement to run: its place in the script (None: not one of its statements, e.g. part of one selected), its text, and the tab
+/// it runs again for (submitted edits): its result goes there in place
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunAt {
+    pub stmt: Option<usize>,
+    pub sql: String,
+    pub into: Option<usize>,
 }
 
 /// A result tab's title: the statement's leading comment, else its table, else "Result n" (the GUI's resultTitle)
@@ -75,7 +86,7 @@ pub fn remap(before: &[String], after: &[String]) -> Vec<Option<usize>> {
 }
 
 /// A statement's text as it is compared with what a tab ran (without the closing semicolon)
-fn bare(sql: &str) -> &str {
+pub fn bare(sql: &str) -> &str {
     let t = sql.trim();
     t.strip_suffix(';').unwrap_or(t).trim_end()
 }
@@ -109,11 +120,13 @@ impl Results {
         self.tabs.iter().filter(of).find(|t| !t.pinned).or_else(|| self.tabs.iter().find(of))
     }
 
-    /// Statement `stmt` (None: a run that isn't one of the script's statements) returned `grid`: its unpinned tab gets it and keeps
-    /// its id; none (or only a pinned one): a new tab, bound to the statement. Shown either way; the tab's id
-    pub fn ran(&mut self, cap: usize, stmt: Option<usize>, sql: String, title: String, grid: Grid) -> usize {
+    /// Statement `stmt` (None: a run that isn't one of the script's statements) returned `grid`: tab `into` (a rerun of it, pinned or
+    /// not) or else the statement's unpinned tab gets it and keeps its id; none (or only a pinned one): a new tab, bound to the
+    /// statement. Shown either way; the tab's id
+    pub fn ran(&mut self, cap: usize, stmt: Option<usize>, into: Option<usize>, sql: String, title: String, grid: Grid) -> usize {
         let used = self.tick();
-        if let Some(t) = self.tabs.iter_mut().find(|t| stmt.is_some() && t.stmt == stmt && !t.pinned) {
+        let own = self.tabs.iter().position(|t| into == Some(t.id)).or_else(|| self.tabs.iter().position(|t| stmt.is_some() && t.stmt == stmt && !t.pinned));
+        if let Some(t) = own.map(|i| &mut self.tabs[i]) {
             (t.sql, t.title, t.grid, t.used) = (sql, title, grid, used);
             self.shown = Some(t.id);
             return t.id;
@@ -131,10 +144,11 @@ impl Results {
         id
     }
 
-    /// Over the cap, close the least recently shown unpinned tabs (never the shown one); pinned tabs don't count
+    /// Over the cap, close the least recently shown unpinned tabs (never the shown one, nor one with edits not submitted yet); pinned
+    /// tabs don't count
     pub fn prune(&mut self, cap: usize) {
         while self.tabs.iter().filter(|t| !t.pinned).count() > cap.max(1) {
-            let Some(lru) = self.tabs.iter().filter(|t| !t.pinned && Some(t.id) != self.shown).min_by_key(|t| t.used).map(|t| t.id) else { return };
+            let Some(lru) = self.tabs.iter().filter(|t| !t.pinned && Some(t.id) != self.shown && t.grid.pending() == 0).min_by_key(|t| t.used).map(|t| t.id) else { return };
             self.tabs.retain(|t| t.id != lru);
         }
     }
@@ -161,23 +175,39 @@ impl Results {
     }
 
     /// The script was edited: tabs follow their statements (remap); a statement that is gone closes its unpinned tab (a pinned one
-    /// stays, its number frozen). In the changed middle, a tab whose statement there now reads differently goes to the statement that
-    /// reads exactly as it ran, if one has no tab yet (a statement typed above it, split off on its `;`)
+    /// stays, its number frozen, and so does one with edits not submitted yet). A tab whose statement now reads differently goes to the
+    /// statement that reads exactly as it ran, if one has no tab yet: in the changed middle (a statement typed above it, split off on
+    /// its `;`), anywhere once its own is gone (the first of two identical statements deleted). A tab left on a statement that another
+    /// tab ran exactly as it reads now closes (its own was merged into that one, then deleted). The run in progress follows the same way
     pub fn edited(&mut self, before: &[String], after: &[String]) {
         let map = remap(before, after);
         let (p, q) = unchanged(before, after);
-        let target = |t: &ResultTab| t.stmt.and_then(|s| map.get(s).copied().flatten());
-        let mut taken: Vec<Option<usize>> = self.tabs.iter().map(target).collect();
-        let mut keep = vec![];
-        for (i, mut t) in std::mem::take(&mut self.tabs).into_iter().enumerate() {
-            let mut to = taken[i];
-            if t.stmt.is_some() && to.is_none_or(|k| bare(&after[k]) != bare(&t.sql))
-                && let Some(j) = (p..after.len() - q).find(|&k| !taken.contains(&Some(k)) && bare(&after[k]) == bare(&t.sql))
-            {
-                taken.push(Some(j));
-                to = Some(j);
+        let target = |s: Option<usize>| s.and_then(|s| map.get(s).copied().flatten());
+        let mut taken: Vec<Option<usize>> = self.tabs.iter().map(|t| target(t.stmt)).collect();
+        // Where what ran `sql` as statement `stmt` goes; `taken`: the statements with a tab (one per statement), None for a statement
+        // still running (it takes none)
+        let follow = |stmt: Option<usize>, sql: &str, taken: Option<&mut Vec<Option<usize>>>| {
+            let to = target(stmt);
+            if stmt.is_none() || to.is_some_and(|k| bare(&after[k]) == bare(sql)) {
+                return to;
             }
-            if t.stmt.is_some() && to.is_none() && !t.pinned {
+            let free = |k: usize| (to.is_none() || (p..after.len() - q).contains(&k)) && !taken.as_ref().is_some_and(|t| t.contains(&Some(k)));
+            let Some(j) = (0..after.len()).find(|&k| free(k) && bare(&after[k]) == bare(sql)) else { return to };
+            if let Some(t) = taken {
+                t.push(Some(j));
+            }
+            Some(j)
+        };
+        let mut to: Vec<Option<usize>> = self.tabs.iter().map(|t| follow(t.stmt, &t.sql, Some(&mut taken))).collect();
+        let exact: Vec<usize> = self.tabs.iter().zip(&to).filter_map(|(t, &k)| k.filter(|&k| bare(&after[k]) == bare(&t.sql))).collect();
+        for (t, k) in self.tabs.iter().zip(to.iter_mut()) {
+            if k.is_some_and(|k| exact.contains(&k) && bare(&after[k]) != bare(&t.sql)) {
+                *k = None;
+            }
+        }
+        let mut keep = vec![];
+        for (mut t, to) in std::mem::take(&mut self.tabs).into_iter().zip(to) {
+            if t.stmt.is_some() && to.is_none() && !t.pinned && t.grid.pending() == 0 {
                 continue;
             }
             if let Some(s) = to {
@@ -187,6 +217,9 @@ impl Results {
             keep.push(t);
         }
         self.tabs = keep;
+        for r in &mut self.pending {
+            r.stmt = follow(r.stmt, &r.sql, None);
+        }
         if self.shown.is_some() && self.shown_tab().is_none() {
             self.shown = None;
         }
@@ -221,6 +254,8 @@ impl Results {
 mod tests {
     use super::*;
     use qurry_core::db::{ColumnInfo, QueryResult};
+    use qurry_core::sql;
+    use qurry_core::store::DbKind;
 
     fn grid(n: usize) -> Grid {
         Grid::new(QueryResult {
@@ -240,7 +275,7 @@ mod tests {
         S3.iter().map(|s| s.to_string()).collect()
     }
     fn run(r: &mut Results, cap: usize, stmt: Option<usize>, title: &str, n: usize) -> usize {
-        r.ran(cap, stmt, format!("select * from {title}"), title.into(), grid(n))
+        r.ran(cap, stmt, None, format!("select * from {title}"), title.into(), grid(n))
     }
     fn labels(r: &Results) -> Vec<String> {
         r.tabs.iter().map(|t| t.label()).collect()
@@ -278,7 +313,7 @@ mod tests {
         after[0] = "select id, name from customers where city = 'Busan'".into();
         r.edited(&s3(), &after);
         let id = r.tabs[0].id;
-        let to = r.ran(10, Some(0), after[0].clone(), "customers".into(), grid(3));
+        let to = r.ran(10, Some(0), None, after[0].clone(), "customers".into(), grid(3));
         assert_eq!(to, id);
         assert_eq!(r.tabs.len(), 2);
         assert_eq!(r.tabs[0].grid.rows(), 3);
@@ -329,7 +364,7 @@ mod tests {
     fn statement_typed_right_above_another_keeps_the_tab_on_the_one_it_ran() {
         let mut r = Results::default();
         run(&mut r, 10, Some(0), "customers", 1);
-        r.ran(10, Some(1), S3[2].into(), "payments".into(), grid(5));
+        r.ran(10, Some(1), None, S3[2].into(), "payments".into(), grid(5));
         let merged = vec![S3[0].to_string(), format!("select * from contracts\n{};", S3[2])];
         r.edited(&[S3[0].to_string(), format!("{};", S3[2])], &merged);
         assert_eq!(r.tabs[1].stmt, Some(1));
@@ -412,6 +447,91 @@ mod tests {
         assert_eq!(r.shown, None);
         r.toggle_output();
         assert_eq!(r.shown, Some(b));
+    }
+
+    #[test]
+    fn a_rerun_of_a_tab_goes_into_it_in_place() {
+        let mut r = two_runs();
+        let sel = run(&mut r, 10, None, "users", 1);
+        let to = r.ran(10, None, Some(sel), "select * from users".into(), "users".into(), grid(4));
+        assert_eq!(to, sel);
+        assert_eq!(r.tabs.iter().map(|t| (t.stmt, t.grid.rows())).collect::<Vec<_>>(), [(Some(0), 8), (Some(1), 8), (None, 4)]);
+        // Pinned: in place too, still pinned and following
+        r.tabs[0].pinned = true;
+        let a = r.tabs[0].id;
+        assert_eq!(r.ran(10, Some(0), Some(a), S3[0].into(), "customers".into(), grid(2)), a);
+        assert_eq!((r.tabs.len(), r.tabs[0].stmt, r.tabs[0].pinned, r.tabs[0].grid.rows()), (3, Some(0), true, 2));
+    }
+
+    #[test]
+    fn the_run_in_progress_follows_edits() {
+        let mut r = two_runs();
+        let two = vec![S3[0].to_string(), S3[1].to_string()];
+        r.pending = vec![RunAt { stmt: Some(1), sql: S3[1].into(), into: None }];
+        let after: Vec<String> = std::iter::once("select 0".to_string()).chain(two.clone()).collect();
+        r.edited(&two, &after);
+        assert_eq!(r.pending[0].stmt, Some(2));
+        r.ran(10, r.pending[0].stmt, None, S3[1].into(), "orders".into(), grid(3));
+        assert_eq!(r.tabs.iter().map(|t| (t.stmt, t.title.as_str(), t.grid.rows())).collect::<Vec<_>>(), [(Some(1), "customers", 8), (Some(2), "orders", 3)]);
+        // Its statement deleted: a tab of its own
+        let mut d = two_runs();
+        d.pending = vec![RunAt { stmt: Some(1), sql: S3[1].into(), into: None }];
+        d.edited(&two, &two[..1]);
+        assert_eq!(d.pending[0].stmt, None);
+    }
+
+    /// Statement texts as ⌃↩ splits them
+    fn texts(t: &str) -> Vec<String> {
+        sql::split_script(t, DbKind::Postgres).into_iter().map(|(s, e)| t[s..e].trim().to_string()).collect()
+    }
+
+    #[test]
+    fn a_statement_backspaced_away_leaves_only_the_next_ones_tab() {
+        let mut r = Results::default();
+        r.ran(10, Some(0), None, "select * from users".into(), "users".into(), grid(1));
+        r.ran(10, Some(1), None, "select * from payments".into(), "payments".into(), grid(1));
+        let b = r.tabs[1].id;
+        let mut cur = "select * from users;\nselect * from payments;".to_string();
+        for at in (1..="select * from users;\n".len()).rev() {
+            let next = format!("{}{}", &cur[..at - 1], &cur[at..]);
+            r.edited(&texts(&cur), &texts(&next));
+            cur = next;
+        }
+        assert_eq!(cur, "select * from payments;");
+        assert_eq!(r.tabs.iter().map(|t| (t.id, t.stmt)).collect::<Vec<_>>(), [(b, Some(0))]);
+    }
+
+    #[test]
+    fn merged_edited_and_split_again_one_tab_per_statement() {
+        let v = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let mut r = Results::default();
+        r.ran(10, Some(0), None, "select 1".into(), "a".into(), grid(1));
+        r.ran(10, Some(1), None, "select 2".into(), "b".into(), grid(1));
+        r.edited(&v(&["select 1", "select 2"]), &v(&["select 1 select 2"]));
+        assert_eq!(r.tabs.iter().map(|t| t.stmt).collect::<Vec<_>>(), [Some(0), Some(0)]);
+        r.edited(&v(&["select 1 select 2"]), &v(&["select 1 select 3"]));
+        r.edited(&v(&["select 1 select 3"]), &v(&["select 1", "select 3"]));
+        assert_eq!(r.tabs.iter().map(|t| (t.title.as_str(), t.stmt)).collect::<Vec<_>>(), [("a", Some(0))]);
+    }
+
+    #[test]
+    fn the_first_of_two_identical_statements_deleted_keeps_the_others_tab() {
+        let mut r = Results::default();
+        run(&mut r, 10, Some(1), "t", 1);
+        r.edited(&["select * from t".into(), "select * from t".into()], &["select * from t".into()]);
+        assert_eq!(r.tabs.iter().map(|t| (t.stmt, t.num)).collect::<Vec<_>>(), [(Some(0), 1)]);
+    }
+
+    #[test]
+    fn a_tab_with_edits_not_submitted_is_never_closed_by_an_edit_or_the_cap() {
+        let mut r = two_runs();
+        r.tabs[0].grid.set_value(0, 0, "9".into());
+        // Its statement deleted: it stays, no longer following
+        r.edited(&s3()[..2], &s3()[1..2]);
+        assert_eq!(r.tabs.iter().map(|t| (t.stmt, t.num)).collect::<Vec<_>>(), [(None, 1), (Some(0), 1)]);
+        // Past the cap: the least recently shown without edits closes instead
+        run(&mut r, 2, Some(1), "payments", 1);
+        assert_eq!(r.tabs.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), ["customers", "payments"]);
     }
 
     #[test]
