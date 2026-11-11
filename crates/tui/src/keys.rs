@@ -48,7 +48,7 @@ pub fn fixed_in(pane: Scope, spec: &str) -> bool {
 
 /// The order the F1 window, --help and docs/shortcuts-tui.md list the commands with default keys in (scripts/gen-keymap-docs.py reads it here).
 /// The table can't hold it: commands both apps have sit in the GUI's order there. Every TUI row with default keys is here once (a test checks)
-const ORDER: [Action; 43] = [
+const ORDER: [Action; 45] = [
     Action::Quit,
     Action::Help,
     Action::Palette,
@@ -83,6 +83,8 @@ const ORDER: [Action; 43] = [
     Action::Commit,
     Action::Rollback,
     Action::ToggleOutput,
+    Action::ResultNext,
+    Action::ResultPrev,
     Action::PaneUp,
     Action::PaneDown,
     Action::PaneLeft,

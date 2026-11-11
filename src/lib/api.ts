@@ -229,6 +229,9 @@ export const api = {
   /** Keyword case as you type and in Reformat Code (settings.json, shared with the TUI) */
   keywordCase: () => invoke<KeywordCase>("keyword_case"),
   setKeywordCase: (keywordCase: KeywordCase) => invoke<void>("set_keyword_case", { case: keywordCase }),
+  /** Result tabs kept per console (settings.json, shared with the TUI) */
+  resultTabs: () => invoke<number>("result_tabs"),
+  setResultTabs: (n: number) => invoke<void>("set_result_tabs", { n }),
   /** Theme pick, Sync with OS and custom themes, shared with the TUI (settings.json) */
   themeSettings: () => invoke<ThemeSettings>("theme_settings"),
   setTheme: (id: string) => invoke<void>("set_theme", { id }),

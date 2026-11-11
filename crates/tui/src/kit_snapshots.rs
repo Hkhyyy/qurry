@@ -243,9 +243,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.result_title = "Result 1: select card_brand, count(*) as payments,".into();
-        c.grid = Some(crate::grid::Grid::new(res));
-        c.show_output = false;
+        c.results.ran(10, Some(0), None, String::new(), "payment".into(), crate::grid::Grid::new(res));
     }
     h.app.focus = crate::app::Focus::Editor;
     h.app.status = "4 row(s) retrieved in 18 ms".into();
@@ -280,11 +278,9 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.result_title = "Result 1: select * from payment".into();
         let mut g = crate::grid::Grid::new(wide);
         (g.row, g.col, g.col_off) = (2, 4, 2);
-        c.grid = Some(g);
-        c.show_output = false;
+        c.results.ran(10, Some(0), None, String::new(), "payment".into(), g);
     }
     let status = std::mem::replace(&mut h.app.status, "12 row(s) retrieved in 12 ms".into());
     use crate::theme::ColorMode;
@@ -334,12 +330,10 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     };
     let target = qurry_core::editable::EditTarget { schema: "public".into(), table: "users".into(), pk: vec!["id".into()], columns: vec!["id".into(), "user_name".into(), "email".into()] };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.result_title = "Result 1: select id, user_name as name, email".into();
         let mut g = crate::grid::Grid::new(users(qurry_core::editable::Editable::Table(target)));
         g.set_value(1, 1, "Lee".into());
         (g.row, g.col) = (1, 1);
-        c.grid = Some(g);
-        c.show_output = false;
+        c.results.ran(10, Some(0), None, String::new(), "users".into(), g);
     }
     h.app.focus = crate::app::Focus::Grid;
     h.app.status = "3 row(s) retrieved in 3 ms".into();
@@ -357,25 +351,24 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
             ..users(Editable::ReadOnly(String::new()))
         };
         if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-            c.result_title = "Result 1: select vo.idx, vo.status, pu.idx, pu.role from".into();
             let mut g = crate::grid::Grid::new(joined);
             g.set_value(0, 3, "admin".into());
             (g.row, g.col) = (1, 3);
-            c.grid = Some(g);
+            c.results.ran(10, Some(0), None, String::new(), "crm.voc".into(), g);
         }
     }
     h.key("Enter");
     scenes.push(app_scene(h, "Console result: join", "A join edits per table, each by its own primary key (users.role of voc 1 edited); a cell where no row of its table matched (outer join) is read-only, and the status line says why", 120, 22));
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.result_title = "Result 1: select name, email from users".into();
-        c.grid = Some(crate::grid::Grid::new(users(qurry_core::editable::Editable::ReadOnly(qurry_shared::errors::edit_missing_pk("public.users", &["id".into()])))));
+        c.results.ran(10, Some(0), None, String::new(), "users".into(), crate::grid::Grid::new(users(qurry_core::editable::Editable::ReadOnly(qurry_shared::errors::edit_missing_pk("public.users", &["id".into()])))));
     }
     h.key("a");
     scenes.push(app_scene(h, "Console result: read-only", "An edit key on a result Qurry can't tie to table rows: the status line says why (here the key isn't in the result)", 120, 22));
     // A Production console starts in Manual (#106): its change is pending, and the reminder about a transaction left open
     let reminder = qurry_shared::errors::tx_idle_reminder("[PROD] rentalpay", 5, true, Some((false, 600)));
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        (c.tx_manual, c.in_tx, c.show_output) = (true, true, true);
+        (c.tx_manual, c.in_tx) = (true, true);
+        c.results.show(None);
         for (e, l) in [(false, qurry_shared::errors::PRODUCTION_MANUAL.to_string()), (false, "> update users set role = 'admin' where idx = 10".into()), (false, "1 row(s) affected in 4 ms".into()), (false, reminder.clone())] {
             c.log(e, l);
         }
@@ -496,9 +489,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.result_title = "Result 1: select * from payment_check".into();
-        c.grid = Some(crate::grid::Grid::new(res));
-        c.show_output = false;
+        c.results.ran(10, Some(0), None, String::new(), "payment_check".into(), crate::grid::Grid::new(res));
     }
     scenes.push(app_scene(h, "Grid alignment", "Numbers and NULL on the right by default (a NULL stays in line with the numbers); text, dates, booleans and JSON on the left", 120, 22));
     // Value panel (v): the cell's whole value beside the grid, jsonb pretty-printed and coloured (the GUI's Value Editor panel)
@@ -571,9 +562,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.result_title = "Result 1: select id, payload from webhook_event".into();
-        c.grid = Some(crate::grid::Grid::new(res));
-        c.show_output = false;
+        c.results.ran(10, Some(0), None, String::new(), "webhook_event".into(), crate::grid::Grid::new(res));
     }
     scenes.push(app_scene(h, "Grid: JSON", "json / jsonb cells in colors (keys · strings · numbers · true/false/null · punctuation), still one line; a large value reads only what fits; binary (bytea) stays plain", 120, 22));
     h.app.color = crate::theme::ColorMode::Ansi16;
@@ -1012,6 +1001,7 @@ async fn all_scenes() -> Vec<Value> {
     h.app.popup = None;
     tab_bars(&mut scenes).await;
     reconnect_scenes(&mut scenes).await;
+    result_tab_scenes(&mut scenes).await;
     scenes.push(temporary_scene().await);
     scenes
 }
@@ -1134,6 +1124,116 @@ async fn tab_bars(scenes: &mut Vec<Value>) {
     }
     (h.app.color, h.app.themes.theme) = (ColorMode::TrueColor, Some("light".into()));
     scenes.push(app_scene(&mut h, "Tab bar: light", "Theme Light: Data Source colors as light tints; the focused pane's active tab in the stronger hue", 120, 10));
+}
+
+/// The shop tables the result tab scenes run against (the GUI story's): `select * from <table> [where status = 'paid'] [limit n]`
+fn shop_db(q: &str) -> Result<qurry_core::db::QueryResult, String> {
+    let table = q.split(" from ").nth(1).and_then(|s| s.split_whitespace().next()).unwrap_or("").trim_end_matches(';');
+    let (cols, rows): (&[&str], Vec<Vec<Value>>) = match table {
+        "customers" => {
+            let city = q.split("city = '").nth(1).and_then(|s| s.split('\'').next());
+            let all = ["Kim", "Lee", "Park", "Choi", "Jung", "Kang", "Cho", "Yoon"].iter().enumerate().map(|(i, n)| (i + 1, *n, ["Seoul", "Busan", "Incheon"][i % 3]));
+            (&["id", "name", "city"], all.filter(|r| city.is_none_or(|c| c == r.2)).map(|(i, n, c)| vec![json!(i), json!(n), json!(c)]).collect())
+        }
+        "orders" => (&["id", "customer_id", "status", "total"], (0..24).filter(|i| !q.contains("'paid'") || i % 3 == 0).map(|i| vec![json!(1000 + i), json!(i % 8 + 1), json!(["paid", "refunded", "pending"][i % 3]), json!((i * 37) % 500 + 20)]).collect()),
+        "payments" | "products" => (&["id", "order_id", "method", "amount"], (0..16).map(|i| vec![json!(i + 1), json!(1000 + i), json!(["card", "bank", "point"][i % 3]), json!((i * 53) % 400 + 10)]).collect()),
+        t => return Err(format!("ERROR: relation \"{t}\" does not exist")),
+    };
+    let limit = q.split(" limit ").nth(1).and_then(|s| s.trim().trim_end_matches(';').parse().ok()).unwrap_or(rows.len());
+    Ok(qurry_core::db::QueryResult {
+        columns: cols.iter().map(|n| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: if *n == "name" || *n == "city" || *n == "status" || *n == "method" { "text" } else { "int8" }.into() }).collect(),
+        rows: rows.into_iter().take(limit).collect(),
+        rows_affected: 0,
+        truncated: false,
+        elapsed_ms: 4,
+        has_result_set: true,
+        in_transaction: false,
+        warning: None,
+        editable: None,
+    })
+}
+
+/// #151: a console's result tabs follow its statements; the result panel's title is their strip (Output │ 1: customers │ …)
+async fn result_tab_scenes(scenes: &mut Vec<Value>) {
+    use tui_textarea::CursorMove::Jump;
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(shop_db);
+    h.app.exec.inside = qurry_core::exec::Inside::Smallest;
+    let caret = |h: &mut Harness, row: u16, col: u16| {
+        if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.get_mut(h.app.active).map(|t| &mut t.kind) {
+            c.editor.move_cursor(Jump(row, col));
+        }
+    };
+    let s3 = "select * from customers;\nselect * from orders where status = 'paid';\nselect * from payments limit 5;";
+    h.console_with(s3, 0, 3);
+    h.app.focus = crate::app::Focus::Editor;
+    h.key("F5");
+    h.settle().await;
+    h.key("Down");
+    h.key("F5");
+    h.settle().await;
+    scenes.push(app_scene(&mut h, "Console result tabs: run 1, then 2", "Each statement keeps its own result tab, numbered by its place in the script; the one just run is shown", 120, 22));
+    h.key("Up");
+    scenes.push(app_scene(&mut h, "Console result tabs: caret back on 1", "The caret in statement 1 shows its tab again, without running it", 120, 22));
+    h.app.themes.theme = Some("light".into());
+    scenes.push(app_scene(&mut h, "Console result tabs: caret back on 1 (light)", "The same in the light theme", 120, 22));
+    h.app.themes.theme = None;
+    caret(&mut h, 0, 23);
+    h.type_str(" where city = 'Busan'");
+    h.key("F5");
+    h.settle().await;
+    scenes.push(app_scene(&mut h, "Console result tabs: edit 1 and run again", "Statement 1 was edited and run again: its tab gets the new result, no new tab", 120, 22));
+    h.app.run_action(crate::app::Action::PinResult);
+    h.type_str(" limit 2");
+    h.key("F5");
+    h.settle().await;
+    scenes.push(app_scene(&mut h, "Console result tabs: pinned, run again", "⌃k › Pin / Unpin Result Tab, then statement 1 run again: a new tab follows it, the pinned one (📌) stays as it was", 120, 22));
+    h.app.close_tab_now(h.app.active);
+    h.console_with(s3, 0, 3);
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    h.key("F5");
+    h.settle().await;
+    h.app.exec.inside = qurry_core::exec::Inside::Smallest;
+    caret(&mut h, 1, 0);
+    h.key("Shift+Down");
+    h.key("Backspace");
+    caret(&mut h, 0, 0);
+    h.key("Home");
+    scenes.push(app_scene(&mut h, "Console result tabs: statement deleted", "Statement 2 was deleted, so its tab closed; statement 3 is now 2 and its tab says so", 120, 22));
+    h.app.close_tab_now(h.app.active);
+    // Ten tabs, statement 1's shown again, then an eleventh: the least recently shown unpinned tab (statement 2's) closes
+    let t = ["customers", "orders", "payments", "products"];
+    let s11: Vec<String> = (0..11).map(|i| format!("select * from {} limit {};", t[i % 4], i + 1)).collect();
+    h.console_with(&s11.join("\n"), 0, 3);
+    for i in 0..11 {
+        if i == 10 {
+            caret(&mut h, 0, 0);
+            h.key("Home");
+        }
+        caret(&mut h, i, 3);
+        h.key("F5");
+        h.settle().await;
+    }
+    scenes.push(app_scene(&mut h, "Console result tabs: 11th tab", "Result tabs (10): the 11th closed the least recently shown (statement 2's; statement 1's was shown just before); tabs that don't fit fold into ‹n", 120, 22));
+    h.app.close_tab_now(h.app.active);
+    h.console_with(s3, 0, 3);
+    h.key("F5");
+    h.settle().await;
+    h.key("Down");
+    h.key("F5");
+    h.settle().await;
+    caret(&mut h, 1, 20);
+    h.key("Backspace");
+    h.key("F5");
+    h.settle().await;
+    scenes.push(app_scene(&mut h, "Console result tabs: error", "Statement 2 failed after an edit: Output is shown with the error; statement 2's tab keeps its last result", 120, 22));
+    h.app.palette_result_tabs();
+    scenes.push(app_scene(&mut h, "Console result tabs: Result Tabs… (default)", "⌃k › Result Tabs…: unpinned result tabs kept per console (shared with the GUI's Settings › Result tabs)", 120, 22));
+    h.key("Backspace");
+    h.key("Backspace");
+    h.type_str("0");
+    h.key("Enter");
+    scenes.push(app_scene(&mut h, "Console result tabs: Result Tabs… (invalid 0)", "A number that isn't 1 or more isn't saved: the box says why", 120, 22));
 }
 
 fn json_path() -> std::path::PathBuf {

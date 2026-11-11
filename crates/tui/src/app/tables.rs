@@ -294,7 +294,7 @@ impl App {
                 Ok(EditTo::Table(EditTarget { schema: tt.schema.clone(), table: tt.table.clone(), pk: tt.pk.clone(), columns: g.result.columns.iter().map(|c| c.name.clone()).collect() }))
             }
             TabKind::Console(c) => {
-                let g = c.grid.as_ref().filter(|_| !c.show_output).ok_or_else(none)?;
+                let g = c.grid().ok_or_else(none)?;
                 match &g.result.editable {
                     Some(Editable::Table(e)) => Ok(EditTo::Table(e.clone())),
                     Some(Editable::Join(j)) => Ok(EditTo::Join(j.clone())),
@@ -407,7 +407,7 @@ impl App {
         // A console's edits run in its transaction in Manual mode or with one open, and stay pending (AppState::submit_edits)
         let (g, tab, in_tx) = match &t.kind {
             TabKind::Table(tt) => (tt.grid.as_ref(), None, false),
-            TabKind::Console(c) => (c.grid.as_ref(), Some(c.session.clone()), c.tx_manual || c.in_tx),
+            TabKind::Console(c) => (c.grid(), Some(c.session.clone()), c.tx_manual || c.in_tx),
             _ => (None, None, false),
         };
         let Some(g) = g else { return };
@@ -470,10 +470,12 @@ impl App {
                         a.status = format!("{n} statement(s) submitted, {} row(s) affected{pending}", r.rows);
                         match a.tab_mut(id).map(|t| &t.kind) {
                             Some(TabKind::Table(_)) => a.reload_table(id),
-                            // The console still shows that result: run its statement again (a newer result stays as it is)
-                            Some(TabKind::Console(c)) if c.grid.as_ref().is_some_and(|g| g.id == gid) => {
-                                let sql = c.result_sql.clone();
-                                Self::in_console(id, move |a| a.run_stmts(vec![sql], false, false))(a);
+                            // The console still shows that result: run its statement again, into its tab (a newer result stays as it is)
+                            Some(TabKind::Console(c)) => {
+                                if let Some(t) = c.results.shown_tab().filter(|t| t.grid.id == gid) {
+                                    let at = result_tabs::RunAt { stmt: t.stmt, sql: t.sql.clone(), into: Some(t.id) };
+                                    Self::in_console(id, move |a| a.run_stmts(vec![at.sql.clone()], vec![at], false, false))(a);
+                                }
                             }
                             _ => {}
                         }

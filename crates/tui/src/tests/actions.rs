@@ -57,7 +57,7 @@ fn typed(key: &str) -> String {
 async fn default_keys_apply_their_command() {
     type Applied = fn(&Harness) -> bool;
     let cases: [(Action, Applied); 7] = [
-        (Action::ToggleOutput, |h| matches!(&h.app.tabs[h.app.active].kind, TabKind::Console(c) if !c.show_output)),
+        (Action::ToggleOutput, |h| matches!(&h.app.tabs[h.app.active].kind, TabKind::Console(c) if c.results.shown.is_none())),
         (Action::Help, |h| matches!(h.app.popup, Some(Popup::Help { .. }))),
         (Action::Palette, |h| matches!(h.app.popup, Some(Popup::Palette(_)))),
         (Action::Find, |h| matches!(h.app.popup, Some(Popup::Find(_)))),
@@ -119,7 +119,7 @@ async fn key_dispatch_bench() {
     const N: u32 = 10_000;
     let mut h = Harness::new().await;
     let id = h.console_tab();
-    let shown = |h: &Harness| matches!(&h.app.tabs[h.app.tab_index(id).unwrap()].kind, TabKind::Console(c) if c.show_output);
+    let shown = |h: &Harness| matches!(&h.app.tabs[h.app.tab_index(id).unwrap()].kind, TabKind::Console(c) if c.results.shown.is_none());
     let before = shown(&h);
     // Lowercase: "Alt+O" is the Shift form, bound to nothing
     for key in ["Alt+o", "Ctrl+Alt+Right", "F12"] {

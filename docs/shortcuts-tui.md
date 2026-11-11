@@ -76,6 +76,8 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `⌥c` | Commit |
 | `⌥r` | Roll Back |
 | `⌥o` | Toggle Output / Result |
+| `⌥.` | Next Result Tab |
+| `⌥,` | Previous Result Tab |
 | `⌃⌥Up` | Go to the Split Above |
 | `⌃⌥Down` | Go to the Split Below |
 | `⌃⌥Left` | Go to the Split on the Left |
@@ -96,6 +98,8 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | — | New Data Source… |
 | — | Refresh |
 | — | Query History… (shared with the GUI) |
+| — | Pin / Unpin Result Tab |
+| — | Close Result Tab |
 | — | Value Panel (the current cell's whole value, beside the grid) |
 | — | Narrow Column (the current one) |
 | — | Widen Column (the current one) |
@@ -153,6 +157,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | — | Trust SSH Host Key (after checking its fingerprint) |
 | — | Password Key… (keep it in the config folder or the system keychain) |
 | — | Keyword Case… (UPPER or lower SQL keywords as you type and in Reformat Code; shared with the GUI) |
+| — | Result Tabs… |
 | — | Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI) |
 | — | Status Bar Items… (what the status line shows for a grid: position, shown columns, Sum, Size …; shared with the GUI) |
 | — | Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background) |

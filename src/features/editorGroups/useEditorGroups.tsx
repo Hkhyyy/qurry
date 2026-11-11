@@ -24,7 +24,8 @@ import type { useExplorer } from "../explorer/useExplorer";
 import type { useJobs } from "../jobs/useJobs";
 import { cmd, keyTitle } from "../../lib/shortcuts";
 import { isMac, sk } from "../shortcuts/labels";
-import { closeTabs, ddlObject, moveTo, patch, settle, sqlOf, togglePin } from "../tabs/ops";
+import { closeTabs, ddlObject, moveTo, patch, settle, sqlOf, togglePin, updTab } from "../tabs/ops";
+import { caret, edited, show } from "../../lib/resultTabs";
 import { editorApis, liveSql, setActiveIds, setFocused, setPanes, setTabs, useTabsStore } from "../tabs/store";
 import { Group, snapKey, Tab, TabSnapshot } from "../tabs/types";
 import type { useTabs } from "../tabs/useTabs";
@@ -33,6 +34,12 @@ import { setWorkspaces, useWorkspacesStore } from "../workspaces/store";
 import type { useWorkspaces } from "../workspaces/useWorkspaces";
 
 /** A tab's database by name: its own, else the connection's default (a tab on the default keeps none) */
+/** Change a console's result tabs (lib/resultTabs) only when the model changes them: a caret move or a keystroke that changes nothing
+ *  doesn't render the app again */
+const follow = (id: string, f: (t: Tab) => Tab) => {
+  const t = useTabsStore.getState().tabs.find((x) => x.id === id);
+  if (t && f(t) !== t) updTab(id, f);
+};
 const tabDatabase = (t: { database?: string }, c?: ConnectionView) => t.database || c?.database || (c?.kind === "mysql" ? "" : "postgres");
 
 type Deps = {
@@ -421,7 +428,9 @@ export function useEditorGroups({
                     onChange={(sql) => liveSql.set(t.id, sql)}
                     onExecute={(stmts, explain, mark) => executeConsole(t.id, stmts, explain, mark)}
                     onCancel={() => cancel(t)}
-                    onSetActiveResult={(id) => patch(t.id, { activeResult: id })}
+                    onSetActiveResult={(id) => updTab(t.id, (x) => show(x, id))}
+                    onCaret={(stmt) => follow(t.id, (x) => caret(x, stmt))}
+                    onStatements={(before, after, keep) => follow(t.id, (x) => edited(x, before, after, keep))}
                     onPin={(id, pinned) => setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.map((r) => (r.id === id ? { ...r, pinned } : r)) } : x)))}
                     onCloseResult={(id) =>
                       setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.filter((r) => r.id !== id), activeResult: x.activeResult === id ? "output" : x.activeResult } : x)))
@@ -430,7 +439,7 @@ export function useEditorGroups({
                     readOnly={!!c?.readOnly}
                     onSubmit={(entryId, st) => submitEdits(t, st, () => {
                       const e = t.results.find((r) => r.id === entryId);
-                      if (e) void executeConsole(t.id, [e.sql]);
+                      if (e) void executeConsole(t.id, [{ sql: e.sql, stmt: e.stmt, into: e.id }]);
                     })}
                     onExport={(sql) => exportCsv({ ...t, lastSql: sql })}
                     onHistory={() => (setHistoryTab("history"), setHistoryFor(t.id))}

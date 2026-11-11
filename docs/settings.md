@@ -12,6 +12,7 @@ GUI **Settings** (`⌘,`, or the ⚙ button at the bottom of the workspace rail 
 | Editor font | Font family and size of the query console editor. Size 8–32 px (default 13); `⌃⇧.` / `⌃⇧,` change it too, and Settings shows the new size | No (the TUI uses the terminal's font) |
 | Grid font | Font family and size of the result and table grids. Size 9–16 px (default 12): rows keep their height, so larger text would be cut. Columns get wider with the size | No (the TUI uses the terminal's font) |
 | Keyword case | **Off** (default), **UPPER** or **lower** for SQL keywords as you type in a console and in **Reformat Code** ([below](#keyword-case-and-reformat-code)) | Yes (TUI **⌃k › Keyword Case…**) |
+| Result tabs | Unpinned result tabs kept per console, 10 by default ([below](#result-tabs)) | Yes (TUI **⌃k › Result Tabs…**) |
 | Alignment | Where cells sit in result grids, per kind of value (below) | Yes (TUI **⌃k › Grid Alignment…**) |
 | Status bar | Which items the status bar shows for the focused grid: Position, Shown columns, Not null, Sum, Avg, Min, Max, Size ([below](#status-bar-items)) | Yes (TUI **⌃k › Status Bar Items…**) |
 | Updates | Check for a new version when the app starts; **Check Now** | — |
@@ -61,6 +62,12 @@ In 0.3.2 Dark, Light and High contrast changed slightly where they missed the co
 The setting is saved in `settings.json` as `"keywordCase"` (`"off"`, `"upper"` or `"lower"`). The TUI reads it when it starts and again when you open **⌃k › Keyword Case…**, so after changing it in the GUI, open that command (or restart the TUI).
 
 If your TUI `keymap.json` already gives `⌥⇧F` to another command, that command keeps it and Reformat Code has no key: the status line says so when the TUI starts. Give Reformat Code a key in the `F1` window (or run it from `⌃k`).
+
+### Result tabs
+
+Each statement a console runs gets its own result tab, which follows the statement as you edit the script ([Getting started](getting-started.md)). **Result tabs** is how many unpinned tabs a console keeps (10 by default, 1 or more); past it, the least recently shown one closes, never the one shown. Pinned tabs don't count. Each kept tab holds its rows in memory, so a lower number keeps less.
+
+Before 0.3.4 a run replaced the console's unpinned result tabs. To clear them yourself, use **Close All Unpinned** in a result tab's menu. In the TUI the setting is **⌃k › Result Tabs…**. The setting is saved in `settings.json` as `"resultTabs"`; the TUI reads it when it starts and again when you open that command. Results aren't saved in workspaces, so nothing saved changes.
 
 ### Alignment in result grids
 

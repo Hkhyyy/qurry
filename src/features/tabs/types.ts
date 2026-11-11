@@ -3,6 +3,7 @@ import type { OutputLine, ResultEntry } from "../../components/ConsolePane";
 import type { EditTarget } from "../../components/ResultGrid";
 import { leaf, type Pane } from "../../lib/panes";
 import type { DdlView } from "../../lib/structure";
+import type { RunStmt } from "../../lib/resultTabs";
 
 /** Pane id (0~3). The pane layout is a Pane tree */
 type Group = number;
@@ -53,6 +54,8 @@ interface Tab {
   inTx: boolean;
   /** The backend's reminder about a Production transaction left open (tx-idle), until the transaction ends or a statement runs */
   txIdle?: string;
+  /** Console: the run in progress, each statement's place followed through edits (lib/resultTabs) */
+  pending?: RunStmt[];
   /** Result tab with an open server cursor (target for loading more) */
   cursorEntry?: string;
   /** Pin Tab */

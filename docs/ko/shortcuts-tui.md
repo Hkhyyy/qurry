@@ -78,6 +78,8 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `⌥c` | Commit |
 | `⌥r` | Roll Back |
 | `⌥o` | Toggle Output / Result |
+| `⌥.` | Next Result Tab |
+| `⌥,` | Previous Result Tab |
 | `⌃⌥Up` | Go to the Split Above |
 | `⌃⌥Down` | Go to the Split Below |
 | `⌃⌥Left` | Go to the Split on the Left |
@@ -98,6 +100,8 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | — | New Data Source… |
 | — | Refresh |
 | — | Query History… (shared with the GUI) |
+| — | Pin / Unpin Result Tab |
+| — | Close Result Tab |
 | — | Value Panel (the current cell's whole value, beside the grid) |
 | — | Narrow Column (the current one) |
 | — | Widen Column (the current one) |
@@ -155,6 +159,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | — | Trust SSH Host Key (after checking its fingerprint) |
 | — | Password Key… (keep it in the config folder or the system keychain) |
 | — | Keyword Case… (UPPER or lower SQL keywords as you type and in Reformat Code; shared with the GUI) |
+| — | Result Tabs… |
 | — | Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI) |
 | — | Status Bar Items… (what the status line shows for a grid: position, shown columns, Sum, Size …; shared with the GUI) |
 | — | Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background) |

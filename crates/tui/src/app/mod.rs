@@ -22,6 +22,8 @@ mod explorer;
 mod palette;
 mod redis;
 mod reformat;
+mod result_tabs;
+pub use result_tabs::Results;
 mod run;
 mod splits;
 mod status_items;
@@ -46,12 +48,11 @@ pub enum Focus {
 pub struct Console {
     pub editor: TextArea<'static>,
     pub session: String,
-    pub grid: Option<Grid>,
-    pub result_title: String,
-    /// The statement the grid shows the result of (run again after its edits are submitted)
-    pub result_sql: String,
+    /// One result tab per statement and the one shown (None: Output)
+    pub results: Results,
+    /// The script's statements as last split, so result tabs follow edits and the caret (follow_statements)
+    pub stmts: Stmts,
     pub output: Vec<(bool, String)>,
-    pub show_output: bool,
     pub running: bool,
     pub tx_manual: bool,
     pub in_tx: bool,
@@ -70,6 +71,18 @@ pub struct Console {
     pub joined: Vec<reformat::Joined>,
     /// The text's SQL colors, highlighted again only when the text changes
     pub colors: SqlColors,
+}
+
+/// The console's statements (qurry_shared::sql::split_script, as ⌃↩ plans them) for the lines and source kind they were split for:
+/// each one's byte range from its first non-blank character, its text, and the caret last looked up and the statement it was in
+#[derive(Default)]
+pub struct Stmts {
+    lines: Vec<String>,
+    kind: Option<DbKind>,
+    segs: Vec<(usize, usize)>,
+    texts: Vec<String>,
+    caret: Option<(usize, usize)>,
+    stmt: Option<usize>,
 }
 
 /// qurry_shared::highlight of the whole console text (a string or comment can span lines), split per line: each line's byte ranges
@@ -242,6 +255,49 @@ const OUTPUT_MAX: usize = 1000;
 pub const WARNING: &str = "Warning: ";
 
 impl Console {
+    /// A new console's state around its editor and session
+    pub fn new(editor: TextArea<'static>, session: String, output: Vec<(bool, String)>, tx_manual: bool) -> Self {
+        Console { editor, session, results: Default::default(), stmts: Default::default(), output, running: false, tx_manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![], colors: Default::default() }
+    }
+
+    /// Result tabs follow the script (#151): after an edit they follow their statements, and the caret entering another statement
+    /// shows its tab (moving within one keeps the tab picked; not while the shown grid has pending edits: that would drop them).
+    /// Split again only when the text changed
+    pub fn follow_statements(&mut self, kind: DbKind) {
+        let lines = self.editor.lines();
+        let st = &mut self.stmts;
+        if st.kind != Some(kind) || st.lines != lines {
+            let text = lines.join("\n");
+            let segs: Vec<(usize, usize)> = sql::split_script(&text, kind).into_iter().map(|(s, e)| (s + text[s..e].len() - text[s..e].trim_start().len(), e)).collect();
+            let texts: Vec<String> = segs.iter().map(|&(s, e)| text[s..e].trim().to_string()).collect();
+            if st.kind == Some(kind) && st.texts != texts {
+                self.results.edited(&st.texts, &texts);
+            }
+            *st = Stmts { lines: lines.to_vec(), kind: Some(kind), segs, texts, caret: st.caret, stmt: st.stmt };
+        }
+        let caret = self.editor.cursor();
+        if st.caret == Some(caret) {
+            return;
+        }
+        st.caret = Some(caret);
+        let at = byte_offset(lines, caret.0, caret.1);
+        // Right after its `;` is still in it, as ⌃↩ plans it
+        let stmt = st.segs.iter().position(|&(s, e)| s <= at && at <= e + 1);
+        if stmt == std::mem::replace(&mut st.stmt, stmt) || self.results.grid().is_some_and(|g| g.pending() > 0) {
+            return;
+        }
+        self.results.caret(stmt);
+    }
+
+    /// The shown result tab's grid (None while Output is shown)
+    pub fn grid(&self) -> Option<&Grid> {
+        self.results.grid()
+    }
+
+    pub fn grid_mut(&mut self) -> Option<&mut Grid> {
+        self.results.grid_mut()
+    }
+
     /// One line in the Output log (old lines are dropped)
     pub fn log(&mut self, err: bool, s: String) {
         self.output.push((err, s));
@@ -483,7 +539,7 @@ impl Tab {
     /// What a run or a load-more in flight says in the status line (as the GUI's RunningBar), or None when the tab isn't busy
     pub fn busy(&self) -> Option<String> {
         let (running, grid, what) = match &self.kind {
-            TabKind::Console(c) => (c.running, c.grid.as_ref(), "Executing".to_string()),
+            TabKind::Console(c) => (c.running, c.grid(), "Executing".to_string()),
             TabKind::Table(tt) => (tt.running, tt.grid.as_ref(), format!("Loading {}.{}", tt.schema, tt.table)),
             _ => return None,
         };
@@ -767,6 +823,11 @@ pub enum Action {
     ManageSchemas,
     PasswordKey,
     KeywordCase,
+    ResultTabs,
+    ResultNext,
+    ResultPrev,
+    PinResult,
+    CloseResult,
     GridAlign,
     StatusBarItems,
     Theme,
@@ -813,6 +874,8 @@ pub struct Hits {
     pub text: ratatui::layout::Rect,
     /// Workspace strip: (number, area)
     pub workspaces: Vec<(usize, ratatui::layout::Rect)>,
+    /// The focused console's result tab strip: each label's area and its tab (None: Output)
+    pub result_tabs: Vec<(ratatui::layout::Rect, Option<usize>)>,
     /// The open confirm's question or warnings didn't fit the window: y / Enter don't answer it
     pub confirm_unseen: bool,
 }
@@ -931,6 +994,8 @@ pub struct App {
     pub align: qurry_core::format::Alignments,
     /// Keyword case as you type and in Reformat Code, shared with the GUI's Settings › Appearance › Keyword case (settings.json, read at startup and by ⌃k › Keyword Case…)
     pub keyword_case: qurry_core::format::KeywordCase,
+    /// Unpinned result tabs kept per console, shared with the GUI's Settings › Result tabs (settings.json, read at startup and by ⌃k › Result Tabs…)
+    pub result_tabs: usize,
     /// The status line's items for a grid, shared with the GUI's status bar (settings.json, read at startup and by ⌃k › Status Bar Items…)
     pub status_items: Vec<qurry_core::statusbar::Item>,
     /// Tables' column types for the Size item, by (target, schema, table)
@@ -978,6 +1043,7 @@ impl App {
         let themes = state.store.theme_settings();
         let mut a = App {
             keyword_case: state.store.keyword_case(),
+            result_tabs: state.store.result_tabs(),
             status_items: state.store.status_bar_items(),
             table_cols: HashMap::new(),
             stats_cache: None,
@@ -1085,7 +1151,7 @@ impl App {
 
     pub fn grid_mut(&mut self) -> Option<&mut Grid> {
         match &mut self.tabs.get_mut(self.active)?.kind {
-            TabKind::Console(c) => c.grid.as_mut(),
+            TabKind::Console(c) => c.grid_mut(),
             TabKind::Table(t) => t.grid.as_mut(),
             TabKind::Redis(r) => r.value.as_mut(),
             TabKind::Dba(d) => d.grid.as_mut(),

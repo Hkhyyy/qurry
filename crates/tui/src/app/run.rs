@@ -52,12 +52,13 @@ pub(crate) fn explain_analyze_ask_text(asks: &[(String, String)]) -> String {
 impl App {
     // ───────── Execution ─────────
 
-    /// A console grid with pending edits asks first: the new result replaces it (as a table tab's reload does)
+    /// A console's result grids with pending edits (shown or not) ask first: the new results replace them (as a table tab's reload
+    /// does), and a tab of the run's statement may be one of them
     pub fn execute(&mut self, explain: bool) {
         let Some(t) = self.tabs.get(self.active) else { return };
         let id = t.id;
         let n = match &t.kind {
-            TabKind::Console(c) if !c.running => c.grid.as_ref().map_or(0, |g| g.pending()),
+            TabKind::Console(c) if !c.running => c.results.tabs.iter().map(|t| t.grid.pending()).sum(),
             _ => 0,
         };
         if n == 0 {
@@ -67,8 +68,8 @@ impl App {
             opened: None,
             text: self.pending_text(n, "run the statement"),
             on_yes: Self::in_console(id, move |a| {
-                if let Some(g) = a.grid_mut() {
-                    g.revert();
+                if let Some(TabKind::Console(c)) = a.tabs.get_mut(a.active).map(|t| &mut t.kind) {
+                    c.results.tabs.iter_mut().for_each(|t| t.grid.revert());
                 }
                 a.execute_checked(explain, false)
             }),
@@ -145,24 +146,44 @@ impl App {
     }
 
     /// Runs statements planned over the console's text, each where it is in the editor: they get gutter marks as they run, and
-    /// the one that fails its error mark
+    /// the one that fails its error mark. Each result goes to the tab of the script statement it runs: a selection only when it is
+    /// all of one (its `;` or not), a planned range when it runs to the statement's end (the notes above it may be left out; a
+    /// subquery is not the statement)
     pub fn run_marked(&mut self, stmts: Vec<String>, spans: Vec<Span>, explain: bool, confirmed: bool) {
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let kind = self.kind_of(&t.conn);
         if let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind)
             && !c.running
         {
-            c.marks.start(c.editor.lines(), &spans.iter().map(|&((r0, _), (r1, _))| (r0, r1)).collect::<Vec<_>>());
-            c.run_spans = (spans, c.editor.lines().to_vec());
+            let lines = c.editor.lines();
+            let text = lines.join("\n");
+            let segs = sql::split_script(&text, kind);
+            let whole = c.editor.selection_range().is_some();
+            c.results.pending = spans
+                .iter()
+                .zip(&stmts)
+                .map(|(&((r0, c0), (r1, c1)), sql)| {
+                    let (a, b) = (byte_offset(lines, r0, c0), byte_offset(lines, r1, c1));
+                    let own = |&(s, e): &(usize, usize)| result_tabs::bare(&text[if whole { s } else { a }..e]) == result_tabs::bare(&text[a..b]);
+                    let stmt = segs.iter().position(|&(s, e)| s <= a && a < e).filter(|&i| own(&segs[i]));
+                    result_tabs::RunAt { stmt, sql: sql.clone(), into: None }
+                })
+                .collect();
+            c.marks.start(lines, &spans.iter().map(|&((r0, _), (r1, _))| (r0, r1)).collect::<Vec<_>>());
+            c.run_spans = (spans, lines.to_vec());
         }
         self.run_stmts_checked(stmts, explain, confirmed, confirmed)
     }
 
-    /// Statements that aren't in the editor (a table's statement run in a console). confirmed = whether a dangerous statement
-    /// (UPDATE/DELETE without WHERE, DROP, TRUNCATE) was confirmed
-    pub fn run_stmts(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool) {
+    /// Statements that aren't in the editor (a result tab's statement run again after its edits are submitted): each result where
+    /// `at[i]` says (missing: a tab of its own). confirmed = whether a dangerous statement (UPDATE/DELETE without WHERE, DROP,
+    /// TRUNCATE) was confirmed
+    pub fn run_stmts(&mut self, stmts: Vec<String>, at: Vec<result_tabs::RunAt>, explain: bool, confirmed: bool) {
         if let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind)
             && !c.running
         {
             c.run_spans = Default::default();
+            c.results.pending = at;
         }
         self.run_stmts_checked(stmts, explain, confirmed, confirmed)
     }
@@ -195,6 +216,7 @@ impl App {
         let keep_history = !self.state.store.is_temporary(&hist_conn);
         let prod = self.tabs.get(self.active).and_then(|t| self.conn(&t.conn)).filter(|c| c.config.options.confirm_changes).map(|c| (c.config.name.clone(), self.tabs[self.active].target.clone()));
         let watch = prod.is_some();
+        let cap = self.result_tabs;
         let t = &mut self.tabs[self.active];
         let TabKind::Console(c) = &mut t.kind else { return };
         if c.running || stmts.is_empty() {
@@ -279,7 +301,11 @@ impl App {
         }
         c.running = true;
         // While running, show Output (the SQL being run instead of the previous results)
-        c.show_output = true;
+        c.results.show(None);
+        // The session's open cursor (a result's load-more) goes with the next statement
+        for t in &mut c.results.tabs {
+            t.grid.more_session = None;
+        }
         // The last run's error mark goes; this run's statements are where run_marked found them, on the lines it saw
         c.run_error = None;
         let (spans, lines0) = std::mem::take(&mut c.run_spans);
@@ -371,6 +397,8 @@ impl App {
                 let Some(t) = a.tab_mut(id) else { return };
                 let TabKind::Console(c) = &mut t.kind else { return };
                 c.running = false;
+                // Where the statements are now (edits since the run was planned moved them: Results::edited)
+                let places = std::mem::take(&mut c.results.pending);
                 let mut status = String::new();
                 let n = out.len();
                 // Changing statements already committed in Auto mode (reported on failure midway: earlier ones are not rolled back)
@@ -378,6 +406,8 @@ impl App {
                 let mut warned = 0;
                 let mut failed = false;
                 let mut tls_err = None;
+                // The tab of the last result: shown once the run ends (Output when none came, or a statement failed)
+                let mut last = None;
                 let ddl = out.iter().any(|(s, r, dry, _)| r.is_ok() && !dry && !explain && qurry_core::guard::is_ddl(s, kind));
                 for (i, (s, r, dry, at)) in out.into_iter().enumerate() {
                     if r.is_ok() && keep_history {
@@ -407,12 +437,14 @@ impl App {
                                 let msg = format!("{}{} row(s) retrieved in {} ms", res.rows.len(), if res.truncated { "+" } else { "" }, res.elapsed_ms);
                                 c.log(false, msg.clone());
                                 status = msg;
-                                c.result_title = format!("Result {}: {}", i + 1, s.split_whitespace().take(6).collect::<Vec<_>>().join(" "));
-                                c.result_sql = s.clone();
+                                for t in &mut c.results.tabs {
+                                    t.grid.more_session = None;
+                                }
                                 let mut g = Grid::new(res);
                                 g.more_session = Some(c.session.clone());
-                                c.grid = Some(g);
-                                c.show_output = false;
+                                let title = result_tabs::title(&s, i + 1);
+                                let at = places.get(i);
+                                last = Some(c.results.ran(cap, at.and_then(|x| x.stmt), at.and_then(|x| x.into), s.clone(), title, g));
                             } else {
                                 let msg = format!("{} row(s) affected in {} ms", res.rows_affected, res.elapsed_ms);
                                 c.log(false, msg.clone());
@@ -421,9 +453,6 @@ impl App {
                                     c.log(false, "Undo saved — ⌃k › Production Log…".into());
                                 }
                                 status = msg;
-                                if i + 1 == n && c.grid.is_none() {
-                                    c.show_output = true;
-                                }
                             }
                             // It ran, but its result couldn't be logged: not a failure (don't run it again). Several statements: counted below (as the GUI does)
                             if let Some(w) = warning {
@@ -440,7 +469,6 @@ impl App {
                             if committed > 0 {
                                 c.log(true, format!("Note: {committed} earlier statement(s) of this run were already committed (Auto mode) and were not rolled back"));
                             }
-                            c.show_output = true;
                             failed = true;
                             let first = qurry_shared::errors::without_position(e.lines().next().unwrap_or(""));
                             // Marked in the editor where it ran from (not if the text changed meanwhile); the status line says where
@@ -459,6 +487,7 @@ impl App {
                         }
                     }
                 }
+                c.results.show(if failed { None } else { last });
                 if warned > 0 && n > 1 {
                     status = format!("{status} · {warned} with a warning (see Output)");
                 }
@@ -497,7 +526,7 @@ impl App {
         let id = t.id;
         // A run in the tab is replacing the result: a load-more now would be answered for the old one
         let g = match &mut t.kind {
-            TabKind::Console(c) if !c.running => c.grid.as_mut(),
+            TabKind::Console(c) if !c.running => c.grid_mut(),
             TabKind::Table(tt) if !tt.running => tt.grid.as_mut(),
             _ => None,
         };
@@ -512,7 +541,8 @@ impl App {
         self.spawn(async move { st.fetch_more(session, Some(500)).await.map_err(err) }, move |a, r| {
             let Some(t) = a.tab_mut(id) else { return };
             let g = match &mut t.kind {
-                TabKind::Console(c) => c.grid.as_mut(),
+                // The result tab asked for, shown or not
+                TabKind::Console(c) => c.results.tabs.iter_mut().map(|t| &mut t.grid).find(|g| g.id == sent),
                 TabKind::Table(tt) => tt.grid.as_mut(),
                 _ => None,
             };
@@ -610,7 +640,7 @@ impl App {
                             // In Output too: the status bar cuts it off, and a COMMIT on a lost connection says there to check the data
                             if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
                                 c.log(true, e.clone());
-                                c.show_output = true;
+                                c.results.show(None);
                             }
                             // A failed COMMIT gets a notice to acknowledge, as in the GUI (not saved, or outcome unknown). A slow one
                             // can return while another popup is open: the notice goes over it

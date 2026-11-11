@@ -12,7 +12,7 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
     // The grid's commands (n set NULL, a add row …: pane keys, F1 › Data grid keys), in table data and query results
     let grid = match app.tabs.get(app.active).map(|t| &t.kind) {
         Some(TabKind::Table(_)) => true,
-        Some(TabKind::Console(c)) => !c.show_output && c.grid.is_some(),
+        Some(TabKind::Console(c)) => c.grid().is_some(),
         _ => false,
     };
     if grid && let Some(a) = app.keys.lookup_in(Scope::Grid, &k) {
@@ -69,7 +69,7 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
                 app.focus = Focus::Editor;
                 return;
             }
-            if c.show_output || c.grid.is_none() {
+            if c.grid().is_none() {
                 return;
             }
             match k.code {
@@ -111,7 +111,7 @@ fn edit_cell(app: &mut App, id: u64) {
         // Into the grid it was asked for (a console run meanwhile replaced it: dropped)
         let grid = match a.tab_mut(id).map(|t| &mut t.kind) {
             Some(TabKind::Table(tt)) => tt.grid.as_mut(),
-            Some(TabKind::Console(c)) => c.grid.as_mut(),
+            Some(TabKind::Console(c)) => c.grid_mut(),
             _ => None,
         };
         if let Some(g) = grid.filter(|g| g.id == gid) {

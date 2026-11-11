@@ -193,7 +193,7 @@ async fn size_in_a_console_result() {
         let TabKind::Console(c) = &mut h.app.tabs[i].kind else { unreachable!() };
         let mut g = Grid::new(r);
         g.col = 1;
-        c.grid = Some(g);
+        c.results.ran(10, Some(0), None, String::new(), "t".into(), g);
         h.app.focus = Focus::Grid;
     };
     set(&mut h, res(None));

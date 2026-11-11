@@ -62,9 +62,11 @@ pub fn on_event(app: &mut App, ev: Event) {
         },
         _ => {}
     }
-    // Gutter marks follow the console's edits (dropped on an edited statement)
-    if let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
+    // Gutter marks follow the console's edits (dropped on an edited statement); result tabs follow its statements and the caret
+    let kind = app.tabs.get(app.active).map(|t| app.kind_of(&t.conn));
+    if let (Some(kind), Some(TabKind::Console(c))) = (kind, app.tabs.get_mut(app.active).map(|t| &mut t.kind)) {
         c.marks.follow(c.editor.lines());
+        c.follow_statements(kind);
     }
     // A confirm that waited for the popup the user was in comes up once that one is closed (quiet, so the closing key doesn't answer it)
     if app.popup.is_none() && !app.waiting.is_empty() {

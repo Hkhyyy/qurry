@@ -46,6 +46,8 @@ Commands (change them with F1)
   ⌥c                             Commit
   ⌥r                             Roll Back
   ⌥o                             Toggle Output / Result
+  ⌥.                             Next Result Tab
+  ⌥,                             Previous Result Tab
   ⌃⌥Up                           Go to the Split Above
   ⌃⌥Down                         Go to the Split Below
   ⌃⌥Left                         Go to the Split on the Left

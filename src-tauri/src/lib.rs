@@ -212,6 +212,8 @@ pub fn run() {
             commands::reset_status_bar_items,
             commands::keyword_case,
             commands::set_keyword_case,
+            commands::result_tabs,
+            commands::set_result_tabs,
             commands::theme_settings,
             commands::set_theme,
             commands::set_theme_sync,

@@ -46,6 +46,12 @@ interface Props {
   onRun: (req: RunRequest) => void;
   /** A statement's gutter mark was clicked: its Output line */
   onMarkClick?: (out: string) => void;
+  /** How the console splits its script into statements (their places are what result tabs follow) */
+  split?: (text: string) => { start: number; end: number }[];
+  /** The caret moved: the statement it is in (from its first non-blank character to its end), null between statements */
+  onCaret?: (stmt: number | null) => void;
+  /** The text changed: its statements' texts before and after (once per change, only when they differ) */
+  onStatements?: (before: string[], after: string[]) => void;
   registerApi: (tabId: string, api: EditorApi) => void;
   readOnly?: boolean;
 }
@@ -72,7 +78,7 @@ const keysOf = (id: string) => bindings(id).map(monacoKey).filter((n): n is numb
 /** One character typed (or an auto-closed pair, or a newline with its indent) that can end a keyword: not a letter, digit, _ or $ */
 const TYPED_END = /^(?:[^\p{L}\p{N}_$]|[([{'"`][)\]}'"`]|\r?\n[ \t]*)$/u;
 
-export function ConsoleEditor({ tabId, connId, database, initialSql, language, kind, onChange, onRun, onMarkClick, registerApi, readOnly }: Props) {
+export function ConsoleEditor({ tabId, connId, database, initialSql, language, kind, onChange, onRun, onMarkClick, split, onCaret, onStatements, registerApi, readOnly }: Props) {
   const modelUri = useRef<string | null>(null);
   useEffect(() => {
     if (modelUri.current) bindModel(modelUri.current, connId, database);
@@ -83,6 +89,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
   onMarkRef.current = onMarkClick;
   const kindRef = useRef(kind);
   kindRef.current = kind;
+  const follow = useRef({ split, onCaret, onStatements });
+  follow.current = { split, onCaret, onStatements };
 
   return (
     <Editor
@@ -225,6 +233,45 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
           );
           drawMarks();
         });
+        // ── Result tabs follow the statements (#151): the script is split once per text version, a pause after typing (a long script
+        // would make each keystroke wait) or right away for a run; a caret move only looks the statement up
+        let stmts: { version: number; segs: { start: number; end: number }[]; texts: string[] } | null = null;
+        /** The statement the caret was in when last looked up (undefined: not yet): only entering another one shows its tab */
+        let last: number | null | undefined;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        /** Split again if the text changed (the tabs follow it), then show the tab of the statement the caret entered, if it did */
+        const sync = () => {
+          clearTimeout(timer);
+          timer = undefined;
+          const m = ed.getModel();
+          const fn = follow.current.split;
+          const pos = ed.getPosition();
+          if (!m || !fn || !pos || !sharedReady()) return;
+          if (stmts?.version !== m.getVersionId()) {
+            const before = stmts?.texts;
+            const text = m.getValue();
+            const segs = fn(text).map((s) => {
+              const raw = text.slice(s.start, s.end);
+              return { start: s.start + raw.length - raw.trimStart().length, end: s.end };
+            });
+            const after = segs.map((s) => text.slice(s.start, s.end).trim());
+            stmts = { version: m.getVersionId(), segs, texts: after };
+            if (before && (before.length !== after.length || before.some((t, i) => t !== after[i]))) follow.current.onStatements?.(before, after);
+          }
+          const at = m.getOffsetAt(pos);
+          // Right after its `;` is still in it, as ⌘↩ plans it
+          const i = stmts.segs.findIndex((s) => s.start <= at && at <= s.end + 1);
+          const now = i < 0 ? null : i;
+          if (last !== undefined && now !== last) follow.current.onCaret?.(now);
+          last = now;
+        };
+        sync();
+        ed.onDidChangeModelContent(() => {
+          clearTimeout(timer);
+          timer = setTimeout(sync, 150);
+        });
+        // While a split waits, it looks the caret up itself
+        ed.onDidChangeCursorPosition(() => timer === undefined && sync());
         ed.onMouseDown((e) => {
           if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
           const line = e.target.position?.lineNumber;
@@ -234,6 +281,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
         const run = (explain?: "plan" | "analyze") => {
           const m = ed.getModel();
           if (!m) return;
+          // The tabs as of this text, and the caret's statement as of this run: moving within it after the run keeps the tab picked
+          sync();
           const sel = ed.getSelection();
           const selection =
             sel && !sel.isEmpty() ? { text: m.getValueInRange(sel), start: m.getOffsetAt(sel.getStartPosition()), end: m.getOffsetAt(sel.getEndPosition()) } : null;
@@ -290,6 +339,7 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
         const offKeymap = onKeymapChange(register);
         // addAction's commands·shortcuts·menus stay in the global registry, so dispose them manually when the editor closes
         ed.onDidDispose(() => {
+          clearTimeout(timer);
           offKeymap();
           unbalanced?.dispose();
           setFocusWidgets(owner, undefined);

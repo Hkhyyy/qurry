@@ -5,7 +5,7 @@ import { expect, fireEvent, userEvent, waitFor, within } from "storybook/test";
 import "../../lib/mock";
 import { monaco } from "../../lib/monaco";
 import App from "../../App";
-import { SettingsDialog } from "../../features/settings/SettingsDialog";
+import { ResultTabsField, SettingsDialog } from "../../features/settings/SettingsDialog";
 import { setFont } from "../../lib/prefs";
 import { saveCustomTheme, setThemeSync } from "../../lib/theme";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
@@ -121,6 +121,24 @@ export const SettingsFontsCustom: S = {
   },
 };
 
+/** Settings › Result tabs (#151): unpinned result tabs kept per console, 10 by default (shared with the TUI's ⌃k › Result Tabs…); what it
+ *  does is in its ⓘ. A value that isn't 1 or more says so and isn't saved */
+const ResultTabsForm = () => (
+  <div className="settings-form" style={{ width: 520 }}>
+    <ResultTabsField />
+  </div>
+);
+export const SettingsResultTabs: S = { name: "Settings — Result tabs", render: () => <ResultTabsForm /> };
+export const SettingsResultTabsInvalid: S = {
+  name: "Settings — Result tabs: 0",
+  render: () => <ResultTabsForm />,
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    const field = await c.findByRole("spinbutton", { name: "Result tabs" });
+    await userEvent.type(field, "{backspace}{backspace}0");
+    await c.findByText("Enter 1 or more.");
+  },
+};
 /** Settings › Appearance › Theme with Sync with OS on: a dark and a light theme of the user's choice (here One Dark and Solarized Light),
  *  shared with the TUI, which picks between them by its terminal's background */
 export const SettingsThemeSync: S = {
@@ -705,7 +723,7 @@ export const ConsoleSplitterFailed: S = {
         tabId="story" target="dev" initialSql={"select * from customers;\nselect 1;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
         dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
         output={[{ ts: "10:24:01", text: SPLITTER_FAILED, level: "error" }]} txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onCaret={noop} onStatements={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
@@ -720,7 +738,7 @@ export const ConsoleStatementsPopup: S = {
         tabId="story-stmts" target="dev" initialSql={"select * from customers;\nselect 1;\nselect 2;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
         dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
         output={[]} txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onCaret={noop} onStatements={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
@@ -745,7 +763,7 @@ export const ConsoleAssist: S = {
         tabId="story-assist" target="dev" initialSql={"select nme, order_total(id, ) from orders o\njoin users u on o.user_id = u.id;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
         dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
         output={[]} txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onCaret={noop} onStatements={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
@@ -769,7 +787,7 @@ export const ConsoleUnclosedBracket: S = {
         tabId="story-unclosed" target="dev" initialSql={"select user_id, count(*\n  from payment\n where card_brand in ('VISA', 'MASTER')\n group by 1;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
         dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
         output={[]} txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onCaret={noop} onStatements={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
@@ -841,7 +859,7 @@ export const ConsoleLongOutput: S = {
           { ts: "10:24:02", text: "ERROR: value too long for type character varying(255)", level: "error" },
         ]}
         txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onCaret={noop} onStatements={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
@@ -857,7 +875,7 @@ const consoleUsers: QueryResult = {
 const consoleProps = {
   tabId: "story", target: "dev", connName: "[DEV] shop_app", kind: "postgres" as const, dialect: dialectOf("postgres"), database: "shop_app", schema: "public",
   dbList: [], schemaList: [], running: false, loadingMore: false, output: [], txManual: false, inTx: false,
-  onChange: noop, onExecute: noop, onCancel: noop, onSetActiveResult: noop, onPin: noop, onCloseResult: noop, onFetchMore: noop, onSubmit: async () => {}, onExport: noop, onHistory: noop,
+  onChange: noop, onExecute: noop, onCancel: noop, onSetActiveResult: noop, onCaret: noop, onStatements: noop, onPin: noop, onCloseResult: noop, onFetchMore: noop, onSubmit: async () => {}, onExport: noop, onHistory: noop,
   onTxMode: noop, onCommit: noop, onRollback: noop, onLoadDbs: noop, onLoadSchemas: noop, onSwitchDb: noop, onSwitchSchema: noop, registerApi: noop, onClearOutput: noop, onError: noop, onLoadingChange: noop,
 };
 /** One toggling button per toolbar (#107): the console's ▶ is ■ in the same spot while it runs a statement (not for a result's
@@ -890,7 +908,7 @@ export const ConsoleEditableResult: S = {
   render: () => (
     <Frame h={420}>
       <ConsolePane {...consoleProps} initialSql="select id, user_name as name, email from users;" activeResult="r1"
-        results={[{ id: "r1", title: "Result 1", sql: "select id, user_name as name, email from users", kind: "result", result: consoleUsers, pinned: false }]} />
+        results={[{ id: "r1", stmt: 0, num: 1, used: 1, title: "users", sql: "select id, user_name as name, email from users", kind: "result", result: consoleUsers, pinned: false }]} />
     </Frame>
   ),
   play: async ({ canvasElement }) => {
@@ -905,6 +923,33 @@ export const ConsoleEditableResult: S = {
     await userEvent.type(input, "Lee{Enter}");
   },
 };
+/** #151: one result tab per statement, numbered by its place in the script ("2: payments"); the caret entering a statement shows its
+ *  tab, a rerun replaces it, deleting the statement closes it. Statement 1's first result was pinned (📌): it no longer follows, and
+ *  running statement 1 again opened the tab after it. Settings › Result tabs caps the unpinned ones */
+const resultTabsPayments: QueryResult = {
+  columns: [{ name: "id", typeName: "INT8" }, { name: "order_id", typeName: "INT8" }, { name: "method", typeName: "VARCHAR" }, { name: "amount", typeName: "NUMERIC" }],
+  rows: Array.from({ length: 5 }, (_, i) => [i + 1, 1000 + i, ["card", "bank", "point"][i % 3], ((i * 53) % 400) + 10]),
+  rowsAffected: 0, truncated: false, elapsedMs: 3, hasResultSet: true,
+};
+const resultTabsSql = "select id, user_name as name, email from users";
+const ConsoleResultTabsScreen = () => (
+  <Frame h={420}>
+    <ConsolePane {...consoleProps} tabId="story-result-tabs" initialSql={`${resultTabsSql};\nselect * from payments limit 5;`} activeResult="r3"
+      output={[
+        { ts: "10:24:01", level: "sql", text: `[DEV] shop_app> ${resultTabsSql}` },
+        { ts: "10:24:01", level: "info", text: "3 rows retrieved starting from 1 in 4 ms" },
+        { ts: "10:24:09", level: "sql", text: "[DEV] shop_app> select * from payments limit 5" },
+        { ts: "10:24:09", level: "info", text: "5 rows retrieved starting from 1 in 3 ms" },
+      ]}
+      results={[
+        { id: "r1", stmt: null, num: 1, used: 1, title: "users", sql: resultTabsSql, kind: "result", result: consoleUsers, pinned: true },
+        { id: "r2", stmt: 0, num: 1, used: 2, title: "users", sql: resultTabsSql, kind: "result", result: { ...consoleUsers, rows: consoleUsers.rows.slice(0, 2) }, pinned: false },
+        { id: "r3", stmt: 1, num: 2, used: 3, title: "payments", sql: "select * from payments limit 5", kind: "result", result: resultTabsPayments, pinned: false },
+      ]} />
+  </Frame>
+);
+export const ConsoleResultTabs: S = { name: "Console — result tabs", render: () => <ConsoleResultTabsScreen /> };
+export const ConsoleResultTabsLight: S = { name: "Console — result tabs, light", globals: { theme: "light" }, render: () => <ConsoleResultTabsScreen /> };
 /** Read-only: the greyed-out edit buttons say why (QueryResult.readOnlyReason; here the key isn't in the result) */
 export const ConsoleReadOnlyResult: S = {
   name: "Console — read-only result (reason)",
@@ -914,7 +959,7 @@ export const ConsoleReadOnlyResult: S = {
     return (
       <Frame h={420}>
         <ConsolePane {...consoleProps} initialSql={sql + ";"} activeResult="r1"
-          results={[{ id: "r1", title: "Result 1", sql, kind: "result", result: { ...rest, readOnlyReason: "Read-only: the result doesn't include the primary key of public.users (id)." }, pinned: false }]} />
+          results={[{ id: "r1", stmt: 0, num: 1, used: 1, title: "users", sql, kind: "result", result: { ...rest, readOnlyReason: "Read-only: the result doesn't include the primary key of public.users (id)." }, pinned: false }]} />
       </Frame>
     );
   },
@@ -936,7 +981,7 @@ export const ConsoleJoinResult: S = {
   name: "Console — join result, edited per table",
   render: () => (
     <Frame h={420}>
-      <ConsolePane {...consoleProps} initialSql={vocSql + ";"} activeResult="r1" results={[{ id: "r1", title: "Result 1", sql: vocSql, kind: "result", result: vocJoin, pinned: false }]} />
+      <ConsolePane {...consoleProps} initialSql={vocSql + ";"} activeResult="r1" results={[{ id: "r1", stmt: 0, num: 1, used: 1, title: "crm.voc", sql: vocSql, kind: "result", result: vocJoin, pinned: false }]} />
     </Frame>
   ),
   play: async ({ canvasElement }) => {
@@ -995,10 +1040,10 @@ function ConsoleMarks() {
           setOutput(stmts.flatMap((s, i) => {
             const [state, text] = runs[i];
             mark?.(i, { state, out: `o${i}`, ts, text });
-            return [{ ts, text: `[DEV] shop_app> ${s}`, level: "sql" as const, stmt: `o${i}` }, ...(text ? [{ ts, text, level: state === "ok" ? ("info" as const) : ("error" as const) }] : [])];
+            return [{ ts, text: `[DEV] shop_app> ${s.sql}`, level: "sql" as const, stmt: `o${i}` }, ...(text ? [{ ts, text, level: state === "ok" ? ("info" as const) : ("error" as const) }] : [])];
           }));
         }}
-        onCancel={noop} onSetActiveResult={setActive} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onCancel={noop} onSetActiveResult={setActive} onCaret={noop} onStatements={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop}
         registerApi={(_id, a) => setTimeout(() => a.run())} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />

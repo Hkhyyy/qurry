@@ -98,6 +98,13 @@ pub(super) fn mouse_down(app: &mut App, x: u16, y: u16) {
         if inside(app.hits.run, x, y) {
             return app.execute(false);
         }
+        // A result tab's label (on the result panel's top border, which is also the divider)
+        if let Some(&(_, id)) = app.hits.result_tabs.iter().find(|(r, _)| inside(*r, x, y)) {
+            if let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
+                c.results.show(id);
+            }
+            return;
+        }
         if inside(app.hits.divider, x, y) {
             app.drag = Some(Drag::Console);
             return;
@@ -286,7 +293,7 @@ fn click(app: &mut App, x: u16, y: u16) {
             && let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind)
             && c.marks.at(row).is_some()
         {
-            c.show_output = true;
+            c.results.show(None);
             return;
         }
         if let Some(pos) = editor_pos(app, x, y) {

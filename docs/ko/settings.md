@@ -12,6 +12,7 @@ GUI **Settings** (`⌘,`, 또는 맨 왼쪽 워크스페이스 막대 아래의 
 | Editor font | 쿼리 콘솔 편집기의 글꼴과 크기. 크기 8–32 px (기본 13). `⌃⇧.` / `⌃⇧,` 로도 바꿀 수 있고, Settings 에 바뀐 크기가 보입니다 | 아니요 (TUI 는 터미널 글꼴을 씀) |
 | Grid font | 결과 · 테이블 그리드의 글꼴과 크기. 크기 9–16 px (기본 12): 행 높이는 그대로라 더 크면 글자가 잘립니다. 크기에 맞춰 열이 넓어집니다 | 아니요 (TUI 는 터미널 글꼴을 씀) |
 | Keyword case | 콘솔에서 입력할 때와 **Reformat Code** 에서 SQL 키워드를 **Off** (기본), **UPPER**, **lower** 중 무엇으로 쓸지 ([아래](#키워드-대소문자와-reformat-code)) | 예 (TUI **⌃k › Keyword Case…**) |
+| Result tabs | 콘솔마다 둘 고정하지 않은 결과 탭 수, 기본 10 ([아래](#result-tabs)) | 예 (TUI **⌃k › Result Tabs…**) |
 | Alignment | 결과 표에서 칸 안의 값을 어디에 둘지, 값 종류마다 (아래) | 예 (TUI **⌃k › Grid Alignment…**) |
 | Status bar | 포커스가 있는 그리드에 대해 상태 표시줄이 보여 줄 항목: Position, Shown columns, Not null, Sum, Avg, Min, Max, Size ([아래](#상태-표시줄-항목)) | 예 (TUI **⌃k › Status Bar Items…**) |
 | Updates | 앱을 켤 때 새 버전 확인, **Check Now** | — |
@@ -61,6 +62,12 @@ GUI **Settings** (`⌘,`, 또는 맨 왼쪽 워크스페이스 막대 아래의 
 설정은 `settings.json` 에 `"keywordCase"` (`"off"`, `"upper"`, `"lower"`) 로 저장됩니다. TUI 는 시작할 때와 **⌃k › Keyword Case…** 를 열 때 읽으므로, GUI 에서 바꾼 뒤에는 그 명령을 열거나 TUI 를 다시 시작하세요.
 
 TUI 의 `keymap.json` 이 이미 `⌥⇧F` 를 다른 명령에 주었다면 그 명령이 키를 그대로 갖고 Reformat Code 에는 키가 없습니다: TUI 를 시작할 때 상태 줄이 알려 줍니다. `F1` 창에서 Reformat Code 에 키를 주세요 (또는 `⌃k` 에서 실행).
+
+### Result tabs
+
+콘솔이 실행한 문장마다 결과 탭이 하나씩 생기고, 스크립트를 고치면 탭이 그 문장을 따라갑니다 ([시작하기](getting-started.md)). **Result tabs** 는 콘솔마다 둘 고정하지 않은 탭 수입니다 (기본 10, 1 이상). 넘으면 가장 오래 보지 않은 탭이 닫히고, 보고 있는 탭은 닫히지 않습니다. 고정한 탭은 세지 않습니다. 남은 탭마다 행을 메모리에 두므로, 수를 줄이면 덜 씁니다.
+
+0.3.4 전에는 실행하면 콘솔의 고정하지 않은 결과 탭이 모두 바뀌었습니다. 직접 비우려면 결과 탭 메뉴의 **Close All Unpinned** 를 쓰세요. TUI 에서 이 설정은 **⌃k › Result Tabs…** 입니다. 설정은 `settings.json` 에 `"resultTabs"` 로 저장되고, TUI 는 시작할 때와 그 명령을 열 때 읽습니다. 결과는 워크스페이스에 저장되지 않으므로 저장된 것은 바뀌지 않습니다.
 
 ### 결과 표의 정렬 (Alignment)
 
