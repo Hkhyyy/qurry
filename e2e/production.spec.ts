@@ -118,10 +118,10 @@ test("Explain Analyse of a SELECT that calls a user-defined function runs it rol
 
 test("Explain Analyse of a plain read or a filtered DELETE the rollback undoes asks nothing (one rule with the TUI)", async ({ page }) => {
   await explainAnalyse(page, "select count(*) from users");
-  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: users/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: 1: users/]);
   await expect(dialog(page)).toHaveCount(0);
   await explainAnalyse(page, "delete from users where id = 1");
-  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: users/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: 1: users/]);
   await expect(dialog(page)).toHaveCount(0);
   await resultTabs(page).first().click();
   await expect(page.locator(".work-layer:visible .output-log")).toContainText("its table changes were undone, but not what a trigger or function did outside the transaction");
@@ -133,7 +133,7 @@ test("Explain Analyse of a DELETE without WHERE asks once, with that reason (one
   await expect(dialog(page).locator(".ui-modal-title")).toHaveText("[PROD] shop_app: Explain Analyse");
   await expect(dialog(page)).toContainText("DELETE without WHERE changes every row, holding their locks until the rollback undoes it");
   await dialog(page).getByRole("button", { name: "Run Anyway" }).click();
-  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: users/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: 1: users/]);
   await expect(dialog(page)).toHaveCount(0);
 });
 

@@ -2,11 +2,12 @@ import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { QueryResult, Dialect, DbKind, currentFirst } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
-import { DEFAULT_EXEC, ExecSettings, planExecution, planSelection } from "../lib/execPlan";
+import { DEFAULT_EXEC, ExecSettings, planExecution, planSelection, type Stmt } from "../lib/execPlan";
 import { initShared, sharedReady } from "../lib/shared";
 import { cmd, eventSpec, keyTitle, runKey } from "../lib/shortcuts";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import type { MarkStmt } from "../lib/stmtMark";
+import type { RunStmt } from "../lib/resultTabs";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
 import { ask } from "../lib/dialogs";
@@ -45,6 +46,13 @@ export interface PlanNode {
 
 export interface ResultEntry {
   id: string;
+  /** The statement's place in the script (0-based) the tab follows (lib/resultTabs); null once it stopped following (pinned, or the
+   *  run wasn't one of the script's statements) */
+  stmt: number | null;
+  /** The number in its label ("2: customers"): its statement's place + 1, kept as it was once the tab stops following */
+  num: number;
+  /** When it last ran or was shown: past Settings › Result tabs the least recently shown unpinned tab closes */
+  used: number;
   title: string;
   sql: string;
   kind: "result" | "plan";
@@ -68,6 +76,9 @@ export interface ConsoleApi extends EditorApi {
   loading: () => boolean;
   cancelPending: () => void;
 }
+
+/** A result tab's label: its statement's number and title ("2: customers") */
+const resultLabel = (r: ResultEntry) => (r.kind === "plan" ? "Plan: " : "") + `${r.num}: ${r.title}`;
 
 /** Output when the module failed to load, so ⌘↩ couldn't plan the console */
 export const SPLITTER_FAILED =
@@ -99,8 +110,12 @@ interface Props {
   /** Read-only data source: its results can't be edited */
   readOnly?: boolean;
   onChange: (sql: string) => void;
-  /** Actual execution: list of statements */
-  onExecute: (statements: string[], explain?: "plan" | "analyze", mark?: MarkStmt) => void;
+  /** Actual execution: the statements, each with its place in the script (its result tab follows it) */
+  onExecute: (statements: RunStmt[], explain?: "plan" | "analyze", mark?: MarkStmt) => void;
+  /** The caret moved into statement `stmt` (its place in the script; null: between statements): its result tab is shown */
+  onCaret: (stmt: number | null) => void;
+  /** The script was edited: its statements' texts before and after, so the result tabs follow their statements */
+  onStatements: (before: string[], after: string[]) => void;
   onCancel: () => void;
   onSetActiveResult: (id: string) => void;
   onPin: (id: string, pinned: boolean) => void;
@@ -132,7 +147,7 @@ interface Props {
 export function ConsolePane(p: Props) {
   const [settings, setSettingsState] = useState<ExecSettings>(loadExecSettings);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
-  const [chooser, setChooser] = useState<{ options: { label: string; stmts: string[]; ranges: { start: number; end: number }[] }[]; idx: number; req: RunRequest } | null>(null);
+  const [chooser, setChooser] = useState<{ options: { label: string; stmts: RunStmt[]; ranges: { start: number; end: number }[] }[]; idx: number; req: RunRequest } | null>(null);
   const [api, setApi] = useState<EditorApi | null>(null);
   /** The Output line of the gutter mark last clicked: selected, and scrolled to on each click */
   const [markedOut, setMarkedOut] = useState<{ out: string } | null>(null);
@@ -162,7 +177,7 @@ export function ConsolePane(p: Props) {
     if (ok) edits.current = 0;
     return ok;
   };
-  const execute = async (stmts: string[], explain?: "plan" | "analyze", mark?: MarkStmt) => {
+  const execute = async (stmts: RunStmt[], explain?: "plan" | "analyze", mark?: MarkStmt) => {
     if (await dropEdits()) p.onExecute(stmts, explain, mark);
   };
   const showResult = async (id: string) => {
@@ -183,6 +198,16 @@ export function ConsolePane(p: Props) {
 
   /** ⌘↩ execution rules (DataGrip Query Execution settings) */
   const splitFn = p.dialect?.split ?? ((t: string) => splitScript(t, p.kind));
+  /** The script statement each range (in `text`) starts in; `whole`: only when the range is all of it (a selection's statement) */
+  const places = (text: string, ranges: { start: number; end: number }[], whole: boolean): (number | null)[] => {
+    if (!sharedReady()) return ranges.map(() => null);
+    const segs = splitFn(text);
+    const body = (r: { start: number; end: number }) => text.slice(r.start, r.end).trim();
+    return ranges.map((r) => {
+      const i = segs.findIndex((s) => s.start <= r.start && r.start < s.end);
+      return i < 0 || (whole && body(segs[i]) !== body(r)) ? null : i;
+    });
+  };
   // The run waiting for the module calls the latest render's run, and is skipped if a run started meanwhile
   const running = useRef(p.running);
   running.current = p.running;
@@ -221,17 +246,22 @@ export function ConsolePane(p: Props) {
       // As one statement without the module too (the way to run while it failed to load)
       const stmts = settings.selection === "single" && !sharedReady() ? [{ start: 0, end: sel.length, sql: sel.trim() }] : planSelection(sel, splitFn(sel), settings);
       if (!stmts.length) return;
-      const mark = req.begin(stmts.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end })));
-      return void execute(stmts.map((s) => s.sql), req.explain, mark);
+      const ranges = stmts.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end }));
+      const at = places(text, ranges, true);
+      return void execute(stmts.map((s, i) => ({ sql: s.sql, stmt: at[i] })), req.explain, req.begin(ranges));
     }
     const plan = planExecution(text, offset, splitFn(text), settings, p.kind);
     if (!plan) return;
+    const toRun = (stmts: Stmt[]) => {
+      const at = places(text, stmts, false);
+      return stmts.map((x, i) => ({ sql: x.sql, stmt: at[i] }));
+    };
     if ("run" in plan) {
       const mark = req.begin(plan.run.map((x) => ({ start: x.start, end: x.end })));
-      return void execute(plan.run.map((x) => x.sql), req.explain, mark);
+      return void execute(toRun(plan.run), req.explain, mark);
     }
     // Ask what to execute: Statements popup
-    setChooser({ options: plan.ask.map((o) => ({ label: o.label, stmts: o.stmts.map((x) => x.sql), ranges: o.stmts })), idx: 0, req });
+    setChooser({ options: plan.ask.map((o) => ({ label: o.label, stmts: toRun(o.stmts), ranges: o.stmts })), idx: 0, req });
   };
 
   latestRun.current = run;
@@ -396,6 +426,10 @@ export function ConsolePane(p: Props) {
               kind={p.dialect?.quoting ?? "postgres"}
               onChange={p.onChange}
               onRun={onRun}
+              split={splitFn}
+              // A caret move never asks to discard a grid's pending edits: the tab stays until it is picked (or the edits are done)
+              onCaret={(stmt) => edits.current === 0 && p.onCaret(stmt)}
+              onStatements={p.onStatements}
               onMarkClick={(out) => {
                 p.onSetActiveResult("output");
                 setMarkedOut({ out });
@@ -433,7 +467,7 @@ export function ConsolePane(p: Props) {
             <div className="result-tabs">
               <TabStrip
                 activeKey={shown}
-                overflow={[{ key: "output", label: "Output", active: shown === "output", onSelect: () => void showResult("output") }, ...p.results.map((r) => ({ key: r.id, label: (r.kind === "plan" ? "Plan: " : "") + r.title, active: shown === r.id, onSelect: () => void showResult(r.id) }))]}
+                overflow={[{ key: "output", label: "Output", active: shown === "output", onSelect: () => void showResult("output") }, ...p.results.map((r) => ({ key: r.id, label: resultLabel(r), active: shown === r.id, onSelect: () => void showResult(r.id) }))]}
                 style={{ flex: 1, minWidth: 0 }}
               >
               <TabItem variant="result" label="Output" active={shown === "output"} onClick={() => void showResult("output")} />
@@ -441,7 +475,7 @@ export function ConsolePane(p: Props) {
                 <TabItem
                   key={r.id}
                   variant="result"
-                  label={(r.kind === "plan" ? "Plan: " : "") + r.title}
+                  label={resultLabel(r)}
                   active={shown === r.id}
                   pinned={r.pinned}
                   onPin={() => p.onPin(r.id, false)}
@@ -456,6 +490,7 @@ export function ConsolePane(p: Props) {
                     });
                   }}
                   title={r.sql}
+                  data-result={r.id}
                 />
               ))}
               </TabStrip>
@@ -498,7 +533,7 @@ export function ConsolePane(p: Props) {
                   query={active.sql}
                   onFetchMore={() => p.onFetchMore(active.id)}
                   onSubmit={(st) => p.onSubmit(active.id, st)}
-                  onReload={() => void execute([active.sql])}
+                  onReload={() => void execute([{ sql: active.sql, stmt: active.stmt }])}
                   onCancel={p.onCancel}
                   onExport={() => p.onExport(active.sql)}
                   dialect={p.dialect}

@@ -67,7 +67,7 @@ test("run one statement → one result tab", async ({ page }) => {
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+Enter");
   await expect(work(page).locator(".exec-highlight")).not.toHaveCount(0);
-  await expect(resultTabs(page)).toHaveText(["Output", /^users/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^1: users/]);
   await expect(resultTabs(page).nth(1)).toHaveAttribute("aria-selected", "true");
   await expect(status(page)).toHaveText("1 statement executed");
 });
@@ -75,7 +75,7 @@ test("run one statement → one result tab", async ({ page }) => {
 test("run several → one result tab per statement", async ({ page }) => {
   await typeSql(page, "select 1;\nselect * from users;\n-- by status\nselect * from orders;");
   await runAll(page);
-  await expect(resultTabs(page)).toHaveText(["Output", /^Result 1/, /^users/, /^by status/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^1: Result 1/, /^2: users/, /^3: by status/]);
   await expect(status(page)).toHaveText("3 statements executed");
   await resultTabs(page).first().click();
   await expect(page.locator(".work-layer:visible .output-log")).toContainText("[DEV] shop_app> select * from users[");
@@ -85,7 +85,7 @@ test("Explain Plan → plan tab with the node tree", async ({ page }) => {
   await typeSql(page, "select * from users u join contracts c on u.contract_id = c.id");
   await page.locator(".work-layer:visible .console-toolbar").getByText("Explain").click();
   await page.getByRole("menuitem", { name: "Explain Plan" }).click();
-  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: users/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: 1: users/]);
   const plan = page.locator(".work-layer:visible .plan-view");
   await expect(plan).toBeVisible();
   // The plan tree comes from analyze_plan (the mock's fixed Gather Merge → Sort → Seq Scan plan)
@@ -112,7 +112,7 @@ for (const [msg, title] of [
     // Look at something else first: the failure brings Output back
     await typeSql(page, "select 1");
     await runAll(page);
-    await expect(resultTabs(page)).toHaveText(["Output", /^Result/]);
+    await expect(resultTabs(page)).toHaveText(["Output", /^1: Result/]);
     await expect(resultTabs(page).nth(1)).toHaveAttribute("aria-selected", "true");
     await page.evaluate((m) => ((globalThis as any).__mockCommitError = m), msg);
     await commit.click();

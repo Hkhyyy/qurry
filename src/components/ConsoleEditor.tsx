@@ -46,6 +46,12 @@ interface Props {
   onRun: (req: RunRequest) => void;
   /** A statement's gutter mark was clicked: its Output line */
   onMarkClick?: (out: string) => void;
+  /** How the console splits its script into statements (their places are what result tabs follow) */
+  split?: (text: string) => { start: number; end: number }[];
+  /** The caret moved: the statement it is in (from its first non-blank character to its end), null between statements */
+  onCaret?: (stmt: number | null) => void;
+  /** The text changed: its statements' texts before and after (once per change, only when they differ) */
+  onStatements?: (before: string[], after: string[]) => void;
   registerApi: (tabId: string, api: EditorApi) => void;
   readOnly?: boolean;
 }
@@ -72,7 +78,7 @@ const keysOf = (id: string) => bindings(id).map(monacoKey).filter((n): n is numb
 /** One character typed (or an auto-closed pair, or a newline with its indent) that can end a keyword: not a letter, digit, _ or $ */
 const TYPED_END = /^(?:[^\p{L}\p{N}_$]|[([{'"`][)\]}'"`]|\r?\n[ \t]*)$/u;
 
-export function ConsoleEditor({ tabId, connId, database, initialSql, language, kind, onChange, onRun, onMarkClick, registerApi, readOnly }: Props) {
+export function ConsoleEditor({ tabId, connId, database, initialSql, language, kind, onChange, onRun, onMarkClick, split, onCaret, onStatements, registerApi, readOnly }: Props) {
   const modelUri = useRef<string | null>(null);
   useEffect(() => {
     if (modelUri.current) bindModel(modelUri.current, connId, database);
@@ -83,6 +89,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
   onMarkRef.current = onMarkClick;
   const kindRef = useRef(kind);
   kindRef.current = kind;
+  const follow = useRef({ split, onCaret, onStatements });
+  follow.current = { split, onCaret, onStatements };
 
   return (
     <Editor
@@ -225,6 +233,36 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
           );
           drawMarks();
         });
+        // ── Result tabs follow the statements (#151): the script is split once per text version (on a change, never on a caret move)
+        let stmts: { version: number; segs: { start: number; end: number }[]; texts: string[] } | null = null;
+        const statements = () => {
+          const m = ed.getModel();
+          const fn = follow.current.split;
+          if (!m || !fn || !sharedReady()) return null;
+          if (stmts?.version !== m.getVersionId()) {
+            const text = m.getValue();
+            const segs = fn(text).map((s) => {
+              const raw = text.slice(s.start, s.end);
+              return { start: s.start + raw.length - raw.trimStart().length, end: s.end };
+            });
+            stmts = { version: m.getVersionId(), segs, texts: segs.map((s) => text.slice(s.start, s.end).trim()) };
+          }
+          return stmts;
+        };
+        statements();
+        ed.onDidChangeModelContent(() => {
+          const before = stmts?.texts;
+          const after = statements()?.texts;
+          if (before && after && (before.length !== after.length || before.some((t, i) => t !== after[i]))) follow.current.onStatements?.(before, after);
+        });
+        ed.onDidChangeCursorPosition((e) => {
+          const m = ed.getModel();
+          const st = follow.current.onCaret && statements();
+          if (!m || !st) return;
+          const at = m.getOffsetAt(e.position);
+          const i = st.segs.findIndex((s) => s.start <= at && at <= s.end);
+          follow.current.onCaret?.(i < 0 ? null : i);
+        });
         ed.onMouseDown((e) => {
           if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
           const line = e.target.position?.lineNumber;
@@ -234,6 +272,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
         const run = (explain?: "plan" | "analyze") => {
           const m = ed.getModel();
           if (!m) return;
+          // The statements as of this run, so an edit after it moves its result tabs (the module may have loaded since the last split)
+          statements();
           const sel = ed.getSelection();
           const selection =
             sel && !sel.isEmpty() ? { text: m.getValueInRange(sel), start: m.getOffsetAt(sel.getStartPosition()), end: m.getOffsetAt(sel.getEndPosition()) } : null;
