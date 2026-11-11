@@ -527,6 +527,33 @@ impl App {
         }
     }
 
+    /// The run key in a console's grid after a failed load: the shown result's own statement again (as the GUI's Run Again), not
+    /// the one at the editor cursor. An Explain result never loads more, so it never runs here. Pending grid edits ask first, as
+    /// execute() does
+    pub fn rerun_result(&mut self) -> bool {
+        let Some(tab) = self.tabs.get(self.active) else { return false };
+        let id = tab.id;
+        let TabKind::Console(c) = &tab.kind else { return false };
+        let Some(t) = c.results.shown_tab().filter(|t| t.grid.more_error.is_some()) else { return false };
+        let at = result_tabs::RunAt { stmt: t.stmt, sql: t.sql.clone(), into: Some(t.id) };
+        let n: usize = c.results.tabs.iter().map(|t| t.grid.pending()).sum();
+        if n == 0 {
+            self.run_stmts(vec![at.sql.clone()], vec![at], false, false);
+            return true;
+        }
+        self.popup = Some(Popup::Confirm {
+            opened: None,
+            text: self.pending_text(n, "run the statement"),
+            on_yes: Self::in_console(id, move |a| {
+                if let Some(TabKind::Console(c)) = a.tabs.get_mut(a.active).map(|t| &mut t.kind) {
+                    c.results.tabs.iter_mut().for_each(|t| t.grid.revert());
+                }
+                a.run_stmts(vec![at.sql.clone()], vec![at], false, false)
+            }),
+        });
+        true
+    }
+
     pub fn fetch_more(&mut self) {
         let Some(t) = self.tabs.get_mut(self.active) else { return };
         let id = t.id;
@@ -543,6 +570,11 @@ impl App {
         g.loading_more = true;
         let sent = g.id;
         let session = g.more_session.clone().unwrap();
+        // How to run it again when it fails: the console's run key in the grid (App::rerun_result), a table tab's r
+        let again = match t.kind {
+            TabKind::Console(_) => format!("{} in the grid runs it again", self.keys.keys(Action::Execute).first().map_or_else(|| "—".into(), |k| crate::keys::disp(k))),
+            _ => "r runs it again".into(),
+        };
         let st = self.state.clone();
         self.spawn(async move { st.fetch_more(session, Some(500)).await.map_err(err) }, move |a, r| {
             let Some(t) = a.tab_mut(id) else { return };
@@ -566,7 +598,7 @@ impl App {
                 }
                 Err(e) => {
                     // The result isn't complete: keep its "+" and say why no more rows came (status line, and the grid's bottom edge)
-                    let why = qurry_shared::errors::more_rows_failed(&e);
+                    let why = qurry_shared::errors::more_rows_failed(&e).replacen(':', &format!(" ({again}):"), 1);
                     g.more_error = Some(why.clone());
                     a.status = why;
                 }

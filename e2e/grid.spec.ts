@@ -94,7 +94,7 @@ test("a load-more that fails keeps its reason in the grid and the result unfinis
   await page.evaluate((w) => ((window as any).__mockFetchMoreError = w), why);
   const scroll = work(page).locator(".grid-scroll").first();
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
-  // The TUI's words (qurry_shared::errors::more_rows_failed), beside the row count (not over the rows), not only in the status bar
+  // The TUI's words (qurry_shared::errors::more_rows_failed), below the rows (not over them), not only in the status bar
   await expect(work(page).locator(".grid-more-error")).toHaveText(`Couldn't load more rows: ${why}`);
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
   // Scrolling on doesn't ask again

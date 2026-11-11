@@ -535,12 +535,28 @@ export const GridLoadingMore: S = {
     </div>
   ),
 };
-/** A load-more that failed (#80): the reason beside the row count (not over the rows), and Run again */
+/** A load-more that failed (#80, #157: after a reconnect the core asks to run it again): the whole reason below the rows (covering
+ * none) with Run again, which runs the statement again and gives the keys back to the grid */
 export const GridLoadMoreFailed: S = {
   name: "Result Grid — load more failed",
   render: () => (
-    <div style={{ position: "relative", height: 260, border: "1px solid var(--ui-border)" }}>
-      <ResultGrid result={{ ...mixed, truncated: true, moreError: "Couldn't load more rows: Session closed" }} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    <div style={{ position: "relative", height: 300, width: 640, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid
+        result={{
+          ...mixed,
+          truncated: true,
+          moreError:
+            "Couldn't load more rows: The data source reconnected since this result was read (settings saved, disconnected or idle), and the session was changed since (SET, RESET, USE or a statement that isn't a read), so a new connection wouldn't match. Run the query again to load more rows.",
+        }}
+        running={false}
+        loadingMore={false}
+        query="select * from payment_check"
+        onFetchMore={noop}
+        onSubmit={async () => {}}
+        onReload={noop}
+        onCancel={noop}
+        onExport={noop}
+      />
     </div>
   ),
 };

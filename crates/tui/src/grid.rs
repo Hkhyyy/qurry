@@ -15,7 +15,7 @@ pub struct Grid {
     /// Server cursor session (console) — scrolling to the end loads more
     pub more_session: Option<String>,
     pub loading_more: bool,
-    /// Loading more failed, and why (qurry_shared::errors::more_rows_failed): shown at the grid's bottom edge, no more loads until it runs again
+    /// Loading more failed, why and how to run it again (App::fetch_more): wrapped on the grid's last lines, no more loads until it runs again
     pub more_error: Option<String>,
     /// Tells grids apart: a load-more answer only goes to the grid it was asked for (a run replaces the grid)
     pub id: u64,
@@ -587,26 +587,18 @@ impl Grid {
             // Thick when focused, like kit::panel: focus shows without colors too (NO_COLOR)
             .border_type(if focused { ratatui::widgets::BorderType::Thick } else { ratatui::widgets::BorderType::Plain })
             .border_style(if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::DarkGray) });
-        // The bottom edge says why no more rows came (the status line says it too, and shows a load in flight); right-aligned, in at most
-        // half the edge, so the horizontal scrollbar keeps the rest
-        let msg = self.more_error.as_ref().map(|e| Span::styled(format!(" ✗ {} ", e.lines().next().unwrap_or_default()), Style::default().fg(crate::kit::DANGER)));
-        let msg = msg.map(|mut m| {
-            let room = (area.width.saturating_sub(2) / 2) as usize;
-            if m.content.width() > room {
-                use unicode_width::UnicodeWidthChar;
-                let mut w = 1;
-                let cut: String = m.content.chars().take_while(|c| { w += c.width().unwrap_or(0); w <= room }).collect();
-                m.content = format!("{cut}…").into();
-            }
-            Line::from(m).right_aligned()
-        });
-        let msg_w = msg.as_ref().map_or(0, |m| m.width() as u16);
-        let block = match msg {
-            Some(m) => block.title_bottom(m),
-            None => block,
-        };
-        let inner = block.inner(area);
+        let mut inner = block.inner(area);
         f.render_widget(block, area);
+        // Why no more rows came, in the grid so it stays in sight (the status line is overwritten by the next message): wrapped on
+        // its last lines, up to half of them, so the reason and how to run it again show at usual widths
+        if let Some(e) = &self.more_error
+            && inner.height > 3
+        {
+            let lines = ratatui::text::Text::styled(format!("✗ {e}"), Style::default().fg(crate::kit::DANGER)).lines;
+            let h = crate::kit::wrapped_height(&lines, inner.width).clamp(1, inner.height / 2);
+            inner.height -= h;
+            f.render_widget(ratatui::widgets::Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }), Rect { y: inner.y + inner.height, height: h, ..inner });
+        }
         if inner.height < 2 || self.cols() == 0 {
             return;
         }
@@ -781,14 +773,14 @@ impl Grid {
         }
         // Horizontal scrollbar on the bottom border (GUI: "cols 3–8 of 14" in the status bar): the border line itself is the bar, a dim
         // thin track with a heavier bold thumb over the shown columns (the same focused or not, so it shows in NO_COLOR too), then the
-        // shown range at its right end, before the load-more message. Click or drag the track to move
+        // shown range at its right end. Click or drag the track to move
         self.hbar = Rect::default();
         let last = self.col_off + full.max(1);
         self.shown = Some((self.col_off + 1, last.min(self.cols()), self.cols()));
         if let Some(text) = qurry_shared::format::shown_cols(self.col_off + 1, last, self.cols()) {
             let accent = if focused { Color::Cyan } else { Color::Gray };
             let label = format!(" ◀ {text} ▶ ");
-            let room = inner.width - msg_w;
+            let room = inner.width;
             // A narrow grid keeps the track and drops the range
             let label_w = if room >= label.width() as u16 + 10 { label.width() as u16 } else { 0 };
             let track = Rect { x: inner.x, y: area.bottom().saturating_sub(1), width: room - label_w, height: 1 };

@@ -19,6 +19,8 @@ pub struct SessionEntry {
     /// open in it: then a locked session isn't running anything of the user's, so it doesn't count as busy (in_use) or as maybe
     /// holding a transaction (close_all)
     pub(crate) housekept: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// A statement that changes the session (session::changes_session: SET, RESET, USE …) ran in it since it was opened (Kept::changed)
+    pub(crate) changed: std::sync::atomic::AtomicBool,
 }
 
 /// Housekeeping's hold on a console's session (SessionEntry::housekept). Dropped before the session's lock is let go
@@ -395,6 +397,8 @@ struct Kept {
     /// Which console run it came from (AppState::runs): a reopen that lost a race with a newer run in the tab stops
     run: u64,
     more: session::More,
+    /// Its session had been changed (SessionEntry::changed): a new connection wouldn't have those settings
+    changed: bool,
 }
 
 /// Why a result whose session was closed isn't reopened on a new one (AppState::fetch_more): None if it may be.
@@ -418,6 +422,8 @@ fn reopen_refused(k: &Kept, now: &ConnectionConfig, manual: bool) -> Option<Stri
         return Some(format!("{RECONNECTED}, and loading more would run the statement again, but it isn't a plain read. Run it again yourself to load more rows."));
     } else if crate::guard::locks_rows(&m.sql, kind) {
         return Some(format!("{RECONNECTED}, and loading more would run the statement again, but it locks rows (FOR UPDATE, FOR SHARE, LOCK IN SHARE MODE …). Run it again yourself to load more rows."));
+    } else if k.changed {
+        "the session was changed since (SET, RESET, USE or a statement that isn't a read), so a new connection wouldn't match"
     } else {
         return None;
     };
@@ -1470,7 +1476,7 @@ async fn new_session(state: &AppState, id: &str, tab_id: &str, stale: Option<u64
         s.discard().await;
         return Ok(first);
     }
-    let entry = SessionEntry { conn_id: id.to_string(), pid: s.backend_id(), session: std::sync::Arc::new(tokio::sync::Mutex::new(s)), used: std::sync::Mutex::new(std::time::SystemTime::now()), housekept: Default::default() };
+    let entry = SessionEntry { conn_id: id.to_string(), pid: s.backend_id(), session: std::sync::Arc::new(tokio::sync::Mutex::new(s)), used: std::sync::Mutex::new(std::time::SystemTime::now()), housekept: Default::default(), changed: Default::default() };
     let arc = entry.session.clone();
     let replaced = all.insert(tab_id.to_string(), entry);
     drop(all);
@@ -1935,10 +1941,17 @@ impl AppState {
                     false => None,
                 };
                 let run = self.runs.fetch_add(1, SeqCst);
+                // Whether this or an earlier statement changed the session: a startup script runs before, not through here
+                let changed = self.sessions.read().await.get(t).filter(|e| sess.as_ref().is_some_and(|s| std::sync::Arc::ptr_eq(&e.session, s))).is_some_and(|e| {
+                    if session::changes_session(sql, cfg.kind) {
+                        e.changed.store(true, SeqCst);
+                    }
+                    e.changed.load(SeqCst)
+                });
                 {
                     let mut all = self.more.lock().unwrap();
                     match more {
-                        Some(more) => all.insert(t.to_string(), Kept { conn_id: id.to_string(), cfg: cfg.clone(), run, more }),
+                        Some(more) => all.insert(t.to_string(), Kept { conn_id: id.to_string(), cfg: cfg.clone(), run, more, changed }),
                         None => all.remove(t),
                     };
                 }
@@ -3626,7 +3639,7 @@ pub(crate) mod tests {
             } else {
                 // Loading more of a result whose session was closed runs its statement again on a new one
                 let more = session::More { sql: write.into(), fetched: 500, tx: false, schema: Some(String::new()) };
-                st.more.lock().unwrap().insert("more".into(), Kept { conn_id: id.clone(), cfg: st.source(&id).unwrap(), run: 0, more });
+                st.more.lock().unwrap().insert("more".into(), Kept { conn_id: id.clone(), cfg: st.source(&id).unwrap(), run: 0, more, changed: false });
                 source(st.fetch_more("more".into(), None).await.unwrap_err().to_string());
             }
             let e = st.run_read_only(id.clone(), write.into(), 10).await.unwrap_err().to_string();
@@ -3649,7 +3662,7 @@ pub(crate) mod tests {
     fn reopen_only_plain_reads_outside_a_transaction() {
         use crate::store::DbKind::{Mysql, Postgres};
         let src = |kind| ConnectionConfig { kind, ..silent_source("s", 5432, None) };
-        let k = |sql: &str, kind, tx: bool| Kept { conn_id: "s".into(), cfg: src(kind), run: 0, more: session::More { sql: sql.into(), fetched: 500, tx, schema: Some("public".into()) } };
+        let k = |sql: &str, kind, tx: bool| Kept { conn_id: "s".into(), cfg: src(kind), run: 0, more: session::More { sql: sql.into(), fetched: 500, tx, schema: Some("public".into()) }, changed: false };
         let refused = |sql: &str, kind, tx, manual| reopen_refused(&k(sql, kind, tx), &src(kind), manual);
         for (sql, kind) in [("select * from t order by id", Postgres), ("with a as (select 1) select * from a", Postgres), ("table t", Postgres), ("select * from t", Mysql)] {
             assert_eq!(refused(sql, kind, false, false), None, "{sql}");
@@ -3696,6 +3709,15 @@ pub(crate) mod tests {
             let e = refused(sql, kind, false, false).unwrap_or_else(|| panic!("{sql}"));
             assert!(e.contains("it locks rows") && e.contains("Run it again"), "{sql}: {e}");
         }
+        // The session was changed (SET, RESET, USE …) before or by it: a new connection lacks that, so it says to run it again
+        let set = Kept { changed: true, ..k("select * from t", Postgres, false) };
+        assert_eq!(
+            reopen_refused(&set, &src(Postgres), false).as_deref(),
+            Some("The data source reconnected since this result was read (settings saved, disconnected or idle), and the session was changed since (SET, RESET, USE or a statement that isn't a read), so a new connection wouldn't match. Run the query again to load more rows.")
+        );
+        // A statement of its own that isn't a plain read says so first
+        let e = reopen_refused(&Kept { changed: true, ..k("select pg_sleep(1), * from t", Postgres, false) }, &src(Postgres), false).unwrap();
+        assert!(e.contains("isn't a plain read"), "{e}");
     }
 
     /// Auto-disconnect: close pools and sessions after the idle time. keep-alive keeps the session alive.
@@ -3890,6 +3912,27 @@ pub(crate) mod tests {
         assert!(e.contains("The transaction is lost") && e.contains("nothing was sent"), "{e}");
         assert!(st.sessions.read().await.get("m").is_none(), "refused before opening a session");
 
+        // The session was changed since it opened (SET, RESET, a MySQL `select @v := …`, a temp table): a new connection wouldn't
+        // have it, so it asks to run the query again (picking the schema above isn't such a change: reopen sets it again)
+        let changes: &[&str] = match my {
+            true => &["set @qurry_reconnect = 1", "select @qurry_reconnect := 5", "create temporary table qurry_reconnect_t (a int)"],
+            false => &["set statement_timeout = 0", "reset all", "select set_config('qurry.reconnect', 'x', false)", "create temp table qurry_reconnect_t (a int)"],
+        };
+        for (i, c) in changes.iter().enumerate() {
+            let tab = format!("s{i}");
+            q(c, &tab).await.unwrap();
+            assert!(q(full, &tab).await.unwrap().truncated);
+            st.disconnect("d".into()).await.unwrap();
+            let e = st.fetch_more(tab.clone(), Some(500)).await.unwrap_err().to_string();
+            assert!(e.contains("the session was changed since (SET, RESET, USE or a statement that isn't a read)") && e.ends_with("Run the query again to load more rows."), "{c}: {e}");
+            assert!(st.sessions.read().await.get(&tab).is_none(), "{c}: refused before opening a session");
+            // Run again: a new session without the change, and its result goes on after a reconnect
+            assert!(q(full, &tab).await.unwrap().truncated);
+            st.disconnect("d".into()).await.unwrap();
+            let r = st.fetch_more(tab.clone(), Some(500)).await.unwrap();
+            assert_eq!(first(&r), Some(501), "{c}");
+        }
+
         // A statement that isn't a plain read: not run again behind the user's back
         let sleep = if my { "select n, sleep(0) from fetch_more_reconnect.t order by n" } else { "select n, pg_sleep(0) from fetch_more_reconnect.t order by n" };
         assert!(q(sleep, "w").await.unwrap().truncated);
@@ -3994,7 +4037,9 @@ pub(crate) mod tests {
         assert_eq!(queued.unwrap_err().to_string(), "Session closed");
         assert_eq!(first(&st.fetch_more("t".into(), Some(500)).await.unwrap()), Some(10501), "the new result's rows are contiguous");
 
-        // Two load-mores after a reconnect: one reopens, the other goes on from its cursor
+        // Two load-mores after a reconnect: one reopens, the other goes on from its cursor. On a new session: pg_sleep() above isn't
+        // a plain read, so a result of the old one isn't reopened (session::changes_session)
+        st.close_session("t".into()).await.unwrap();
         run("select g from generate_series(1, 2000) g order by g").await.unwrap();
         st.disconnect("q".into()).await.unwrap();
         let (a, b) = tokio::join!(st.fetch_more("t".into(), Some(500)), st.fetch_more("t".into(), Some(500)));

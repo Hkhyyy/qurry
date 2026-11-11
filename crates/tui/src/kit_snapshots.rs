@@ -260,8 +260,17 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.color = crate::theme::ColorMode::NoColor;
     scenes.push(app_scene(h, "Grid: loading more, NO_COLOR", "NO_COLOR=1: the same bar and words", 120, 26));
     h.app.color = crate::theme::ColorMode::TrueColor;
+    // Loading more failed (#157): the reason wraps on the grid's last lines with the key that runs the result's statement again
+    let why = "Couldn't load more rows (F5 in the grid runs it again): The data source reconnected since this result was read (settings saved, disconnected or idle), and the session was changed since (SET, RESET, USE or a statement that isn't a read), so a new connection wouldn't match. Run the query again to load more rows.";
     if let Some(g) = h.app.grid_mut() {
-        (g.result.truncated, g.loading_more) = (false, false);
+        (g.loading_more, g.more_error) = (false, Some(why.into()));
+    }
+    let status = std::mem::replace(&mut h.app.status, why.into());
+    h.app.focus = crate::app::Focus::Grid;
+    scenes.push(app_scene(h, "Console: load more failed", "A load of more rows that failed keeps its reason on the grid's last lines, wrapped (here at 80 columns), with how to go on: the run key in the grid runs the result's statement again, not the editor's", 80, 26));
+    (h.app.focus, h.app.status) = (crate::app::Focus::Editor, status);
+    if let Some(g) = h.app.grid_mut() {
+        (g.result.truncated, g.more_error) = (false, None);
     }
     // Horizontal scrollbar on the grid's bottom border (#107): 14 columns, 3–8 shown
     let id = h.console_with("select * from payment;", 0, 22);
@@ -297,9 +306,9 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     }
     (h.app.color, h.app.themes.theme) = (ColorMode::TrueColor, None);
     if let Some(g) = h.app.grid_mut() {
-        (g.result.truncated, g.more_error) = (true, Some("Couldn't load more rows: Session closed".into()));
+        (g.result.truncated, g.more_error) = (true, Some("Couldn't load more rows (F5 in the grid runs it again): Session closed".into()));
     }
-    scenes.push(app_scene(h, "Grid scrollbar: beside a failed load-more", "The load-more message keeps its place at the right end; the range sits just before it", 120, 22));
+    scenes.push(app_scene(h, "Grid scrollbar: with a failed load-more", "The load-more reason sits on the grid's last line, above the bottom edge, which keeps the whole bar and its range", 120, 22));
     h.app.focus = crate::app::Focus::Editor;
     h.app.close_tab_now(h.app.active);
     h.app.status = status;

@@ -143,6 +143,10 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
         if a == Action::Execute && app.focus == Focus::Tree {
             return app.run_action(Action::Refresh);
         }
+        // Run key in a console's grid whose load failed = its result's statement again (the grid's reason says so)
+        if a == Action::Execute && app.focus == Focus::Grid && app.rerun_result() {
+            return;
+        }
         return app.run_action(a);
     }
     // Alt+1~9: workspaces (if the keymap binds that key to another command, that command wins)

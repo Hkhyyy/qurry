@@ -61,7 +61,8 @@ interface Props {
   query: string | null;
   onFetchMore: () => void;
   onSubmit: (statements: string[]) => Promise<void>;
-  onReload: () => void;
+  /** A console's run again resolves when it ends (Run again then gives the keys to its new grid) */
+  onReload: () => void | Promise<void>;
   onCancel: () => void;
   onExport: () => void;
   /** Table data: server-side sort (ORDER BY) */
@@ -509,6 +510,14 @@ export function ResultGrid(p: Props) {
     setPanelError(err && `${cols[d.c].name} not changed: ${err}`);
   }, [panelCell?.r, panelCell?.c]);
   const focusGrid = () => (scrollRef.current ?? wrapRef.current)?.focus();
+  // The button goes with the failure: the keys go to the grid again, the new one when the run replaced it (a console's result is
+  // drawn anew in the same place after its run)
+  const runAgain = async () => {
+    const place = wrapRef.current?.parentElement;
+    focusGrid();
+    await p.onReload();
+    requestAnimationFrame(() => place?.querySelector<HTMLElement>(":scope > .grid-wrap .grid-scroll")?.focus());
+  };
   const openPanel = () => {
     setPanel(true);
     setPanelFocus((n) => n + 1);
@@ -910,13 +919,6 @@ export function ResultGrid(p: Props) {
           <IcSearch />
         </IconButton>
         <span className="tb-info">{rowsLabel}{pendingCount ? ` · ${pendingCount} pending` : ""}</span>
-        {/* A failed load-more: why no more rows came (the status bar says it too), and running the statement again starts over */}
-        {!loadingMore && result.moreError && (
-          <>
-            <Text truncate className="grid-more-error">{result.moreError}</Text>
-            <Button size="sm" onClick={p.onReload} disabled={p.running}>Run again</Button>
-          </>
-        )}
         <Spacer />
         <ToolButton title="Data Extractor (copy format)" onClick={(e) => dropdown(e, EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })))}>
           {extractor} ▾
@@ -1137,6 +1139,14 @@ export function ResultGrid(p: Props) {
           </>
         )}
       </PanelGroup>
+      {/* A failed load-more, below the rows (covering none), in full: why no more rows came (the status bar says it too), and
+          running the statement again starts over */}
+      {!loadingMore && result.moreError && (
+        <Notice tone="danger" className="grid-more-error-row">
+          <span className="grid-more-error">{result.moreError}</span>
+          <Button size="sm" onClick={runAgain} disabled={p.running}>Run again</Button>
+        </Notice>
+      )}
 
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
 
