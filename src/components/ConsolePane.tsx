@@ -110,8 +110,9 @@ interface Props {
   /** Read-only data source: its results can't be edited */
   readOnly?: boolean;
   onChange: (sql: string) => void;
-  /** Actual execution: the statements, each with its place in the script (its result tab follows it) */
-  onExecute: (statements: RunStmt[], explain?: "plan" | "analyze", mark?: MarkStmt) => void;
+  /** Actual execution: the statements, each with its place in the script (its result tab follows it). Resolves when the run ends (a
+   * result's Run again gives the keys to its new grid then) */
+  onExecute: (statements: RunStmt[], explain?: "plan" | "analyze", mark?: MarkStmt) => void | Promise<void>;
   /** The caret moved into statement `stmt` (its place in the script; null: between statements): its result tab is shown */
   onCaret: (stmt: number | null) => void;
   /** The script was edited: its statements' texts before and after, so the result tabs follow their statements; `keep`: the shown
@@ -179,7 +180,7 @@ export function ConsolePane(p: Props) {
     return ok;
   };
   const execute = async (stmts: RunStmt[], explain?: "plan" | "analyze", mark?: MarkStmt) => {
-    if (await dropEdits()) p.onExecute(stmts, explain, mark);
+    if (await dropEdits()) await p.onExecute(stmts, explain, mark);
   };
   const showResult = async (id: string) => {
     if (id === p.activeResult || (await dropEdits())) p.onSetActiveResult(id);
@@ -534,7 +535,7 @@ export function ConsolePane(p: Props) {
                   query={active.sql}
                   onFetchMore={() => p.onFetchMore(active.id)}
                   onSubmit={(st) => p.onSubmit(active.id, st)}
-                  onReload={() => void execute([{ sql: active.sql, stmt: active.stmt, into: active.id }])}
+                  onReload={() => execute([{ sql: active.sql, stmt: active.stmt, into: active.id }])}
                   onCancel={p.onCancel}
                   onExport={() => p.onExport(active.sql)}
                   dialect={p.dialect}
