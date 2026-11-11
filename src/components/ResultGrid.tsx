@@ -553,7 +553,8 @@ export function ResultGrid(p: Props) {
   };
   const cloneRow = () => {
     if (!canEdit || !active) return;
-    const src = cols.map((_, c) => (pkIdx.includes(c) ? undefined : (valueAt(active.r, c) ?? undefined)));
+    // Key cells are left untouched; the others keep the source's value, NULL included (a new row's untouched cell stays untouched)
+    const src = cols.map((_, c) => (pkIdx.includes(c) ? undefined : active.r < baseCount ? valueAt(active.r, c) : added[active.r - baseCount][c]));
     setAdded((a) => [...a, src]);
     setTimeout(() => virt.scrollToIndex(rowCount));
   };
@@ -599,14 +600,15 @@ export function ResultGrid(p: Props) {
 
   const tableRef = edit ? `${quoteIdent(edit.schema)}.${quoteIdent(edit.table)}` : "MY_TABLE";
   /** Submit's statements (lib/gridEdit: the TUI's rules), each ending with `;` */
-  const buildStatements = (): string[] => {
+  const buildStatements = (): string[] | undefined => {
+    if (!sharedReady()) return void setStatusNote("Submit needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
     if (join) return joinStatements(D.quoting, join, result.rows, changes);
     if (!edit) return [];
     return editStatements(D.quoting, { ...edit, columns: cols.map((_, i) => tcol(i)) }, result.rows, changes, deleted, added);
   };
   const submit = async () => {
     const sql = buildStatements();
-    if (!sql.length) return;
+    if (!sql?.length) return;
     setSubmitErr(null);
     try {
       await p.onSubmit(sql);
@@ -614,6 +616,10 @@ export function ResultGrid(p: Props) {
       setPreview({ sql });
       setSubmitErr(String(e));
     }
+  };
+  const previewPending = () => {
+    const sql = buildStatements();
+    if (sql) setPreview({ sql, readOnly: true });
   };
   const doSubmitPreview = async () => {
     if (!preview) return;
@@ -836,7 +842,7 @@ export function ResultGrid(p: Props) {
     { label: "Add Row", ...cmd("grid.addRow"), action: addRow, disabled: !canEdit },
     { label: "Delete Row", ...cmd("grid.deleteRows"), action: deleteRows, disabled: !canEdit || !hasSel },
     { label: "Revert Selected", ...cmd("grid.revert"), action: revertSelected, disabled: !pendingCount },
-    { label: "Preview Pending Changes", ...cmd("grid.preview"), action: () => setPreview({ sql: buildStatements(), readOnly: true }), disabled: !pendingCount },
+    { label: "Preview Pending Changes", ...cmd("grid.preview"), action: previewPending, disabled: !pendingCount },
     { label: "Submit", ...cmd("grid.submit"), action: submit, disabled: !pendingCount },
     ...(p.onDdl ? ([{ label: "Go to DDL", ...cmd("grid.ddl"), action: p.onDdl }] as MenuItem[]) : []),
     { label: "Find on Current Page", ...cmd("grid.find"), action: openFind },
@@ -882,7 +888,7 @@ export function ResultGrid(p: Props) {
         <IconButton {...editButton("Add Row", "grid.addRow", rowReason)} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
         <IconButton {...editButton("Delete Row", "grid.deleteRows", rowReason)} onClick={deleteRows} disabled={!canEdit || !hasSel}><IcMinus /></IconButton>
         <IconButton {...editButton("Revert Selected", "grid.revert")} onClick={revertSelected} disabled={!pendingCount}><IcRevert /></IconButton>
-        <IconButton {...editButton("Preview Pending Changes", "grid.preview")} onClick={() => setPreview({ sql: buildStatements(), readOnly: true })} disabled={!pendingCount}><IcPreview /></IconButton>
+        <IconButton {...editButton("Preview Pending Changes", "grid.preview")} onClick={previewPending} disabled={!pendingCount}><IcPreview /></IconButton>
         <IconButton active={false} className={pendingCount ? "accent" : undefined} {...editButton("Submit", "grid.submit")} onClick={submit} disabled={!pendingCount}><IcSubmit /></IconButton>
         <ToolbarSep />
         <ToolButton
