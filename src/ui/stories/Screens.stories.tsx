@@ -93,22 +93,21 @@ export const ExplorerSeveral: S = {
 
 /** Settings: a tree of pages on the left (DataGrip's settings tree: ↑↓, → opens a parent then goes to its first page, ← closes it or goes
  *  to the parent, Home / End), one page on the right. The dialog keeps one size on every page; it opens on the last page used */
-const settingsPage = (name: string, page: SettingsPage, theme: "dark" | "light" = "dark"): S => ({
-  name: `Settings — ${name}${theme === "light" ? " (light)" : ""}`,
+const settingsPage = (page: SettingsPage, theme: "dark" | "light" = "dark"): S => ({
   globals: { theme },
   render: () => <SettingsDialog initialPage={page} onClose={noop} onUpdate={noop} onChannel={noop} />,
 });
 /** Settings › Appearance: theme, editor and grid fonts */
-export const Settings = settingsPage("Appearance", "appearance");
+export const Settings: S = { ...settingsPage("appearance"), name: "Settings — Appearance" };
 /** Settings › Appearance › Console: SQL keywords' case as you type and in Reformat Code (shared with the TUI) */
-export const SettingsConsole = settingsPage("Console", "console");
+export const SettingsConsole: S = { ...settingsPage("console"), name: "Settings — Console" };
 /** Settings › Appearance › Data grid: alignment per value class and the status bar items (shared with the TUI) */
-export const SettingsDataGrid = settingsPage("Data grid", "grid");
+export const SettingsDataGrid: S = { ...settingsPage("grid"), name: "Settings — Data grid" };
 /** Settings › Updates: the automatic check, Check Now, the project page on GitHub and the update channel (shared with the TUI) */
-export const SettingsUpdates = settingsPage("Updates", "updates");
-export const SettingsUpdatesLight = settingsPage("Updates", "updates", "light");
+export const SettingsUpdates: S = { ...settingsPage("updates"), name: "Settings — Updates" };
+export const SettingsUpdatesLight: S = { ...settingsPage("updates", "light"), name: "Settings — Updates (light)" };
 /** Settings › Passwords: where the password file's key is kept (the config folder or the system keychain) */
-export const SettingsPasswords = settingsPage("Passwords", "passwords");
+export const SettingsPasswords: S = { ...settingsPage("passwords"), name: "Settings — Passwords" };
 /** Editor / Grid font: each family is picked from a drop-down of the installed fonts (search, "Monospaced only" on by default, the default
  * entry first), sizes in px. A saved family that isn't installed stays on top of the list marked "(not installed)" and renders with the
  * default monospace. The choice is saved like in the app; preview.tsx resets it before every story. The drop-down is the ui kit's
