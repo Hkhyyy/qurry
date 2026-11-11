@@ -26,6 +26,18 @@ fn parse_kind(v: JsValue) -> Result<DbKind, JsError> {
     Ok(serde_wasm_bindgen::from_value(v)?)
 }
 
+/// The database a target without "::db" connects to, from the data source's Database field (the backend's and the TUI's rule)
+#[wasm_bindgen(js_name = defaultDb)]
+pub fn default_db(kind: JsValue, database: &str) -> Result<String, JsError> {
+    Ok(qurry_shared::kind::default_db(parse_kind(kind)?, database))
+}
+
+/// A new data source's port for the kind (0 for file DBs)
+#[wasm_bindgen(js_name = defaultPort)]
+pub fn default_port(kind: JsValue) -> Result<u16, JsError> {
+    Ok(parse_kind(kind)?.default_port())
+}
+
 /// UI only, not a security check (the backend enforces read-only): the statement doesn't change data
 #[wasm_bindgen(js_name = isRead)]
 pub fn is_read(sql: &str, kind: JsValue) -> Result<bool, JsError> {

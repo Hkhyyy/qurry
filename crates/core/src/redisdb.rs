@@ -24,9 +24,7 @@ fn pct(s: &str) -> String {
 }
 
 /// "db3" / "3" / "" → 3 / 0
-pub fn db_index(name: &str) -> i64 {
-    name.trim().trim_start_matches("db").parse().unwrap_or(0)
-}
+pub use qurry_shared::kind::redis_db_index as db_index;
 
 /// A connection, and whether the server answered CONFIG when it connected (managed services like ElastiCache, Azure Cache,
 /// Memorystore or Upstash rename or refuse it; the browser's Config tab is then greyed out)

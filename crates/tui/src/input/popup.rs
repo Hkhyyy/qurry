@@ -310,12 +310,13 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                             f.value = opts[j].to_string();
                             // Changing the DB type also changes the default port
                             if f.label == "Type" {
-                                const PORTS: &[(&str, &str)] = &[("postgres", "5432"), ("mysql", "3306"), ("redis", "6379"), ("sqlite", "0"), ("duckdb", "0"), ("mssql", "1433"), ("clickhouse", "8123"), ("mongodb", "27017"), ("oracle", "1521"), ("qdrant", "6333"), ("chroma", "8000"), ("milvus", "19530")];
-                                let port = PORTS.iter().find(|x| x.0 == f.value).map(|x| x.1).unwrap_or("5432");
+                                let port_of = |kind: &str| serde_json::from_value::<qurry_core::store::DbKind>(serde_json::Value::String(kind.into())).ok().map(|k| k.default_port().to_string());
+                                let port = port_of(&f.value).unwrap_or_else(|| "5432".into());
+                                let defaults: Vec<String> = opts.iter().filter_map(|o| port_of(o)).collect();
                                 if let Some(p) = form.fields.iter_mut().find(|x| x.label == "Port") {
                                     // Keep a manually changed port; replace it if it was another type's default port
-                                    if p.value.is_empty() || PORTS.iter().any(|x| x.1 == p.value) {
-                                        p.value = port.into();
+                                    if p.value.is_empty() || defaults.contains(&p.value) {
+                                        p.value = port;
                                     }
                                 }
                             }

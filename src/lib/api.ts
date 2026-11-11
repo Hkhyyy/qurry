@@ -566,6 +566,7 @@ export const COLOR_PRESETS: { name: string; value: string | null }[] = [
   { name: "Gray", value: "#45474d" },
 ];
 
+/** A new data source's port (qurry_shared::kind::DbKind::default_port; read synchronously by the dialog, so a copy: defaultDb.test.ts pins it) */
 export const DEFAULT_PORT: Record<DbKind, number> = { postgres: 5432, mysql: 3306, redis: 6379, sqlite: 0, duckdb: 0, mssql: 1433, clickhouse: 8123, mongodb: 27017, oracle: 1521, qdrant: 6333, chroma: 8000, milvus: 19530 };
 export const KIND_LABEL: Record<DbKind, string> = {
   postgres: "PostgreSQL",
@@ -691,8 +692,11 @@ export function dbVisible(scope: Scope | undefined, db: string, defaultDb: strin
   return d.includes(SCOPE_ALL) || d.includes(db) || (d.includes(SCOPE_DEFAULT) && db === defaultDb);
 }
 
-/** The database a target without "::db" connects to (PostgreSQL: postgres when blank; MySQL: none, all schemas) */
-export const defaultDbOf = (c: Pick<ConnectionView, "database" | "kind">) => c.database || (c.kind === "postgres" ? "postgres" : "");
+/** The database a target without "::db" connects to (qurry_shared::kind::default_db: PostgreSQL postgres when blank, MySQL none, Redis db<n>,
+ *  file DBs main). Before the module has loaded, or if it failed, the PostgreSQL rule only: the tree and tabs call this while they
+ *  draw, which must not throw */
+export const defaultDbOf = (c: Pick<ConnectionView, "database" | "kind">) =>
+  sharedOr(c.database || (c.kind === "postgres" ? "postgres" : ""), (s) => s.defaultDb(c.kind, c.database ?? ""));
 
 const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
 /** A system database the explorer hides unless asked (MySQL's system schemas) */

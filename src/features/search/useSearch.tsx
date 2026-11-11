@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { api, ConnectionView, meta, targetId } from "../../lib/api";
+import { api, ConnectionView, defaultDbOf, meta, targetId } from "../../lib/api";
 import type { FtsRequest } from "../../lib/api";
 import { allThemes, getThemeSettings, setThemePick, SYSTEM } from "../../lib/theme";
 import { saveSnippet } from "../../components/HistoryDialog";
@@ -82,7 +82,7 @@ export function useSearch({
     const sel = treeSel;
     const c = sel?.conn ?? conns.find((x) => x.id === active?.connId);
     if (!c) return setStatus("Select a data source, database, schema or table to search in");
-    const db = sel?.db ?? active?.database ?? (c.database || "postgres");
+    const db = sel?.db ?? active?.database ?? defaultDbOf(c);
     if (sel && isRelation(sel.kind) && sel.schema && sel.name)
       return setFtsScope({ connId: c.id, connName: c.name, db, schemas: [], tables: [[sel.schema, sel.name]] });
     if (sel?.kind === "schema" && sel.schema) return setFtsScope({ connId: c.id, connName: c.name, db, schemas: [sel.schema], tables: [] });

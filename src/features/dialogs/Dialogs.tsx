@@ -1,5 +1,5 @@
 import type { ConnectionView } from "../../lib/api";
-import { api } from "../../lib/api";
+import { api, defaultDbOf } from "../../lib/api";
 import { allThemes, findTheme, setThemePick, SYSTEM, useThemeState } from "../../lib/theme";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
 import { CopyRowsDialog, GenerateDataDialog } from "../../components/DataTools";
@@ -109,7 +109,7 @@ export function Dialogs({ conns, setStatus, openConsole, startBackup, startExpor
             setStatus(msg);
             setObjEdit(null);
             objEdit.refresh?.();
-            schemaChanged(objEdit.conn.id, objEdit.db ?? (objEdit.conn.database || (objEdit.conn.kind === "postgres" ? "postgres" : "")));
+            schemaChanged(objEdit.conn.id, objEdit.db ?? defaultDbOf(objEdit.conn));
           };
           const toConsole = (sql: string) => {
             openConsole(objEdit.conn, objEdit.db, sql);
