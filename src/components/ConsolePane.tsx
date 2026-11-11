@@ -12,6 +12,7 @@ import { ContextMenu, MenuItem } from "./Explorer";
 import { CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
 import { ask } from "../lib/dialogs";
 import { planText } from "../lib/planText";
+import { explainSql } from "../lib/explain";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
 import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep, TxPending } from "../ui";
 
@@ -347,12 +348,19 @@ export function ConsolePane(p: Props) {
         )}
         <ToolButton
           title="Explain Plan"
-          onClick={(e) =>
-            dropdown(e, [
-              { label: "Explain Plan", ...cmd("editor.explain"), action: () => api?.run("plan") },
-              { label: "Explain Analyse", ...cmd("editor.explainAnalyze"), action: () => api?.run("analyze") },
-            ])
-          }
+          onClick={(e) => {
+            // A kind without Explain: its words instead of the items; one without Explain Analyse: that item greyed out with them
+            const [plan, analyse] = [false, true].map((analyze) => explainSql("", p.kind ?? "postgres", analyze, false));
+            dropdown(
+              e,
+              "err" in plan
+                ? [{ label: plan.err, action: () => {}, disabled: true }]
+                : [
+                    { label: "Explain Plan", ...cmd("editor.explain"), action: () => api?.run("plan") },
+                    { label: "Explain Analyse", ...cmd("editor.explainAnalyze"), action: () => api?.run("analyze"), ...("err" in analyse ? { disabled: true, title: analyse.err } : {}) },
+                  ],
+            );
+          }}
         >
           Explain ▾
         </ToolButton>

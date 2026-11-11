@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { analyzePlan, api, auditLog, ConnectionView, dialectOf, DbKind, meta, previewImpact, QueryResult, targetId } from "../../lib/api";
+import { analyzePlan, api, auditLog, ConnectionView, defaultDbOf, dialectOf, DbKind, meta, previewImpact, QueryResult, targetId } from "../../lib/api";
 import { ask, notice } from "../../lib/dialogs";
 import { pushHistory } from "../../components/HistoryDialog";
 import type { OutputLine } from "../../components/ConsolePane";
@@ -12,6 +12,7 @@ import { commitNoticeTitle } from "../../lib/commitNotice";
 import { sharedOr } from "../../lib/shared";
 import { cancelTableLoad, loadTableTab } from "../explorer/tableTab";
 import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "../../lib/stmtKind";
+import { explainSql } from "../../lib/explain";
 import { patch, updTab } from "../tabs/ops";
 import { editorApis, setTabs, useTabsStore } from "../tabs/store";
 import type { Tab } from "../tabs/types";
@@ -73,7 +74,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     const c = conns.find((x) => x.id === tab.connId);
     if (!c) return;
     if (tab.inTx && !(await ask("This console has uncommitted changes. Switching the database rolls them back. Continue?", { okLabel: "Switch and Roll Back", danger: true }))) return;
-    const database = db !== (c.database || "postgres") ? db : undefined;
+    const database = db !== defaultDbOf(c) ? db : undefined;
     api.closeSession(tab.id).catch(() => {}); // The next run opens a session on the new DB
     patch(tab.id, { database, target: targetId(c.id, database), schema: undefined, inTx: false });
     setStatus(`Console switched to database ${db}`);
@@ -166,6 +167,24 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     // Explain Analyse really runs the statement: PostgreSQL · MySQL roll it back (below), other kinds don't. Ask first when the rollback
     // may not undo it all or nothing does (qurry_shared::guard::explain_analyze_ask, the TUI's rule and words)
     const wraps = kind === "postgres" || kind === "mysql";
+    // Each statement's Explain (qurry_shared::explain, the TUI's): PostgreSQL as JSON for the plan tree, other kinds' rows as a grid.
+    // A kind without it says so in Output and on the statement's mark, and nothing is sent
+    const [analyze, json] = [explain === "analyze", kind === "postgres"];
+    const built = explain ? stmts.map((s) => explainSql(s, kind, analyze, json)) : [];
+    const no = built.findIndex((b) => "err" in b);
+    if (no >= 0) {
+      const err = (built[no] as { err: string }).err;
+      const out = crypto.randomUUID();
+      const ts = nowTs();
+      log(tabId, "sql", `${c?.name ?? ""}> ${stmts[no]}`, out);
+      log(tabId, "error", err);
+      mark?.(no, { state: "error", out, ts, text: err });
+      updTab(tabId, (t) => ({ ...t, activeResult: "output", pending: undefined }));
+      setStatus(err);
+      return;
+    }
+    // What Explain puts before each statement (the error mark below takes it off)
+    const pre = explain ? (explainSql("", kind, analyze, json) as { sql: string }).sql.length : 0;
     if (explain === "analyze" && !(await askExplainAnalyze(c?.name, kind, stmts))) return drop();
     // Production: for data-changing statements, count the rows that will change, show it and ask (counted with SELECT count(*))
     if (c?.options?.confirmChanges && !explain) {
@@ -209,9 +228,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     // Statements that ran but whose result the Production log couldn't record (a warning, not a failure: running them again would repeat them)
     let warned = 0;
     for (const [i, sql0] of stmts.entries()) {
-      const isMy = c?.kind === "mysql";
-      const bare = sql0.replace(/;\s*$/, "");
-      const sql = !explain ? sql0 : isMy ? `EXPLAIN ${explain === "analyze" ? "ANALYZE " : ""}${bare}` : `EXPLAIN (FORMAT JSON${explain === "analyze" ? ", ANALYZE, BUFFERS" : ""}) ${bare}`;
+      const sql = explain ? (built[i] as { sql: string }).sql : sql0;
       const out = crypto.randomUUID();
       const ts = nowTs();
       log(tabId, "sql", `${c?.name ?? ""}> ${sql0}`, out);
@@ -245,7 +262,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
           warned++;
           log(tabId, "warn", `Warning: ${r.warning}`);
         }
-        if (explain && !isMy) {
+        if (explain && kind === "postgres") {
           const raw = String(r.rows[0]?.[0] ?? "");
           const plan = await analyzePlan(raw).catch(() => null);
           const pretty = (() => {
@@ -271,14 +288,13 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
       } catch (e) {
         log(tabId, "error", String(e));
         // The server's spot, in the statement's own text (Explain sent it after its EXPLAIN …)
-        const pre = explain ? sql.length - bare.length : 0;
         const pos = sharedOr(undefined, (s) => s.errorPosition(String(e), sql));
         mark?.(i, { state: "error", out, ts, text: sharedOr(String(e), (s) => s.withoutPosition(String(e))), at: pos !== undefined && pos >= pre ? pos - pre : undefined });
         if (committed > 0) log(tabId, "error", `Note: ${committed} earlier statement${committed > 1 ? "s" : ""} of this run ${committed > 1 ? "were" : "was"} already committed (Auto mode) and ${committed > 1 ? "were" : "was"} not rolled back`);
         // Even on error a transaction may be open (e.g. first statement fails in Manual) → sync the Commit/Roll back buttons
         syncTx(tabId);
         // DDL among the earlier statements may already be applied
-        if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
+        if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c ? defaultDbOf(c) : ""));
         lastActive = "output";
         updTab(tabId, (t) => ({ ...t, running: false, activeResult: "output", pending: undefined }));
         setStatus(mark ? "Query failed: the error is marked in the editor and kept in Output — fix the statement and run it again" : "Query failed (see Output)");
@@ -289,7 +305,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     updTab(tabId, (t) => ({ ...t, running: false, activeResult: lastActive, lastSql: stmts[stmts.length - 1], pending: undefined }));
     setStatus(`${stmts.length} statement${stmts.length > 1 ? "s" : ""} executed${warned ? ` · ${warned} with a warning (see Output)` : ""}`);
     // If tables or columns were created, altered, or dropped, show it in the explorer right away
-    if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
+    if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c ? defaultDbOf(c) : ""));
     refresh();
   };
 
