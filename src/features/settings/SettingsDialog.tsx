@@ -3,10 +3,11 @@ import { alignOf, setGridAlign, useGridAlign, VALUE_CLASSES } from "../../lib/gr
 import { shared, useSharedReady, type Align, type KeywordCase } from "../../lib/shared";
 import { loadStatusItems, resetStatusItems, setStatusItem, useStatusItems } from "../../lib/statusbar";
 import { setKeywordCase, useKeywordCase } from "../../lib/keywordCase";
-import { api, secretKey, setUpdateCheckEnabled, UpdateInfo, updateCheckEnabled } from "../../lib/api";
+import { api, openExternal, secretKey, setUpdateCheckEnabled, UpdateInfo, updateCheckEnabled } from "../../lib/api";
 import type { FontFamily, UpdateChannel } from "../../lib/api";
 import { KeymapEditor } from "../../components/KeymapEditor";
-import { Button, Checkbox, cx, Field, List, ListItem, Modal, Select, Text } from "../../ui";
+import { Button, Checkbox, cx, Field, Modal, Select, Text, TreeRow } from "../../ui";
+import { IcGitHub } from "../../ui/icons";
 import { allThemes, currentTheme, setThemePick, setThemeSync, SYSTEM, useThemeState, type ThemeDef } from "../../lib/theme";
 import { askDiscardColors, ThemeEditor } from "./ThemeEditor";
 import { FontTarget, setFont, SIZES, useFonts } from "../../lib/prefs";
@@ -34,7 +35,7 @@ function FontField({ target, label, info, installed, onOpen }: { target: FontTar
   );
 }
 
-/** Settings › Appearance › Alignment: where grid cells sit, per value class (shared with the TUI through settings.json) */
+/** Settings › Appearance › Data grid › Alignment: where grid cells sit, per value class (shared with the TUI through settings.json) */
 export function GridAlignField() {
   const overrides = useGridAlign();
   // The classes and their defaults come from the WASM module: without it (a WebView that refused WebAssembly) nothing can be picked
@@ -83,7 +84,7 @@ export function GridAlignField() {
   );
 }
 
-/** Settings › Appearance › Status bar: the items the status bar shows for the focused grid, by group (the status bar's right-click
+/** Settings › Appearance › Data grid › Status bar: the items the status bar shows for the focused grid, by group (the status bar's right-click
  *  checklist, shared with the TUI through settings.json) */
 export function StatusBarField() {
   const on = useStatusItems();
@@ -140,7 +141,7 @@ export function StatusBarField() {
   );
 }
 
-/** Settings › Appearance › Keyword case: SQL keywords' letter case as you type in a console and in Reformat Code (shared with the TUI) */
+/** Settings › Appearance › Console › Keyword case: SQL keywords' letter case as you type in a console and in Reformat Code (shared with the TUI) */
 export function KeywordCaseField() {
   const kc = useKeywordCase();
   const [err, setErr] = useState<string | null>(null);
@@ -285,9 +286,43 @@ function PasswordSettings() {
 const offered = (u: UpdateInfo) => (u.latest ? u : null);
 const upToDate = (u: UpdateInfo) => `You have the latest ${u.channel} version (${u.current}).`;
 
-/** onChannel: the update the new channel (or a check that finds nothing) offers (null: none), so the status bar button follows the channel */
-export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "appearance" }: { onClose: () => void; onUpdate: (u: UpdateInfo) => void; onChannel: (u: UpdateInfo | null) => void; initialPage?: "appearance" | "theme" | "keymap" }) {
-  const [page, setPage] = useState<"appearance" | "theme" | "keymap" | "passwords">(initialPage);
+/** The pages tree on the left (DataGrip's settings tree): a child page sits under its parent */
+const PAGES = [
+  { id: "appearance", label: "Appearance", parent: null },
+  { id: "console", label: "Console", parent: "appearance" },
+  { id: "grid", label: "Data grid", parent: "appearance" },
+  { id: "updates", label: "Updates", parent: null },
+  { id: "keymap", label: "Keymap", parent: null },
+  { id: "passwords", label: "Passwords", parent: null },
+] as const;
+export type SettingsPage = (typeof PAGES)[number]["id"];
+const hasKids = (id: SettingsPage) => PAGES.some((p) => p.parent === id);
+
+/** Settings opens on the last page used when no page is asked for */
+const LAST_PAGE = "dbtool.settingsPage";
+const lastPage = (): SettingsPage => {
+  try {
+    const v = localStorage.getItem(LAST_PAGE);
+    return PAGES.find((p) => p.id === v)?.id ?? "appearance";
+  } catch {
+    return "appearance";
+  }
+};
+
+const REPO_URL = "https://github.com/Hkhyyy/qurry";
+
+/** onChannel: the update the new channel (or a check that finds nothing) offers (null: none), so the status bar button follows the channel.
+ *  initialPage: the page to open on (the theme editor is Appearance's); none: the last page used */
+export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage }: { onClose: () => void; onUpdate: (u: UpdateInfo) => void; onChannel: (u: UpdateInfo | null) => void; initialPage?: SettingsPage | "theme" }) {
+  const [page, setPage] = useState<SettingsPage | "theme">(() => initialPage ?? lastPage());
+  useEffect(() => {
+    if (page === "theme") return;
+    try {
+      localStorage.setItem(LAST_PAGE, page);
+    } catch {
+      /* the next Settings opens on Appearance */
+    }
+  }, [page]);
   const [checkOnStart, setCheckOnStart] = useState(updateCheckEnabled());
   const [updMsg, setUpdMsg] = useState<string | null>(null);
   const [channel, setChannel] = useState<UpdateChannel | null>(null);
@@ -340,6 +375,34 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
     loadFonts();
   }, []);
   const fontKeys = [sk("font.bigger"), sk("font.smaller")].filter(Boolean).join(" and ");
+
+  /** The row selected in the tree (the theme editor is Appearance's) */
+  const shown: SettingsPage = page === "theme" ? "appearance" : page;
+  // Every parent starts open, so the opened page's row shows
+  const [open, setOpen] = useState<ReadonlySet<SettingsPage>>(() => new Set(PAGES.flatMap((p) => (p.parent ? [p.parent] : []))));
+  const visible = PAGES.filter((p) => !p.parent || open.has(p.parent));
+  const toggle = (id: SettingsPage) => setOpen((o) => new Set(o.has(id) ? [...o].filter((x) => x !== id) : [...o, id]));
+  /** DataGrip's tree keys: ↑↓ the previous / next row, → opens a parent then goes to its first page, ← closes it or goes to the parent,
+   *  Home / End the first / last row. The Modal doesn't see them */
+  const treeKeys = (e: React.KeyboardEvent) => {
+    const i = visible.findIndex((p) => p.id === shown);
+    const cur = visible[i];
+    let to: SettingsPage | null = null;
+    if (e.key === "ArrowUp") to = visible[Math.max(0, i - 1)].id;
+    else if (e.key === "ArrowDown") to = visible[Math.min(visible.length - 1, i + 1)].id;
+    else if (e.key === "Home") to = visible[0].id;
+    else if (e.key === "End") to = visible[visible.length - 1].id;
+    else if (e.key === "ArrowRight") {
+      if (hasKids(cur.id) && !open.has(cur.id)) toggle(cur.id);
+      else if (hasKids(cur.id)) to = PAGES.find((p) => p.parent === cur.id)!.id;
+    } else if (e.key === "ArrowLeft") {
+      if (hasKids(cur.id) && open.has(cur.id)) toggle(cur.id);
+      else if (cur.parent) to = cur.parent;
+    } else return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (to && to !== shown) go(to);
+  };
   return (
     <Modal
       title="Settings"
@@ -349,7 +412,7 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
       onClose={() => leave(onClose)}
       footer={
         <>
-          {(page === "appearance" || page === "theme") && <span className="ui-modal-foot-hint">Quick switch theme: {sk("theme")}</span>}
+          {shown === "appearance" && <span className="ui-modal-foot-hint">Quick switch theme: {sk("theme")}</span>}
           <Button variant="primary" onClick={() => leave(onClose)}>
             OK
           </Button>
@@ -357,11 +420,20 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
       }
     >
       <div className="settings-body">
-        <List className="settings-nav">
-          <ListItem title="Appearance" selected={page === "appearance" || page === "theme"} onClick={() => go("appearance")} />
-          <ListItem title="Keymap" selected={page === "keymap"} onClick={() => go("keymap")} />
-          <ListItem title="Passwords" selected={page === "passwords"} onClick={() => go("passwords")} />
-        </List>
+        <div className="settings-nav settings-tree" role="tree" aria-label="Settings" tabIndex={0} onKeyDown={treeKeys}>
+          {visible.map((p) => (
+            <TreeRow
+              key={p.id}
+              depth={p.parent ? 1 : 0}
+              leaf={!hasKids(p.id)}
+              open={open.has(p.id)}
+              label={p.label}
+              selected={shown === p.id}
+              onSelect={() => go(p.id)}
+              onToggle={() => toggle(p.id)}
+            />
+          ))}
+        </div>
         {page === "keymap" && <KeymapEditor />}
         {page === "passwords" && <PasswordSettings />}
         {page === "theme" && <ThemeEditor start={currentTheme().id} onBack={() => go("appearance")} onDirty={(d) => (themeDirty.current = d)} />}
@@ -370,9 +442,21 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
             <ThemeField onEdit={() => setPage("theme")} />
             <FontField target="editor" label="Editor font" info={fontKeys ? [`In the editor, ${fontKeys} change the size too.`] : undefined} installed={fonts} onOpen={loadFonts} />
             <FontField target="grid" label="Grid font" installed={fonts} onOpen={loadFonts} />
+          </div>
+        )}
+        {page === "console" && (
+          <div className="settings-form">
             <KeywordCaseField />
+          </div>
+        )}
+        {page === "grid" && (
+          <div className="settings-form">
             <GridAlignField />
             <StatusBarField />
+          </div>
+        )}
+        {page === "updates" && (
+          <div className="settings-form">
             <Field label="Updates" hint={updMsg ?? undefined}>
               <div className="ui-row">
                 <Checkbox
@@ -386,6 +470,9 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
                 </Checkbox>
                 <Button size="sm" onClick={checkNow}>
                   Check Now
+                </Button>
+                <Button size="sm" className="settings-github" aria-label="Open GitHub" title="Open GitHub" onClick={() => openExternal(REPO_URL)}>
+                  <IcGitHub />
                 </Button>
               </div>
             </Field>

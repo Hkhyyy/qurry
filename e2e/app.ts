@@ -92,6 +92,15 @@ export const work = (page: Page) => page.locator(".work-layer:visible");
 export const suggestions = (page: Page) => page.locator(".suggest-widget.visible .monaco-list-row");
 export const resultTabs = (page: Page) => page.locator(".work-layer:visible .result-tabs [role=tab]");
 export const dialog = (page: Page) => page.getByRole("dialog");
+/** Settings' pages tree and one of its rows */
+export const settingsTree = (page: Page) => page.getByRole("tree", { name: "Settings" });
+export const settingsRow = (page: Page, name: string) => settingsTree(page).getByRole("treeitem", { name, exact: true });
+/** Opens Settings (⌘,) on a page of its tree */
+export async function openSettings(page: Page, name: string) {
+  await page.keyboard.press("Meta+Comma");
+  await settingsRow(page, name).click();
+  await expect(settingsRow(page, name)).toHaveAttribute("aria-selected", "true");
+}
 export const menuItem = (page: Page, name: string | RegExp) => page.getByRole("menuitem", { name });
 export const status = (page: Page) => page.locator(".statusbar .sb-text");
 

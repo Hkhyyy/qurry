@@ -143,7 +143,7 @@ export default function App() {
   // Qurry › Settings…
   useEffect(() => {
     let off: (() => void) | undefined;
-    listen("open-settings", () => setSettingsOpen("appearance"))
+    listen("open-settings", () => setSettingsOpen(true))
       .then((u) => (off = u))
       .catch(() => {});
     return () => off?.();
@@ -277,7 +277,7 @@ export default function App() {
           onRename={renameWs}
           onDelete={deleteWs}
           onKeymap={() => setKeymapOpen(true)}
-          onSettings={() => setSettingsOpen("appearance")}
+          onSettings={() => setSettingsOpen(true)}
         />
       )}
       <PanelGroup direction="vertical" className="main" autoSaveId="dbtool-v">

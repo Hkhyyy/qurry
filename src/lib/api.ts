@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { sharedOr, type Align, type Alignments, type KeywordCase, type StatusItemId, type ValueClass } from "./shared";
 import type { DataFormat } from "./transfer";
 import type { CustomTheme, ThemeSettings, ThemeSync } from "./theme";
@@ -180,6 +181,9 @@ export interface UpdateInfo {
 }
 /** Whether this is a release URL of this repo (current name · old name). The update window opens only these (even if the cache in the config folder changes) */
 export const isReleaseUrl = (u: string) => /^https:\/\/github\.com\/Hkhyyy\/(qurry|dbtool)\/releases(\/|$)/.test(u);
+
+/** Opens a web address in the browser (window.open where the opener plugin isn't there: the mock, Storybook) */
+export const openExternal = (url: string) => void openUrl(url).catch(() => window.open(url, "_blank"));
 
 /** Automatic new-version check (at startup + every hour; turn off in Settings) */
 const UPDATE_PREF = "dbtool.updateCheck";

@@ -1,13 +1,13 @@
 import type { Page } from "@playwright/test";
-import { dialog, editor, editorText, expect, openApp, openConsole, test, typeSql } from "./app";
+import { dialog, editor, editorText, expect, openApp, openConsole, openSettings, test, typeSql } from "./app";
 
-// Settings › Appearance › Keyword case (settings.json "keywordCase", shared with the TUI): keywords as you type in a console and in
+// Settings › Appearance › Console › Keyword case (settings.json "keywordCase", shared with the TUI): keywords as you type in a console and in
 // Reformat Code (⌘⌥l). The rule (strings, comments, quoted names, names after a dot) is qurry_shared::format's, tested there
 
 const field = (page: Page) => dialog(page).getByRole("combobox", { name: "Keyword case" });
 
 async function pickCase(page: Page, value: "off" | "upper" | "lower") {
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Console");
   await field(page).selectOption(value);
   await page.keyboard.press("Escape");
   await expect(dialog(page)).toHaveCount(0);
@@ -16,7 +16,7 @@ async function pickCase(page: Page, value: "off" | "upper" | "lower") {
 test.beforeEach(async ({ page }) => openApp(page));
 
 test("Keyword case UPPER: keywords change as you type, strings and names after a dot don't; kept after a restart", async ({ page }) => {
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Console");
   await expect(field(page)).toHaveValue("off");
   await page.keyboard.press("Escape");
   await pickCase(page, "upper");

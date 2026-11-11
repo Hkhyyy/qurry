@@ -197,7 +197,7 @@ export function useGlobalShortcuts({
         },
         settings: () => {
           e.preventDefault();
-          setSettingsOpen("appearance");
+          setSettingsOpen(true);
         },
         theme: () => {
           e.preventDefault();

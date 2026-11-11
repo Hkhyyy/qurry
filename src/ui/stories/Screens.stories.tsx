@@ -5,7 +5,7 @@ import { expect, fireEvent, userEvent, waitFor, within } from "storybook/test";
 import "../../lib/mock";
 import { monaco } from "../../lib/monaco";
 import App from "../../App";
-import { SettingsDialog } from "../../features/settings/SettingsDialog";
+import { SettingsDialog, type SettingsPage } from "../../features/settings/SettingsDialog";
 import { setFont } from "../../lib/prefs";
 import { saveCustomTheme, setThemeSync } from "../../lib/theme";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
@@ -91,15 +91,31 @@ export const ExplorerSeveral: S = {
   },
 };
 
-/** Settings › Appearance: theme, editor and grid fonts, grid alignment per value class, the automatic update check and the update channel (alignment and channel shared with the TUI) */
-export const Settings: S = { name: "Settings — Appearance & updates", render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} /> };
+/** Settings: a tree of pages on the left (DataGrip's settings tree: ↑↓, → opens a parent then goes to its first page, ← closes it or goes
+ *  to the parent, Home / End), one page on the right. The dialog keeps one size on every page; it opens on the last page used */
+const settingsPage = (name: string, page: SettingsPage, theme: "dark" | "light" = "dark"): S => ({
+  name: `Settings — ${name}${theme === "light" ? " (light)" : ""}`,
+  globals: { theme },
+  render: () => <SettingsDialog initialPage={page} onClose={noop} onUpdate={noop} onChannel={noop} />,
+});
+/** Settings › Appearance: theme, editor and grid fonts */
+export const Settings = settingsPage("Appearance", "appearance");
+/** Settings › Appearance › Console: SQL keywords' case as you type and in Reformat Code (shared with the TUI) */
+export const SettingsConsole = settingsPage("Console", "console");
+/** Settings › Appearance › Data grid: alignment per value class and the status bar items (shared with the TUI) */
+export const SettingsDataGrid = settingsPage("Data grid", "grid");
+/** Settings › Updates: the automatic check, Check Now, the project page on GitHub and the update channel (shared with the TUI) */
+export const SettingsUpdates = settingsPage("Updates", "updates");
+export const SettingsUpdatesLight = settingsPage("Updates", "updates", "light");
+/** Settings › Passwords: where the password file's key is kept (the config folder or the system keychain) */
+export const SettingsPasswords = settingsPage("Passwords", "passwords");
 /** Editor / Grid font: each family is picked from a drop-down of the installed fonts (search, "Monospaced only" on by default, the default
  * entry first), sizes in px. A saved family that isn't installed stays on top of the list marked "(not installed)" and renders with the
  * default monospace. The choice is saved like in the app; preview.tsx resets it before every story. The drop-down is the ui kit's
  * PopupList in select mode (search box on top, fixed height), the same list as ComboBox's (GUI/3 Organisms › List popup) */
 export const SettingsFonts: S = {
   name: "Settings — Fonts (font not installed)",
-  render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
+  render: () => <SettingsDialog initialPage="appearance" onClose={noop} onUpdate={noop} onChannel={noop} />,
   play: async ({ canvasElement }) => {
     setFont("grid", { family: "No Such Mono" });
     await userEvent.click(await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Grid font family" }));
@@ -110,7 +126,7 @@ export const SettingsFonts: S = {
  * set to it goes back to the default). Here a font is added from the grid font picker, which is then opened again */
 export const SettingsFontsCustom: S = {
   name: "Settings — Fonts (added font file)",
-  render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
+  render: () => <SettingsDialog initialPage="appearance" onClose={noop} onUpdate={noop} onChannel={noop} />,
   play: async ({ canvasElement }) => {
     const body = within(canvasElement.ownerDocument.body);
     const field = await body.findByRole("combobox", { name: "Grid font family" });
@@ -125,7 +141,7 @@ export const SettingsFontsCustom: S = {
  *  shared with the TUI, which picks between them by its terminal's background */
 export const SettingsThemeSync: S = {
   name: "Settings — Theme: Sync with OS",
-  render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
+  render: () => <SettingsDialog initialPage="appearance" onClose={noop} onUpdate={noop} onChannel={noop} />,
   play: async ({ canvasElement }) => {
     const body = within(canvasElement.ownerDocument.body);
     await setThemeSync({ dark: "one-dark", light: "solarized-light" });
@@ -1124,7 +1140,7 @@ export const StatusBarStory: S = {
   ),
 };
 /** Right-click the status bar (or click an item): the checklist of items by group, Restore Defaults; it stays open while items are
- *  toggled (↑↓ move, Space or ↩ toggles, Esc closes). The same setting as Settings › Appearance › Status bar and the TUI's ⌃k › Status
+ *  toggled (↑↓ move, Space or ↩ toggles, Esc closes). The same setting as Settings › Appearance › Data grid › Status bar and the TUI's ⌃k › Status
  *  Bar Items… (settings.json, here the mock's) */
 export const StatusBarMenu: S = {
   name: "Status bar — items checklist",

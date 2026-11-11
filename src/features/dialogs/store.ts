@@ -1,11 +1,13 @@
 import { create } from "zustand";
 import type { ConnectionView, UpdateInfo } from "../../lib/api";
 import type { NewKind } from "../../components/ObjectEditors";
+import type { SettingsPage } from "../settings/SettingsDialog";
 import { setter } from "../setter";
 
 /** Which dialogs are open, and what each was opened for (null / false = closed) */
 interface DialogsState {
-  settingsOpen: false | "appearance" | "theme" | "keymap";
+  /** true: the last page used */
+  settingsOpen: boolean | SettingsPage | "theme";
   /** Quick Switch Theme */
   schemeOpen: boolean;
   /** Keymap Reference */
