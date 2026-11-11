@@ -9,10 +9,11 @@
 use crate::errors as e;
 use crate::guard::{Tok, scan};
 use crate::kind::DbKind;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Where an editable console result writes. Result column i is the table's column `columns[i]`; `pk` is the table's primary key
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditTarget {
     pub schema: String,
@@ -23,7 +24,7 @@ pub struct EditTarget {
 
 /// A join result's edits (#102): per result column, the table occurrence it writes to or why it can't be edited. Rows can't be
 /// added or deleted (a result row isn't a row of one table)
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JoinEdit {
     /// The table occurrences whose rows can be edited, each found by its own primary key
@@ -33,7 +34,7 @@ pub struct JoinEdit {
 }
 
 /// A table occurrence of a join that can be edited: `pk_at[j]` is the result column holding its key column `pk[j]`
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JoinTable {
     pub schema: String,
@@ -43,7 +44,7 @@ pub struct JoinTable {
 }
 
 /// Where an edit of one result column goes: `table` (an index into JoinEdit::tables) and its column there, or why it can't be edited
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged, rename_all = "camelCase")]
 pub enum ColumnEdit {
     To { table: usize, column: String },
@@ -462,6 +463,88 @@ pub fn decide_join(tables: &[Result<TableInfo, String>], result: &[String], sour
     Editable::Join(JoinEdit { tables: targets, columns })
 }
 
+/// Why Submit can't save the edits of a table without a primary key (rows are found by it)
+pub const EDIT_NO_KEY: &str = "Table has no primary key — cannot update/delete rows";
+
+/// A value as the SQL Submit writes: None = NULL, the GUI's Set DEFAULT token = DEFAULT, else a string literal `kind` reads
+fn value(kind: DbKind, v: &Option<String>) -> String {
+    match v.as_deref() {
+        Some(crate::extract::DEFAULT_TOKEN) => "DEFAULT".into(),
+        v => crate::sql::literal(kind, v),
+    }
+}
+
+/// Submit's statements for one table (the GUI and the TUI), without a trailing `;`, in the order they run: DELETE, then UPDATE, then
+/// INSERT, so a deleted row frees a unique value an update or insert may take; a row both edited and deleted is only deleted.
+/// rows = the result rows' raw text (only the edited and deleted rows' key values are read), edits = (row, column) → value of those
+/// rows (None = NULL), added = per new row the cells the user set (an unset cell is left out: the column default applies; one set to
+/// NULL is NULL). A new row with no cell set inserts the defaults. Err: there are rows to update or delete and the table has no key
+pub fn edit_statements(
+    kind: DbKind,
+    to: &EditTarget,
+    rows: &[Vec<Option<String>>],
+    edits: &BTreeMap<(usize, usize), Option<String>>,
+    deleted: &BTreeSet<usize>,
+    added: &[BTreeMap<usize, Option<String>>],
+) -> Result<Vec<String>, String> {
+    let q = |s: &str| crate::sql::quote_ident(kind, s);
+    let table = format!("{}.{}", q(&to.schema), q(&to.table));
+    // The table column of each result column (a console result's aliases): what the SQL names
+    let col = |i: usize| q(&to.columns[i]);
+    let pk_at: Vec<usize> = to.pk.iter().filter_map(|p| to.columns.iter().position(|c| c == p)).collect();
+    let at = |r: usize, i: usize| rows.get(r).and_then(|row| row.get(i)).cloned().flatten();
+    let key = |r: usize| -> Result<String, String> {
+        if pk_at.is_empty() || pk_at.len() != to.pk.len() {
+            return Err(EDIT_NO_KEY.into());
+        }
+        Ok(pk_at.iter().map(|&i| format!("{} = {}", col(i), crate::sql::literal(kind, at(r, i).as_deref()))).collect::<Vec<_>>().join(" AND "))
+    };
+    let mut out = vec![];
+    for &r in deleted {
+        out.push(format!("DELETE FROM {table} WHERE {}", key(r)?));
+    }
+    let mut sets: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    for ((r, c), v) in edits.iter().filter(|((r, _), _)| !deleted.contains(r)) {
+        sets.entry(*r).or_default().push(format!("{} = {}", col(*c), value(kind, v)));
+    }
+    for (r, set) in sets {
+        out.push(format!("UPDATE {table} SET {} WHERE {}", set.join(", "), key(r)?));
+    }
+    for row in added {
+        out.push(match (row.is_empty(), kind) {
+            (true, DbKind::Mysql) => format!("INSERT INTO {table} () VALUES ()"),
+            (true, _) => format!("INSERT INTO {table} DEFAULT VALUES"),
+            _ => format!(
+                "INSERT INTO {table} ({}) VALUES ({})",
+                row.keys().map(|&c| col(c)).collect::<Vec<_>>().join(", "),
+                row.values().map(|v| value(kind, v)).collect::<Vec<_>>().join(", ")
+            ),
+        });
+    }
+    Ok(out)
+}
+
+/// Submit's statements for a join (#102): per edited row, one UPDATE for each table its edits go to, found by that table's key
+/// (never by a column's name), without a trailing `;`. rows and edits as edit_statements reads them; an edit of a cell that can't
+/// be edited (JoinEdit::cell) is left out
+pub fn join_statements(kind: DbKind, j: &JoinEdit, rows: &[Vec<Option<String>>], edits: &BTreeMap<(usize, usize), Option<String>>) -> Vec<String> {
+    let q = |s: &str| crate::sql::quote_ident(kind, s);
+    let at = |r: usize, i: usize| rows.get(r).and_then(|row| row.get(i)).cloned().flatten();
+    let mut sets: BTreeMap<(usize, usize), Vec<String>> = BTreeMap::new();
+    for ((r, c), v) in edits {
+        if let (Ok((_, column)), Some(ColumnEdit::To { table, .. })) = (j.cell(*c, |i| at(*r, i).is_none()), j.columns.get(*c)) {
+            sets.entry((*r, *table)).or_default().push(format!("{} = {}", q(column), value(kind, v)));
+        }
+    }
+    sets.into_iter()
+        .map(|((r, ti), set)| {
+            let t = &j.tables[ti];
+            let key = t.pk.iter().zip(&t.pk_at).map(|(k, &i)| format!("{} = {}", q(k), crate::sql::literal(kind, at(r, i).as_deref()))).collect::<Vec<_>>().join(" AND ");
+            format!("UPDATE {}.{} SET {} WHERE {key}", q(&t.schema), q(&t.table), set.join(", "))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -766,5 +849,103 @@ mod tests {
             serde_json::to_value(R { e: Some(Editable::Join(j)) }).unwrap(),
             serde_json::json!({"editJoin": {"tables": [{"schema": "s", "table": "t", "pk": ["id"], "pkAt": [0]}], "columns": [{"table": 0, "column": "id"}, {"readOnly": "why"}]}})
         );
+    }
+
+    mod submit {
+        use super::*;
+
+        const SQLITE: DbKind = DbKind::Sqlite;
+
+        fn users() -> EditTarget {
+            EditTarget { schema: "public".into(), table: "users".into(), pk: s(&["id"]), columns: s(&["id", "name", "memo"]) }
+        }
+        fn rows() -> Vec<Vec<Option<String>>> {
+            vec![some(&["1", "a", "x"]), some(&["2", "b", "y"]), some(&["3", "c", "z"])]
+        }
+        fn cells(v: &[(usize, usize, Option<&str>)]) -> BTreeMap<(usize, usize), Option<String>> {
+            v.iter().map(|&(r, c, x)| ((r, c), x.map(String::from))).collect()
+        }
+        fn new_row(v: &[(usize, Option<&str>)]) -> BTreeMap<usize, Option<String>> {
+            v.iter().map(|&(c, x)| (c, x.map(String::from))).collect()
+        }
+        fn none() -> BTreeSet<usize> {
+            BTreeSet::new()
+        }
+        fn add(kind: DbKind, added: &[BTreeMap<usize, Option<String>>]) -> Vec<String> {
+            edit_statements(kind, &users(), &rows(), &cells(&[]), &none(), added).unwrap()
+        }
+
+        #[test]
+        fn all_default_row_per_kind() {
+            assert_eq!(add(MY, &[new_row(&[])]), ["INSERT INTO public.users () VALUES ()"]);
+            assert_eq!(add(PG, &[new_row(&[])]), ["INSERT INTO public.users DEFAULT VALUES"]);
+            assert_eq!(add(SQLITE, &[new_row(&[])]), ["INSERT INTO public.users DEFAULT VALUES"]);
+        }
+
+        #[test]
+        fn untouched_cell_is_left_out_and_a_null_one_is_sent() {
+            for k in [PG, MY, SQLITE] {
+                // name set to NULL, memo never touched: the column default applies to memo only
+                assert_eq!(add(k, &[new_row(&[(1, None)])]), ["INSERT INTO public.users (name) VALUES (NULL)"], "{k:?}");
+                assert_eq!(add(k, &[new_row(&[(0, Some("9")), (2, Some("m"))])]), ["INSERT INTO public.users (id, memo) VALUES ('9', 'm')"], "{k:?}");
+                let up = edit_statements(k, &users(), &rows(), &cells(&[(0, 2, None)]), &none(), &[]).unwrap();
+                assert_eq!(up, ["UPDATE public.users SET memo = NULL WHERE id = '1'"], "{k:?}");
+            }
+        }
+
+        #[test]
+        fn delete_then_update_then_insert_and_an_edited_deleted_row_is_only_deleted() {
+            let edits = cells(&[(0, 1, Some("a2")), (0, 2, Some("x2")), (1, 1, Some("gone")), (2, 1, Some("c2"))]);
+            let deleted: BTreeSet<usize> = [1].into();
+            let got = edit_statements(PG, &users(), &rows(), &edits, &deleted, &[new_row(&[(1, Some("n"))]), new_row(&[])]).unwrap();
+            assert_eq!(
+                got,
+                [
+                    "DELETE FROM public.users WHERE id = '2'",
+                    "UPDATE public.users SET name = 'a2', memo = 'x2' WHERE id = '1'",
+                    "UPDATE public.users SET name = 'c2' WHERE id = '3'",
+                    "INSERT INTO public.users (name) VALUES ('n')",
+                    "INSERT INTO public.users DEFAULT VALUES",
+                ]
+            );
+        }
+
+        #[test]
+        fn no_key_is_an_error_for_updates_and_deletes_only() {
+            let mut to = users();
+            to.pk = s(&["id", "tenant"]); // a key column the result doesn't have
+            let rows = rows();
+            assert_eq!(edit_statements(PG, &to, &rows, &cells(&[(0, 1, Some("z"))]), &none(), &[]), Err(EDIT_NO_KEY.into()));
+            assert_eq!(edit_statements(PG, &to, &rows, &cells(&[]), &[0].into(), &[]), Err(EDIT_NO_KEY.into()));
+            to.pk = vec![];
+            assert_eq!(edit_statements(MY, &to, &rows, &cells(&[(0, 1, Some("z"))]), &none(), &[]), Err(EDIT_NO_KEY.into()));
+            assert_eq!(edit_statements(MY, &to, &rows, &cells(&[]), &none(), &[new_row(&[])]), Ok(vec!["INSERT INTO public.users () VALUES ()".to_string()]));
+        }
+
+        #[test]
+        fn names_and_values_quoted_per_kind() {
+            let to = EditTarget { schema: "S".into(), table: "My T".into(), pk: s(&["Id"]), columns: s(&["Id", "select"]) };
+            let rows = vec![some(&["it's", "a"])];
+            let edits = cells(&[(0, 1, Some("x\\y'z")), (0, 0, Some(crate::extract::DEFAULT_TOKEN))]);
+            let got = |k| edit_statements(k, &to, &rows, &edits, &none(), &[]).unwrap();
+            assert_eq!(got(PG), [r#"UPDATE "S"."My T" SET "Id" = DEFAULT, "select" = E'x\\y''z' WHERE "Id" = 'it''s'"#]);
+            assert_eq!(got(MY), [r"UPDATE S.`My T` SET Id = DEFAULT, `select` = 'x\\y''z' WHERE Id = 'it''s'"]);
+            assert_eq!(got(SQLITE), [r#"UPDATE "S"."My T" SET "Id" = DEFAULT, "select" = 'x\y''z' WHERE "Id" = 'it''s'"#]);
+        }
+
+        #[test]
+        fn join_edits_one_update_per_table_by_its_key() {
+            // voc.idx, voc.status, users.idx, users.role, a read-only expression
+            let j = JoinEdit {
+                tables: vec![JoinTable { schema: "crm".into(), table: "voc".into(), pk: s(&["idx"]), pk_at: vec![0] }, JoinTable { schema: "public".into(), table: "users".into(), pk: s(&["idx"]), pk_at: vec![2] }],
+                columns: vec![to(0, "idx"), to(0, "status"), to(1, "idx"), to(1, "role"), ro("why".into())],
+            };
+            let rows = vec![some(&["10", "open", "7", "admin", "e"]), vec![Some("11".into()), Some("new".into()), None, None, None]];
+            let edits = cells(&[(0, 1, Some("closed")), (0, 3, None), (0, 4, Some("ignored")), (1, 1, Some("done")), (1, 3, Some("outer side"))]);
+            assert_eq!(
+                join_statements(MY, &j, &rows, &edits),
+                ["UPDATE crm.voc SET status = 'closed' WHERE idx = '10'", "UPDATE public.users SET role = NULL WHERE idx = '7'", "UPDATE crm.voc SET status = 'done' WHERE idx = '11'"]
+            );
+        }
     }
 }

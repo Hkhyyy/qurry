@@ -169,6 +169,7 @@ pub(super) fn nav(app: &mut App, k: KeyEvent) {
 mod tests {
     use super::*;
     use crate::testkit::Harness;
+    use qurry_core::db::QueryResult;
 
     /// ⌘← arriving as ⌃A doesn't add a row (a adds a row)
     #[tokio::test]
@@ -766,5 +767,80 @@ mod tests {
         }
         h.app.fetch_more();
         assert!(!h.table(id).grid.as_ref().unwrap().loading_more);
+    }
+
+    /// A table tab on data source "test" of `kind` (Production when `prod`), rows 1 a x · 2 b y · 3 c z keyed by id; the statements
+    /// Submit sends go to `record`
+    async fn users(kind: &str, prod: bool, record: crate::app::FakeDb) -> Harness {
+        let mut h = Harness::new().await;
+        let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+            "id": "test", "name": "T", "kind": kind, "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+        }))
+        .unwrap();
+        cfg.options.confirm_changes = prod;
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        h.app.fake_db = Some(record);
+        h.table_tab("users", &["id", "name", "memo"], &[&["1", "a", "x"], &["2", "b", "y"], &["3", "c", "z"]], &["id"]);
+        h
+    }
+
+    /// Row 1's name edited, row 2 set to NULL and deleted, a new row whose name is set to NULL, a new row left as it is; Submit
+    fn edit_delete_add(h: &mut Harness) {
+        h.key("Right");
+        h.key("Enter");
+        h.key("Backspace");
+        h.type_str("a2");
+        h.key("Enter");
+        h.key("Down");
+        h.key("n");
+        h.key("d");
+        h.key("a");
+        h.key("n");
+        h.key("a");
+        h.key("Ctrl+S");
+    }
+
+    fn one_row() -> QueryResult {
+        QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 1, has_result_set: false, in_transaction: false, warning: None, editable: None }
+    }
+
+    /// Submit runs DELETE, then UPDATE, then INSERT (the GUI's order); the edited deleted row is only deleted, a new row's cell set to
+    /// NULL is sent, its untouched cells are left out, and an all-default row is `DEFAULT VALUES` on PostgreSQL
+    #[tokio::test]
+    async fn submit_on_postgres_runs_delete_update_insert() {
+        static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        fn record(q: &str) -> Result<QueryResult, String> {
+            SEEN.lock().unwrap().push(q.into());
+            Ok(one_row())
+        }
+        let mut h = users("postgres", false, record).await;
+        edit_delete_add(&mut h);
+        h.settle().await;
+        assert_eq!(
+            *SEEN.lock().unwrap(),
+            ["DELETE FROM public.users WHERE id = '2'", "UPDATE public.users SET name = 'a2' WHERE id = '1'", "INSERT INTO public.users (name) VALUES (NULL)", "INSERT INTO public.users DEFAULT VALUES"]
+        );
+        assert!(h.app.status.starts_with("4 statement(s) submitted, 4 row(s) affected"), "{}", h.app.status);
+    }
+
+    /// On MySQL an all-default row is `() VALUES ()`; a Production source lists the statements in the order they run before it asks
+    #[tokio::test]
+    async fn submit_on_mysql_production_lists_then_runs_them_in_order() {
+        static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        fn record(q: &str) -> Result<QueryResult, String> {
+            SEEN.lock().unwrap().push(q.into());
+            Ok(one_row())
+        }
+        let mut h = users("mysql", true, record).await;
+        edit_delete_add(&mut h);
+        let want = ["DELETE FROM public.users WHERE id = '2'", "UPDATE public.users SET name = 'a2' WHERE id = '1'", "INSERT INTO public.users (name) VALUES (NULL)", "INSERT INTO public.users () VALUES ()"];
+        let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
+        assert_eq!(text, &format!("Production data source \"T\" — save 4 change(s)?\n\n  {}", want.join("\n  ")));
+        assert!(SEEN.lock().unwrap().is_empty(), "nothing runs before the answer");
+        h.key("y");
+        h.settle().await;
+        assert_eq!(*SEEN.lock().unwrap(), want);
     }
 }

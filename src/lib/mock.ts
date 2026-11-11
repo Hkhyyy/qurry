@@ -520,7 +520,9 @@ const handlers: Record<string, (a: any) => unknown> = {
   close_session: () => null,
   // A console in Manual mode keeps them pending (tx_state)
   // As the core: what ran goes into the query history
+  // window.__mockSubmitted: every statement Submit sent, in order (e2e)
   submit_edits: (a: any) => {
+    ((globalThis as any).__mockSubmitted ??= []).push(...a.statements);
     const [connId, database] = String(a.id).split("::");
     for (const sql of a.statements) historyAdded.unshift({ id: `ha${historyAdded.length}`, connId, database: database || undefined, sql, ts: Date.now() });
     return { rows: a.statements.length };

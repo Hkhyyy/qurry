@@ -144,7 +144,7 @@ impl App {
     }
 
     /// The test stand-in for the database (always None outside tests)
-    fn fake_db(&self) -> Option<FakeDb> {
+    pub(super) fn fake_db(&self) -> Option<FakeDb> {
         #[cfg(test)]
         return self.fake_db;
         #[cfg(not(test))]

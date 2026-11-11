@@ -4,7 +4,7 @@
 import { useSyncExternalStore } from "react";
 import init, * as wasm from "../wasm/pkg/qurry_shared_wasm";
 import wasmUrl from "../wasm/pkg/qurry_shared_wasm_bg.wasm?url";
-import type { Cell, CompletionTable, DbKind, QueryResult, RedisReply } from "./api";
+import type { Cell, CompletionTable, DbKind, JoinEdit, QueryResult, RedisReply, ResultEditTarget } from "./api";
 import type { ExecPlan, ExecSettings, Stmt } from "./execPlan";
 import type { Extractor } from "./extract";
 import type { Segment } from "./sqlSplit";
@@ -247,6 +247,12 @@ const api = {
   editNoRow: (table: string): string => wasm.editNoRow(table),
   /** Why Add / Delete / Clone Row are greyed out on a join result (qurry_shared::errors::EDIT_JOIN_ROWS) */
   editJoinRows: (): string => wasm.editJoinRows(),
+  /** Submit's statements for one table (qurry_shared::result_edit::edit_statements): rows = raw text, edits = [row, column, value],
+   *  added = per new row the [column, value] of each cell set */
+  editStatements: (kind: DbKind, to: ResultEditTarget, rows: (string | null)[][], edits: [number, number, string | null][], deleted: number[], added: [number, string | null][][]): { Ok: string[] } | { Err: string } =>
+    wasm.editStatements(kind, to, rows, edits, deleted, added),
+  /** Submit's statements for a join result (qurry_shared::result_edit::join_statements) */
+  joinStatements: (kind: DbKind, edit: JoinEdit, rows: (string | null)[][], edits: [number, number, string | null][]): string[] => wasm.joinStatements(kind, edit, rows, edits),
   /** What a Production console that starts in Manual mode says the first time (qurry_shared::errors::PRODUCTION_MANUAL) */
   productionManual: (): string => wasm.productionManual(),
   /** The result grid's line when loading more rows failed (qurry_shared::errors::more_rows_failed, the TUI's words) */

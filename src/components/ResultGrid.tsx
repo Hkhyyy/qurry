@@ -5,6 +5,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { Cell, Dialect, dialectOf, type JoinEdit, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
+import { editStatements, joinStatements, type NewRow } from "../lib/gridEdit";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, raw } from "../lib/extract";
 import { shared, sharedOr, sharedReady, useSharedReady, type GridStatus, type StatusItemId } from "../lib/shared";
@@ -103,7 +104,6 @@ export function ResultGrid(p: Props) {
   const D = p.dialect ?? dialectOf("postgres");
   const quoteIdent = D.q;
   const sqlLiteral = D.lit;
-  const lit = (c: Cell) => (c === DEFAULT_TOKEN ? "DEFAULT" : sqlLiteral(c));
   const cols = result.columns;
   const scrollRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -113,7 +113,8 @@ export function ResultGrid(p: Props) {
   const [editing, setEditing] = useState<{ r: number; c: number; value: string; picker?: boolean } | null>(null);
   const [changes, setChanges] = useState<Record<number, Record<number, Cell>>>({});
   const [deleted, setDeleted] = useState<Set<number>>(new Set());
-  const [added, setAdded] = useState<Cell[][]>([]);
+  /** New rows: a cell never set is undefined (left out of the INSERT, so the column default applies), one set to NULL is null */
+  const [added, setAdded] = useState<NewRow[]>([]);
   const [preview, setPreview] = useState<{ sql: string[]; readOnly?: boolean } | null>(null);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [extractor, setExtractorState] = useState<Extractor>(lastExtractor);
@@ -544,7 +545,7 @@ export function ResultGrid(p: Props) {
 
   const addRow = () => {
     if (!canEdit) return;
-    setAdded((a) => [...a, cols.map(() => null)]);
+    setAdded((a) => [...a, cols.map(() => undefined)]);
     setTimeout(() => {
       virt.scrollToIndex(rowCount);
       selectCell({ r: rowCount, c: 0 }, false);
@@ -552,7 +553,8 @@ export function ResultGrid(p: Props) {
   };
   const cloneRow = () => {
     if (!canEdit || !active) return;
-    const src = cols.map((_, c) => (pkIdx.includes(c) ? null : valueAt(active.r, c)));
+    // Key cells are left untouched; the others keep the source's value, NULL included (a new row's untouched cell stays untouched)
+    const src = cols.map((_, c) => (pkIdx.includes(c) ? undefined : active.r < baseCount ? valueAt(active.r, c) : added[active.r - baseCount][c]));
     setAdded((a) => [...a, src]);
     setTimeout(() => virt.scrollToIndex(rowCount));
   };
@@ -597,49 +599,16 @@ export function ResultGrid(p: Props) {
   };
 
   const tableRef = edit ? `${quoteIdent(edit.schema)}.${quoteIdent(edit.table)}` : "MY_TABLE";
-  /** A join: per edited row, one UPDATE for each table its edits go to, found by that table's key (never by a column's name) */
-  const joinStatements = (j: JoinEdit): string[] => {
-    const out: string[] = [];
-    for (const [rs, ch] of Object.entries(changes)) {
-      const r = Number(rs);
-      const sets = new Map<number, string[]>();
-      for (const [cs, v] of Object.entries(ch)) {
-        const col = j.columns[Number(cs)];
-        if (col && "table" in col) sets.set(col.table, [...(sets.get(col.table) ?? []), `${quoteIdent(col.column)} = ${lit(v)}`]);
-      }
-      for (const [ti, set] of sets) {
-        const t = j.tables[ti];
-        const where = t.pk.map((k, i) => `${quoteIdent(k)} = ${sqlLiteral(result.rows[r][t.pkAt[i]])}`).join(" AND ");
-        out.push(`UPDATE ${quoteIdent(t.schema)}.${quoteIdent(t.table)} SET ${set.join(", ")} WHERE ${where};`);
-      }
-    }
-    return out;
-  };
-  const buildStatements = (): string[] => {
-    if (join) return joinStatements(join);
+  /** Submit's statements (lib/gridEdit: the TUI's rules), each ending with `;` */
+  const buildStatements = (): string[] | undefined => {
+    if (!sharedReady()) return void setStatusNote("Submit needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
+    if (join) return joinStatements(D.quoting, join, result.rows, changes);
     if (!edit) return [];
-    const where = (r: number) => pkIdx.map((i) => `${quoteIdent(tcol(i))} = ${sqlLiteral(result.rows[r][i])}`).join(" AND ");
-    const out: string[] = [];
-    for (const r of [...deleted].sort((a, b) => a - b)) out.push(`DELETE FROM ${tableRef} WHERE ${where(r)};`);
-    for (const [rs, ch] of Object.entries(changes)) {
-      const r = Number(rs);
-      if (deleted.has(r)) continue;
-      const sets = Object.entries(ch).map(([c, v]) => `${quoteIdent(tcol(Number(c)))} = ${lit(v)}`).join(", ");
-      out.push(`UPDATE ${tableRef} SET ${sets} WHERE ${where(r)};`);
-    }
-    for (const row of added) {
-      const idx = row.map((v, i) => (v === null ? -1 : i)).filter((i) => i >= 0);
-      out.push(
-        idx.length === 0
-          ? `INSERT INTO ${tableRef} DEFAULT VALUES;`
-          : `INSERT INTO ${tableRef} (${idx.map((i) => quoteIdent(tcol(i))).join(", ")}) VALUES (${idx.map((i) => lit(row[i])).join(", ")});`,
-      );
-    }
-    return out;
+    return editStatements(D.quoting, { ...edit, columns: cols.map((_, i) => tcol(i)) }, result.rows, changes, deleted, added);
   };
   const submit = async () => {
     const sql = buildStatements();
-    if (!sql.length) return;
+    if (!sql?.length) return;
     setSubmitErr(null);
     try {
       await p.onSubmit(sql);
@@ -647,6 +616,10 @@ export function ResultGrid(p: Props) {
       setPreview({ sql });
       setSubmitErr(String(e));
     }
+  };
+  const previewPending = () => {
+    const sql = buildStatements();
+    if (sql) setPreview({ sql, readOnly: true });
   };
   const doSubmitPreview = async () => {
     if (!preview) return;
@@ -706,7 +679,7 @@ export function ResultGrid(p: Props) {
       const d = cur.r + i;
       const r = d < rowCount ? dataIndex(d) : -1;
       if (r < 0) {
-        const row: Cell[] = cols.map(() => null);
+        const row: NewRow = cols.map(() => undefined);
         cells.forEach((v, j) => {
           if (cur.c + j < cols.length) row[cur.c + j] = v;
         });
@@ -869,7 +842,7 @@ export function ResultGrid(p: Props) {
     { label: "Add Row", ...cmd("grid.addRow"), action: addRow, disabled: !canEdit },
     { label: "Delete Row", ...cmd("grid.deleteRows"), action: deleteRows, disabled: !canEdit || !hasSel },
     { label: "Revert Selected", ...cmd("grid.revert"), action: revertSelected, disabled: !pendingCount },
-    { label: "Preview Pending Changes", ...cmd("grid.preview"), action: () => setPreview({ sql: buildStatements(), readOnly: true }), disabled: !pendingCount },
+    { label: "Preview Pending Changes", ...cmd("grid.preview"), action: previewPending, disabled: !pendingCount },
     { label: "Submit", ...cmd("grid.submit"), action: submit, disabled: !pendingCount },
     ...(p.onDdl ? ([{ label: "Go to DDL", ...cmd("grid.ddl"), action: p.onDdl }] as MenuItem[]) : []),
     { label: "Find on Current Page", ...cmd("grid.find"), action: openFind },
@@ -915,7 +888,7 @@ export function ResultGrid(p: Props) {
         <IconButton {...editButton("Add Row", "grid.addRow", rowReason)} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
         <IconButton {...editButton("Delete Row", "grid.deleteRows", rowReason)} onClick={deleteRows} disabled={!canEdit || !hasSel}><IcMinus /></IconButton>
         <IconButton {...editButton("Revert Selected", "grid.revert")} onClick={revertSelected} disabled={!pendingCount}><IcRevert /></IconButton>
-        <IconButton {...editButton("Preview Pending Changes", "grid.preview")} onClick={() => setPreview({ sql: buildStatements(), readOnly: true })} disabled={!pendingCount}><IcPreview /></IconButton>
+        <IconButton {...editButton("Preview Pending Changes", "grid.preview")} onClick={previewPending} disabled={!pendingCount}><IcPreview /></IconButton>
         <IconButton active={false} className={pendingCount ? "accent" : undefined} {...editButton("Submit", "grid.submit")} onClick={submit} disabled={!pendingCount}><IcSubmit /></IconButton>
         <ToolbarSep />
         <ToolButton

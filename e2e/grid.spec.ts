@@ -632,3 +632,78 @@ test.describe("multi-range selection (⌘-click)", () => {
     await expect(page.locator(".statusbar")).toContainText("Paste needs one selected range: click a cell to select just it (⌘-click adds cells to the selection)");
   });
 });
+
+// Submit's statements come from qurry_shared::result_edit (the TUI's rules): DELETE, then UPDATE, then INSERT; a new row's cell set to
+// NULL is sent, one never set is left out; an all-default row is DEFAULT VALUES on PostgreSQL and () VALUES () on MySQL (#155)
+const submitted = (page: Page) => page.evaluate(() => ((window as any).__mockSubmitted ?? []) as string[]);
+
+test("Submit on PostgreSQL: the preview lists DELETE, UPDATE, INSERT in that order, and Submit sends them so", async ({ page }) => {
+  const button = (name: RegExp) => work(page).getByRole("button", { name });
+  await work(page).getByRole("gridcell", { name: "user_2", exact: true }).click();
+  await page.keyboard.press("Meta+Alt+KeyN");
+  await work(page).getByRole("rowheader", { name: "1", exact: true }).click();
+  await button(/^Delete Row/).click();
+  await button(/^Add Row/).click();
+  // Scrolling to the new row loads the next rows before it (the view stays): scroll to it again
+  await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows · 3 pending");
+  await work(page).locator(".grid-scroll").first().evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".grid-row.added .cell.sel")).toHaveCount(1);
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Meta+Alt+KeyN");
+  await button(/^Add Row/).click();
+  await button(/^Preview Pending Changes/).click();
+  const want = [
+    "DELETE FROM public.users WHERE id = '1';",
+    "UPDATE public.users SET user_name = NULL WHERE id = '2';",
+    "INSERT INTO public.users (user_name) VALUES (NULL);",
+    "INSERT INTO public.users DEFAULT VALUES;",
+  ];
+  await expect(dialog(page).locator(".sql-preview")).toHaveText(want.join("\n"));
+  await dialog(page).getByRole("button", { name: "Submit", exact: true }).click();
+  await expect.poll(() => submitted(page)).toEqual(want);
+});
+
+test("Submit on MySQL: an empty new row is INSERT INTO … () VALUES (), listed by the Production confirm", async ({ page }) => {
+  // [MySQL] shop (Production) lists its tables after [DEV] shop_app's
+  await treeItem(page, "users").nth(1).dblclick();
+  await expect(page.getByRole("tab", { name: /users/ })).toHaveCount(2);
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  await work(page).getByRole("button", { name: /^Add Row/ }).click();
+  await work(page).getByRole("button", { name: /^Submit/ }).click();
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Production: [MySQL] shop");
+  await expect(dialog(page).locator(".ui-detail-text")).toHaveText(["INSERT INTO shop.users () VALUES ();"]);
+  await dialog(page).getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => submitted(page)).toEqual(["INSERT INTO shop.users () VALUES ();"]);
+});
+
+test("Clone Row keeps the source's NULL (sent as NULL, not the column default), and a new row's untouched cells stay untouched", async ({ page }) => {
+  // user_2's memo is NULL
+  await work(page).getByRole("gridcell", { name: "user_2", exact: true }).click();
+  await page.keyboard.press("Meta+KeyD");
+  await work(page).getByRole("button", { name: /^Add Row/ }).click();
+  await expect(work(page).locator(".grid-row.added .cell.sel")).toHaveCount(1);
+  await page.keyboard.press("Meta+KeyD");
+  await work(page).getByRole("button", { name: /^Preview Pending Changes/ }).click();
+  await expect(dialog(page).locator(".sql-preview")).toHaveText(
+    [
+      "INSERT INTO public.users (user_name, amount, created_at, memo) VALUES ('user_2', '1234.50', '2026-10-15 12:00:00.5 +09:00', NULL);",
+      "INSERT INTO public.users DEFAULT VALUES;",
+      "INSERT INTO public.users DEFAULT VALUES;",
+    ].join("\n"),
+  );
+});
+
+test("a WebView that refuses WebAssembly: Submit and Preview Pending Changes say why nothing happens", async ({ page }) => {
+  await page.route((u) => u.pathname.endsWith(".wasm") && !u.search, (r) => r.abort());
+  await openApp(page);
+  await treeItem(page, "users").first().dblclick();
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  await work(page).getByRole("button", { name: /^Add Row/ }).click();
+  const why = "Submit needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk";
+  await work(page).getByRole("button", { name: /^Submit/ }).click();
+  await expect(page.locator(".statusbar")).toContainText(why);
+  await work(page).getByRole("button", { name: /^Preview Pending Changes/ }).click();
+  await expect(page.locator(".statusbar")).toContainText(why);
+  await expect(dialog(page)).toHaveCount(0);
+  expect(await submitted(page)).toEqual([]);
+});
