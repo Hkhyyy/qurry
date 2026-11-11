@@ -4,7 +4,7 @@ import { expect, openApp, openConsole, test, treeItem, typeSql, work } from "./a
 // Loading more rows fails (#157: the core asks to run the query again after a reconnect): the whole reason sits below the grid
 // with Run again, which runs it again and gives the keys back to the grid
 const ERR =
-  "The data source reconnected since this result was read (settings saved, disconnected or idle), and the session was changed with SET, RESET or USE since, so a new connection wouldn't match. Run the query again to load more rows.";
+  "The data source reconnected since this result was read (settings saved, disconnected or idle), and the session was changed since (SET, RESET, USE or a statement that isn't a read), so a new connection wouldn't match. Run the query again to load more rows.";
 
 const failLoads = (page: Page, e: string | null) => page.evaluate((x) => ((globalThis as any).__mockFetchMoreError = x ?? undefined), e);
 const grid = (page: Page) => work(page).locator(".grid-scroll").first();

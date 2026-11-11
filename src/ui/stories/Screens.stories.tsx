@@ -546,7 +546,7 @@ export const GridLoadMoreFailed: S = {
           ...mixed,
           truncated: true,
           moreError:
-            "Couldn't load more rows: The data source reconnected since this result was read (settings saved, disconnected or idle), and the session was changed with SET, RESET or USE since, so a new connection wouldn't match. Run the query again to load more rows.",
+            "Couldn't load more rows: The data source reconnected since this result was read (settings saved, disconnected or idle), and the session was changed since (SET, RESET, USE or a statement that isn't a read), so a new connection wouldn't match. Run the query again to load more rows.",
         }}
         running={false}
         loadingMore={false}

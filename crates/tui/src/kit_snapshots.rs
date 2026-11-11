@@ -261,7 +261,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     scenes.push(app_scene(h, "Grid: loading more, NO_COLOR", "NO_COLOR=1: the same bar and words", 120, 26));
     h.app.color = crate::theme::ColorMode::TrueColor;
     // Loading more failed (#157): the reason wraps on the grid's last lines with the key that runs the result's statement again
-    let why = "Couldn't load more rows (F5 in the grid runs it again): The data source reconnected since this result was read (settings saved, disconnected or idle), and the session was changed with SET, RESET or USE since, so a new connection wouldn't match. Run the query again to load more rows.";
+    let why = "Couldn't load more rows (F5 in the grid runs it again): The data source reconnected since this result was read (settings saved, disconnected or idle), and the session was changed since (SET, RESET, USE or a statement that isn't a read), so a new connection wouldn't match. Run the query again to load more rows.";
     if let Some(g) = h.app.grid_mut() {
         (g.loading_more, g.more_error) = (false, Some(why.into()));
     }

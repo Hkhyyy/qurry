@@ -423,7 +423,7 @@ fn reopen_refused(k: &Kept, now: &ConnectionConfig, manual: bool) -> Option<Stri
     } else if crate::guard::locks_rows(&m.sql, kind) {
         return Some(format!("{RECONNECTED}, and loading more would run the statement again, but it locks rows (FOR UPDATE, FOR SHARE, LOCK IN SHARE MODE …). Run it again yourself to load more rows."));
     } else if k.changed {
-        "the session was changed with SET, RESET or USE since, so a new connection wouldn't match"
+        "the session was changed since (SET, RESET, USE or a statement that isn't a read), so a new connection wouldn't match"
     } else {
         return None;
     };
@@ -3713,7 +3713,7 @@ pub(crate) mod tests {
         let set = Kept { changed: true, ..k("select * from t", Postgres, false) };
         assert_eq!(
             reopen_refused(&set, &src(Postgres), false).as_deref(),
-            Some("The data source reconnected since this result was read (settings saved, disconnected or idle), and the session was changed with SET, RESET or USE since, so a new connection wouldn't match. Run the query again to load more rows.")
+            Some("The data source reconnected since this result was read (settings saved, disconnected or idle), and the session was changed since (SET, RESET, USE or a statement that isn't a read), so a new connection wouldn't match. Run the query again to load more rows.")
         );
         // A statement of its own that isn't a plain read says so first
         let e = reopen_refused(&Kept { changed: true, ..k("select pg_sleep(1), * from t", Postgres, false) }, &src(Postgres), false).unwrap();
@@ -3924,7 +3924,7 @@ pub(crate) mod tests {
             assert!(q(full, &tab).await.unwrap().truncated);
             st.disconnect("d".into()).await.unwrap();
             let e = st.fetch_more(tab.clone(), Some(500)).await.unwrap_err().to_string();
-            assert!(e.contains("the session was changed with SET, RESET or USE since") && e.ends_with("Run the query again to load more rows."), "{c}: {e}");
+            assert!(e.contains("the session was changed since (SET, RESET, USE or a statement that isn't a read)") && e.ends_with("Run the query again to load more rows."), "{c}: {e}");
             assert!(st.sessions.read().await.get(&tab).is_none(), "{c}: refused before opening a session");
             // Run again: a new session without the change, and its result goes on after a reconnect
             assert!(q(full, &tab).await.unwrap().truncated);
