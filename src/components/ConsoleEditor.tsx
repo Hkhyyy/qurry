@@ -236,7 +236,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
         // ── Result tabs follow the statements (#151): the script is split once per text version, a pause after typing (a long script
         // would make each keystroke wait) or right away for a run; a caret move only looks the statement up
         let stmts: { version: number; segs: { start: number; end: number }[]; texts: string[] } | null = null;
-        /** The statement the caret was in when last looked up (undefined: not yet): only entering another one shows its tab */
+        /** The statement the caret was in when last looked up (undefined: not yet; null: none, or forgotten after a statement was
+         * added or deleted): only entering another one shows its tab */
         let last: number | null | undefined;
         let timer: ReturnType<typeof setTimeout> | undefined;
         /** Split again if the text changed (the tabs follow it), then show the tab of the statement the caret entered, if it did */
@@ -257,6 +258,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, k
             const after = segs.map((s) => text.slice(s.start, s.end).trim());
             stmts = { version: m.getVersionId(), segs, texts: after };
             if (before && (before.length !== after.length || before.some((t, i) => t !== after[i]))) follow.current.onStatements?.(before, after);
+            // A statement added or deleted: the one at the caret's index may be another now (⌘⇧K on it), so its tab is looked up again
+            if (before && before.length !== after.length) last = null;
           }
           const at = m.getOffsetAt(pos);
           // Right after its `;` is still in it, as ⌘↩ plans it

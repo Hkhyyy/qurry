@@ -275,7 +275,9 @@ impl Console {
             if st.kind == Some(kind) && st.texts != texts {
                 self.results.edited(&st.texts, &texts);
             }
-            *st = Stmts { lines: lines.to_vec(), kind: Some(kind), segs, texts, caret: st.caret, stmt: st.stmt };
+            // A statement added or deleted: the one at the caret's index may be another now (its line deleted), so it is looked up again
+            let (caret, stmt) = if st.kind == Some(kind) && st.texts.len() != texts.len() { (None, None) } else { (st.caret, st.stmt) };
+            *st = Stmts { lines: lines.to_vec(), kind: Some(kind), segs, texts, caret, stmt };
         }
         let caret = self.editor.cursor();
         if st.caret == Some(caret) {

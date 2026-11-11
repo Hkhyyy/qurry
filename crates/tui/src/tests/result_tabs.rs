@@ -138,6 +138,28 @@ async fn a_deleted_statement_closes_its_tab_and_the_next_renumbers() {
 }
 
 #[tokio::test]
+async fn deleting_the_caret_statement_shows_the_tab_of_the_one_now_at_the_caret() {
+    let mut h = open(S2).await;
+    run(&mut h).await;
+    h.key("Down");
+    run(&mut h).await;
+    // Line 1 selected from the start of line 2 up: the caret ends in statement 1, which shows its tab
+    h.key("Home");
+    h.key("Shift+Up");
+    assert_eq!(tabs(&h).1.as_deref(), Some("1: customers"));
+    // Deleted, the caret stays at the start of line 1: statement 2 is there now, so its tab shows, not Output
+    h.key("Backspace");
+    assert_eq!(h.console_text(), "select * from orders limit 3;");
+    assert_eq!(console(&h).editor.cursor(), (0, 0));
+    assert_eq!(tabs(&h), (vec!["1: orders".into()], Some("1: orders".into())), "after deleting a statement, move the caret into the next one to show its tab");
+    // The last one deleted: the caret is in no statement, so its tab closes and the shown one is the store's choice (Output)
+    h.key("Shift+End");
+    h.key("Backspace");
+    assert_eq!(h.console_text(), "");
+    assert_eq!(tabs(&h), (vec![], None));
+}
+
+#[tokio::test]
 async fn result_tabs_setting_caps_the_unpinned_tabs() {
     let mut h = open("select * from customers;\nselect * from orders;\nselect * from payments limit 5;").await;
     h.key("Ctrl+K");
