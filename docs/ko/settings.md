@@ -2,7 +2,16 @@
 
 [English](../settings.md) | 한국어
 
-GUI **Settings** (`⌘,`, 또는 맨 왼쪽 워크스페이스 막대 아래의 ⚙ 버튼) 에는 **Appearance**, **Keymap**, **Passwords** 세 쪽이 있습니다. GUI 와 TUI 가 함께 쓰는 설정은 설정 폴더의 `settings.json` 에 저장됩니다 ([폴더 위치](getting-started.md#설정이-저장되는-곳)). TUI 에는 설정 창이 없습니다: 옵션은 `⌃k` (Find Action) 에 있고, 글꼴은 터미널의 글꼴을 씁니다 ([터미널에서 쓰는 TUI › 글꼴](tui.md#글꼴) 참고).
+GUI **Settings** (`⌘,`, 또는 맨 왼쪽 워크스페이스 막대 아래의 ⚙ 버튼) 는 DataGrip 처럼 왼쪽 트리에 쪽을 보여 줍니다: **Appearance** (그 아래 **Console**, **Data grid**), **Updates**, **Keymap**, **Passwords**. 쪽을 누르거나, 트리에 포커스를 두고 아래 키를 씁니다. Settings 는 마지막에 본 쪽으로 열립니다. GUI 와 TUI 가 함께 쓰는 설정은 설정 폴더의 `settings.json` 에 저장됩니다 ([폴더 위치](getting-started.md#설정이-저장되는-곳)). TUI 에는 설정 창이 없습니다: 옵션은 `⌃k` (Find Action) 에 있고, 글꼴은 터미널의 글꼴을 씁니다 ([터미널에서 쓰는 TUI › 글꼴](tui.md#글꼴) 참고).
+
+| 키 | 쪽 트리에서 |
+|---|---|
+| `↑` `↓` | 이전 / 다음 쪽 |
+| `→` | 하위 쪽 펼치기. 펼쳐져 있으면 첫 하위 쪽으로 |
+| `←` | 펼친 쪽 접기. 하위 쪽이면 상위 쪽으로 |
+| `Home` / `End` | 첫 / 마지막 쪽 |
+
+0.3.3 까지는 Appearance, Updates, Channel 이 모두 한 쪽에 있었습니다. 설정마다 이름, 값, `settings.json` 의 키는 그대로이고, 놓인 쪽만 바뀌었습니다.
 
 ## Appearance
 
@@ -11,23 +20,6 @@ GUI **Settings** (`⌘,`, 또는 맨 왼쪽 워크스페이스 막대 아래의 
 | Theme | Dark, Light, High contrast, Dracula, One Dark, Solarized Dark, Solarized Light 또는 사용자 테마, 또는 어두운 테마와 밝은 테마를 하나씩 고르는 **Sync with OS** ([아래](#테마)). 빠른 전환: `` ⌃` `` | 예 (TUI **⌃k › Theme…**) |
 | Editor font | 쿼리 콘솔 편집기의 글꼴과 크기. 크기 8–32 px (기본 13). `⌃⇧.` / `⌃⇧,` 로도 바꿀 수 있고, Settings 에 바뀐 크기가 보입니다 | 아니요 (TUI 는 터미널 글꼴을 씀) |
 | Grid font | 결과 · 테이블 그리드의 글꼴과 크기. 크기 9–16 px (기본 12): 행 높이는 그대로라 더 크면 글자가 잘립니다. 크기에 맞춰 열이 넓어집니다 | 아니요 (TUI 는 터미널 글꼴을 씀) |
-| Keyword case | 콘솔에서 입력할 때와 **Reformat Code** 에서 SQL 키워드를 **Off** (기본), **UPPER**, **lower** 중 무엇으로 쓸지 ([아래](#키워드-대소문자와-reformat-code)) | 예 (TUI **⌃k › Keyword Case…**) |
-| Alignment | 결과 표에서 칸 안의 값을 어디에 둘지, 값 종류마다 (아래) | 예 (TUI **⌃k › Grid Alignment…**) |
-| Status bar | 포커스가 있는 그리드에 대해 상태 표시줄이 보여 줄 항목: Position, Shown columns, Not null, Sum, Avg, Min, Max, Size ([아래](#상태-표시줄-항목)) | 예 (TUI **⌃k › Status Bar Items…**) |
-| Updates | 앱을 켤 때 새 버전 확인, **Check Now** | — |
-| Channel | stable 또는 beta 릴리스 ([업데이트](updates.md)) | 예 |
-
-### 글꼴
-
-글꼴은 바꾸는 즉시 열려 있는 모든 콘솔과 그리드에 적용됩니다.
-
-**글꼴 이름**: 이 컴퓨터에 설치된 글꼴 목록에서 고릅니다. **Monospaced only** (기본으로 켜짐) 는 고정폭이 아닌 글꼴을 숨깁니다. 끄면 설치된 어떤 글꼴이든 고를 수 있습니다. 입력하면 목록을 검색하고 (닫힌 입력란에서 입력해도 열립니다), `↑` `↓` 로 움직이고, `↩` 로 고르고, `⎋` 로 목록을 닫습니다. 입력란의 글자는 고른 글꼴로 보입니다. 목록 맨 위의 **Default monospace** 는 JetBrains Mono, 없으면 Menlo 입니다. 목록은 열 때마다 다시 읽으므로, Qurry 가 켜져 있는 동안 설치한 글꼴도 다시 시작하지 않고 바로 보입니다. macOS 와 Linux (`fc-list`) 에서는 설치된 글꼴을 보여 주고, 그 밖에서는 기본 글꼴과 저장된 글꼴만 나옵니다.
-
-저장된 글꼴이 설치되어 있지 않아도 (그 뒤에 지웠거나 다른 컴퓨터에서 고른 글꼴) 화면이 깨지지 않습니다: Qurry 는 기본 고정폭 글꼴을 쓰고, 입력란과 목록 맨 위에 `<이름> (not installed)` 로 보여 줍니다. 다른 글꼴을 고르면 바뀝니다.
-
-**Add Font File…** (목록 맨 아래, DataGrip 에는 없음) 는 컴퓨터에 설치하지 않고 글꼴 파일을 씁니다: 20 MB 이하의 `.ttf`, `.otf`, `.woff`, `.woff2` 파일을 고르면 Qurry 가 설정 폴더 안의 `fonts` 폴더로 복사하고 그 입력란의 글꼴로 고릅니다. 복사본 이름은 파일 이름을 따릅니다 (글자, 숫자, `-`, `_` 는 그대로, 나머지는 공백). 같은 이름의 글꼴을 이미 추가했다면 덮어쓰지 않고 ` 2`, ` 3`… 을 붙입니다. 실제로 글꼴이 아닌 파일 (확장자가 아니라 파일 앞부분을 봅니다) 이나 글꼴로 불러올 수 없는 파일 (손상되었거나 덜 받은 파일) 은 이유와 함께 거절합니다. 추가한 글꼴은 두 입력란 모두에서 **Default monospace** 바로 다음에 `custom` 표시와 함께 나오고, **Monospaced only** 가 켜져 있어도 보입니다. 설치된 글꼴과 이름이 같으면 목록에서 그 글꼴 대신 나옵니다. 그 줄의 `−` 버튼은 (확인을 받은 뒤) 글꼴을 지웁니다: 복사본만 지우고 원래 파일은 그대로 두며, 그 글꼴을 쓰던 입력란은 **Default monospace** 로 돌아갑니다 (같은 이름의 글꼴이 설치되어 있으면 그대로 두고 설치된 글꼴로 보입니다). 추가한 글꼴은 Qurry 를 켤 때마다 불러옵니다. TUI 는 터미널 글꼴을 쓰므로 추가한 글꼴이 적용되지 않습니다.
-
-글꼴은 이 컴퓨터의 GUI 가 따로 보관합니다 (설정 폴더가 아님. 추가한 글꼴 파일만 그 안의 `fonts` 폴더에 복사됩니다). 그래서 TUI 에는 영향이 없습니다.
 
 ### 테마
 
@@ -49,6 +41,24 @@ GUI **Settings** (`⌘,`, 또는 맨 왼쪽 워크스페이스 막대 아래의 
 
 0.3.2 에서 Dark, Light, High contrast 는 대비 기준에 못 미치던 곳만 조금 바뀌었습니다: 강조색 위의 글자 (주 버튼. High contrast 는 이제 검정), 운영 띠, Dark 의 흐린 글자와 NULL 회색, Light 의 강조색 · 링크 파랑, NULL 회색, 운영 · 초록 배경색, Light 의 오류 빨강.
 
+### 글꼴
+
+글꼴은 바꾸는 즉시 열려 있는 모든 콘솔과 그리드에 적용됩니다.
+
+**글꼴 이름**: 이 컴퓨터에 설치된 글꼴 목록에서 고릅니다. **Monospaced only** (기본으로 켜짐) 는 고정폭이 아닌 글꼴을 숨깁니다. 끄면 설치된 어떤 글꼴이든 고를 수 있습니다. 입력하면 목록을 검색하고 (닫힌 입력란에서 입력해도 열립니다), `↑` `↓` 로 움직이고, `↩` 로 고르고, `⎋` 로 목록을 닫습니다. 입력란의 글자는 고른 글꼴로 보입니다. 목록 맨 위의 **Default monospace** 는 JetBrains Mono, 없으면 Menlo 입니다. 목록은 열 때마다 다시 읽으므로, Qurry 가 켜져 있는 동안 설치한 글꼴도 다시 시작하지 않고 바로 보입니다. macOS 와 Linux (`fc-list`) 에서는 설치된 글꼴을 보여 주고, 그 밖에서는 기본 글꼴과 저장된 글꼴만 나옵니다.
+
+저장된 글꼴이 설치되어 있지 않아도 (그 뒤에 지웠거나 다른 컴퓨터에서 고른 글꼴) 화면이 깨지지 않습니다: Qurry 는 기본 고정폭 글꼴을 쓰고, 입력란과 목록 맨 위에 `<이름> (not installed)` 로 보여 줍니다. 다른 글꼴을 고르면 바뀝니다.
+
+**Add Font File…** (목록 맨 아래, DataGrip 에는 없음) 는 컴퓨터에 설치하지 않고 글꼴 파일을 씁니다: 20 MB 이하의 `.ttf`, `.otf`, `.woff`, `.woff2` 파일을 고르면 Qurry 가 설정 폴더 안의 `fonts` 폴더로 복사하고 그 입력란의 글꼴로 고릅니다. 복사본 이름은 파일 이름을 따릅니다 (글자, 숫자, `-`, `_` 는 그대로, 나머지는 공백). 같은 이름의 글꼴을 이미 추가했다면 덮어쓰지 않고 ` 2`, ` 3`… 을 붙입니다. 실제로 글꼴이 아닌 파일 (확장자가 아니라 파일 앞부분을 봅니다) 이나 글꼴로 불러올 수 없는 파일 (손상되었거나 덜 받은 파일) 은 이유와 함께 거절합니다. 추가한 글꼴은 두 입력란 모두에서 **Default monospace** 바로 다음에 `custom` 표시와 함께 나오고, **Monospaced only** 가 켜져 있어도 보입니다. 설치된 글꼴과 이름이 같으면 목록에서 그 글꼴 대신 나옵니다. 그 줄의 `−` 버튼은 (확인을 받은 뒤) 글꼴을 지웁니다: 복사본만 지우고 원래 파일은 그대로 두며, 그 글꼴을 쓰던 입력란은 **Default monospace** 로 돌아갑니다 (같은 이름의 글꼴이 설치되어 있으면 그대로 두고 설치된 글꼴로 보입니다). 추가한 글꼴은 Qurry 를 켤 때마다 불러옵니다. TUI 는 터미널 글꼴을 쓰므로 추가한 글꼴이 적용되지 않습니다.
+
+글꼴은 이 컴퓨터의 GUI 가 따로 보관합니다 (설정 폴더가 아님. 추가한 글꼴 파일만 그 안의 `fonts` 폴더에 복사됩니다). 그래서 TUI 에는 영향이 없습니다.
+
+## Appearance › Console
+
+| 설정 | 하는 일 | TUI 와 공유 |
+|---|---|---|
+| Keyword case | 콘솔에서 입력할 때와 **Reformat Code** 에서 SQL 키워드를 **Off** (기본), **UPPER**, **lower** 중 무엇으로 쓸지 ([아래](#키워드-대소문자와-reformat-code)) | 예 (TUI **⌃k › Keyword Case…**) |
+
 ### 키워드 대소문자와 Reformat Code
 
 **Reformat Code** (GUI `⌘⌥l`, TUI `⌥⇧F` 또는 **⌃k › Reformat Code**) 는 선택한 부분을, 선택이 없으면 커서가 있는 문장을 정리합니다: 절마다 한 줄, 그 안의 항목은 4칸 들여쓰기. 문자열, 주석, 따옴표로 감싼 이름은 쓴 그대로 둡니다. 실행 취소 한 번 (`⌘z`, TUI `⌃u`) 이면 원래대로 돌아갑니다. GUI 와 TUI 가 같은 포매터를 쓰므로 같은 문장은 두 앱에서 똑같이 정리됩니다. Redis, MongoDB, 벡터 DB 콘솔은 정리하지 않습니다.
@@ -61,6 +71,13 @@ GUI **Settings** (`⌘,`, 또는 맨 왼쪽 워크스페이스 막대 아래의 
 설정은 `settings.json` 에 `"keywordCase"` (`"off"`, `"upper"`, `"lower"`) 로 저장됩니다. TUI 는 시작할 때와 **⌃k › Keyword Case…** 를 열 때 읽으므로, GUI 에서 바꾼 뒤에는 그 명령을 열거나 TUI 를 다시 시작하세요.
 
 TUI 의 `keymap.json` 이 이미 `⌥⇧F` 를 다른 명령에 주었다면 그 명령이 키를 그대로 갖고 Reformat Code 에는 키가 없습니다: TUI 를 시작할 때 상태 줄이 알려 줍니다. `F1` 창에서 Reformat Code 에 키를 주세요 (또는 `⌃k` 에서 실행).
+
+## Appearance › Data grid
+
+| 설정 | 하는 일 | TUI 와 공유 |
+|---|---|---|
+| Alignment | 결과 표에서 칸 안의 값을 어디에 둘지, 값 종류마다 (아래) | 예 (TUI **⌃k › Grid Alignment…**) |
+| Status bar | 포커스가 있는 그리드에 대해 상태 표시줄이 보여 줄 항목: Position, Shown columns, Not null, Sum, Avg, Min, Max, Size ([아래](#상태-표시줄-항목)) | 예 (TUI **⌃k › Status Bar Items…**) |
 
 ### 결과 표의 정렬 (Alignment)
 
@@ -105,11 +122,20 @@ TUI 에서는 `<` / `>` 가 현재 컬럼을 좁히고 / 넓히고 `=` 가 내�
 | Sum, Avg, Min, Max | 선택한 셀 (2 개 이상) 중 숫자들의 합 · 평균 · 최솟값 · 최댓값 |
 | Size | 셀 하나: 크기를 바이트와 글자 수로 (`Size: 11 bytes (7 chars)`, 바이너리는 길이), 테이블 메타데이터가 알려 주면 컬럼에 선언된 한도도: `varchar(8): up to 8 chars (32 bytes in UTF-8)`, MySQL 은 `up to 8 chars (32 bytes in utf8mb4)`, `char(8): always 8 chars (padded)`, `varbinary(16): up to 16 bytes`, `blob: up to 65,535 bytes`, `bytea: no limit (up to 1 GB)`. 숫자, 날짜 / 시간, boolean 에는 나오지 않습니다 |
 
-**Settings › Appearance › Status bar** 에서 고르거나, **상태 표시줄을 오른쪽 클릭** (또는 항목 하나를 클릭) 하면 같은 체크리스트가 열립니다. 항목을 켜고 끄는 동안 열려 있습니다 (`↑` `↓` 이동, `Space` 나 `↩` 켜고 끄기, `⎋` 닫기). **Restore Defaults** 는 Position 과 Shown columns 로 되돌립니다. 고른 항목은 `settings.json` 의 `"statusBarItems"` (켜진 항목들) 에 저장되고 TUI 와 공유됩니다. TUI 에서는 **⌃k › Status Bar Items…** 에서 바꿉니다 ([TUI 상태 줄](tui.md#상태-줄)). 두 앱 모두 시작할 때와 체크리스트를 열 때 읽으므로, 다른 앱에서 바꾼 것이 그때 보입니다.
+**Settings › Appearance › Data grid › Status bar** 에서 고르거나, **상태 표시줄을 오른쪽 클릭** (또는 항목 하나를 클릭) 하면 같은 체크리스트가 열립니다. 항목을 켜고 끄는 동안 열려 있습니다 (`↑` `↓` 이동, `Space` 나 `↩` 켜고 끄기, `⎋` 닫기). **Restore Defaults** 는 Position 과 Shown columns 로 되돌립니다. 고른 항목은 `settings.json` 의 `"statusBarItems"` (켜진 항목들) 에 저장되고 TUI 와 공유됩니다. TUI 에서는 **⌃k › Status Bar Items…** 에서 바꿉니다 ([TUI 상태 줄](tui.md#상태-줄)). 두 앱 모두 시작할 때와 체크리스트를 열 때 읽으므로, 다른 앱에서 바꾼 것이 그때 보입니다.
 
 Size 는 Qurry 가 보내는 값의 바이트 수를 UTF-8 로 셉니다. 다른 문자 집합의 컬럼 (MySQL `latin1`) 에는 더 적은 바이트로 저장될 수 있고, 한도는 컬럼 자신의 문자 집합으로 말합니다. 테이블 탭은 컬럼의 한도를 알고, 콘솔 결과는 그 컬럼이 테이블의 컬럼일 때만 압니다 (키가 있는 한 테이블의 결과, 또는 조인에서 테이블의 컬럼). 그 밖에는 바이트만 나옵니다. 그리드가 받는 64 바이트보다 긴 바이너리 값은 `over 64 bytes` 로 나옵니다.
 
 창이 좁으면 상태 글이 먼저 (짧은 너비까지) 줄고, 그다음 UTF-8, 컬럼 한도, Max, Min, Avg, Sum, Not null, Size, Shown columns 순서로 빠집니다. Position 과 Read-only 는 항상 남습니다.
+
+## Updates
+
+| 설정 | 하는 일 | TUI 와 공유 |
+|---|---|---|
+| Updates | 앱을 켤 때 새 버전 확인, **Check Now** | — |
+| Channel | stable 또는 beta 릴리스 ([업데이트](updates.md)) | 예 |
+
+**Check Now** 옆의 GitHub 버튼은 프로젝트 페이지 https://github.com/Hkhyyy/qurry 를 브라우저로 엽니다. TUI 에서는 **⌃k › Open GitHub** 가 같은 페이지를 열고, 상태 줄에 주소를 보여 줍니다 (SSH 에서는 브라우저가 열리지 않을 수 있습니다).
 
 ## Keymap
 

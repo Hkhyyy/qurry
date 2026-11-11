@@ -28,7 +28,7 @@ Stable releases come from a version tag; every change to `main` also publishes a
 
 ## Updates
 
-Both apps tell you when a new version is out and install it in place: GUI `⬆ vX.Y.Z available` › **Update & Restart**, TUI **⌃k › Update Qurry & Restart** (or `qurry-tui --update`). You get stable releases unless you switch to the beta channel (GUI **Settings › Appearance › Updates**, TUI **⌃k › Update Channel…**). Channels, turning the check off and macOS 12: [Updates](updates.md).
+Both apps tell you when a new version is out and install it in place: GUI `⬆ vX.Y.Z available` › **Update & Restart**, TUI **⌃k › Update Qurry & Restart** (or `qurry-tui --update`). You get stable releases unless you switch to the beta channel (GUI **Settings › Updates**, TUI **⌃k › Update Channel…**). Channels, turning the check off and macOS 12: [Updates](updates.md).
 
 ## First steps
 

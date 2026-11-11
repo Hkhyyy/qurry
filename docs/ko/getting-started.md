@@ -28,7 +28,7 @@ stable 릴리스는 버전 태그로 나오고, `main` 이 바뀔 때마다 beta
 
 ## 업데이트
 
-두 앱 모두 새 버전이 나오면 알려 주고 그 자리에서 설치합니다: GUI `⬆ vX.Y.Z available` › **Update & Restart**, TUI **⌃k › Update Qurry & Restart** (또는 `qurry-tui --update`). beta 채널로 바꾸지 않으면 stable 릴리스만 받습니다 (GUI **Settings › Appearance › Updates**, TUI **⌃k › Update Channel…**). 채널, 확인 끄기, macOS 12 는 [업데이트](updates.md) 장에 있습니다.
+두 앱 모두 새 버전이 나오면 알려 주고 그 자리에서 설치합니다: GUI `⬆ vX.Y.Z available` › **Update & Restart**, TUI **⌃k › Update Qurry & Restart** (또는 `qurry-tui --update`). beta 채널로 바꾸지 않으면 stable 릴리스만 받습니다 (GUI **Settings › Updates**, TUI **⌃k › Update Channel…**). 채널, 확인 끄기, macOS 12 는 [업데이트](updates.md) 장에 있습니다.
 
 ## 처음 쓰기
 
