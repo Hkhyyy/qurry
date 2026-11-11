@@ -1,5 +1,5 @@
 //! Qurry engine. The GUI (Tauri) · TUI · MCP server all use this crate's `app::AppState`.
-/// Turn off diagnostic logs (the TUI owns the screen, so stderr logs are suppressed)
+/// Turn off diagnostic logs on stderr (the TUI owns the screen, MCP stdout is the protocol); the log file (logfile) still has them
 pub static QUIET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// MCP server: open drivers so they can't touch anything outside the server (local files·URLs·extension installs) (DuckDB enable_external_access = false)
 pub static SANDBOX: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -7,9 +7,7 @@ pub static SANDBOX: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 #[macro_export]
 macro_rules! log {
     ($($t:tt)*) => {
-        if !$crate::QUIET.load(std::sync::atomic::Ordering::Relaxed) {
-            eprintln!($($t)*);
-        }
+        $crate::logfile::log(&format!($($t)*))
     };
 }
 
@@ -31,6 +29,7 @@ pub mod guard;
 pub mod hints;
 pub mod history;
 pub mod import;
+pub mod logfile;
 /// Command shortcut table and key notation, shared with the GUI through WASM
 pub use qurry_shared::keymap;
 pub mod meta;

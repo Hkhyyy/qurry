@@ -444,7 +444,7 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, tx: Option<&str>
             drop_pool_logged(state, split_target(id).0, crate::audit::BY_SERVER).await;
         }
     }
-    crate::log!("[qurry] connection lost on {id}: {e}");
+    crate::log!("[qurry] connection lost on {id}: {}", crate::logfile::error_kind(&e));
     let idle = idle_ended(&e);
     // Which way it went: a connect's timeout says so itself (timeout_error)
     let cfg = state.source(id).ok();
@@ -586,7 +586,11 @@ async fn close_all(state: &AppState, id: &str, lost: Option<&str>, dead: bool) -
     }
     // The tunnel goes before the pools: a connect that saw this generation and kept its pool while it was still open (keep_pool)
     // has that pool closed below
-    state.tunnels.write().await.retain(|k, _| !belongs(k, id));
+    let mut tunnel = false;
+    state.tunnels.write().await.retain(|k, _| {
+        tunnel |= belongs(k, id);
+        !belongs(k, id)
+    });
     let mut tabs = Vec::new();
     state.sessions.write().await.retain(|t, e| {
         let gone = belongs(&e.conn_id, id);
@@ -611,6 +615,10 @@ async fn close_all(state: &AppState, id: &str, lost: Option<&str>, dead: bool) -
     // all: each is closed to new uses right away, and a connection still in use is closed when it comes back. Through a tunnel,
     // its connections end with it (above)
     let _ = tokio::time::timeout(std::time::Duration::from_secs(3), futures::future::join_all(removed.iter().map(|p| p.close()))).await;
+    if tunnel || !removed.is_empty() || !tabs.is_empty() {
+        let why = if dead { " (it stopped answering)" } else { "" };
+        crate::log!("[qurry] closed {id}{why}: {} pool(s), {} console session(s){}", removed.len(), tabs.len(), if tunnel { ", the tunnel" } else { "" });
+    }
     state.last_ping.lock().unwrap().retain(|k, _| !belongs(k, id));
     tabs
 }
@@ -623,19 +631,39 @@ pub async fn connect_config(
 ) -> AppResult<(Pool, Option<crate::tunnel::Tunnel>)> {
     let tunnel = open_tunnel(cfg, ssh_secret).await?;
     let mark = tunnel.as_ref().and_then(|t| t.ssm_mark());
-    match db::connect_via(cfg, password, tunnel.as_ref().map(|t| t.local_port)).await {
+    let started = std::time::Instant::now();
+    crate::log!("[qurry] connect {} ({}) {}:{} as {} db={}", cfg.name, cfg.id, cfg.host, cfg.port, cfg.user, cfg.database);
+    let r = db::connect_via(cfg, password, tunnel.as_ref().map(|t| t.local_port)).await;
+    log_connect("connect", &cfg.id, started, &r);
+    match r {
         Ok(pool) => Ok((pool, tunnel)),
         Err(e) => Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, timeout_error(cfg, e, false)).await),
     }
 }
 
+/// How a connect to the database (not its tunnel) went, and how long it took
+fn log_connect<T>(what: &str, id: &str, started: std::time::Instant, r: &AppResult<T>) {
+    let ms = started.elapsed().as_millis();
+    match r {
+        Ok(_) => crate::log!("[qurry] {what} {id} ok in {ms} ms"),
+        Err(e) => crate::log!("[qurry] {what} {id} failed after {ms} ms: {e}"),
+    }
+}
+
 async fn open_tunnel(cfg: &ConnectionConfig, ssh_secret: Option<&str>) -> AppResult<Option<crate::tunnel::Tunnel>> {
-    Ok(match (cfg.active_ssh(), cfg.active_ssm()) {
+    let started = std::time::Instant::now();
+    let r = match (cfg.active_ssh(), cfg.active_ssm()) {
         (Some(_), Some(_)) => return Err(AppError::Msg("Both an SSH and an AWS SSM tunnel are turned on — choose one (GUI: SSH/SSL tab · TUI: Tunnel).".into())),
-        (Some(ssh), None) => Some(crate::tunnel::open(ssh, ssh_secret, &cfg.host, cfg.port).await?),
-        (None, Some(ssm)) => Some(crate::ssm::open(ssm, &cfg.host, cfg.port).await?),
-        (None, None) => None,
-    })
+        (Some(ssh), None) => crate::tunnel::open(ssh, ssh_secret, &cfg.host, cfg.port).await,
+        (None, Some(ssm)) => crate::ssm::open(ssm, &cfg.host, cfg.port).await,
+        (None, None) => return Ok(None),
+    };
+    let (ms, way) = (started.elapsed().as_millis(), way(cfg).unwrap_or_default());
+    match &r {
+        Ok(t) => crate::log!("[qurry] {way} of {} ({}) to {}:{} open in {ms} ms on local port {}", cfg.name, cfg.id, cfg.host, cfg.port, t.local_port),
+        Err(e) => crate::log!("[qurry] {way} of {} ({}) to {}:{} failed after {ms} ms: {e}", cfg.name, cfg.id, cfg.host, cfg.port),
+    }
+    r.map(Some)
 }
 
 /// The data source's tunnel: None without one, Some(false) once it has stopped (the aws CLI exited: idle timeout, network, session ended)
@@ -758,6 +786,7 @@ pub async fn housekeeping(state: &AppState) -> Vec<(String, String)> {
             let last = *state.last_used.lock().unwrap().entry(base.clone()).or_insert(now);
             // Do not disconnect if any session has a running query or uncommitted changes (disconnecting would lose the changes)
             if !in_use(state, &base).await && now.duration_since(last) >= Duration::from_secs(secs as u64) {
+                crate::log!("[qurry] {base} unused for {secs}s; disconnecting it (auto-disconnect)");
                 drop_pool_logged(state, &base, crate::audit::DISCONNECTED).await;
                 state.last_used.lock().unwrap().remove(&base);
                 dropped.push((base, disconnected(&cfg, Disconnected::Idle)));
@@ -794,6 +823,10 @@ pub async fn housekeeping(state: &AppState) -> Vec<(String, String)> {
                 .await;
                 // Not held while the tunnel is closed: closing a pool waits for its connections to come back
                 drop((pools, sessions));
+                let failed = pinged.iter().chain(&pinged_sessions).filter(|ok| !**ok).count();
+                if failed > 0 {
+                    crate::log!("[qurry] keep-alive of {base}: {failed} of {} connection(s) didn't answer", pinged.len() + pinged_sessions.len());
+                }
                 if pinged.iter().chain(&pinged_sessions).all(|ok| *ok) && c.generation.load(SeqCst) == g {
                     c.pinged();
                 }
@@ -808,6 +841,9 @@ pub async fn housekeeping(state: &AppState) -> Vec<(String, String)> {
                 }
             }
         }
+    }
+    for (id, why) in &dropped {
+        crate::log!("[qurry] {why} ({id})");
     }
     dropped
 }
@@ -870,7 +906,11 @@ async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppRes
         };
         let mark = state.tunnels.read().await.get(base).and_then(|t| t.ssm_mark());
         // Each database connects on its own: one that is missing or refused fails only for its caller, not for the whole source
-        match db::connect_via(&cfg, password.as_deref(), port).await {
+        let started = std::time::Instant::now();
+        crate::log!("[qurry] pool open {id}: {}:{} as {} db={}{}", cfg.host, cfg.port, cfg.user, cfg.database, port.map(|p| format!(" through local port {p}")).unwrap_or_default());
+        let r = db::connect_via(&cfg, password.as_deref(), port).await;
+        log_connect("pool open", id, started, &r);
+        match r {
             Ok(pool) => return keep_pool(state, &c, g, id, port, pool).await,
             Err(e) if port.is_some() && stale.is_none() && timed_out(&e) => stale = Some(g),
             Err(e) => return Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, timeout_error(&cfg, e, stale.is_some())).await),
@@ -1219,6 +1259,9 @@ async fn shared_tunnel(state: &AppState, c: &Connecting, base: &str, cfg: &Conne
             return Err(e);
         }
     };
+    if shown.is_some() {
+        crate::log!("[qurry] the tunnel of {base} reconnected in {} ms", asked.elapsed().as_millis());
+    }
     drop(shown);
     c.dead.store(false, SeqCst);
     *failed = None;
@@ -1754,7 +1797,10 @@ impl AppState {
 
     pub async fn connect(&self, id: String) -> AppResult<String> {
         crate::log!("[qurry] connect {id}");
-        let (pool, v) = with_pool(self, &id, |p| async move { p.server_version().await.map(|v| (p, v)) }).await?;
+        let started = std::time::Instant::now();
+        let r = with_pool(self, &id, |p| async move { p.server_version().await.map(|v| (p, v)) }).await;
+        log_connect("connect", &id, started, &r);
+        let (pool, v) = r?;
         // If connected in plain text, say so next to the version (status bar · TUI status)
         let cfg = self.source(&id)?;
         let note = dispatch!(pool, b => b.plaintext_note(&cfg).await);
@@ -2458,7 +2504,7 @@ impl AppState {
         crate::log!("[qurry] list_databases {id}");
         let r = with_pool(self, &id, |p| async move { crate::meta::list_databases(&p).await }).await;
         if let Err(e) = &r {
-            crate::log!("[qurry] list_databases error: {e}");
+            crate::log!("[qurry] list_databases {id} failed: {}", crate::logfile::error_kind(e));
         }
         r
     }
@@ -2468,7 +2514,7 @@ impl AppState {
         let r = with_pool(self, &id, |p| async move { crate::meta::list_schemas(&p).await }).await;
         match &r {
             Ok(v) => crate::log!("[qurry] list_schemas → {} schemas", v.len()),
-            Err(e) => crate::log!("[qurry] list_schemas error: {e}"),
+            Err(e) => crate::log!("[qurry] list_schemas {id} failed: {}", crate::logfile::error_kind(e)),
         }
         r
     }
