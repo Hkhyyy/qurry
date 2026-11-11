@@ -975,7 +975,7 @@ pub async fn full_text_search(p: &MySqlPool, r: &FtsRequest) -> AppResult<Vec<Ft
         match res {
             Ok(result) if !result.rows.is_empty() => hits.push(FtsHit { schema, table, where_clause, result }),
             Ok(_) => {}
-            Err(e) => crate::log!("[qurry] fts {schema}.{table}: {e}"),
+            Err(e) => crate::log!("[qurry] fts {schema}.{table}: {}", crate::logfile::error_kind(&e)),
         }
     }
     let _ = conn.execute("SET SESSION max_execution_time = 0").await;

@@ -482,9 +482,13 @@ mod tests {
         assert!(l.iter().all(|l| l.ends_with(&"x".repeat(300)) && l.matches("writer").count() == 1));
     }
 
-    /// Through log! itself, as the apps write it. The only test that sets the process's log file
+    /// The tests that set the process's log file, one at a time (other tests' lines may land in it meanwhile)
+    static SET: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Through log! itself, as the apps write it
     #[test]
     fn log_macro_never_writes_secrets() {
+        let _one = SET.blocking_lock();
         let t = tempfile::tempdir().unwrap();
         init_at(t.path(), "gui");
         crate::log!("[qurry] save_connection dsn=postgres://app:Pw-s3cret-1@db.local:5432/x password=Pw-s3cret-1");
@@ -492,8 +496,34 @@ mod tests {
         crate::log!("[qurry] run failed: insert into t (a, b) values ('s3cret-literal', 42)");
         *SINK.lock().unwrap() = None;
         let text = std::fs::read_to_string(t.path().join("qurry.log")).unwrap();
-        assert_eq!(text.lines().count(), 3, "{text}");
         assert!(!text.contains("s3cret") && !text.contains("Pw-"), "{text}");
-        assert!(text.contains("save_connection dsn=postgres://app:***@db.local:5432/x"), "{text}");
+        assert!(text.contains("] save_connection dsn=postgres://app:***@db.local:5432/x password=***\n"), "{text}");
+        assert!(text.contains("] save ssh {\"host\":\"bastion\",\"passphrase\":***,\"key\":\"-----BEGIN (redacted)-----\"}\n"), "{text}");
+        assert!(text.contains("] run failed: insert into t (a, b) values ('…', 42)\n"), "{text}");
+    }
+
+    /// A save and connect to a real server: the file has the connect with its time, never the password.
+    /// QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres:<password> cargo test -p qurry-core logfile_real_connect -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn logfile_real_connect() {
+        let Some(pg) = crate::testenv::pg() else { return };
+        let password = pg.password.clone().expect("QURRY_TEST_PG with a password");
+        let _one = SET.lock().await;
+        let t = tempfile::tempdir().unwrap();
+        init_at(&t.path().join("logs"), "tui");
+        let st = crate::open_state(Some(t.path().join("config"))).unwrap();
+        let mut cfg = pg.cfg;
+        cfg.id = String::new();
+        let saved = st.save_connection(cfg, Some(password.clone()), None).await.unwrap();
+        st.connect(saved.id.clone()).await.unwrap();
+        st.disconnect(saved.id.clone()).await.unwrap();
+        *SINK.lock().unwrap() = None;
+        let text = std::fs::read_to_string(t.path().join("logs/qurry.log")).unwrap();
+        println!("{text}");
+        assert!(!text.contains(&password), "{text}");
+        assert!(text.lines().any(|l| l.contains(&format!("] connect {} ok in ", saved.id)) && l.ends_with(" ms")), "{text}");
+        assert!(text.lines().any(|l| l.contains(&format!("] pool open {} ok in ", saved.id))), "{text}");
+        assert!(text.lines().any(|l| l.contains(&format!("] closed {}: 1 pool(s)", saved.id))), "{text}");
     }
 }

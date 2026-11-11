@@ -453,7 +453,7 @@ impl Backend for PgPool {
             match res {
                 Ok(result) if !result.rows.is_empty() => hits.push(FtsHit { schema, table, where_clause, result }),
                 Ok(_) => {}
-                Err(e) => crate::log!("[qurry] fts {schema}.{table}: {e}"),
+                Err(e) => crate::log!("[qurry] fts {schema}.{table}: {}", crate::logfile::error_kind(&e)),
             }
         }
         Ok(hits)
