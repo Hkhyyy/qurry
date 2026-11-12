@@ -235,7 +235,8 @@ test("word operators are keywords, symbol operators keep their color: `a = 1 AND
     editor(page).locator(".view-line span span").evaluateAll((els) => Object.fromEntries(els.map((e) => [e.textContent!.trim(), getComputedStyle(e).color])));
   await typeSql(page, "SELECT 1 WHERE a = 1 AND b IN (2) OR c IS NOT NULL");
   await page.keyboard.press("Escape");
-  await expect.poll(async () => (await colors())["AND"]).toBeTruthy();
+  // Wait for the last word: on a slow WebKit the line is still being drawn after the typing ended
+  await expect.poll(async () => (await colors())["NULL"]).toBeTruthy();
   const c = await colors();
   for (const w of ["AND", "IN", "OR", "IS", "NOT", "NULL"]) expect(c[w], w).toBe(c["WHERE"]);
   // `=` (with the spaces around it, one piece when they are the same color) is not drawn as a keyword
