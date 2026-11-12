@@ -69,7 +69,7 @@ fn read_it(h: &mut Harness) {
 }
 
 fn production_confirm() -> Popup {
-    Popup::Confirm { opened: None, text: "Production data source \"PROD\" — this changes data:\n\n  delete from t\n    → 3 rows\n\nRun it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) }
+    Popup::Confirm { opened: None, sql: None, text: "Production data source \"PROD\" — this changes data:\n\n  delete from t\n    → 3 rows\n\nRun it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) }
 }
 
 /// The user goes on typing while the rows are counted: the Enter that comes right after the confirm shows (meant for the editor)

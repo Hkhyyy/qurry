@@ -274,7 +274,7 @@ impl App {
             Some(why) => format!("{head}{why}:\n  {line}\nRun it anyway?"),
             None => format!("{head}this command changes data:\n  {line}\nRun it?"),
         };
-        self.popup = Some(Popup::Confirm { opened: None, text, on_yes: Box::new(move |a| run(a, line)) });
+        self.popup = Some(Popup::Confirm { opened: None, sql: None, text, on_yes: Box::new(move |a| run(a, line)) });
     }
 
     /// Runs the line; the reply (by type: a hash as a field / value table …) in a notice. A write reads the keys again

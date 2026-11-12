@@ -42,7 +42,7 @@ The light and high-contrast themes give the same names other values.
 | Piece | Rules |
 |---|---|
 | `Text` | A piece of text. `tone` (muted · subtle · accent · ok · warn · danger), `size` (xs · sm · md · lg), `mono`, `strong`, `truncate` (… when it overflows, the whole text in title) |
-| `Code` · `CodeBlock` · `Kbd` | Inline code / multi-line code (SQL preview · DDL) / a shortcut |
+| `Code` · `CodeBlock` · `Kbd` | Inline code / multi-line code (`spans` color it: SQL previews use components/SqlBlock) / a shortcut |
 | `Row` · `Spacer` · `Divider` · `ToolbarSep` | Horizontal layout (gap 1–6) / the remaining width / a divider (horizontal · vertical) |
 | `Button` | `variant`: default · primary (one per window, rightmost) · danger · ghost · link. `size`: md 26px · sm 22px. The label is a verb |
 | `IconButton` · `ToolButton` | Icon only (title required, `tone` ok · danger, `active`) / a text button on a toolbar (`active` · `accent`) |

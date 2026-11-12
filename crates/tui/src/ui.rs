@@ -1439,10 +1439,10 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let inner = popup(f, r, format!(" Manage Shown Schemas — {name} "));
             f.render_widget(Paragraph::new(lines), inner);
         }
-        Popup::Confirm { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Confirm ", text, key_hints(&[("y / Enter", "yes"), ("n / Esc", "no")])),
+        Popup::Confirm { text, sql, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Confirm ", text, *sql, key_hints(&[("y / Enter", "yes"), ("n / Esc", "no")])),
         Popup::ImportPick(p) => draw_import(f, area, p),
         // Like Confirm, but only y allows (no Enter): the popup opened on its own
-        Popup::AllowPlaintext { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Allow Unencrypted ", text, key_hints(&[("y", "allow"), ("n / Esc", "cancel")])),
+        Popup::AllowPlaintext { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Allow Unencrypted ", text, None, key_hints(&[("y", "allow"), ("n / Esc", "cancel")])),
         Popup::Input { title, body, input, complete, filter, redis, .. } => {
             // The title goes on the border; the body (answers, reasons) in a box below, wrapped, so it isn't cut off
             let body: Vec<Line> = body.lines().map(|l| Line::raw(disp(l))).collect();
@@ -1572,13 +1572,21 @@ fn color_sql(buf: &mut Buffer, inner: Rect, line: &str, caret: usize, scroll: u1
 /// In a window too short for all of it, the popup takes the whole height; the first line, the questions (a line ending in "?" or
 /// with a "? " in it), the warnings (⚠) and the keys stay, and the details in between (statements, columns, tables) give way to a line saying how many are
 /// hidden and how many rows they would change. If even that doesn't fit, the keys line says to enlarge the window and the result is
-/// false: y / Enter don't answer a question that isn't on screen
-fn draw_confirm(f: &mut Frame, area: Rect, title: &'static str, text: &str, keys: Line<'static>) -> bool {
+/// false: y / Enter don't answer a question that isn't on screen. With `sql`, the statement lines (two-space indent) are drawn in the
+/// console's SQL colors; the other lines and the line counting stay as they are
+fn draw_confirm(f: &mut Frame, area: Rect, title: &'static str, text: &str, sql: Option<qurry_shared::DbKind>, keys: Line<'static>) -> bool {
     let danger = text.starts_with("Production")
         || text.ends_with("Run it anyway?")
         || text.ends_with("Run them anyway?")
         || text.lines().any(|l| l.starts_with('⚠') && l.contains("Production"));
     let mut lines = confirm_lines(text);
+    if let Some(kind) = sql {
+        for (l, t) in lines.iter_mut().zip(text.lines()) {
+            if t.strip_prefix("  ").is_some_and(|s| !s.starts_with(char::is_whitespace)) {
+                *l = sql_line(t, kind);
+            }
+        }
+    }
     let last = lines.len() - 1;
     lines[last] = keys;
     let keep: Vec<bool> = lines
@@ -1818,7 +1826,7 @@ mod tests {
         let bar = g.hbar;
         assert!(bar.width > 0);
         // A confirm that arrives (or was open) when the window shrinks
-        h.app.popup = Some(crate::app::Popup::Confirm { opened: None, text: "Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        h.app.popup = Some(crate::app::Popup::Confirm { opened: None, sql: None, text: "Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         assert!(h.screen(39, 30).contains("Terminal too small"));
         h.key("Enter");
         h.key("y");
@@ -1921,7 +1929,7 @@ mod tests {
     async fn production_confirm_keeps_its_question_in_small_windows() {
         let mut h = crate::testkit::Harness::new().await;
         let text = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?";
-        h.app.popup = Some(Popup::Confirm { opened: None, text: text.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text: text.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         let s = h.screen(80, 24);
         assert!(s.contains("12,408 rows") && s.contains("Run it?") && !s.contains("hidden"), "{s}");
         // Every row that would change shows, as its own line or in the hidden total
@@ -1933,7 +1941,7 @@ mod tests {
         }
         // One statement at the minimum size: its row count shows
         let one = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n\nRun it?";
-        h.app.popup = Some(Popup::Confirm { opened: None, text: one.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text: one.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         let (w, ht) = MIN_SIZE;
         let s = h.screen(w, ht);
         assert!(s.contains("1 row") && s.contains("Run it?"), "{s}");
@@ -1947,7 +1955,7 @@ mod tests {
         let mut h = crate::testkit::Harness::new().await;
         let lines: Vec<String> = (0..1000).map(|i| format!("  update payment set amount = 0 where id = {i}\n     → 1 row")).collect();
         let text = format!("Production data source \"[PROD] kr\" — this changes data:\n\n{}\n\nRun it?", lines.join("\n"));
-        h.app.popup = Some(Popup::Confirm { opened: None, text, on_yes: Box::new(|_| {}) });
+        h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text, on_yes: Box::new(|_| {}) });
         for (w, ht) in [MIN_SIZE, (80, 24)] {
             let t = std::time::Instant::now();
             let s = h.screen(w, ht);

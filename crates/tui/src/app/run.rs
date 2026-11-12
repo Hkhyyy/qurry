@@ -72,6 +72,7 @@ impl App {
         }
         self.popup = Some(Popup::Confirm {
             opened: None,
+            sql: None,
             text: self.pending_text(n, "run the statement"),
             on_yes: Self::in_console(id, move |a| {
                 if let Some(TabKind::Console(c)) = a.tabs.get_mut(a.active).map(|t| &mut t.kind) {
@@ -233,7 +234,7 @@ impl App {
             && let Some((why, s)) = stmts.iter().find_map(|s| qurry_core::guard::unsafe_statement(s, kind).map(|w| (w, s.clone())))
         {
             let preview: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
-            self.popup = Some(Popup::Confirm { opened: None, text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Self::in_console(id, move |a| a.run_stmts_checked(stmts, explain, true, prod_ok)) });
+            self.popup = Some(Popup::Confirm { opened: None, sql: Some(kind), text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Self::in_console(id, move |a| a.run_stmts_checked(stmts, explain, true, prod_ok)) });
             return;
         }
         // Production Data Source: count the rows to change, show it, and ask (counting is SELECT count(*) — changes nothing)
@@ -278,6 +279,7 @@ impl App {
                         a.status.clear();
                         a.open_after_notices(Popup::Confirm {
                             opened: None,
+                            sql: Some(kind),
                             text: format!("Production data source \"{name}\" — this changes data:\n\n{}\n\nRun it?", lines.join("\n")),
                             on_yes: Self::in_console(id, move |a| a.run_stmts_checked(stmts, explain, true, true)),
                         });
@@ -313,6 +315,7 @@ impl App {
         if !asks.is_empty() {
             self.popup = Some(Popup::Confirm {
                 opened: None,
+                sql: Some(kind),
                 text: explain_analyze_ask_text(&asks),
                 on_yes: Self::in_console(id, move |a| {
                     a.analyze_next = true;
@@ -543,6 +546,7 @@ impl App {
         }
         self.popup = Some(Popup::Confirm {
             opened: None,
+            sql: None,
             text: self.pending_text(n, "run the statement"),
             on_yes: Self::in_console(id, move |a| {
                 if let Some(TabKind::Console(c)) = a.tabs.get_mut(a.active).map(|t| &mut t.kind) {

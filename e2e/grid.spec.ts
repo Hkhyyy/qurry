@@ -659,6 +659,9 @@ test("Submit on PostgreSQL: the preview lists DELETE, UPDATE, INSERT in that ord
     "INSERT INTO public.users DEFAULT VALUES;",
   ];
   await expect(dialog(page).locator(".sql-preview")).toHaveText(want.join("\n"));
+  // In the console's colors (#161)
+  await expect(dialog(page).locator(".sql-preview .ui-hl-keyword").first()).toHaveText("DELETE");
+  await expect(dialog(page).locator(".sql-preview .ui-hl-string").first()).toHaveText("'1'");
   await dialog(page).getByRole("button", { name: "Submit", exact: true }).click();
   await expect.poll(() => submitted(page)).toEqual(want);
 });

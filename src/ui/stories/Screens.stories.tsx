@@ -26,6 +26,7 @@ import { RagView } from "../../components/RagView";
 import { RedisBrowser } from "../../components/RedisBrowser";
 import { ResultChart } from "../../components/ResultChart";
 import { ResultGrid } from "../../components/ResultGrid";
+import { SqlBlock } from "../../components/SqlBlock";
 import { SearchEverywhere } from "../../components/SearchEverywhere";
 import { TableEditor } from "../../components/TableEditor";
 import { TableStructureView } from "../../components/TableStructure";
@@ -308,7 +309,7 @@ export const TableModifyTypes: S = {
 export const NewView: S = { name: "New View", render: () => <NewObjectDialog kind="view" target="dev" conn={DEV} schema="public" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 export const NewDatabase: S = { name: "New Database", render: () => <NewObjectDialog kind="database" target="dev" conn={DEV} schema="public" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 
-export const ProdLog: S = { name: "Production Log", render: () => <ProductionLog connId={null} onOpenUndo={noop} onClose={noop} /> };
+export const ProdLog: S = { name: "Production Log", render: () => <ProductionLog connId={null} kindOf={() => "postgres"} onOpenUndo={noop} onClose={noop} /> };
 export const GenerateData: S = { name: "Generate Test Data", render: () => <GenerateDataDialog target="dev" schema="public" table="orders" onDone={noop} onClose={noop} /> };
 export const CopyRows: S = { name: "Copy Related Rows", render: () => <CopyRowsDialog source="prod" schema="public" table="users" conn={PROD} conns={CONNS} onDone={noop} onClose={noop} /> };
 
@@ -597,7 +598,49 @@ export const GridMultiSelect: S = {
   },
 };
 
-export const History: S = { name: "Query History", render: () => <HistoryDialog connId="dev" title="[DEV] shop_app Query History" onPick={noop} onClose={noop} /> };
+/** Submit Changes (⌘↩ › Preview): the statements in the console's colors, in the data source's dialect */
+export const GridSubmitChanges: S = {
+  name: "Result Grid — Submit Changes",
+  render: () => (
+    <div style={{ position: "relative", height: 320, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid result={mixed} edit={{ schema: "public", table: "payment_check", pk: ["card_brand"] }} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole("gridcell", { name: "VISA" })[0]);
+    await userEvent.click(c.getByRole("button", { name: /^Add Row/ }));
+    await userEvent.click(c.getAllByRole("gridcell", { name: "MASTER" })[0]);
+    await userEvent.click(c.getByRole("button", { name: /^Delete Row/ }));
+    await userEvent.click(c.getByRole("button", { name: /^Preview Pending Changes/ }));
+    await waitFor(() => expect(canvasElement.ownerDocument.querySelector(".sql-preview .ui-hl-keyword")).not.toBeNull());
+  },
+};
+
+/** Generated or saved SQL (Submit Changes, DDL and migrate previews, history, Production log): the console's colors per dialect */
+const SAMPLE_SQL = `-- refund the duplicated payments
+UPDATE public.payments SET status = 'refunded', meta = E'{"pg":"toss","n":1}', updated_at = now() WHERE id IN (1042, 1043);
+INSERT INTO public.audit (actor, note) VALUES ('ops', NULL);
+SELECT count(*), max(amount) FROM public.payments WHERE paid_at >= DATE '2026-10-01';`;
+const SqlBlockDemo = () => (
+  <div style={{ display: "grid", gap: 12, width: 640 }}>
+    <SqlBlock sql={SAMPLE_SQL} kind="postgres" />
+    <SqlBlock sql={"# MySQL: # is a comment, \"…\" a string\nUPDATE shop.users SET note = \"vip\" WHERE id = 7;"} kind="mysql" />
+  </div>
+);
+export const SqlBlockDark: S = { name: "SQL block — dark", globals: { theme: "dark" }, render: () => <SqlBlockDemo /> };
+export const SqlBlockLight: S = { name: "SQL block — light", globals: { theme: "light" }, render: () => <SqlBlockDemo /> };
+/** Thousands of statements: colored up to SqlBlock's limit, the rest plain, so the preview opens at once */
+export const SqlBlockLarge: S = {
+  name: "SQL block — 5,000 INSERTs",
+  render: () => {
+    const json = JSON.stringify({ items: Array.from({ length: 12 }, (_, i) => ({ sku: `SKU-${i}`, qty: i, note: "long text ".repeat(4) })) });
+    const sql = Array.from({ length: 5000 }, (_, i) => `INSERT INTO public.events (id, kind, payload) VALUES (${i}, 'order', '${json}');`).join("\n");
+    return <SqlBlock className="sql-preview" sql={sql} kind="postgres" />;
+  },
+};
+
+export const History: S = { name: "Query History", render: () => <HistoryDialog connId="dev" kind="postgres" title="[DEV] shop_app Query History" onPick={noop} onClose={noop} /> };
 export const Search: S = {
   name: "Search Everywhere (⇧⇧)",
   render: () => (

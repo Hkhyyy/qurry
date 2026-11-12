@@ -48,7 +48,7 @@ impl App {
         if n == 0 {
             return self.reload_table(id);
         }
-        self.popup = Some(Popup::Confirm { opened: None, text: self.pending_text(n, "reload"), on_yes: Box::new(move |a| a.reload_table(id)) });
+        self.popup = Some(Popup::Confirm { opened: None, sql: None, text: self.pending_text(n, "reload"), on_yes: Box::new(move |a| a.reload_table(id)) });
     }
 
     /// The question before a reload or a run drops a grid's pending edits
@@ -436,6 +436,7 @@ impl App {
                 };
                 self.popup = Some(Popup::Confirm {
                     opened: None,
+                    sql: Some(kind),
                     text: format!("Production data source \"{name}\" — {what}\n\n{}", lines.join("\n")),
                     on_yes: Box::new(move |a| a.submit_stmts(id, gid, target, tab, stmts)),
                 });

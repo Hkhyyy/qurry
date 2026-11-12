@@ -162,6 +162,7 @@ fn delete_data_source(app: &mut App) {
     if let Some(c) = app.tree.selected().and_then(|n| app.conn(&n.conn).map(|c| c.config.clone())) {
         app.popup = Some(Popup::Confirm {
             opened: None,
+            sql: None,
             text: format!("Remove data source \"{}\"?", c.name),
             on_yes: Box::new(move |a| {
                 let st = a.state.clone();
@@ -381,7 +382,7 @@ fn close_result(app: &mut App) {
     if n == 0 {
         return close(app);
     }
-    app.popup = Some(Popup::Confirm { opened: None, text: app.pending_text(n, "close the result tab"), on_yes: Box::new(close) });
+    app.popup = Some(Popup::Confirm { opened: None, sql: None, text: app.pending_text(n, "close the result tab"), on_yes: Box::new(close) });
 }
 
 fn other_split(app: &mut App) {
@@ -440,7 +441,7 @@ fn manage_schemas(app: &mut App) {
 fn install_update(app: &mut App) {
     let n = app.pending_tabs(None).len();
     if n > 0 {
-        app.popup = Some(Popup::Confirm { opened: None, text: format!("{n} console(s) have uncommitted changes. Roll them back, update and restart?"), on_yes: Box::new(|a| a.install_update()) });
+        app.popup = Some(Popup::Confirm { opened: None, sql: None, text: format!("{n} console(s) have uncommitted changes. Roll them back, update and restart?"), on_yes: Box::new(|a| a.install_update()) });
     } else {
         app.install_update();
     }
@@ -514,7 +515,7 @@ fn spawn_opener(url: &str) -> std::io::Result<()> {
 fn quit(app: &mut App) {
     let n = app.pending_tabs(None).len();
     if n > 0 {
-        app.popup = Some(Popup::Confirm { opened: None, text: format!("{n} console(s) have uncommitted changes. Roll them back and quit?"), on_yes: Box::new(|a| a.quit = true) });
+        app.popup = Some(Popup::Confirm { opened: None, sql: None, text: format!("{n} console(s) have uncommitted changes. Roll them back and quit?"), on_yes: Box::new(|a| a.quit = true) });
     } else {
         app.quit = true;
     }

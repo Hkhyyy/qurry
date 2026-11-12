@@ -176,6 +176,7 @@ impl App {
         if self.pending_tabs(None).contains(&id) {
             self.popup = Some(Popup::Confirm {
                 opened: None,
+                sql: None,
                 text: "This console has uncommitted changes. Roll them back and close the tab?".into(),
                 on_yes: Box::new(move |a| {
                     if let Some(i) = a.tab_index(id) {

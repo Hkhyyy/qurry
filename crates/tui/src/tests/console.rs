@@ -417,7 +417,7 @@ async fn failed_commit_is_in_output() {
     assert!(h.app.popup.is_none());
     // A popup opened while the COMMIT was running (a confirmation here) stays: the notice goes over it, and Esc goes back to it
     h.app.tx(crate::app::Action::Commit);
-    h.app.popup = Some(crate::app::Popup::Confirm { opened: None, text: "Roll back and close the tab?".into(), on_yes: Box::new(|_| {}) });
+    h.app.popup = Some(crate::app::Popup::Confirm { opened: None, sql: None, text: "Roll back and close the tab?".into(), on_yes: Box::new(|_| {}) });
     h.settle().await;
     let Some(crate::app::Popup::Note { title, back, .. }) = &h.app.popup else { panic!("no notice over the confirmation") };
     assert_eq!(title, "Commit failed");
@@ -881,14 +881,14 @@ async fn a_picked_subquery_goes_through_the_guards() {
 }
 
 /// The theme's color of a highlight token (keyword, number, string, function, comment)
-fn token(h: &Harness, tok: &str) -> ratatui::style::Color {
+pub(super) fn token(h: &Harness, tok: &str) -> ratatui::style::Color {
     let t = h.app.themes.resolve(qurry_shared::theme::SYSTEM, !h.app.auto_light);
     let (r, g, b) = qurry_shared::theme::rgb(t.color(tok)).unwrap();
     ratatui::style::Color::Rgb(r, g, b)
 }
 
 /// The cell where `pat` (a part of `after`) is, on the first screen row holding `after`
-fn cell_at<'a>(buf: &'a ratatui::buffer::Buffer, after: &str, pat: &str) -> &'a ratatui::buffer::Cell {
+pub(super) fn cell_at<'a>(buf: &'a ratatui::buffer::Buffer, after: &str, pat: &str) -> &'a ratatui::buffer::Cell {
     let (w, ht) = (buf.area.width, buf.area.height);
     let row = |y: u16| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>();
     let y = (0..ht).find(|&y| row(y).contains(after)).unwrap_or_else(|| panic!("no row with {after:?}"));

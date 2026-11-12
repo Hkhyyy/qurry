@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { ask, askText } from "../lib/dialogs";
 import { ConnectionView, DataDiff, defaultDbOf, meta, migrate, Migration, SchemaChange, targetId } from "../lib/api";
-import { Button, Checkbox, CodeBlock, List, ListItem, Named, Notice, Row, Select, Spacer, Table, Tabs, Td, Text, Th } from "../ui";
+import { Button, Checkbox, List, ListItem, Named, Notice, Row, Select, Spacer, Table, Tabs, Td, Text, Th } from "../ui";
+import { SqlBlock } from "./SqlBlock";
 
 /** Compare·migration target: Data Source · DB · schema (· table) */
 interface End {
@@ -172,7 +173,7 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
                   />
                 ))}
               </List>
-              <CodeBlock className="mig-sql">{pickedSql || "-- check changes to see their SQL"}</CodeBlock>
+              <SqlBlock className="mig-sql" sql={pickedSql || "-- check changes to see their SQL"} kind={dc?.kind ?? "postgres"} />
             </div>
           )}
         </>
@@ -197,7 +198,7 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
                 <b>{data.same.toLocaleString()}</b> same · <b>{data.different.toLocaleString()}</b> different · <b>{data.onlySource.toLocaleString()}</b> only in source · <b>{data.onlyTarget.toLocaleString()}</b> only in target
                 {data.truncated && <span className="danger"> · compared the first 200,000 rows only</span>}
               </div>
-              <CodeBlock className="mig-sql full">{data.sql || "-- the tables hold the same data"}</CodeBlock>
+              <SqlBlock className="mig-sql full" sql={data.sql || "-- the tables hold the same data"} kind={dc?.kind ?? "postgres"} />
             </>
           )}
         </>

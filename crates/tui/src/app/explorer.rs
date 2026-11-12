@@ -155,6 +155,7 @@ impl App {
                         let k2 = key.clone();
                         a.open_after_notices(Popup::Confirm {
                             opened: None,
+                            sql: None,
                             text: format!("The {d} driver isn't installed.\n\nDownload it from this Qurry version's GitHub release (its signature is checked) and connect?"),
                             on_yes: Box::new(move |a| {
                                 a.status = format!("Installing the {d} driver…");

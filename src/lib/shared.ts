@@ -444,5 +444,5 @@ const subscribe = (l: () => void) => {
   return () => listeners.delete(l);
 };
 
-/** sharedReady() as React state: the component renders again once the module has loaded */
-export const useSharedReady = () => useSyncExternalStore(subscribe, sharedReady);
+/** sharedReady() as React state: the component renders again once the module has loaded (a server render, in tests, reads it as is) */
+export const useSharedReady = () => useSyncExternalStore(subscribe, sharedReady, sharedReady);

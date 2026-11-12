@@ -285,6 +285,7 @@ impl App {
         );
         self.popup = Some(Popup::Confirm {
             opened: None,
+            sql: None,
             text,
             on_yes: Box::new(move |a| {
                 let closing = a.take_live();

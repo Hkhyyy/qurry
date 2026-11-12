@@ -90,6 +90,7 @@ impl App {
             let c = conn.to_string();
             self.popup = Some(Popup::Confirm {
                 opened: None,
+                sql: None,
                 text: format!("{n} console(s) on this data source have uncommitted changes. Roll them back and disconnect?"),
                 on_yes: Box::new(move |a| a.disconnect_now(&c)),
             });
@@ -295,6 +296,7 @@ impl App {
         let st = self.state.clone();
         self.popup = Some(Popup::Confirm {
             opened: None,
+            sql: None,
             text: text.into(),
             on_yes: Box::new(move |a| {
                 a.status = "Waiting for the system keychain…".into();
