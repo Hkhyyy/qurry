@@ -150,7 +150,7 @@ fn molecules() -> Value {
         let prod = Some(Color::Rgb(0x6e, 0x2a, 0x2a));
         let lines = vec![
             Line::from(muted("Row — 트리 (정확히 60칸, 줄 색 끝까지 · 끝에 걸린 한글은 빈칸)")),
-            Row::new("[PROD] rentalpay").chevron(Some(true)).lead(icon("◉", C_DB)).bold().hint("postgres").bg(prod).fit(0, w),
+            Row::new("[PROD] shop").chevron(Some(true)).lead(icon("◉", C_DB)).bold().hint("postgres").bg(prod).fit(0, w),
             Row::new("tables").indent(2).chevron(Some(true)).lead(icon("▤", ACCENT)).hint("66").bg(prod).fit(0, w),
             Row::new("adjust").indent(3).chevron(Some(false)).lead(icon("▦", Color::Gray)).hint("정산 테이블 (주문 단위 정산) 매우 긴 설명").bg(prod).fit(0, w),
             Row::new("payment").indent(3).chevron(Some(false)).lead(icon("▦", Color::Gray)).hint("결제 카드 정보").bg(prod).selected(true, true).fit(0, w),
@@ -192,29 +192,29 @@ fn organisms() -> Value {
 fn conn(id: &str, name: &str, color: &str, prod: bool) -> ConnectionConfig {
     serde_json::from_value(json!({
         "id": id, "name": name, "kind": "postgres", "host": "db.example.com", "port": 5432, "user": "app",
-        "database": "rentalpay", "color": color, "options": { "confirmChanges": prod }
+        "database": "shop", "color": color, "options": { "confirmChanges": prod }
     }))
     .unwrap()
 }
 
 fn node(key: &str, label: &str, hint: &str, kind: NodeKind, conn: &str) -> Node {
-    Node { key: key.into(), label: label.into(), hint: hint.into(), kind, conn: conn.into(), db: Some("rentalpay".into()), schema: Some("public".into()), name: None, expandable: true }
+    Node { key: key.into(), label: label.into(), hint: hint.into(), kind, conn: conn.into(), db: Some("shop".into()), schema: Some("public".into()), name: None, expandable: true }
 }
 
 /// Explorer (production · development colors, Korean descriptions) + table tab + status line (PROD badge)
 async fn explorer(h: &mut Harness) {
-    for c in [conn("prod", "[PROD] rentalpay", "#6e2a2a", true), conn("dev", "[DEV] rentalpay", "#2f5634", false)] {
+    for c in [conn("prod", "[PROD] shop", "#6e2a2a", true), conn("dev", "[DEV] shop", "#2f5634", false)] {
         h.app.state.save_connection(c, None, None).await.unwrap();
     }
     h.app.reload_conns();
     h.settle().await;
     let p = "prod";
-    h.app.tree.children.insert(p.into(), vec![node("prod|rentalpay", "rentalpay", "default", NodeKind::Db, p)]);
-    h.app.tree.children.insert("prod|rentalpay".into(), vec![node("prod|rentalpay|public", "public", "", NodeKind::Schema, p)]);
-    h.app.tree.children.insert("prod|rentalpay|public".into(), vec![node("prod|rentalpay|public|g", "tables", "66", NodeKind::Group, p)]);
+    h.app.tree.children.insert(p.into(), vec![node("prod|shop", "shop", "default", NodeKind::Db, p)]);
+    h.app.tree.children.insert("prod|shop".into(), vec![node("prod|shop|public", "public", "", NodeKind::Schema, p)]);
+    h.app.tree.children.insert("prod|shop|public".into(), vec![node("prod|shop|public|g", "tables", "66", NodeKind::Group, p)]);
     let tables = [("adjust", "정산 테이블 (주문 단위 정산)"), ("adjust_status_log", "정산 상태 로그"), ("admin_auth", "관리자 OTP 인증"), ("admin_role", ""), ("bank_info", "은행 정보 테이블"), ("contract", "월세 계약 테이블"), ("payment", "결제 카드 정보")];
-    h.app.tree.children.insert("prod|rentalpay|public|g".into(), tables.iter().map(|(t, c)| Node { expandable: true, name: Some(t.to_string()), ..node(&format!("prod|rentalpay|public|g|{t}"), t, c, NodeKind::Object("table".into()), p) }).collect());
-    for k in ["prod", "prod|rentalpay", "prod|rentalpay|public", "prod|rentalpay|public|g"] {
+    h.app.tree.children.insert("prod|shop|public|g".into(), tables.iter().map(|(t, c)| Node { expandable: true, name: Some(t.to_string()), ..node(&format!("prod|shop|public|g|{t}"), t, c, NodeKind::Object("table".into()), p) }).collect());
+    for k in ["prod", "prod|shop", "prod|shop|public", "prod|shop|public|g"] {
         h.app.tree.expanded.insert(k.into());
     }
     h.app.tree.sel = 5;
@@ -316,10 +316,10 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     let id = h.console_with("update payment set memo = 'migrated' where id = 1;", 0, 0);
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         for i in 1..=40 {
-            c.log(false, format!("rentalpay> update payment set memo = 'migrated' where id = {i}"));
+            c.log(false, format!("shop> update payment set memo = 'migrated' where id = {i}"));
             c.log(false, "1 row(s) affected in 2 ms".into());
         }
-        c.log(false, format!("rentalpay> insert into payment_audit (payment_id, memo, payload) values (41, 'migrated', '{{{}}}')", (1..=12).map(|k| format!("\"field_{k}\": \"value {k}\"")).collect::<Vec<_>>().join(", ")));
+        c.log(false, format!("shop> insert into payment_audit (payment_id, memo, payload) values (41, 'migrated', '{{{}}}')", (1..=12).map(|k| format!("\"field_{k}\": \"value {k}\"")).collect::<Vec<_>>().join(", ")));
         c.log(true, "ERROR: value too long for type character varying(255)".into());
     }
     scenes.push(app_scene(h, "Console: long Output", "A script's Output longer than the pane: the newest line sits on the bottom row, wrapped long lines included", 120, 22));
@@ -374,7 +374,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.key("a");
     scenes.push(app_scene(h, "Console result: read-only", "An edit key on a result Qurry can't tie to table rows: the status line says why (here the key isn't in the result)", 120, 22));
     // A Production console starts in Manual (#106): its change is pending, and the reminder about a transaction left open
-    let reminder = qurry_shared::errors::tx_idle_reminder("[PROD] rentalpay", 5, true, Some((false, 600)));
+    let reminder = qurry_shared::errors::tx_idle_reminder("[PROD] shop", 5, true, Some((false, 600)));
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         (c.tx_manual, c.in_tx) = (true, true);
         c.results.show(None);
@@ -586,7 +586,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         id: id.into(),
         ts: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64 - ago * 60_000,
         conn_id: "prod".into(),
-        conn_name: "[PROD] rentalpay".into(),
+        conn_name: "[PROD] shop".into(),
         database: None,
         sql: sql.into(),
         rows,
@@ -639,14 +639,14 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.popup = Some(Popup::Confirm {
         opened: None,
         sql: None,
-        text: "Insert 1,000 generated rows into public.payment?\n\n  id          left to the database (auto / generated)\n  user_id     picked from public.users (id)\n  amount      random values\n  card_brand  one of: VISA, MASTER, AMEX\n  created_at  random values\n\n⚠ Production data source \"[PROD] rentalpay\"\n\nAll rows go in one transaction — if one fails, nothing is inserted.".into(),
+        text: "Insert 1,000 generated rows into public.payment?\n\n  id          left to the database (auto / generated)\n  user_id     picked from public.users (id)\n  amount      random values\n  card_brand  one of: VISA, MASTER, AMEX\n  created_at  random values\n\n⚠ Production data source \"[PROD] shop\"\n\nAll rows go in one transaction — if one fails, nothing is inserted.".into(),
         on_yes: Box::new(|_| {}),
     });
     scenes.push(app_scene(h, "Generate test data", "⌃k › Generate Test Data: 컬럼마다 채우는 법을 보여 주고 확인", 120, 24));
     h.app.popup = Some(Popup::Confirm {
         opened: None,
         sql: None,
-        text: "Copy 29 rows into \"[DEV] rentalpay\"? (in insert order)\n\n  users         1  start · masked: email, name, phone\n  contract      3  child of users\n  payment      25  child of contract\n\nOne transaction; rows already there are skipped. The tables must exist in the target.".into(),
+        text: "Copy 29 rows into \"[DEV] shop\"? (in insert order)\n\n  users         1  start · masked: email, name, phone\n  contract      3  child of users\n  payment      25  child of contract\n\nOne transaction; rows already there are skipped. The tables must exist in the target.".into(),
         on_yes: Box::new(|_| {}),
     });
     scenes.push(app_scene(h, "Copy related rows", "⌃k › Copy Related Rows To: FK 로 이어진 행 · 가린 개인정보 컬럼을 보여 주고 확인", 120, 22));
@@ -692,16 +692,16 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     let timeout = "The report ran into its time limit (30 s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.\n(error returned from database: canceling statement due to statement timeout)";
     let info = |kind, id| qurry_core::dba::reports(kind).into_iter().find(|r| r.id == id);
     let d = crate::app::DbaTab { report: "sessions".into(), info: info(qurry_core::store::DbKind::Postgres, "sessions"), grid: Some(crate::grid::Grid::new(sessions)), loaded: Some(std::time::Instant::now()), error: Some(timeout.into()), running: false, run: 0, auto: true, gone: None };
-    h.app.push_tab("prod", "rentalpay".into(), "Sessions".into(), crate::app::TabKind::Dba(d));
+    h.app.push_tab("prod", "shop".into(), "Sessions".into(), crate::app::TabKind::Dba(d));
     h.app.focus = crate::app::Focus::Grid;
     scenes.push(app_scene(h, "Database Admin: refresh failed", "A refresh that ran into the time limit keeps the last sessions (c / K still work) and says how old they are", 120, 22));
     let maria = "performance_schema / sys schema is not available on this server — enable performance_schema to see this (MariaDB has it off by default, and some of these tables only exist on MySQL).\n(error returned from database: 1146 (42S02): Table 'performance_schema.events_statements_summary_by_digest' doesn't exist)";
     let d = crate::app::DbaTab { report: "slow_queries".into(), info: info(qurry_core::store::DbKind::Mysql, "slow_queries"), grid: None, loaded: None, error: Some(maria.into()), running: false, run: 0, auto: true, gone: None };
-    h.app.push_tab("prod", "rentalpay".into(), "Slow Queries".into(), crate::app::TabKind::Dba(d));
+    h.app.push_tab("prod", "shop".into(), "Slow Queries".into(), crate::app::TabKind::Dba(d));
     scenes.push(app_scene(h, "Database Admin: report error", "A report the server can't run: what to turn on, then the server's error", 120, 22));
     // d: the database the report runs on (the grid's title names it)
     let id = h.app.tabs[h.app.active].id;
-    h.app.dba_db_choices(id, ["postgres", "rentalpay", "rentalpay_archive"].map(String::from).to_vec());
+    h.app.dba_db_choices(id, ["postgres", "shop", "shop_archive"].map(String::from).to_vec());
     scenes.push(app_scene(h, "Database Admin: database", "d: every database of the server, the current one first and selected; picking one reruns the report there", 120, 22));
     h.app.popup = None;
     for _ in 0..2 {
@@ -710,7 +710,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     // DDL → Structure (v)
     let text = "CREATE TABLE public.users (\n    id bigint NOT NULL\n);".to_string();
     let t = crate::app::TextTab { text, ddl_of: Some(("public".into(), "users".into())), kind: "table".into(), structure_view: true, structure: Some(Ok(crate::structure::sample())), ..Default::default() };
-    h.app.push_tab("prod", "rentalpay".into(), "users [DDL]".into(), crate::app::TabKind::Text(t));
+    h.app.push_tab("prod", "shop".into(), "users [DDL]".into(), crate::app::TabKind::Text(t));
     h.app.focus = crate::app::Focus::Grid;
     scenes.push(app_scene(h, "DDL: Structure", "A table's DDL tab, v: columns, keys, indexes, foreign keys both ways, triggers (not reported by this source), options and comment; v again for the SQL", 120, 40));
     h.app.close_tab_now(h.app.active);
@@ -745,7 +745,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
 /// (/) in its title; folder counts beside the name, TTLs only for keys; the command line (:) with completion and argument hints
 async fn redis(h: &mut Harness, scenes: &mut Vec<Value>) {
     use qurry_core::redisdb::{KeyRow, RedisDb};
-    let cfg = serde_json::from_value(json!({ "id": "rd", "name": "[DEV] rentalpay redis", "kind": "redis", "host": "cache.example.com", "port": 6379, "user": "", "database": "0", "color": "#2f5634" })).unwrap();
+    let cfg = serde_json::from_value(json!({ "id": "rd", "name": "[DEV] shop redis", "kind": "redis", "host": "cache.example.com", "port": 6379, "user": "", "database": "0", "color": "#2f5634" })).unwrap();
     h.app.state.save_connection(cfg, None, None).await.unwrap();
     h.app.reload_conns();
     h.settle().await;
@@ -763,7 +763,7 @@ async fn redis(h: &mut Harness, scenes: &mut Vec<Value>) {
     ];
     let id = h.redis_tab(&[]);
     let t = h.app.tabs.iter_mut().find(|t| t.id == id).unwrap();
-    (t.conn, t.title, t.target) = ("rd".into(), "[DEV] rentalpay redis [db0]".into(), "rd::db0".into());
+    (t.conn, t.title, t.target) = ("rd".into(), "[DEV] shop redis [db0]".into(), "rd::db0".into());
     if let crate::app::TabKind::Redis(r) = &mut t.kind {
         r.keys = keys.iter().map(|(k, ty, ttl)| KeyRow { key: k.to_string(), ty: ty.to_string(), ttl: *ttl }).collect();
         r.dbs = dbs.iter().map(|(d, n)| RedisDb { name: d.to_string(), keys: *n }).collect();
@@ -903,7 +903,7 @@ async fn all_scenes() -> Vec<Value> {
     scenes.push(app_scene(&mut h, "Terminal too small", "Below 40×10 the layout isn't drawn: the size, the size needed and how to quit", 36, 9));
     // Marked nodes (m, the GUI's ⌘-click), then Delete on them: one confirmation for all, the Production one on a Production source
     for t in ["adjust", "contract", "payment"] {
-        h.app.tree.select_key(&format!("prod|rentalpay|public|g|{t}"));
+        h.app.tree.select_key(&format!("prod|shop|public|g|{t}"));
         h.app.run_action(crate::app::Action::MarkNode);
     }
     scenes.push(app_scene(&mut h, "Explorer: marked nodes", "m marks nodes (the GUI's ⌘-click): Go to DDL, F4, y, Delete and refresh act on every marked node; m unmarks, Esc clears", 120, 22));
@@ -917,7 +917,7 @@ async fn all_scenes() -> Vec<Value> {
     h.app.popup = Some(Popup::Confirm {
         opened: None,
         sql: Some(qurry_core::store::DbKind::Postgres),
-        text: "Production data source \"[PROD] rentalpay\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?".into(),
+        text: "Production data source \"[PROD] shop\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?".into(),
         on_yes: Box::new(|_| {}),
     });
     scenes.push(app_scene(&mut h, "Production confirm", "운영 Data Source 에서 바꾸는 문장: 바뀔 행 수를 보여 주고 묻는다", 120, 22));
@@ -928,13 +928,13 @@ async fn all_scenes() -> Vec<Value> {
     scenes.push(app_scene(&mut h, "Production confirm: minimum size", "At 40×10 the question and its keys stay; the statements that don't fit are counted", 40, 10));
     // Question first, warnings after the details: the columns / tables in between give way, the ⚠ lines stay
     let cols: Vec<_> = (0..12).map(|i| qurry_core::fake::ColPlan { name: format!("col_{i}"), data_type: "text".into(), how: "random values".into() }).collect();
-    h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text: crate::datatools::fake_confirm_text(1000, "public.payment", &cols, &[], Some("[PROD] rentalpay")), on_yes: Box::new(|_| {}) });
+    h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text: crate::datatools::fake_confirm_text(1000, "public.payment", &cols, &[], Some("[PROD] shop")), on_yes: Box::new(|_| {}) });
     scenes.push(app_scene(&mut h, "Generate test data: minimum size", "At 40×10 the question, the ⚠ Production line and the keys stay; the columns in between are counted as hidden", 40, 10));
     let tables = (0..24)
         .map(|i| qurry_core::subset::SubsetTable { schema: "public".into(), table: format!("contract_{i}"), rows: 25, masked: vec![], reason: "child of users".into() })
         .collect();
     let plan = qurry_core::subset::SubsetPlan { tables, total: 600, warning: None };
-    h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text: crate::datatools::copy_confirm_text(&plan, "[PROD] rentalpay", Some("[PROD] rentalpay"), false), on_yes: Box::new(|_| {}) });
+    h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text: crate::datatools::copy_confirm_text(&plan, "[PROD] shop", Some("[PROD] shop"), false), on_yes: Box::new(|_| {}) });
     scenes.push(app_scene(&mut h, "Copy related rows: 80×24", "Into a Production source, not masked, with more tables than fit: both ⚠ warnings and the question stay, the tables that don't fit are counted", 80, 24));
     let notes: String = (0..8).map(|i| format!("\n⚠ Column note_{i} has a check constraint the generated values may not meet")).collect();
     h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text: format!("Insert 10 generated rows into public.notes?\n{notes}"), on_yes: Box::new(|_| {}) });
@@ -957,7 +957,7 @@ async fn all_scenes() -> Vec<Value> {
     // #131: whether AI tools may read a Production source's admin reports (MCP dba_report); disabled with why elsewhere
     let cases = [("off", true, "read", false, false), ("on", true, "read", true, false), ("not Production", false, "read", false, false), ("MCP Off", true, "off", false, false), ("off", true, "read", false, true), ("on", true, "read", true, true)];
     for (name, prod, mcp, on, light) in cases {
-        let mut c = conn("prod", if prod { "[PROD] rentalpay" } else { "[DEV] rentalpay" }, if prod { "#6e2a2a" } else { "#2f5634" }, prod);
+        let mut c = conn("prod", if prod { "[PROD] shop" } else { "[DEV] shop" }, if prod { "#6e2a2a" } else { "#2f5634" }, prod);
         (c.options.mcp, c.options.mcp_dba_reports) = (Some(mcp.into()), on);
         h.app.themes.theme = light.then(|| "light".into());
         h.app.conn_form(Some(c));
@@ -1025,13 +1025,13 @@ async fn all_scenes() -> Vec<Value> {
     scenes
 }
 
-/// #135: a table tab and an explorer node waiting on [PROD] rentalpay while it reconnects through AWS SSM: the status line says so with
+/// #135: a table tab and an explorer node waiting on [PROD] shop while it reconnects through AWS SSM: the status line says so with
 /// the time and the Cancel key (past 10 s why), a failure opens the Message popup, Cancel leaves how to load again (the GUI's toast)
 async fn reconnect_scenes(scenes: &mut Vec<Value>) {
     use crate::app::{Action, TabKind, WaitFor};
     let mut h = Harness::new().await;
     explorer(&mut h).await;
-    let mut ssm = conn("prod", "[PROD] rentalpay", "#6e2a2a", true);
+    let mut ssm = conn("prod", "[PROD] shop", "#6e2a2a", true);
     ssm.ssm = Some(qurry_core::store::SsmConfig { enabled: true, profile: "prod".into(), region: String::new(), target: "i-0a1b2c3d4e5f".into() });
     h.app.state.store.save(&ssm).unwrap();
     h.app.reload_conns();
@@ -1064,7 +1064,7 @@ async fn reconnect_scenes(scenes: &mut Vec<Value>) {
     scenes.push(app_scene(&mut h, "Reconnect: failed", "A load that waited on the reconnect failed: the Message popup says why and that r in the table tab loads it again; the status line keeps it", 120, 22));
     h.app.popup = None;
     // The explorer: a schema expanding while the source reconnects shows only its loading mark
-    let key = "prod|rentalpay|public";
+    let key = "prod|shop|public";
     let tables = h.app.tree.children.remove(key);
     h.app.tree.loading.insert(key.into());
     h.app.spawn_wait("prod", WaitFor::Tree(key.into()), std::future::pending::<()>(), |_, _, _| {});
@@ -1101,7 +1101,7 @@ async fn temporary_scene() -> Value {
 async fn tab_bars(scenes: &mut Vec<Value>) {
     use crate::theme::ColorMode;
     let mut h = Harness::new().await;
-    for c in [conn("prod", "[PROD] rentalpay", "#6e2a2a", true), conn("dev", "[DEV] rentalpay", "#2f5634", false)] {
+    for c in [conn("prod", "[PROD] shop", "#6e2a2a", true), conn("dev", "[DEV] shop", "#2f5634", false)] {
         h.app.state.save_connection(c, None, None).await.unwrap();
     }
     h.app.reload_conns();
@@ -1112,7 +1112,7 @@ async fn tab_bars(scenes: &mut Vec<Value>) {
         id
     }
     fn ddl(h: &mut Harness, name: &str, conn: &str, kind: &str) {
-        h.app.push_tab(conn, "rentalpay".into(), format!("{name} [DDL]"), crate::app::TabKind::Text(crate::app::TextTab { text: String::new(), kind: kind.into(), ..Default::default() }));
+        h.app.push_tab(conn, "shop".into(), format!("{name} [DDL]"), crate::app::TabKind::Text(crate::app::TextTab { text: String::new(), kind: kind.into(), ..Default::default() }));
     }
     let users = tab(&mut h, "users", "prod");
     let orders = tab(&mut h, "v_orders", "dev");
