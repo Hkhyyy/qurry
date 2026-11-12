@@ -17,6 +17,7 @@ ignore = [
   { id = "RUSTSEC-2026-0369", reason = "zip (via calamine): ZipArchive::extract only; calamine reads entries in memory and never extracts to disk" },
   { id = "RUSTSEC-2026-0429", reason = "zip (via calamine): ZipArchive::extract only; calamine reads entries in memory and never extracts to disk" },
   # rsa: no fixed release exists
+  { id = "RUSTSEC-2026-0495", reason = "russh agent server (signs confirm-constrained keys without asking): Qurry only runs the agent client against the user's ssh-agent; the agent server is used in tunnel tests only. Fixed in russh 0.65: upgrade (#163)" },
   { id = "RUSTSEC-2023-0071", reason = "rsa (russh, sqlx-mysql): no fixed version. Qurry signs with the user's SSH key and encrypts a MySQL password with the server's public key; it never decrypts with a private key for a network peer" },
   # rustls 0.21 / rustls-webpki 0.101 via tiberius 0.12.3 (the newest release), only in the MSSQL plugin driver (drivers/mssql)
   { id = "RUSTSEC-2026-0346", reason = "rustls 0.21 (tiberius, MSSQL driver): Debug output of a client session; the driver never formats one. Needs a tiberius release on rustls 0.23" },
