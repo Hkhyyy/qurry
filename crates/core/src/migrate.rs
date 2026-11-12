@@ -145,7 +145,7 @@ pub fn diff(src: &Model, dst: &Model, kind: DbKind, src_schema: &str, dst_schema
                         if let Some(seq) = c.default.as_deref().and_then(|d| d.strip_prefix("nextval('")).and_then(|d| d.split('\'').next()) {
                             pre += &format!("CREATE SEQUENCE IF NOT EXISTS {}.{seq};\n", q(dst_schema));
                         }
-                        c.default = c.default.as_deref().map(&pg_qualify);
+                        c.default = c.default.as_deref().map(pg_qualify);
                         lines.push(format!("    {} {}", q(n), col_sql(&c)));
                     } else {
                         lines.push(format!("    {}", c.line));
@@ -173,7 +173,7 @@ pub fn diff(src: &Model, dst: &Model, kind: DbKind, src_schema: &str, dst_schema
                     match d.columns.iter().find(|x| x.0 == *n).map(|x| &x.1) {
                         None => {
                             let mut c = c.clone();
-                            c.default = c.default.as_deref().map(&pg_qualify);
+                            c.default = c.default.as_deref().map(pg_qualify);
                             cols.push(change("add_column", format!("{t}.{n}"), format!("ALTER TABLE {} ADD COLUMN {} {};", tbl(t), q(n), if pg { col_sql(&c) } else { c.line.trim_start_matches(|ch| ch != ' ').trim().to_string() })));
                         }
                         Some(dc) if dc != c => {
