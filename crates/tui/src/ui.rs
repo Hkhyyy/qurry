@@ -1258,11 +1258,12 @@ fn job_line(label: &str, (rows, done, total): (u64, u64, u64)) -> String {
     const W: usize = 10;
     // Backup·restore progress in bytes instead of rows
     let n = if rows == 0 && done > 0 { format!("{:.1} MB", done as f64 / 1048576.0) } else { format!("{} rows", crate::transfer::thousands(rows)) };
-    let (bar, pct) = if total > 0 {
-        let pct = (done * 100 / total).min(99) as usize;
-        ("█".repeat(pct * W / 100) + &"░".repeat(W - pct * W / 100), format!(" · {pct}%"))
-    } else {
-        (bounce(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)), String::new())
+    let (bar, pct) = match (done * 100).checked_div(total) {
+        Some(pct) => {
+            let pct = pct.min(99) as usize;
+            ("█".repeat(pct * W / 100) + &"░".repeat(W - pct * W / 100), format!(" · {pct}%"))
+        }
+        None => (bounce(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)), String::new()),
     };
     format!("{label} ▕{bar}▏ {n}{pct}")
 }
@@ -1304,7 +1305,7 @@ fn conn_form_message(form: &crate::app::ConnForm) -> Vec<Line<'static>> {
         (None, Some((ok, m))) => (*ok, disp(m)),
         // A local Host with AWS SSM is the instance itself: a hint, not an error (a database on the instance is fine)
         (None, None) => {
-            let hint = Some(form.value("Host")).filter(|_| form.value("Tunnel") == "aws ssm").and_then(qurry_shared::errors::ssm_local_host);
+            let hint = (form.value("Tunnel") == "aws ssm").then_some(form.value("Host")).and_then(qurry_shared::errors::ssm_local_host);
             return hint.map(|h| vec![Line::styled(h, Style::default().fg(WARN))]).unwrap_or_default();
         }
     };

@@ -173,7 +173,7 @@ impl App {
             // Columns go after tables·actions with the same name (same as the GUI's All)
             let mut v: Vec<(i64, usize)> = p.items.iter().enumerate().filter_map(|(i, it)| fuzzy(&q, &it.label).map(|s| (s - if it.hint.starts_with("column ") { 50 } else { 0 }, i))).collect();
             if !q.is_empty() {
-                v.sort_by(|a, b| b.0.cmp(&a.0));
+                v.sort_by_key(|x| std::cmp::Reverse(x.0));
             }
             *cache = Some((q, p.items.len(), v.into_iter().take(300).map(|x| x.1).collect()));
         }

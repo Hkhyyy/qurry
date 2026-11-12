@@ -169,7 +169,7 @@ pub fn parse_fk(spec: &str, schema: &str) -> Result<ForeignKeyDef, String> {
     let rest: Vec<String> = r[2..].iter().map(|x| x.to_uppercase()).collect();
     let mut i = 0;
     while i < rest.len() {
-        if rest[i] != "ON" || i + 2 >= rest.len() + 1 {
+        if rest[i] != "ON" || i + 1 >= rest.len() {
             return Err(bad());
         }
         let which = rest.get(i + 1).ok_or_else(bad)?.clone();
