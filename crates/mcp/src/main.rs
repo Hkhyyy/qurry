@@ -302,7 +302,7 @@ impl Server {
                     }
                     }
                 }
-                hits.sort_by(|a, b| b.0.cmp(&a.0));
+                hits.sort_by_key(|h| std::cmp::Reverse(h.0));
                 Ok(json!({ "matches": hits.into_iter().take(limit).map(|h| h.1).collect::<Vec<_>>(), "errors": errors }))
             }
             "query" => {
