@@ -108,7 +108,7 @@
       "x": "이름",
       "y": "값"
     },
-    "extract(TSV, no header)": "김😀\t1\t1\na|b\t2\t2\nline\nbreak\t\t3\ncomma,quote\"\t4\t4\ntab\there\t5\t5",
+    "extract(TSV, no header)": "김😀\t1\t1\na|b\t2\t2\n\"line\nbreak\"\t\t3\ncomma,quote\"\t4\t4\n\"tab\there\"\t5\t5",
     "fracWidth": {
       "id": 0,
       "값": 0,
@@ -243,7 +243,7 @@
       "x": "label",
       "y": null
     },
-    "extract(TSV, no header)": "a\t1\t2024-01-01 00:00:00\nb\t2.5\t2024-01-02 00:00:00\nc\t\t2024-01-03 00:00:00\nd\tx\t",
+    "extract(TSV, no header)": "a\t1\t2024-01-01 00:00:00\nb\t2.5\t2024-01-02 00:00:00\nc\t\"\"\t2024-01-03 00:00:00\nd\tx\t",
     "fracWidth": {
       "label": 0,
       "n": 0,
@@ -325,7 +325,7 @@
       "x": "yr",
       "y": "ratio"
     },
-    "extract(TSV, no header)": "1.5\t\t1,000\n0.25\t\t2\n1.5\t\t 3 \n2\t\t",
+    "extract(TSV, no header)": "1.5\t\t1,000\n0.25\t\t2\n1.5\t\t 3 \n2\t\t\"\"",
     "fracWidth": {
       "qty": 0,
       "ratio": 0,

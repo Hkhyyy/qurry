@@ -178,7 +178,7 @@
       "n": "('1', '2.5', '', 'x')",
       "when": "('2024-01-01 00:00:00', '2024-01-02 00:00:00', '2024-01-03 00:00:00')"
     },
-    "extract(TSV, no header)": "a\t1\t2024-01-01 00:00:00\nb\t2.5\t2024-01-02 00:00:00\nc\t\t2024-01-03 00:00:00\nd\tx\t",
+    "extract(TSV, no header)": "a\t1\t2024-01-01 00:00:00\nb\t2.5\t2024-01-02 00:00:00\nc\t\"\"\t2024-01-03 00:00:00\nd\tx\t",
     "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (label, n, `when`) VALUES ('a', '1', '2024-01-01 00:00:00');\nINSERT INTO MY_TABLE (label, n, `when`) VALUES ('b', '2.5', '2024-01-02 00:00:00');\nINSERT INTO MY_TABLE (label, n, `when`) VALUES ('c', '', '2024-01-03 00:00:00');\nINSERT INTO MY_TABLE (label, n, `when`) VALUES ('d', 'x', NULL);",
     "fracWidth": {
       "label": 0,
@@ -193,8 +193,8 @@
         null
       ]
     },
-    "extract(CSV)": "label,n,when\na,1,2024-01-01 00:00:00\nb,2.5,2024-01-02 00:00:00\nc,,2024-01-03 00:00:00\nd,x,",
-    "extract(TSV)": "label\tn\twhen\na\t1\t2024-01-01 00:00:00\nb\t2.5\t2024-01-02 00:00:00\nc\t\t2024-01-03 00:00:00\nd\tx\t",
+    "extract(CSV)": "label,n,when\na,1,2024-01-01 00:00:00\nb,2.5,2024-01-02 00:00:00\nc,\"\",2024-01-03 00:00:00\nd,x,",
+    "extract(TSV)": "label\tn\twhen\na\t1\t2024-01-01 00:00:00\nb\t2.5\t2024-01-02 00:00:00\nc\t\"\"\t2024-01-03 00:00:00\nd\tx\t",
     "extract(SQL Inserts)": "INSERT INTO MY_TABLE (label, n, \"when\") VALUES ('a', '1', '2024-01-01 00:00:00');\nINSERT INTO MY_TABLE (label, n, \"when\") VALUES ('b', '2.5', '2024-01-02 00:00:00');\nINSERT INTO MY_TABLE (label, n, \"when\") VALUES ('c', '', '2024-01-03 00:00:00');\nINSERT INTO MY_TABLE (label, n, \"when\") VALUES ('d', 'x', NULL);",
     "extract(SQL Updates)": "UPDATE MY_TABLE SET label = 'a', n = '1', \"when\" = '2024-01-01 00:00:00' WHERE /* no key */;\nUPDATE MY_TABLE SET label = 'b', n = '2.5', \"when\" = '2024-01-02 00:00:00' WHERE /* no key */;\nUPDATE MY_TABLE SET label = 'c', n = '', \"when\" = '2024-01-03 00:00:00' WHERE /* no key */;\nUPDATE MY_TABLE SET label = 'd', n = 'x', \"when\" = NULL WHERE /* no key */;",
     "extract(Where Clause)": "(label = 'a' AND n = '1' AND \"when\" = '2024-01-01 00:00:00') OR\n(label = 'b' AND n = '2.5' AND \"when\" = '2024-01-02 00:00:00') OR\n(label = 'c' AND n = '' AND \"when\" = '2024-01-03 00:00:00') OR\n(label = 'd' AND n = 'x' AND \"when\" IS NULL)",
@@ -587,7 +587,7 @@
       "값": "(1, 2, 4, 5)",
       "id": "(1, 2, 3, 4, 5)"
     },
-    "extract(TSV, no header)": "김😀\t1\t1\na|b\t2\t2\nline\nbreak\t\t3\ncomma,quote\"\t4\t4\ntab\there\t5\t5",
+    "extract(TSV, no header)": "김😀\t1\t1\na|b\t2\t2\n\"line\nbreak\"\t\t3\ncomma,quote\"\t4\t4\n\"tab\there\"\t5\t5",
     "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (`이름`, `값`, id) VALUES ('김😀', '1', '1');\nINSERT INTO MY_TABLE (`이름`, `값`, id) VALUES ('a|b', '2', '2');\nINSERT INTO MY_TABLE (`이름`, `값`, id) VALUES ('line\nbreak', NULL, '3');\nINSERT INTO MY_TABLE (`이름`, `값`, id) VALUES ('comma,quote\"', '4', '4');\nINSERT INTO MY_TABLE (`이름`, `값`, id) VALUES ('tab\there', '5', '5');",
     "fracWidth": {
       "이름": 0,
@@ -595,8 +595,8 @@
       "id": 0
     },
     "padFrac": {},
-    "extract(CSV)": "이름,값,id\n김😀,1,1\na|b,2,2\n\"line\nbreak\",,3\n\"comma,quote\"\"\",4,4\ntab\there,5,5",
-    "extract(TSV)": "이름\t값\tid\n김😀\t1\t1\na|b\t2\t2\nline\nbreak\t\t3\ncomma,quote\"\t4\t4\ntab\there\t5\t5",
+    "extract(CSV)": "이름,값,id\n김😀,1,1\na|b,2,2\n\"line\nbreak\",,3\n\"comma,quote\"\"\",4,4\n\"tab\there\",5,5",
+    "extract(TSV)": "이름\t값\tid\n김😀\t1\t1\na|b\t2\t2\n\"line\nbreak\"\t\t3\ncomma,quote\"\t4\t4\n\"tab\there\"\t5\t5",
     "extract(SQL Inserts)": "INSERT INTO MY_TABLE (\"이름\", \"값\", id) VALUES ('김😀', '1', '1');\nINSERT INTO MY_TABLE (\"이름\", \"값\", id) VALUES ('a|b', '2', '2');\nINSERT INTO MY_TABLE (\"이름\", \"값\", id) VALUES ('line\nbreak', NULL, '3');\nINSERT INTO MY_TABLE (\"이름\", \"값\", id) VALUES ('comma,quote\"', '4', '4');\nINSERT INTO MY_TABLE (\"이름\", \"값\", id) VALUES ('tab\there', '5', '5');",
     "extract(SQL Updates)": "UPDATE MY_TABLE SET \"이름\" = '김😀', \"값\" = '1', id = '1' WHERE id = '1';\nUPDATE MY_TABLE SET \"이름\" = 'a|b', \"값\" = '2', id = '2' WHERE id = '2';\nUPDATE MY_TABLE SET \"이름\" = 'line\nbreak', \"값\" = NULL, id = '3' WHERE id = '3';\nUPDATE MY_TABLE SET \"이름\" = 'comma,quote\"', \"값\" = '4', id = '4' WHERE id = '4';\nUPDATE MY_TABLE SET \"이름\" = 'tab\there', \"값\" = '5', id = '5' WHERE id = '5';",
     "extract(Where Clause)": "(\"이름\" = '김😀' AND \"값\" = '1' AND id = '1') OR\n(\"이름\" = 'a|b' AND \"값\" = '2' AND id = '2') OR\n(\"이름\" = 'line\nbreak' AND \"값\" IS NULL AND id = '3') OR\n(\"이름\" = 'comma,quote\"' AND \"값\" = '4' AND id = '4') OR\n(\"이름\" = 'tab\there' AND \"값\" = '5' AND id = '5')",
@@ -949,7 +949,7 @@
       "yr": "(NULL)",
       "qty": "('1,000', '2', ' 3 ', '')"
     },
-    "extract(TSV, no header)": "1.5\t\t1,000\n0.25\t\t2\n1.5\t\t 3 \n2\t\t",
+    "extract(TSV, no header)": "1.5\t\t1,000\n0.25\t\t2\n1.5\t\t 3 \n2\t\t\"\"",
     "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('1.5', NULL, '1,000');\nINSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('0.25', NULL, '2');\nINSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('1.5', NULL, ' 3 ');\nINSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('2', NULL, '');",
     "fracWidth": {
       "ratio": 0,
@@ -957,8 +957,8 @@
       "qty": 0
     },
     "padFrac": {},
-    "extract(CSV)": "ratio,yr,qty\n1.5,,\"1,000\"\n0.25,,2\n1.5,, 3 \n2,,",
-    "extract(TSV)": "ratio\tyr\tqty\n1.5\t\t1,000\n0.25\t\t2\n1.5\t\t 3 \n2\t\t",
+    "extract(CSV)": "ratio,yr,qty\n1.5,,\"1,000\"\n0.25,,2\n1.5,, 3 \n2,,\"\"",
+    "extract(TSV)": "ratio\tyr\tqty\n1.5\t\t1,000\n0.25\t\t2\n1.5\t\t 3 \n2\t\t\"\"",
     "extract(SQL Inserts)": "INSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('1.5', NULL, '1,000');\nINSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('0.25', NULL, '2');\nINSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('1.5', NULL, ' 3 ');\nINSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('2', NULL, '');",
     "extract(SQL Updates)": "UPDATE MY_TABLE SET ratio = '1.5', yr = NULL, qty = '1,000' WHERE /* no key */;\nUPDATE MY_TABLE SET ratio = '0.25', yr = NULL, qty = '2' WHERE /* no key */;\nUPDATE MY_TABLE SET ratio = '1.5', yr = NULL, qty = ' 3 ' WHERE /* no key */;\nUPDATE MY_TABLE SET ratio = '2', yr = NULL, qty = '' WHERE /* no key */;",
     "extract(Where Clause)": "(ratio = '1.5' AND yr IS NULL AND qty = '1,000') OR\n(ratio = '0.25' AND yr IS NULL AND qty = '2') OR\n(ratio = '1.5' AND yr IS NULL AND qty = ' 3 ') OR\n(ratio = '2' AND yr IS NULL AND qty = '')",

@@ -400,12 +400,14 @@ impl Grid {
     }
 
     /// The selection as TSV (values only, NULL as empty): pastes into a sheet as cells. Same rule as the GUI's copy (gridSelection.ts
-    /// copyTable): rows and columns in grid order, the union of their columns, a cell outside the selection empty. Nothing selected: the current cell
+    /// copyTable): rows and columns in grid order, the union of their columns, a cell outside the selection empty. Nothing selected: the current cell.
+    /// One cell is its value as it is (NULL empty), as the GUI copies one cell: it pastes back as one value
     pub fn selection_tsv(&self) -> String {
-        let Some((rows, cols)) = self.selection() else {
-            let vals = vec![vec![self.value(self.row, self.col).map_or(Value::Null, Value::String)]];
-            return extract::rows(Format::Tsv, &Rows { vals, ..Default::default() }, DbKind::Postgres, extract::Options::default());
-        };
+        let one = |r: usize, c: usize| self.value(r, c).unwrap_or_default();
+        let Some((rows, cols)) = self.selection() else { return one(self.row, self.col) };
+        if let ([r], [c]) = (&rows[..], &cols[..]) {
+            return one(*r, *c);
+        }
         let cell = |r: usize, c: usize| if self.selected(r, c) { self.value(r, c).map_or(Value::Null, Value::String) } else { Value::Null };
         let vals = rows.iter().map(|&r| cols.iter().map(|&c| cell(r, c)).collect()).collect();
         extract::rows(Format::Tsv, &Rows { vals, ..Default::default() }, DbKind::Postgres, extract::Options::default())
@@ -464,40 +466,39 @@ impl Grid {
 
     /// Change a cell value (clears the edit if equal to the original)
     pub fn set_value(&mut self, r: usize, c: usize, v: String) {
+        self.set_cell(r, c, Some(v));
+    }
+
+    /// Change a cell to a value or NULL (None); clears the edit if equal to the original. An added row keeps a NULL: Submit sends
+    /// it, where an untouched cell is left out (its default)
+    fn set_cell(&mut self, r: usize, c: usize, v: Option<String>) {
         let orig = self.result.rows.get(r).and_then(|row| row.get(c)).and_then(raw_text);
-        if orig.as_deref() == Some(v.as_str()) {
+        if orig == v && !self.is_added(r) {
             self.edits.remove(&(r, c));
         } else {
-            self.edits.insert((r, c), Some(v));
+            self.edits.insert((r, c), v);
         }
     }
 
     /// The cells a paste of `text` writes from the current cell (rows past the last one would be added)
     pub fn paste_spots(&self, text: &str) -> Vec<(usize, usize)> {
-        let mut lines: Vec<&str> = text.split('\n').collect();
-        if lines.len() > 1 && lines.last() == Some(&"") {
-            lines.pop();
-        }
         let n = self.cols();
-        lines.iter().enumerate().flat_map(|(i, l)| (0..l.split('\t').count()).map(move |j| (self.row + i, self.col + j))).filter(|&(_, c)| c < n).collect()
+        let rows = extract::paste_cells(text);
+        rows.iter().enumerate().flat_map(|(i, cells)| (0..cells.len()).map(move |j| (self.row + i, self.col + j))).filter(|&(_, c)| c < n).collect()
     }
 
-    /// Paste: fill from the current cell. Tabs for multiple cells, lines for multiple rows (spreadsheet·DataGrip copy). Missing rows are added, overflowing columns dropped
+    /// Paste: fill from the current cell, `text` read as TSV or CSV (extract::paste_cells, as the GUI reads it; an empty field is NULL).
+    /// Missing rows are added, overflowing columns dropped
     pub fn paste(&mut self, text: &str) {
         let (row, col) = (self.row, self.col);
-        let mut lines: Vec<&str> = text.split('\n').collect();
-        if lines.len() > 1 && lines.last() == Some(&"") {
-            lines.pop();
-        }
-        for (i, line) in lines.into_iter().enumerate() {
+        for (i, cells) in extract::paste_cells(text).into_iter().enumerate() {
             let r = row + i;
             while r >= self.rows() {
                 self.add_row();
             }
-            let cells: Vec<&str> = if line.contains('\t') { line.split('\t').collect() } else { vec![line] };
             let n = self.cols();
             for (j, v) in cells.into_iter().enumerate().filter(|(j, _)| col + j < n) {
-                self.set_value(r, col + j, v.to_string());
+                self.set_cell(r, col + j, v);
             }
         }
         (self.row, self.col) = (row, col);

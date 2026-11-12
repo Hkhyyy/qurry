@@ -28,6 +28,15 @@ export interface ExtractInput {
   header: boolean;
 }
 
+/**
+ * Pasted text as grid cells, one array per row, null for NULL (qurry_shared::extract::paste_cells, as the TUI reads it): one line
+ * without a tab is one value; otherwise TSV when a tab is outside quotes, else CSV (RFC 4180 quotes, an empty field NULL, "" an
+ * empty string). Reads back what CSV and TSV copy write
+ */
+export function pasteCells(text: string): (string | null)[][] {
+  return shared().pasteCells(text);
+}
+
 /** Rows as text in a Data Extractor format */
 export function extractRows(fmt: Extractor, x: ExtractInput): string {
   const { dialect, ...rows } = x;

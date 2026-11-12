@@ -248,7 +248,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `w or / · o` | Edit WHERE · ORDER BY (table data) |
 | `r` | Reload (table data) |
 | `y  ⌘c` | Copy cell value (a selected range or marked rows: as TSV, pastes into spreadsheets as cells) |
-| `⌘v` | Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data) |
+| `⌘v` | Paste into cells from the selected one (TSV or CSV fills several, an empty field is NULL; extra lines add rows; table data) |
 | `Esc` | Back (query results: to the editor) |
 
 ## DDL / routine view

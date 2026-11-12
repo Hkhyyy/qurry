@@ -356,6 +356,7 @@ const api = {
   sqlLiteral: (kind: DbKind, value: string | null): string => wasm.sqlLiteral(kind, value),
   inList: (rows: Cell[][], types: string[], kind: DbKind, opts: ExtractOptions): string => wasm.inList(rows, types, kind, opts),
   extractRows: (fmt: Extractor, rows: ExtractRowsInput, kind: DbKind, opts: ExtractOptions): string => wasm.extractRows(fmt, rows, kind, opts),
+  pasteCells: (text: string): (string | null)[][] => wasm.pasteCells(text),
   fuzzyScore: (query: string, text: string, wordStarts: boolean): number | undefined => wasm.fuzzyScore(query, text, wordStarts),
   keyTree: (names: string[], opts: KeyTreeOptions): SharedKeyNode[] => wasm.keyTree(names, opts),
   redisAssist: (before: string): RedisAssist => wasm.redisAssist(before),
