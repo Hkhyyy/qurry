@@ -28,13 +28,22 @@ export interface ExtractInput {
   header: boolean;
 }
 
+/** What a grid copy last put on the clipboard, and in which format ("other": one raw value, an IN list, SQL …) */
+let lastCopy: { text: string; format: Extractor | "other" } | undefined;
+
+/** A grid copy wrote `text` to the clipboard in `format` (a single cell's raw value is "other") */
+export function copied(text: string, format: Extractor | "other") {
+  lastCopy = { text, format };
+}
+
 /**
  * Pasted text as grid cells, one array per row, null for NULL (qurry_shared::extract::paste_cells, as the TUI reads it): one line
  * without a tab is one value; otherwise TSV when a tab is outside quotes, else CSV (RFC 4180 quotes, an empty field NULL, "" an
- * empty string). Reads back what CSV and TSV copy write
+ * empty string). Text that is the grid's last CSV or TSV copy is read as that format, so one copied row splits into its cells
  */
 export function pasteCells(text: string): (string | null)[][] {
-  return shared().pasteCells(text);
+  const own = lastCopy?.text === text && (lastCopy.format === "CSV" || lastCopy.format === "TSV") ? lastCopy.format : "auto";
+  return shared().pasteCells(text, own);
 }
 
 /** Rows as text in a Data Extractor format */

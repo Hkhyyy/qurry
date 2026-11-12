@@ -236,12 +236,31 @@ fn delimited(v: &Value, opts: Options, field: fn(&str) -> String) -> String {
     if v.is_null() || is_hole(v) { String::new() } else { field(&raw(v, opts)) }
 }
 
+/// How paste_cells reads the text: by its own rules, or as CSV / TSV
+#[derive(Debug, Clone, Copy, PartialEq, Default, Deserialize)]
+pub enum PasteFormat {
+    #[default]
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "CSV")]
+    Csv,
+    #[serde(rename = "TSV")]
+    Tsv,
+}
+
 /// Pasted text as grid cells, one Vec per row; None is NULL. The reverse of the CSV and TSV above, and what spreadsheets copy:
 /// - one line without a tab is one value as it is (pasting `a, b` or `{"k": 1}` into a cell), and no text is no cells
 /// - otherwise TSV when a tab is outside quotes, else CSV, with RFC 4180 quotes: a field that starts with `"` runs to the next lone `"`
 ///   (`""` inside is one quote, delimiters and line breaks inside are text); a quote elsewhere is text
 /// - an empty field is NULL, `""` an empty string; CRLF reads as a line break and the text's last line break ends the last row
-pub fn paste_cells(text: &str) -> Vec<Vec<Option<String>>> {
+///
+/// `format` Csv or Tsv reads the text as that, one line too: the caller knows it wrote the text so (the GUI's last grid copy)
+pub fn paste_cells(text: &str, format: PasteFormat) -> Vec<Vec<Option<String>>> {
+    match format {
+        PasteFormat::Csv => return split_delimited(text, ',').0,
+        PasteFormat::Tsv => return split_delimited(text, '\t').0,
+        PasteFormat::Auto => {}
+    }
     let line = text.strip_suffix('\n').map_or(text, |t| t.strip_suffix('\r').unwrap_or(t));
     if !line.contains(['\n', '\r', '\t']) {
         return if line.is_empty() { vec![] } else { vec![vec![Some(line.to_string())]] };
@@ -494,6 +513,10 @@ mod tests {
         assert_eq!(f(Format::Markdown), "| user_name | amount |\n| --- | --- |\n| user_1 |  |\n|  | 2469.00 |\n| user_3 |  |");
     }
 
+    fn auto(text: &str) -> Vec<Vec<Option<String>>> {
+        paste_cells(text, PasteFormat::Auto)
+    }
+
     fn cells(rows: &[&[Option<&str>]]) -> Vec<Vec<Option<String>>> {
         rows.iter().map(|r| r.iter().map(|c| c.map(String::from)).collect()).collect()
     }
@@ -502,31 +525,31 @@ mod tests {
     fn paste_reads_csv_quotes() {
         let n: Option<&str> = None;
         // Doubled quotes, a comma and a line break inside quotes, an empty field (NULL) and "" (an empty string)
-        assert_eq!(paste_cells("1,\"{\"\"k\"\": \"\"a, b\"\"}\",\n2,\"x\ny\",\"\"\n"), cells(&[&[Some("1"), Some("{\"k\": \"a, b\"}"), n], &[Some("2"), Some("x\ny"), Some("")]]));
+        assert_eq!(auto("1,\"{\"\"k\"\": \"\"a, b\"\"}\",\n2,\"x\ny\",\"\"\n"), cells(&[&[Some("1"), Some("{\"k\": \"a, b\"}"), n], &[Some("2"), Some("x\ny"), Some("")]]));
         // CRLF, and only the last line break is dropped: an empty line is a row with one NULL
-        assert_eq!(paste_cells("a,b\r\n\r\nc,\r\n"), cells(&[&[Some("a"), Some("b")], &[n], &[Some("c"), n]]));
+        assert_eq!(auto("a,b\r\n\r\nc,\r\n"), cells(&[&[Some("a"), Some("b")], &[n], &[Some("c"), n]]));
         // A quote that doesn't start the field is text; text after a closing quote joins the field
-        assert_eq!(paste_cells("a\"b,\"c\"d\ne"), cells(&[&[Some("a\"b"), Some("cd")], &[Some("e")]]));
+        assert_eq!(auto("a\"b,\"c\"d\ne"), cells(&[&[Some("a\"b"), Some("cd")], &[Some("e")]]));
         // An unclosed quote runs to the end
-        assert_eq!(paste_cells("x\n\"a,\nb"), cells(&[&[Some("x")], &[Some("a,\nb")]]));
+        assert_eq!(auto("x\n\"a,\nb"), cells(&[&[Some("x")], &[Some("a,\nb")]]));
     }
 
     #[test]
     fn paste_reads_tsv_when_a_tab_is_outside_quotes() {
         let n: Option<&str> = None;
-        assert_eq!(paste_cells("a\t\t{\"k\": 1, \"j\": 2}\n\"x\ty\"\t\"\"\t,"), cells(&[&[Some("a"), n, Some("{\"k\": 1, \"j\": 2}")], &[Some("x\ty"), Some(""), Some(",")]]));
-        assert_eq!(paste_cells("a\tb"), cells(&[&[Some("a"), Some("b")]]));
+        assert_eq!(auto("a\t\t{\"k\": 1, \"j\": 2}\n\"x\ty\"\t\"\"\t,"), cells(&[&[Some("a"), n, Some("{\"k\": 1, \"j\": 2}")], &[Some("x\ty"), Some(""), Some(",")]]));
+        assert_eq!(auto("a\tb"), cells(&[&[Some("a"), Some("b")]]));
         // A tab only inside quotes: CSV
-        assert_eq!(paste_cells("\"a\tb\",c\nd"), cells(&[&[Some("a\tb"), Some("c")], &[Some("d")]]));
+        assert_eq!(auto("\"a\tb\",c\nd"), cells(&[&[Some("a\tb"), Some("c")], &[Some("d")]]));
     }
 
     /// One line without a tab is one value: `a, b` or a JSON value pasted into one cell stays whole, quotes and all
     #[test]
     fn paste_keeps_one_line_whole() {
-        assert_eq!(paste_cells("a, b\n"), cells(&[&[Some("a, b")]]));
-        assert_eq!(paste_cells("\"quoted\", {\"k\": 1}"), cells(&[&[Some("\"quoted\", {\"k\": 1}")]]));
-        assert_eq!(paste_cells(""), cells(&[]));
-        assert_eq!(paste_cells("\r\n"), cells(&[]));
+        assert_eq!(auto("a, b\n"), cells(&[&[Some("a, b")]]));
+        assert_eq!(auto("\"quoted\", {\"k\": 1}"), cells(&[&[Some("\"quoted\", {\"k\": 1}")]]));
+        assert_eq!(auto(""), cells(&[]));
+        assert_eq!(auto("\r\n"), cells(&[]));
     }
 
     /// What CSV and TSV copy writes, paste reads back: NULL, '', quotes, commas, tabs and line breaks in values
@@ -541,11 +564,21 @@ mod tests {
         for fmt in [Format::Csv, Format::Tsv] {
             let x = Rows { names: vec!["a".into(), "b".into(), "c".into(), "d".into()], vals: vals.clone(), ..Default::default() };
             let text = rows(fmt, &x, DbKind::Postgres, Options::default());
-            assert_eq!(paste_cells(&text), want, "{fmt:?}: {text}");
-            assert_eq!(paste_cells(&format!("{text}\n")), want, "{fmt:?} with a final line break");
+            assert_eq!(auto(&text), want, "{fmt:?}: {text}");
+            assert_eq!(auto(&format!("{text}\n")), want, "{fmt:?} with a final line break");
             let head = rows(fmt, &Rows { header: true, ..x }, DbKind::Postgres, Options::default());
-            assert_eq!(paste_cells(&head)[1..], want[..], "{fmt:?} with a header");
+            assert_eq!(auto(&head)[1..], want[..], "{fmt:?} with a header");
+            // Read as the format it was copied in (the GUI's last grid copy): the same, and one row splits into its cells too
+            let forced = if fmt == Format::Csv { PasteFormat::Csv } else { PasteFormat::Tsv };
+            assert_eq!(paste_cells(&text, forced), want, "{fmt:?} forced");
+            for (i, row) in vals.iter().enumerate() {
+                let one = rows(fmt, &Rows { vals: vec![row.clone()], ..Default::default() }, DbKind::Postgres, Options::default());
+                assert_eq!(paste_cells(&one, forced), want[i..=i], "{fmt:?} row {i}: {one}");
+            }
         }
+        // One copied CSV row is one value by the text's own rules, cells when read as CSV
+        assert_eq!(auto("1,,\"a, b\""), cells(&[&[Some("1,,\"a, b\"")]]));
+        assert_eq!(paste_cells("1,,\"a, b\"", PasteFormat::Csv), cells(&[&[Some("1"), None, Some("a, b")]]));
         // TSV leaves JSON's quotes as they are
         let json = Rows { vals: vec![vec![json!("{\"k\": 1}"), Value::Null]], ..Default::default() };
         assert_eq!(rows(Format::Tsv, &json, DbKind::Postgres, Options::default()), "{\"k\": 1}\t");

@@ -99,10 +99,12 @@ async fn check_paste(kind: DbKind, c: ConnectionConfig, password: Option<String>
     let to = EditTarget { schema: schema.into(), table: "grid_paste".into(), pk: vec!["id".into()], columns: vec!["id".into(), "n".into(), "j".into(), "s".into()] };
     let gui = extract::Options { strict_numbers: true, js_numbers: true };
     let mut first = 4;
-    for (fmt, opts) in [(Format::Csv, extract::Options::default()), (Format::Tsv, extract::Options::default()), (Format::Csv, gui), (Format::Tsv, gui)] {
+    // The TUI reads the text by its own rules; the GUI reads its own last copy as the format it wrote
+    let (auto, csv, tsv) = (extract::PasteFormat::Auto, extract::PasteFormat::Csv, extract::PasteFormat::Tsv);
+    for (fmt, opts, read) in [(Format::Csv, extract::Options::default(), auto), (Format::Tsv, extract::Options::default(), auto), (Format::Csv, gui, csv), (Format::Tsv, gui, tsv)] {
         let text = extract::rows(fmt, &Rows { vals: orig.clone(), ..Default::default() }, kind, opts);
         // Pasted from the new rows' first value column: each pasted value is set on its column, NULL as NULL
-        let added: Vec<BTreeMap<usize, Option<String>>> = extract::paste_cells(&text).into_iter().map(|r| r.into_iter().enumerate().map(|(j, v)| (j + 1, v)).collect()).collect();
+        let added: Vec<BTreeMap<usize, Option<String>>> = extract::paste_cells(&text, read).into_iter().map(|r| r.into_iter().enumerate().map(|(j, v)| (j + 1, v)).collect()).collect();
         let stmts = edit_statements(kind, &to, &[], &BTreeMap::new(), &BTreeSet::new(), &added).unwrap();
         st.submit_edits(ID.into(), None, stmts.clone()).await.unwrap_or_else(|e| panic!("{fmt:?} {text:?} {stmts:?}: {e}"));
         let got = q(&st, &select(&format!("id >= {first} AND id < {}", first + 3))).await;

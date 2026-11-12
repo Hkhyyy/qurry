@@ -754,10 +754,11 @@ pub fn extract_rows(format: JsValue, rows: JsValue, kind: JsValue, opts: JsValue
     Ok(qurry_shared::extract::rows(serde_wasm_bindgen::from_value(format)?, &rows, parse_kind(kind)?, serde_wasm_bindgen::from_value(opts)?))
 }
 
-/// Pasted text as grid cells, one array per row, null for NULL (qurry_shared::extract::paste_cells: TSV or CSV, the reverse of the copy)
+/// Pasted text as grid cells, one array per row, null for NULL (qurry_shared::extract::paste_cells: TSV or CSV, the reverse of the
+/// copy); `format` "auto", or "CSV" / "TSV" to read it as that
 #[wasm_bindgen(js_name = pasteCells)]
-pub fn paste_cells(text: &str) -> Result<JsValue, JsError> {
-    Ok(qurry_shared::extract::paste_cells(text).serialize(&serde_wasm_bindgen::Serializer::json_compatible())?)
+pub fn paste_cells(text: &str, format: JsValue) -> Result<JsValue, JsError> {
+    Ok(qurry_shared::extract::paste_cells(text, from(format)?).serialize(&serde_wasm_bindgen::Serializer::json_compatible())?)
 }
 
 /// Search score of `text` for `query` (higher first), undefined if it doesn't match. `word_starts` is the one fuzzy option, passed

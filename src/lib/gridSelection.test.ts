@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dialectOf } from "./api";
-import { extractRows, HOLE_TOKEN, pasteCells } from "./extract";
+import { copied, extractRows, HOLE_TOKEN, pasteCells } from "./extract";
 import { contains, copyTable, extend, forEachCell, isSingle, selCols, selRows, single, toggle, type Selection } from "./gridSelection";
 
 const cells = (sel: Selection | null) => {
@@ -126,5 +126,18 @@ describe("paste (qurry_shared::extract::paste_cells through WASM)", () => {
     expect(pasteCells('{"k": 1, "j": 2}\n')).toEqual([['{"k": 1, "j": 2}']]);
     expect(pasteCells('1,"x ""y""",\r\n2,,""\r\n')).toEqual([["1", 'x "y"', null], ["2", null, ""]]);
     expect(pasteCells("")).toEqual([]);
+  });
+
+  it("the grid's last CSV or TSV copy is read as that format: one copied row splits into its cells", () => {
+    const row = '1,,"a, b",""';
+    expect(pasteCells(row)).toEqual([[row]]);
+    copied(row, "CSV");
+    expect(pasteCells(row)).toEqual([["1", null, "a, b", ""]]);
+    // Other text, or one raw value copied, keeps the text's own rules
+    expect(pasteCells("a, b")).toEqual([["a, b"]]);
+    copied("a, b", "other");
+    expect(pasteCells("a, b")).toEqual([["a, b"]]);
+    copied('"x"', "TSV");
+    expect(pasteCells('"x"')).toEqual([["x"]]);
   });
 });

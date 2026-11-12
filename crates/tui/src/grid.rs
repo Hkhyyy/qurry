@@ -483,7 +483,7 @@ impl Grid {
     /// The cells a paste of `text` writes from the current cell (rows past the last one would be added)
     pub fn paste_spots(&self, text: &str) -> Vec<(usize, usize)> {
         let n = self.cols();
-        let rows = extract::paste_cells(text);
+        let rows = extract::paste_cells(text, extract::PasteFormat::Auto);
         rows.iter().enumerate().flat_map(|(i, cells)| (0..cells.len()).map(move |j| (self.row + i, self.col + j))).filter(|&(_, c)| c < n).collect()
     }
 
@@ -491,7 +491,7 @@ impl Grid {
     /// Missing rows are added, overflowing columns dropped
     pub fn paste(&mut self, text: &str) {
         let (row, col) = (self.row, self.col);
-        for (i, cells) in extract::paste_cells(text).into_iter().enumerate() {
+        for (i, cells) in extract::paste_cells(text, extract::PasteFormat::Auto).into_iter().enumerate() {
             let r = row + i;
             while r >= self.rows() {
                 self.add_row();
@@ -1072,6 +1072,22 @@ mod tests {
         g.move_by(1, 0);
         assert_eq!(g.sel_rect(), None);
         assert_eq!(g.in_list(DbKind::Postgres), ("(1, 2, 3)".to_string(), 3));
+    }
+
+    /// One row copied (y: TSV) pastes back as its cells on a new row, its NULL as NULL and a value with quotes as it was (#160)
+    #[test]
+    fn one_copied_row_pastes_back_as_cells() {
+        let ty = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: "TEXT".into() };
+        let rows = vec![vec![json!(7), Value::Null, json!("{\"k\": \"a, b\"}"), json!("\"q\"")]];
+        let mut g = Grid::new(QueryResult { columns: vec![ty("n"), ty("m"), ty("j"), ty("s")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
+        g.extend(0, 3);
+        let text = g.selection_tsv();
+        assert_eq!(text, "7\t\t{\"k\": \"a, b\"}\t\"\"\"q\"\"\"");
+        g.move_by(0, -3);
+        g.add_row();
+        g.paste(&text);
+        assert_eq!((1..4).map(|c| g.edits.get(&(1, c)).cloned()).collect::<Vec<_>>(), [Some(None), Some(Some("{\"k\": \"a, b\"}".into())), Some(Some("\"q\"".into()))]);
+        assert_eq!(g.value(1, 0).as_deref(), Some("7"));
     }
 
     /// Focus shows in the border's shape, not only its color (NO_COLOR has none). The bottom border is the horizontal scrollbar (#107):
