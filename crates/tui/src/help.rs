@@ -42,7 +42,7 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("w or / · o", "Edit WHERE · ORDER BY (table data)"),
         ("r", "Reload (table data)"),
         ("y  ⌘C", "Copy cell value (a selected range or marked rows: as TSV, pastes into spreadsheets as cells)"),
-        ("⌘V", "Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data)"),
+        ("⌘V", "Paste into cells from the selected one (TSV or CSV fills several, an empty field is NULL; extra lines add rows; table data)"),
         ("Esc", "Back (query results: to the editor)"),
     ]),
     ("DDL / routine view", &[

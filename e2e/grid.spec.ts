@@ -676,6 +676,56 @@ test("Submit on MySQL: an empty new row is INSERT INTO … () VALUES (), listed 
   await expect.poll(() => submitted(page)).toEqual(["INSERT INTO shop.users () VALUES ();"]);
 });
 
+test("pasted CSV rows: a quoted JSON value loses its CSV quotes, an empty field is NULL and \"\" an empty string (#160)", async ({ page }) => {
+  const text = '10,"{""k"": ""a, b""}",,,\r\n11,,5,,""\r\n';
+  await page.evaluate((t) => (navigator.clipboard.readText = async () => t), text);
+  await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();
+  await work(page).getByRole("button", { name: /^Add Row/ }).click();
+  // Scrolling to the new row loads the next rows before it (the view stays): scroll to it again
+  const scroll = work(page).locator(".grid-scroll").first();
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows · 1 pending");
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".grid-row.added .cell.sel")).toHaveCount(1);
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Meta+V");
+  await work(page).getByRole("button", { name: /^Preview Pending Changes/ }).click();
+  const want = [
+    `INSERT INTO public.users (id, user_name, amount, created_at, memo) VALUES ('10', '{"k": "a, b"}', NULL, NULL, NULL);`,
+    "INSERT INTO public.users (id, user_name, amount, created_at, memo) VALUES ('11', NULL, '5', NULL, '');",
+  ];
+  await expect(dialog(page).locator(".sql-preview")).toHaveText(want.join("\n"));
+  await dialog(page).getByRole("button", { name: "Submit", exact: true }).click();
+  await expect.poll(() => submitted(page)).toEqual(want);
+});
+
+test("one row copied as CSV pastes back as its cells on a new row, its NULL as NULL; a typed `a, b` stays one value (#160)", async ({ page }) => {
+  // Row 2 (memo NULL) copied with the default extractor, CSV: one line, read back as CSV because the grid wrote it
+  await work(page).getByRole("rowheader", { name: "2", exact: true }).click();
+  await page.keyboard.press("Meta+C");
+  await expect.poll(() => clipboard(page)).toBe(`2,user_2,1234.50,${T2},`);
+  await work(page).getByRole("button", { name: /^Add Row/ }).click();
+  const scroll = work(page).locator(".grid-scroll").first();
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows · 1 pending");
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".grid-row.added .cell.sel")).toHaveCount(1);
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Meta+V");
+  // Text the grid didn't copy: one line without a tab is one value
+  await page.evaluate(() => (navigator.clipboard.readText = async () => "a, b"));
+  await scroll.evaluate((el) => (el.scrollTop = 0));
+  await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();
+  await page.keyboard.press("Meta+V");
+  await work(page).getByRole("button", { name: /^Preview Pending Changes/ }).click();
+  await expect(dialog(page).locator(".sql-preview")).toHaveText(
+    [
+      "UPDATE public.users SET user_name = 'a, b' WHERE id = '1';",
+      `INSERT INTO public.users (id, user_name, amount, created_at, memo) VALUES ('2', 'user_2', '1234.50', '${T2}', NULL);`,
+    ].join("\n"),
+  );
+});
+
 test("Clone Row keeps the source's NULL (sent as NULL, not the column default), and a new row's untouched cells stay untouched", async ({ page }) => {
   // user_2's memo is NULL
   await work(page).getByRole("gridcell", { name: "user_2", exact: true }).click();

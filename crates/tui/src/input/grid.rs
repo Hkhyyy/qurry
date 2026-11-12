@@ -846,4 +846,25 @@ mod tests {
         h.settle().await;
         assert_eq!(*SEEN.lock().unwrap(), want);
     }
+
+    /// CSV pasted into new rows (#160): a quoted JSON value loses its CSV quotes, an empty field is NULL (not ''), "" stays an
+    /// empty string, and the integer column gets its number; the Production list shows what Submit sends
+    #[tokio::test]
+    async fn pasted_csv_rows_submit_nulls_and_unescaped_json() {
+        static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        fn record(q: &str) -> Result<QueryResult, String> {
+            SEEN.lock().unwrap().push(q.into());
+            Ok(one_row())
+        }
+        let mut h = users("postgres", true, record).await;
+        h.key("a");
+        h.paste("10,\"{\"\"k\"\": \"\"a, b\"\"}\",\r\n11,,\"\"\r\n");
+        h.key("Ctrl+S");
+        let want = ["INSERT INTO public.users (id, name, memo) VALUES ('10', '{\"k\": \"a, b\"}', NULL)", "INSERT INTO public.users (id, name, memo) VALUES ('11', NULL, '')"];
+        let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
+        assert_eq!(text, &format!("Production data source \"T\" — save 2 change(s)?\n\n  {}", want.join("\n  ")));
+        h.key("y");
+        h.settle().await;
+        assert_eq!(*SEEN.lock().unwrap(), want);
+    }
 }

@@ -400,12 +400,14 @@ impl Grid {
     }
 
     /// The selection as TSV (values only, NULL as empty): pastes into a sheet as cells. Same rule as the GUI's copy (gridSelection.ts
-    /// copyTable): rows and columns in grid order, the union of their columns, a cell outside the selection empty. Nothing selected: the current cell
+    /// copyTable): rows and columns in grid order, the union of their columns, a cell outside the selection empty. Nothing selected: the current cell.
+    /// One cell is its value as it is (NULL empty), as the GUI copies one cell: it pastes back as one value
     pub fn selection_tsv(&self) -> String {
-        let Some((rows, cols)) = self.selection() else {
-            let vals = vec![vec![self.value(self.row, self.col).map_or(Value::Null, Value::String)]];
-            return extract::rows(Format::Tsv, &Rows { vals, ..Default::default() }, DbKind::Postgres, extract::Options::default());
-        };
+        let one = |r: usize, c: usize| self.value(r, c).unwrap_or_default();
+        let Some((rows, cols)) = self.selection() else { return one(self.row, self.col) };
+        if let ([r], [c]) = (&rows[..], &cols[..]) {
+            return one(*r, *c);
+        }
         let cell = |r: usize, c: usize| if self.selected(r, c) { self.value(r, c).map_or(Value::Null, Value::String) } else { Value::Null };
         let vals = rows.iter().map(|&r| cols.iter().map(|&c| cell(r, c)).collect()).collect();
         extract::rows(Format::Tsv, &Rows { vals, ..Default::default() }, DbKind::Postgres, extract::Options::default())
@@ -464,40 +466,39 @@ impl Grid {
 
     /// Change a cell value (clears the edit if equal to the original)
     pub fn set_value(&mut self, r: usize, c: usize, v: String) {
+        self.set_cell(r, c, Some(v));
+    }
+
+    /// Change a cell to a value or NULL (None); clears the edit if equal to the original. An added row keeps a NULL: Submit sends
+    /// it, where an untouched cell is left out (its default)
+    fn set_cell(&mut self, r: usize, c: usize, v: Option<String>) {
         let orig = self.result.rows.get(r).and_then(|row| row.get(c)).and_then(raw_text);
-        if orig.as_deref() == Some(v.as_str()) {
+        if orig == v && !self.is_added(r) {
             self.edits.remove(&(r, c));
         } else {
-            self.edits.insert((r, c), Some(v));
+            self.edits.insert((r, c), v);
         }
     }
 
     /// The cells a paste of `text` writes from the current cell (rows past the last one would be added)
     pub fn paste_spots(&self, text: &str) -> Vec<(usize, usize)> {
-        let mut lines: Vec<&str> = text.split('\n').collect();
-        if lines.len() > 1 && lines.last() == Some(&"") {
-            lines.pop();
-        }
         let n = self.cols();
-        lines.iter().enumerate().flat_map(|(i, l)| (0..l.split('\t').count()).map(move |j| (self.row + i, self.col + j))).filter(|&(_, c)| c < n).collect()
+        let rows = extract::paste_cells(text, extract::PasteFormat::Auto);
+        rows.iter().enumerate().flat_map(|(i, cells)| (0..cells.len()).map(move |j| (self.row + i, self.col + j))).filter(|&(_, c)| c < n).collect()
     }
 
-    /// Paste: fill from the current cell. Tabs for multiple cells, lines for multiple rows (spreadsheet·DataGrip copy). Missing rows are added, overflowing columns dropped
+    /// Paste: fill from the current cell, `text` read as TSV or CSV (extract::paste_cells, as the GUI reads it; an empty field is NULL).
+    /// Missing rows are added, overflowing columns dropped
     pub fn paste(&mut self, text: &str) {
         let (row, col) = (self.row, self.col);
-        let mut lines: Vec<&str> = text.split('\n').collect();
-        if lines.len() > 1 && lines.last() == Some(&"") {
-            lines.pop();
-        }
-        for (i, line) in lines.into_iter().enumerate() {
+        for (i, cells) in extract::paste_cells(text, extract::PasteFormat::Auto).into_iter().enumerate() {
             let r = row + i;
             while r >= self.rows() {
                 self.add_row();
             }
-            let cells: Vec<&str> = if line.contains('\t') { line.split('\t').collect() } else { vec![line] };
             let n = self.cols();
             for (j, v) in cells.into_iter().enumerate().filter(|(j, _)| col + j < n) {
-                self.set_value(r, col + j, v.to_string());
+                self.set_cell(r, col + j, v);
             }
         }
         (self.row, self.col) = (row, col);
@@ -1071,6 +1072,22 @@ mod tests {
         g.move_by(1, 0);
         assert_eq!(g.sel_rect(), None);
         assert_eq!(g.in_list(DbKind::Postgres), ("(1, 2, 3)".to_string(), 3));
+    }
+
+    /// One row copied (y: TSV) pastes back as its cells on a new row, its NULL as NULL and a value with quotes as it was (#160)
+    #[test]
+    fn one_copied_row_pastes_back_as_cells() {
+        let ty = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: "TEXT".into() };
+        let rows = vec![vec![json!(7), Value::Null, json!("{\"k\": \"a, b\"}"), json!("\"q\"")]];
+        let mut g = Grid::new(QueryResult { columns: vec![ty("n"), ty("m"), ty("j"), ty("s")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
+        g.extend(0, 3);
+        let text = g.selection_tsv();
+        assert_eq!(text, "7\t\t{\"k\": \"a, b\"}\t\"\"\"q\"\"\"");
+        g.move_by(0, -3);
+        g.add_row();
+        g.paste(&text);
+        assert_eq!((1..4).map(|c| g.edits.get(&(1, c)).cloned()).collect::<Vec<_>>(), [Some(None), Some(Some("{\"k\": \"a, b\"}".into())), Some(Some("\"q\"".into()))]);
+        assert_eq!(g.value(1, 0).as_deref(), Some("7"));
     }
 
     /// Focus shows in the border's shape, not only its color (NO_COLOR has none). The bottom border is the horizontal scrollbar (#107):

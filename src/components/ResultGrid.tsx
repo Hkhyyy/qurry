@@ -7,7 +7,7 @@ import { Cell, Dialect, dialectOf, type JoinEdit, QueryResult } from "../lib/api
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { editStatements, joinStatements, type NewRow } from "../lib/gridEdit";
 import { ContextMenu, MenuItem } from "./Explorer";
-import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, raw } from "../lib/extract";
+import { copied, DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, pasteCells, raw } from "../lib/extract";
 import { shared, sharedOr, sharedReady, useSharedReady, type GridStatus, type StatusItemId } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
@@ -660,24 +660,29 @@ export function ResultGrid(p: Props) {
     if (!sel || !hasSel) return;
     // The one selected cell (not sel.cur: a ⌘-click that took a cell out leaves the cursor outside the selection)
     const one = sel.ranges[0];
-    const text = isSingle(sel) && !header && (extractor === "CSV" || extractor === "TSV") ? raw(valueAt(dataIndex(one.r0), one.c0)) : formatted(() => extract(sel, extractor, header));
-    if (text !== undefined) navigator.clipboard.writeText(text);
+    const rawOne = isSingle(sel) && !header && (extractor === "CSV" || extractor === "TSV");
+    const text = rawOne ? raw(valueAt(dataIndex(one.r0), one.c0)) : formatted(() => extract(sel, extractor, header));
+    if (text === undefined) return;
+    // Paste reads this text back as its format (one copied row splits into cells); one raw value stays one value
+    copied(text, rawOne ? "other" : extractor);
+    navigator.clipboard.writeText(text);
   };
   /** Selected cells as ('a', 'b') (paste straight into WHERE x IN). If only one cell is selected, its whole column */
   const copyInList = () => {
     if (!sel || !hasSel) return;
     const c = sel.ranges[0].c0;
     const text = formatted(() => extract(isSingle(sel) ? single({ r: 0, c }, { r: rowCount - 1, c }) : sel, "SQL IN List"));
-    if (text !== undefined) navigator.clipboard.writeText(text);
+    if (text === undefined) return;
+    copied(text, "other");
+    navigator.clipboard.writeText(text);
   };
-  /** Paste: split multi-line TSV/CSV into cells, adding new rows if there are not enough (DataGrip) */
+  /** Paste: TSV/CSV into cells (pasteCells: an empty field is NULL), adding new rows if there are not enough (DataGrip) */
   const paste = async () => {
     if (!anyEdit || !cur) return;
     // Paste goes into one place (DataGrip); a ⌘-click meant as a plain click is the usual way to get several ranges here
     if ((sel?.ranges.length ?? 0) > 1) return setStatusNote("Paste needs one selected range: click a cell to select just it (⌘-click adds cells to the selection)");
-    const text = await navigator.clipboard.readText();
-    const lines = text.replace(/\r/g, "").split("\n").filter((l, i, a) => l !== "" || i < a.length - 1);
-    const grid = lines.map((l) => l.split(l.includes("\t") ? "\t" : ","));
+    if (!sharedReady()) return setStatusNote("Paste needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
+    const grid = pasteCells(await navigator.clipboard.readText());
     // A join: only into cells that can be edited, and no rows added
     if (join) {
       const spots = grid.flatMap((cells, i) => cells.map((_, j) => [cur.r + i, cur.c + j]).filter(([, c]) => c < cols.length));

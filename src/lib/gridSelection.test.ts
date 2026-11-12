@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dialectOf } from "./api";
-import { extractRows, HOLE_TOKEN } from "./extract";
+import { copied, extractRows, HOLE_TOKEN, pasteCells } from "./extract";
 import { contains, copyTable, extend, forEachCell, isSingle, selCols, selRows, single, toggle, type Selection } from "./gridSelection";
 
 const cells = (sel: Selection | null) => {
@@ -104,5 +104,40 @@ describe("grid selection", () => {
   it("overlapping ranges list each cell once", () => {
     const sel = toggle(single({ r: 0, c: 0 }, { r: 1, c: 1 }), { r: 1, c: 1 }, { r: 2, c: 2 });
     expect(cells(sel)).toEqual(["0,0", "0,1", "1,0", "1,1", "1,2", "2,1", "2,2"]);
+  });
+});
+
+describe("paste (qurry_shared::extract::paste_cells through WASM)", () => {
+  it("reads back what CSV and TSV copy write: NULL, '', numbers, JSON, quotes, tabs and line breaks", () => {
+    const vals = [
+      [null, "", 42, '{"k": "a, b"}'],
+      ['"lead', "x\ty", "l1\nl2", 'a"b'],
+    ];
+    const x = { names: ["a", "b", "c", "d"], types: [], vals, keys: [], tableRef: "t", header: false, dialect: dialectOf("postgres") };
+    const want = vals.map((r) => r.map((v) => (v === null ? null : String(v))));
+    for (const fmt of ["CSV", "TSV"] as const) {
+      expect(pasteCells(extractRows(fmt, x))).toEqual(want);
+      expect(pasteCells(extractRows(fmt, { ...x, header: true })).slice(1)).toEqual(want);
+    }
+  });
+
+  it("one line without a tab is one value; CRLF and the last line break are dropped", () => {
+    expect(pasteCells("a, b")).toEqual([["a, b"]]);
+    expect(pasteCells('{"k": 1, "j": 2}\n')).toEqual([['{"k": 1, "j": 2}']]);
+    expect(pasteCells('1,"x ""y""",\r\n2,,""\r\n')).toEqual([["1", 'x "y"', null], ["2", null, ""]]);
+    expect(pasteCells("")).toEqual([]);
+  });
+
+  it("the grid's last CSV or TSV copy is read as that format: one copied row splits into its cells", () => {
+    const row = '1,,"a, b",""';
+    expect(pasteCells(row)).toEqual([[row]]);
+    copied(row, "CSV");
+    expect(pasteCells(row)).toEqual([["1", null, "a, b", ""]]);
+    // Other text, or one raw value copied, keeps the text's own rules
+    expect(pasteCells("a, b")).toEqual([["a, b"]]);
+    copied("a, b", "other");
+    expect(pasteCells("a, b")).toEqual([["a, b"]]);
+    copied('"x"', "TSV");
+    expect(pasteCells('"x"')).toEqual([["x"]]);
   });
 });
