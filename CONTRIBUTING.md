@@ -4,6 +4,8 @@ Thanks for helping. Bug reports and feature ideas go in [issues](https://github.
 
 How the code is laid out (core / tui / mcp / drivers / src) and where each config file is written: [Development › Layout](docs/development.md#layout).
 
+Where new code goes, the patterns the code follows and the rules that keep it from adding debt: [ARCHITECTURE.md](ARCHITECTURE.md). Read it before changing code.
+
 ## What belongs in Qurry
 
 Qurry is a free DataGrip alternative: one Rust engine behind a desktop app, a terminal UI and an MCP server, safe to hand to AI tools, small and fast. A feature goes into a milestone only after its issue answers these, and says the outcome: **in**, **in, smaller** (which part), **later**, or **no**.
@@ -101,7 +103,7 @@ Shortcuts are written with the ⌘ ⌥ ⌃ ⇧ glyphs (`⇧⌘A`). After changin
 
 - Commit messages start with the kind of change in brackets, then a short summary: `[feat] Copy a query plan as text`, `[fix] Keep the selection after refresh`. Also used: `[test]`, `[docs]`, `[refactor]`, `[perf]`, `[ci]`, `[chore]`.
 - One topic per commit. Don't commit screenshots, generated files (`src/wasm/pkg`, `storybook-static`) or local config.
-- Pull requests go to `main`. CI runs the Rust tests with the real-server tests, vitest, the web and Storybook builds and Playwright (two shards per browser, one `e2e (<browser>)` check each); it has to pass before a merge. A new push to the pull request cancels the run of the previous one. A pull request that only changes `docs/` or `.md` files (other than `SECURITY.md`) skips the Rust and Playwright jobs; their checks still pass.
+- Pull requests go to `main`. CI runs the Rust tests with the real-server tests, vitest, the web and Storybook builds and Playwright (two shards per browser, one `e2e (<browser>)` check each); it has to pass before a merge. A new push to the pull request cancels the run of the previous one. A pull request that only changes `docs/` or `.md` files (other than `docs/release-signing.md`, which a Rust test reads) skips the Rust and Playwright jobs; their checks still pass.
 
 ## Dependencies
 

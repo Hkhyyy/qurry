@@ -1,100 +1,100 @@
-# UI 규격
+# UI rules
 
-화면은 이 폴더 (GUI) 와 `crates/tui/src/kit` (TUI) 의 조각으로만 만든다.
-화면 코드에 맨 HTML (`<button>`, `<input>`, `<span className="muted">` …), 숫자 px · 숫자 색을 직접 쓰지 않는다.
-모양을 바꿀 일이 있으면 조각을 고치고, 화면 코드는 건드리지 않는다.
+Screens are built only from the pieces in this folder (GUI) and in `crates/tui/src/kit` (TUI).
+Screen code doesn't use bare HTML (`<button>`, `<input>`, `<span className="muted">` …), numeric px or literal colors.
+To change how something looks, change the piece, not the screen code.
 
-미리 보기: `pnpm storybook` → http://localhost:6006 — GUI 는 단계별 (1 Atoms · 2 Molecules · 3 Organisms · 4 Grid), 위쪽에서 테마 바꾸기. TUI 는 `pnpm tui-snapshots` 가 실제 TUI 코드로 그린 화면.
+Preview: `pnpm storybook` → http://localhost:6006 — the GUI by level (1 Atoms · 2 Molecules · 3 Organisms · 4 Grid), with the theme switcher at the top. The TUI: screens that `pnpm tui-snapshots` draws with the real TUI code.
 
-조각은 세 단계로 나눈다 (아토믹 디자인).
+Pieces come in three levels (atomic design).
 
-| 단계 | 뜻 | 예 |
+| Level | Meaning | Examples |
 |---|---|---|
-| 원자 (atoms) | 더 쪼갤 수 없는 것 | 글자 · 코드 · 단축키 · 버튼 · 입력칸 · 배지 · 구분선 |
-| 분자 (molecules) | 원자 몇 개를 묶은 한 줄 · 한 칸 | 목록 한 줄 · 트리 한 줄 · 상세 줄 · 메뉴 항목 · 폼 칸 · 탭 |
-| 유기체 (organisms) | 분자를 모은 덩어리 | 도구 막대 · 대화상자 · 확인 창 · 메뉴 · 팝오버 · 목록 · 표 |
+| Atoms | Can't be split further | Text · code · shortcut · button · input · badge · divider |
+| Molecules | A few atoms in one row or one field | List row · tree row · detail row · menu item · form field · tab |
+| Organisms | A block of molecules | Toolbar · dialog · confirm · menu · popover · list · table |
 
-## 토큰 (`tokens.css`)
+## Tokens (`tokens.css`)
 
 Colors are theme tokens: every theme's values are in `crates/shared/src/themes.json` (the TUI draws from it too), and `lib/theme.ts` sets them on `<html>`. The values below are Dark's.
 
-| 종류 | 토큰 | 값 (dark) | 쓰는 곳 |
+| Kind | Token | Value (dark) | Used for |
 |---|---|---|---|
-| 바탕 | `--ui-bg` | #1e1f22 | 편집기, 표, 입력칸 |
-| | `--ui-surface` | #2b2d30 | 패널, 도구 막대, 대화상자, 메뉴 |
-| | `--ui-surface-2` | #26282b | 한 단계 낮은 면 |
-| | `--ui-hover` · `--ui-selected` | #33353a · #2e436e | 올림 · 고른 줄 |
-| 선 | `--ui-border` · `--ui-border-strong` | #393b40 · #4e5157 | 구역 · 입력칸 테두리 |
-| 글자 | `--ui-text` · `--ui-text-muted` · `--ui-text-on-accent` | #dfe1e5 · #8b8f95 · #fff | 본문 · 설명 · 강조색 위 |
-| 색 | `--ui-accent` · `--ui-danger` · `--ui-warn` · `--ui-ok` | #3574f0 · #f75464 · #e5a64b · #5fb865 | 주 버튼 · 위험 · 주의 · 성공 |
+| Background | `--ui-bg` | #1e1f22 | Editor, tables, inputs |
+| | `--ui-surface` | #2b2d30 | Panels, toolbars, dialogs, menus |
+| | `--ui-surface-2` | #26282b | A surface one step lower |
+| | `--ui-hover` · `--ui-selected` | #33353a · #2e436e | Hover · selected row |
+| Lines | `--ui-border` · `--ui-border-strong` | #393b40 · #4e5157 | Sections · input borders |
+| Text | `--ui-text` · `--ui-text-muted` · `--ui-text-on-accent` | #dfe1e5 · #8b8f95 · #fff | Body · descriptions · on the accent color |
+| Colors | `--ui-accent` · `--ui-danger` · `--ui-warn` · `--ui-ok` | #3574f0 · #f75464 · #e5a64b · #5fb865 | Primary button · danger · warning · success |
 | JSON | `--ui-json-key` · `-string` · `-number` · `-keyword` · `-punct` | #c77dbb · #6aab73 · #2aacb8 · #cf8e6d · #8b8f95 | JSON cells in result grids (the TUI uses the same values) |
 | SQL | `--c-cf8e6d` · `--c-56a8f5` · `--c-number` · `--ui-json-string` · `--c-comment` | #cf8e6d · #56a8f5 · #2aacb8 · #6aab73 · #7a7e85 | Keyword · function · number · string · comment in `HighlightInput` (the table tab's WHERE / ORDER BY; the console's Monaco theme and the TUI use the same values) |
-| 간격 | `--ui-sp-1` … `--ui-sp-6` | 2 · 4 · 8 · 12 · 16 · 24px | padding · gap · margin 은 이 값만 |
-| 둥글기 | `--ui-radius-sm` / `-md` / `-lg` | 4 · 6 · 10px | 버튼 / 메뉴 · 목록 / 대화상자 |
-| 글자 크기 | `--ui-fs-xs` / `-sm` / `-md` / `-lg` | 11 · 12 · 13 · 14px | 배지 / 보조 / 본문 / 제목 |
-| 높이 | `--ui-h-sm` / `-md` / `-lg` | 22 · 26 · 30px | 작은 버튼 / 버튼 · 입력칸 / 도구 막대 |
-| 그림자 · 쌓기 | `--ui-shadow-pop` / `-modal` · `--ui-z-modal` 100 · `-menu` 200 · `-popover` 300 · `-dialog` 400 | | 확인 창이 늘 맨 위 |
+| Spacing | `--ui-sp-1` … `--ui-sp-6` | 2 · 4 · 8 · 12 · 16 · 24px | Padding, gap and margin use only these |
+| Radius | `--ui-radius-sm` / `-md` / `-lg` | 4 · 6 · 10px | Buttons / menus · lists / dialogs |
+| Font size | `--ui-fs-xs` / `-sm` / `-md` / `-lg` | 11 · 12 · 13 · 14px | Badges / secondary / body / titles |
+| Height | `--ui-h-sm` / `-md` / `-lg` | 22 · 26 · 30px | Small buttons / buttons · inputs / toolbars |
+| Shadow · stacking | `--ui-shadow-pop` / `-modal` · `--ui-z-modal` 100 · `-menu` 200 · `-popover` 300 · `-dialog` 400 | | A confirm is always on top |
 
-라이트 · 고대비 테마는 같은 이름에 다른 값만 준다.
+The light and high-contrast themes give the same names other values.
 
-## GUI 원자 (`atoms.tsx`)
+## GUI atoms (`atoms.tsx`)
 
-| 조각 | 규칙 |
+| Piece | Rules |
 |---|---|
-| `Text` | 글자 한 조각. `tone` (muted · subtle · accent · ok · warn · danger), `size` (xs · sm · md · lg), `mono`, `strong`, `truncate` (넘치면 … + 전체는 title) |
-| `Code` · `CodeBlock` · `Kbd` | 줄 안 코드 / 여러 줄 코드 (SQL 미리 보기 · DDL) / 단축키 표기 |
-| `Row` · `Spacer` · `Divider` · `ToolbarSep` | 가로 배치 (gap 1~6) / 남는 폭 / 구분선 (가로 · 세로) |
-| `Button` | `variant`: default · primary (창마다 하나, 맨 오른쪽) · danger · ghost · link. `size`: md 26px · sm 22px. 글자는 동사 |
-| `IconButton` · `ToolButton` | 아이콘만 (title 필수, `tone` ok · danger, `active`) / 도구 막대 글자 버튼 (`active` · `accent`) |
-| `Badge` · `Avatar` · `Swatch` · `ProgressBar` | 개수 · 상태 (`tone`, 정해진 색은 `color`) / 이니셜 사각형 / 색 견본 / 진행 막대 (`pct` null = 모름, `label` = 접근성 이름) |
-| `TextInput` · `Select` · `TextArea` · `Checkbox` · `Radio` | 입력 (`full` · `grow`) / 고르기 / 여러 줄 (고정폭) / 체크 (`indeterminate`) / 하나 고르기. 글 칸은 모두 자동 고침 · 대문자 · 맞춤법 · 글쓰기 제안이 꺼져 있다 (`textAssistOff`; 이름 · 타입 · 호스트를 쓰는 칸). 주석처럼 글을 쓰는 칸만 `prose` (맞춤법만 켬) |
+| `Text` | A piece of text. `tone` (muted · subtle · accent · ok · warn · danger), `size` (xs · sm · md · lg), `mono`, `strong`, `truncate` (… when it overflows, the whole text in title) |
+| `Code` · `CodeBlock` · `Kbd` | Inline code / multi-line code (SQL preview · DDL) / a shortcut |
+| `Row` · `Spacer` · `Divider` · `ToolbarSep` | Horizontal layout (gap 1–6) / the remaining width / a divider (horizontal · vertical) |
+| `Button` | `variant`: default · primary (one per window, rightmost) · danger · ghost · link. `size`: md 26px · sm 22px. The label is a verb |
+| `IconButton` · `ToolButton` | Icon only (title required, `tone` ok · danger, `active`) / a text button on a toolbar (`active` · `accent`) |
+| `Badge` · `Avatar` · `Swatch` · `ProgressBar` | Count · status (`tone`, a fixed color with `color`) / initials square / color sample / progress bar (`pct` null = unknown, `label` = accessible name) |
+| `TextInput` · `Select` · `TextArea` · `Checkbox` · `Radio` | Input (`full` · `grow`) / pick one from a list / multi-line (monospace) / check (`indeterminate`) / pick one. Every text field has autocorrect, autocapitalize, spellcheck and writing suggestions off (`textAssistOff`; fields for names, types and hosts). Only fields for prose, such as comments, use `prose` (spellcheck only) |
 
-## GUI 분자 (`molecules.tsx`)
+## GUI molecules (`molecules.tsx`)
 
-| 조각 | 규칙 |
+| Piece | Rules |
 |---|---|
-| `Field` · `RadioGroup` · `FormSection` · `Hint` · `ColorPicker` | 라벨 + 칸 (힌트 · 오류는 아래; `group` = 제 라벨이 있는 칸 여럿: `<div>` 라서 라벨을 눌러도 첫 칸으로 가지 않음) / 선택지마다 설명 / 구역 제목 / 작은 회색 설명 / 색 고르기 |
-| `Named` · `InfoTip` | 설명하는 이름 바로 뒤의 ⓘ: 칸의 라벨 (`Field` 의 `info`), 체크박스 옆 (라벨 안이 아니라서 ⓘ 를 눌러도 체크되지 않음), 힌트 줄, 구역 제목 — 어디서나 같은 간격 · 같은 팝오버. 누르거나 Space · Enter 로 열고, Esc (팝오버만 닫고 초점은 ⓘ 로) · 바깥 클릭 · 스크롤로 닫는다. 이름은 "About <이름>". 고르기 전에 꼭 읽어야 할 한 줄 (경고 · 결과) 만 보이게 두고 나머지 설명은 ⓘ 뒤로 |
-| `SearchField` | ⌕ + 입력 (+ 불러오는 중 ◌). `bare` = 팝오버 머리처럼 테두리 없이 크게 |
+| `Field` · `RadioGroup` · `FormSection` · `Hint` · `ColorPicker` | Label + field (hint · error below; `group` = several fields with labels of their own: a `<div>`, so clicking the label doesn't go to the first field) / a description per choice / section title / small gray description / color picker |
+| `Named` · `InfoTip` | The ⓘ right after the name it explains: a field's label (`Field`'s `info`), next to a checkbox (not inside its label, so clicking ⓘ doesn't check it), a hint line, a section title — the same spacing and the same popover everywhere. Opens on click or Space · Enter, closes on Esc (closes only the popover, focus back to the ⓘ), a click outside or a scroll. Its name is "About <name>". Leave visible only the one line people must read before choosing (a warning · the result); the rest of the explanation goes behind the ⓘ |
+| `SearchField` | ⌕ + input (+ loading ◌). `bare` = larger, without a border, like a popover header |
 | `HighlightInput` | One-line input whose text is drawn in SQL colors (`spans`: UTF-16 ranges with keyword · function · number · string · comment, from `shared().highlight`). The input's own text is transparent and a colored copy is drawn over it in the same font and padding, following its scroll: caret, selection and keys stay the input's (the table tab's WHERE / ORDER BY) |
-| `Tabs` · `SectionTitle` · `KeyHints` | 구역 바꾸기 (`size` sm) / 목록 · 창 안의 작은 제목 / "↩ Open · ⇥ Next tab" |
-| `Notice` · `EmptyState` | 안내 · 경고 · 오류 한 덩어리 / 비어 있을 때 |
-| `ListItem` | 목록 한 줄: [앞(체크)] [색 띠] [아이콘] 제목 설명 ……… 오른쪽, 두 번째 줄 (`subtitle`), `selected` · `dim` · `mono` |
-| `TreeRow` | 트리 한 줄: 들여쓰기 ▸ [앞] 아이콘 이름 [배지] 설명 ……… 오른쪽 |
-| `DetailRow` | 코드 + 오른쪽 값 (행 수 · pid · 버전), 값 `tone`, 코드 아래 `note` (묻는 이유) |
-| `MenuItem` · `MenuSeparator` · `MenuLabel` | 메뉴 한 줄 (이름 ……… 단축키 · ▸) / 구분선 / 흐린 설명 줄 |
-| `TabItem` · `RailItem` · `StatusItem` | 닫을 수 있는 탭 (편집기 · 결과, 📌 고정) / 왼쪽 세로 막대 칸 / 상태 줄 칸 |
+| `Tabs` · `SectionTitle` · `KeyHints` | Switch sections (`size` sm) / a small title inside a list or window / "↩ Open · ⇥ Next tab" |
+| `Notice` · `EmptyState` | One block of info · warning · error / when there is nothing |
+| `ListItem` | One list row: [lead (check)] [color strip] [icon] title description ……… right, a second line (`subtitle`), `selected` · `dim` · `mono` |
+| `TreeRow` | One tree row: indent ▸ [lead] icon name [badge] description ……… right |
+| `DetailRow` | Code + a value on the right (row count · pid · version), value `tone`, a `note` under the code (why it asks) |
+| `MenuItem` · `MenuSeparator` · `MenuLabel` | One menu row (name ……… shortcut · ▸) / separator / dim description line |
+| `TabItem` · `RailItem` · `StatusItem` | A closable tab (editor · result, 📌 pinned) / a cell of the left vertical rail / a status bar cell |
 
-## GUI 유기체 (`organisms.tsx`) · 결과 표 (`grid.tsx`)
+## GUI organisms (`organisms.tsx`) · result grid (`grid.tsx`)
 
-| 조각 | 규칙 |
+| Piece | Rules |
 |---|---|
-| `Toolbar` | 높이 30px, 아이콘 간격 2px, 묶음 사이는 `ToolbarSep` |
-| `Modal` · `Overlay` · `Popover` | 대화상자 (`size` sm 420 · md 520 · lg 760 · xl 900, Esc · 바깥 클릭으로 닫힘, 버튼은 오른쪽: 취소 → 주 버튼) / 팝업 뒤 바탕 / 떠 있는 판 (머리 · 목록 · 아래 안내) |
-| `confirm()` · `ConfirmHost` | 앱 안의 확인 창. `detail` = DetailList, `danger` 면 빨간 버튼 + 기본 포커스 Cancel. 버튼은 동작 이름 (Delete · Run …) |
-| `Menu` | 우클릭 (`at`) · 드롭다운. 항목: 동작 · 구분선 · 설명 줄 (`heading`) · 하위 메뉴. 바깥 클릭 · ⎋ 로 닫힘 |
-| `List` · `ListGroup` · `DetailList` | 목록 (`boxed`, 비면 `empty`) / 목록 안 묶음 제목 / 상세 목록 |
-| `PopupList` · `ComboBox` | 칸 바로 아래 뜨는 목록 하나 (칸 왼쪽에 맞춤, 아래 자리가 없으면 위로, 창 안에; 바깥 스크롤이면 닫힘; 키는 `listKey`: ↑↓ PgUp PgDn · ↩ · ⎋) / 자유 입력 + 제안 (타입 칸: 치면 거르고 — 같음 · 앞 · 포함 순, 맞는 게 없으면 안 뜸 — ↩ · ⇥ 고름, ⎋ 는 목록만 닫음). 고르기만 하는 쪽은 FontPicker (검색 칸 + PopupList). 맨 `<datalist>` 는 쓰지 않는다 (WKWebView 가 엉뚱한 곳에 그림) |
-| `Table` · `Th` · `Td` | 작은 표 (`num` · `mono` · `muted`) |
-| `FormGrid` | 긴 설정 창: `<label>` + 칸, 줄 전체는 `FormSection` |
-| `GridHead` · `GridHeaderRow` · `GridHeaderCell` · `GridRow` · `RowNumberCell` · `GridCell` · `JsonText` · `CellEditor` | 결과 표 칸 (상태: 선택 · 커서 · 바뀜 · 찾기 · 추가 · 지움 · null · 숫자). 가상 스크롤 · 선택은 ResultGrid. `GridHead`: header strip above the scroller (not sticky inside it), follows its scrollLeft. `GridHeaderCell` `onResize` · `onFit`: its right edge resizes the column (drag) or fits it (double-click; widths in `lib/columnWidths.ts`). `GridCell` `align`: left · right · center per value class (`lib/gridAlign.ts`, Settings › Appearance › Data grid › Alignment). `JsonText`: a JSON cell's text in colors (`--ui-json-*`; pieces from `lib/jsonSpans.ts`) |
+| `Toolbar` | 30px high, 2px between icons, `ToolbarSep` between groups |
+| `Modal` · `Overlay` · `Popover` | Dialog (`size` sm 420 · md 520 · lg 760 · xl 900, closes on Esc · a click outside, buttons on the right: Cancel → primary) / the backdrop behind a popup / a floating panel (header · list · footer hint) |
+| `confirm()` · `ConfirmHost` | The in-app confirm. `detail` = DetailList; with `danger`, a red button and focus on Cancel by default. Buttons are named for the action (Delete · Run …) |
+| `Menu` | Right-click (`at`) · dropdown. Items: action · separator · description line (`heading`) · submenu. Closes on a click outside · ⎋ |
+| `List` · `ListGroup` · `DetailList` | List (`boxed`, `empty` when empty) / a group title inside a list / detail list |
+| `PopupList` · `ComboBox` | One list right below a field (aligned to the field's left edge, above it when there is no room below, inside the window; closes when the page around it scrolls; keys through `listKey`: ↑↓ PgUp PgDn · ↩ · ⎋) / free input + suggestions (type fields: typing filters — exact, prefix, then contains; nothing shows when nothing matches — ↩ · ⇥ pick, ⎋ closes only the list). For picking only, use FontPicker (a search field + PopupList). Never a bare `<datalist>` (WKWebView draws it in the wrong place) |
+| `Table` · `Th` · `Td` | A small table (`num` · `mono` · `muted`) |
+| `FormGrid` | A long settings window: `<label>` + field, a whole row is a `FormSection` |
+| `GridHead` · `GridHeaderRow` · `GridHeaderCell` · `GridRow` · `RowNumberCell` · `GridCell` · `JsonText` · `CellEditor` | Result grid cells (states: selected · cursor · changed · found · added · deleted · null · number). Virtual scrolling and selection are in ResultGrid. `GridHead`: header strip above the scroller (not sticky inside it), follows its scrollLeft. `GridHeaderCell` `onResize` · `onFit`: its right edge resizes the column (drag) or fits it (double-click; widths in `lib/columnWidths.ts`). `GridCell` `align`: left · right · center per value class (`lib/gridAlign.ts`, Settings › Appearance › Data grid › Alignment). `JsonText`: a JSON cell's text in colors (`--ui-json-*`; pieces from `lib/jsonSpans.ts`) |
 
-아이콘 (`icons.tsx`) 은 DB 종류별 고유색을 쓴다. 테마를 따라야 하는 것 (펼침 화살표) 은 `currentColor`.
+Icons (`icons.tsx`) use each database kind's own color. What has to follow the theme (the expand arrow) uses `currentColor`.
 
 ## TUI (`crates/tui/src/kit`)
 
-GUI 와 같은 이름 · 같은 색. 화면 코드에 `Color::Rgb(…)` 나 손으로 만든 줄을 쓰지 않는다.
+The same names and colors as the GUI. Screen code doesn't use `Color::Rgb(…)` or hand-built lines.
 
-| 단계 | 조각 |
+| Level | Pieces |
 |---|---|
-| 원자 (`atoms.rs`) | 색 토큰 `ACCENT` `DIM` `SEL` `SEL_BLUR` `SURFACE` `POPUP_BG` `OK` `WARN` `DANGER` `NUMBER` `C_DB` … · `selected(focused)` · `key` · `muted` · `icon` · `swatch` · `badge` · `fit_spans` (정확히 폭만큼, 끝에 걸린 두 칸 글자 처리) · `clear` |
-| 분자 (`molecules.rs`) | `Row` (들여쓰기 · ▸ · 앞 조각 · 이름 · 설명 · 오른쪽 · 색 · 선택 → `line()` / `fit(skip, width)`) · `key_row` · `field_row` · `key_hint` · `key_hints` · `section` |
-| 유기체 (`organisms.rs`) | `panel(title, focused)` · `centered` · `popup` · `popup_danger` · `confirm_lines` (행 수 색: 0 흐리게 · 1~99 WARN · 100+ DANGER) · `wrapped_height` (접힌 줄까지 높이) |
+| Atoms (`atoms.rs`) | Color tokens `ACCENT` `DIM` `SEL` `SEL_BLUR` `SURFACE` `POPUP_BG` `OK` `WARN` `DANGER` `NUMBER` `C_DB` … · `selected(focused)` · `key` · `muted` · `icon` · `swatch` · `badge` · `fit_spans` (exactly the width, handles a double-width character at the edge) · `clear` |
+| Molecules (`molecules.rs`) | `Row` (indent · ▸ · lead pieces · name · description · right · color · selection → `line()` / `fit(skip, width)`) · `key_row` · `field_row` · `key_hint` · `key_hints` · `section` |
+| Organisms (`organisms.rs`) | `panel(title, focused)` · `centered` · `popup` · `popup_danger` · `confirm_lines` (row count colors: 0 dim · 1–99 WARN · 100+ DANGER) · `wrapped_height` (height including wrapped lines) |
 
-TUI 화면을 바꾸면 `pnpm tui-snapshots` 로 Storybook 장면을 다시 그려 같이 커밋한다 (`crates/tui/src/kit_snapshots.rs`).
+After changing a TUI screen, redraw the Storybook scenes with `pnpm tui-snapshots` and commit them with it (`crates/tui/src/kit_snapshots.rs`).
 
-## 글
+## Words
 
-- 제목은 Title Case ("Back Up Database"), 버튼은 동사.
-- 단축키 표기는 macOS 에서 ⌘ ⌥ ⌃ ⇧ (Alt+ / Ctrl+ 는 Windows · Linux 만).
-- 넘치는 글은 줄임표 + `title` 로 전체를 보인다 (잘린 채 두지 않는다).
+- Titles in Title Case ("Back Up Database"), buttons are verbs.
+- Shortcuts on macOS are written ⌘ ⌥ ⌃ ⇧ (Alt+ / Ctrl+ only on Windows and Linux).
+- Text that overflows shows an ellipsis and the whole text in `title` (never left cut off).

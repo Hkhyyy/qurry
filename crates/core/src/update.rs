@@ -246,7 +246,7 @@ pub fn cached(dir: &Path, current: &str, channel: Channel) -> Option<Option<Rele
 
 /// Update signing public keys whose signature on SHA256SUMS is accepted (`qurry-tui --update` and driver plugins).
 /// The first one is the current key, the same as plugins.updater.pubkey in the GUI tauri.conf.json (checked by a test).
-/// Only a key rotation's bridge release lists the old key after it (SECURITY.md, "Rotating the key")
+/// Only a key rotation's bridge release lists the old key after it (docs/release-signing.md, "Rotating the key")
 pub const UPDATE_PUBKEYS: &[&str] = &["dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA0MjA1NDlDN0EyODFEM0YKUldRL0hTaDZuRlFnQklTVks5ZFNkdVBNamNqK0JJWEY0akRmR3p3azVGQ2ZiTXUwM2xiL3VtUWwK"];
 
 /// Verify the SHA256SUMS signature (the release's SHA256SUMS.sig, tauri signer format = base64 of the minisign signature text)
@@ -334,12 +334,12 @@ mod tests {
         assert_eq!(changes(notes), ["[fix] real (#9)"]);
     }
 
-    /// The signing key notice SECURITY.md tells the maintainer to put at the top of .github/release-notes.md shows in the update window,
+    /// The signing key notice docs/release-signing.md tells the maintainer to put at the top of .github/release-notes.md shows in the update window,
     /// as release.yml assembles the notes (stable: its macOS 13 block before the file; beta: a quote before it; generated notes after)
     #[test]
-    fn security_md_key_notice_shows_in_update_window() {
-        let doc = include_str!("../../../SECURITY.md");
-        let block = doc.split("```markdown\n").nth(1).and_then(|s| s.split("```").next()).expect("notice block in SECURITY.md");
+    fn release_signing_key_notice_shows_in_update_window() {
+        let doc = include_str!("../../../docs/release-signing.md");
+        let block = doc.split("```markdown\n").nth(1).and_then(|s| s.split("```").next()).expect("no ```markdown block in docs/release-signing.md: keep the key notice under \"If the private key is lost\" in one");
         let file = format!("{block}\n## Qurry 1.0.0\n\n### Install\n* not this\n");
         let generated = "## What's Changed\n* [fix] real by @u in https://github.com/Hkhyyy/qurry/pull/9";
         let stable = format!("## What's Changed\n* {MACOS13_ITEM} Ventura or later.\n\n{file}{generated}");
