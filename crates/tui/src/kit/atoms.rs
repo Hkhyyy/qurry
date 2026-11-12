@@ -65,6 +65,24 @@ pub fn sql_style(class: qurry_shared::highlight::Class) -> Option<Style> {
     }
 }
 
+/// `text` as one line in the console's SQL colors (sql_style), the text unchanged
+pub fn sql_line(text: &str, kind: qurry_shared::DbKind) -> Line<'static> {
+    let mut out = vec![];
+    let mut at = 0;
+    for s in qurry_shared::highlight::highlight(text, kind) {
+        let Some(style) = sql_style(s.class) else { continue };
+        if s.start > at {
+            out.push(Span::raw(text[at..s.start].to_string()));
+        }
+        out.push(Span::styled(text[s.start..s.end].to_string(), style));
+        at = s.end;
+    }
+    if at < text.len() {
+        out.push(Span::raw(text[at..].to_string()));
+    }
+    Line::from(out)
+}
+
 /// Selected row background
 pub fn selected(focused: bool) -> Color {
     if focused {

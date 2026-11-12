@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { AuditEntry, auditLog } from "../lib/api";
+import { AuditEntry, auditLog, DbKind } from "../lib/api";
 import { shared } from "../lib/shared";
-import { Badge, Button, CodeBlock, List, ListItem, Modal, Named, Notice, SearchField, SectionTitle, Text } from "../ui";
+import { Badge, Button, List, ListItem, Modal, Named, Notice, SearchField, SectionTitle, Text } from "../ui";
+import { SqlBlock } from "./SqlBlock";
 
 type Tone = "neutral" | "warn" | "danger" | "accent";
 /** Tone of each result word qurry-shared's audit::status gives */
@@ -36,7 +37,7 @@ export function auditStatus(e: AuditEntry): { text: string; tone: Tone } {
  * Production log: modifying statements run on Production Data Sources (same file as the TUI).
  * Simple UPDATE / DELETE leave undo SQL built from rows captured right before running — open it in a console and run it (never run automatically)
  */
-export function ProductionLog({ connId, onOpenUndo, onClose }: { connId: string | null; onOpenUndo: (e: AuditEntry) => void; onClose: () => void }) {
+export function ProductionLog({ connId, kindOf, onOpenUndo, onClose }: { connId: string | null; /** The kind of an entry's data source (its connId is conn or conn::db) */ kindOf: (connId: string) => DbKind; onOpenUndo: (e: AuditEntry) => void; onClose: () => void }) {
   const [items, setItems] = useState<AuditEntry[]>([]);
   const [q, setQ] = useState("");
   const [idx, setIdx] = useState(0);
@@ -114,7 +115,7 @@ export function ProductionLog({ connId, onOpenUndo, onClose }: { connId: string 
               <Text tone="muted" size="sm">
                 {new Date(cur.ts).toLocaleString()} · {where(cur)} · {auditStatus(cur).text}
               </Text>
-              <CodeBlock>{cur.sql}</CodeBlock>
+              <SqlBlock sql={cur.sql} kind={kindOf(cur.connId)} />
               {unknown ? (
                 // It may have committed: what to do first, then the driver error
                 <Notice tone="warn">
@@ -125,7 +126,7 @@ export function ProductionLog({ connId, onOpenUndo, onClose }: { connId: string 
                 cur.error && <Notice tone="danger">{cur.error}</Notice>
               )}
               <SectionTitle>Undo</SectionTitle>
-              {cur.undo ? <CodeBlock className="audit-undo">{cur.undo}</CodeBlock> : <Text tone="muted">{(!unknown && cur.note) || "No undo for this statement."}</Text>}
+              {cur.undo ? <SqlBlock className="audit-undo" sql={cur.undo} kind={kindOf(cur.connId)} /> : <Text tone="muted">{(!unknown && cur.note) || "No undo for this statement."}</Text>}
             </>
           )}
         </div>

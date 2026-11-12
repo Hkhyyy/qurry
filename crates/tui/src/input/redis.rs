@@ -57,7 +57,7 @@ pub(super) fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
                     }
                     _ => return,
                 };
-                app.popup = Some(Popup::Confirm { opened: None, text: format!("{}?", cmd.join(" ")), on_yes: Box::new(move |a| a.redis_cmd(id, cmd, false)) });
+                app.popup = Some(Popup::Confirm { opened: None, sql: None, text: format!("{}?", cmd.join(" ")), on_yes: Box::new(move |a| a.redis_cmd(id, cmd, false)) });
             }
             KeyCode::Char('a') => {
                 let Some(key) = cur_key else { return };
@@ -153,7 +153,7 @@ pub(super) fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
         KeyCode::Char('r') => app.redis_scan(id, true),
         KeyCode::Char('D') | KeyCode::Delete => {
             if let Some(key) = cur_key {
-                app.popup = Some(Popup::Confirm { opened: None, text: format!("Delete key \"{key}\"?"), on_yes: Box::new(move |a| {
+                app.popup = Some(Popup::Confirm { opened: None, sql: None, text: format!("Delete key \"{key}\"?"), on_yes: Box::new(move |a| {
                     if let Some(TabKind::Redis(r)) = a.tab_mut(id).map(|t| &mut t.kind) {
                         r.detail = None;
                         r.value = None;

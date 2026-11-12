@@ -85,7 +85,7 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
         Popup::Note { title, text, back } => {
             app.popup = match k.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1) => Some(match *back {
-                    Popup::Confirm { text, on_yes, .. } => Popup::Confirm { text, on_yes, opened: Some(Instant::now()) },
+                    Popup::Confirm { text, sql, on_yes, .. } => Popup::Confirm { text, sql, on_yes, opened: Some(Instant::now()) },
                     Popup::AllowPlaintext { text, on_yes, .. } => Popup::AllowPlaintext { text, on_yes, opened: Instant::now() },
                     back => back,
                 }),
@@ -93,20 +93,20 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
             };
         }
         // n / Esc always cancel. A confirm that came up on its own (`opened`) takes y / Enter only after a pause, like AllowPlaintext below
-        Popup::Confirm { text, on_yes, opened } => match k.code {
+        Popup::Confirm { text, sql, on_yes, opened } => match k.code {
             KeyCode::Char('n') | KeyCode::Esc => {}
             _ if opened.is_some_and(|t| t.elapsed() < App::TLS_ASK_GRACE) => {
                 if matches!(k.code, KeyCode::Char('y' | 'Y') | KeyCode::Enter) {
                     app.status = TOO_SOON.into();
                 }
-                app.popup = Some(Popup::Confirm { text, on_yes, opened: Some(Instant::now()) })
+                app.popup = Some(Popup::Confirm { text, sql, on_yes, opened: Some(Instant::now()) })
             }
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter if app.hits.confirm_unseen => {
                 app.status = "The window is too small to show the whole question: enlarge it, then answer (n / Esc cancels)".into();
-                app.popup = Some(Popup::Confirm { text, on_yes, opened });
+                app.popup = Some(Popup::Confirm { text, sql, on_yes, opened });
             }
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => on_yes(app),
-            _ => app.popup = Some(Popup::Confirm { text, on_yes, opened: opened.map(|_| Instant::now()) }),
+            _ => app.popup = Some(Popup::Confirm { text, sql, on_yes, opened: opened.map(|_| Instant::now()) }),
         },
         // Only a y after a pause counts: every other key (and any key inside the grace) starts the grace again, so typing that
         // goes on into the popup never allows plaintext. n / Esc cancel at once

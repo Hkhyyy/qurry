@@ -713,7 +713,8 @@ pub enum Popup {
     Input { title: String, body: String, input: TextArea<'static>, on_ok: OnInput, filter: Option<FilterSource>, redis: Option<RedisPrompt>, complete: Option<Completion> },
     /// `opened` is set when the confirm comes up on its own (open_after_notices, or a notice over it closing): then, as for
     /// AllowPlaintext, y / Enter count only after TLS_ASK_GRACE without any key, so typing meant for the editor or a form never answers it
-    Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: Option<std::time::Instant> },
+    /// `sql`: the statement lines (two-space indent) are SQL of this kind, drawn in the console's colors
+    Confirm { text: String, sql: Option<DbKind>, on_yes: Box<dyn FnOnce(&mut App)>, opened: Option<std::time::Instant> },
     /// The TLS opt-in (offer_tls_opt_in). It opens on its own when a background load fails, so only a y pressed after TLS_ASK_GRACE
     /// without any key (`opened` restarts at each other key) allows plaintext: never Enter, never a key that was meant for the editor or the tree
     AllowPlaintext { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: std::time::Instant },

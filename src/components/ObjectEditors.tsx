@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { ColumnDef, ConnectionView, ddl, ForeignKeyDef, IndexDef, NewObject, TableDef } from "../lib/api";
 import { ask, notice } from "../lib/dialogs";
-import { Button, Checkbox, CodeBlock, ComboBox, Field, Hint, IconButton, Modal, Notice, SectionTitle, Select, Table, Tabs, Td, Text, TextArea, TextInput, Th } from "../ui";
+import { Button, Checkbox, ComboBox, Field, Hint, IconButton, Modal, Notice, SectionTitle, Select, Table, Tabs, Td, Text, TextArea, TextInput, Th } from "../ui";
+import { SqlBlock } from "./SqlBlock";
 
 /** Suggestions for the type field (any other type can be typed) */
 const TYPES: Record<string, string[]> = {
@@ -274,7 +275,7 @@ export function TableDesigner({ target, conn, schema, table, onDone, onOpenConso
         </div>
       </div>
       <SectionTitle>SQL</SectionTitle>
-      {preview.err ? <Hint>{preview.err}</Hint> : <CodeBlock className="designer-sql">{preview.sql.length ? preview.sql.map((s) => `${s};`).join("\n\n") : "-- no changes"}</CodeBlock>}
+      {preview.err ? <Hint>{preview.err}</Hint> : <SqlBlock className="designer-sql" sql={preview.sql.length ? preview.sql.map((s) => `${s};`).join("\n\n") : "-- no changes"} kind={conn.kind} />}
       {err && <Notice tone="danger">{err}</Notice>}
     </Modal>
   );
@@ -347,7 +348,7 @@ export function NewObjectDialog({ kind, target, conn, schema, onDone, onOpenCons
         </>
       )}
       <SectionTitle>SQL</SectionTitle>
-      {preview.err ? <Hint>{preview.err}</Hint> : <CodeBlock>{preview.sql.map((s) => `${s};`).join("\n\n")}</CodeBlock>}
+      {preview.err ? <Hint>{preview.err}</Hint> : <SqlBlock sql={preview.sql.map((s) => `${s};`).join("\n\n")} kind={conn.kind} />}
       {err && <Notice tone="danger">{err}</Notice>}
     </Modal>
   );

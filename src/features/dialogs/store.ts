@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ConnectionView, UpdateInfo } from "../../lib/api";
+import type { ConnectionView, DbKind, UpdateInfo } from "../../lib/api";
 import type { NewKind } from "../../components/ObjectEditors";
 import type { SettingsPage } from "../settings/SettingsDialog";
 import { setter } from "../setter";
@@ -31,7 +31,7 @@ interface DialogsState {
   /** Copy a subset of production data window */
   copyReq: { target: string; schema: string; table: string; conn: ConnectionView } | null;
   backupReq: { c: ConnectionView; db?: string } | null;
-  quickDoc: { title: string; text: string } | null;
+  quickDoc: { title: string; text: string; /** The text is DDL in this kind's dialect (colored) */ kind?: DbKind } | null;
 }
 
 export const useDialogsStore = create<DialogsState>()(() => ({

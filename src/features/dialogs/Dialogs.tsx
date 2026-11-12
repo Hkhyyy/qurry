@@ -8,6 +8,7 @@ import { KeymapDialog } from "../../components/KeymapDialog";
 import { NewObjectDialog, TableDesigner } from "../../components/ObjectEditors";
 import { ProductionLog } from "../../components/ProductionLog";
 import { schemaChanged } from "../../components/SchemaTree";
+import { SqlBlock } from "../../components/SqlBlock";
 import { RecentFiles } from "../../components/Switcher";
 import { TextDialog } from "../../components/TextDialog";
 import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Transfer";
@@ -173,6 +174,7 @@ export function TopDialogs({ conns, setStatus, refresh, openConsole }: { conns: 
         return t && c ? (
           <HistoryDialog
             connId={c.id}
+            kind={c.kind}
             title={`${c.name} Query History`}
             initialTab={historyTab}
             onPick={(sql) => {
@@ -187,6 +189,7 @@ export function TopDialogs({ conns, setStatus, refresh, openConsole }: { conns: 
       {prodLog && (
         <ProductionLog
           connId={prodLog.connId}
+          kindOf={(id) => conns.find((x) => x.id === id.split("::")[0])?.kind ?? "postgres"}
           onOpenUndo={(e) => {
             const [base, db] = e.connId.split("::");
             const c = conns.find((x) => x.id === base);
@@ -202,7 +205,7 @@ export function TopDialogs({ conns, setStatus, refresh, openConsole }: { conns: 
         <Overlay variant="light" onClose={() => setQuickDoc(null)} onKeyDown={(e) => e.key === "Escape" && setQuickDoc(null)}>
           <div className="quick-doc" onMouseDown={(e) => e.stopPropagation()} tabIndex={-1} ref={(el) => el?.focus()} onKeyDown={(e) => e.key === "Escape" && setQuickDoc(null)}>
             <div className="qd-title">{quickDoc.title}</div>
-            <CodeBlock className="qd-body">{quickDoc.text}</CodeBlock>
+            {quickDoc.kind ? <SqlBlock className="qd-body" sql={quickDoc.text} kind={quickDoc.kind} /> : <CodeBlock className="qd-body">{quickDoc.text}</CodeBlock>}
           </div>
         </Overlay>
       )}

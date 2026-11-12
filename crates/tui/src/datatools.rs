@@ -55,6 +55,7 @@ impl App {
                 a.status.clear();
                 a.open_after_notices(Popup::Confirm {
                     opened: None,
+                    sql: None,
                     text: fake_confirm_text(n, &where_, &pv.plan, &pv.warnings, a.production_name(&conn).as_deref()),
                     on_yes: Box::new(move |a| {
                         let st = a.state.clone();
@@ -138,6 +139,7 @@ impl App {
             let name = a.conn(&into).map(|c| c.config.name.clone()).unwrap_or_default();
             a.open_after_notices(Popup::Confirm {
                 opened: None,
+                sql: None,
                 text: copy_confirm_text(&plan, &name, a.production_name(&into).as_deref(), spec.mask),
                 on_yes: Box::new(move |a| {
                     let st = a.state.clone();

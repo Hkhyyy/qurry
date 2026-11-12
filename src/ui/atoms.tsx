@@ -45,11 +45,31 @@ export function Text({
 /** Short code like a statement · name (monospace, keeps line breaks) */
 export const Code = ({ children, className }: { children: ReactNode; className?: string }) => <code className={cx("ui-code", className)}>{children}</code>;
 
-/** Multi-line code (SQL preview · DDL · raw error) */
-export function CodeBlock({ children, className, wrap = true, style }: { children: ReactNode; className?: string; wrap?: boolean; style?: CSSProperties }) {
+/** A colored piece of code: a UTF-16 range and its class (keyword · function · number · string · comment, ui.css .ui-hl-*; others stay plain) */
+export type HlSpan = { start: number; end: number; class: string };
+/** `text` with its `spans` (in order) drawn as .ui-hl-* pieces, the rest plain */
+export function hlNodes(text: string, spans: HlSpan[]): ReactNode[] {
+  const out: ReactNode[] = [];
+  let at = 0;
+  for (const sp of spans) {
+    if (sp.class === "other") continue;
+    if (sp.start > at) out.push(text.slice(at, sp.start));
+    out.push(
+      <span key={sp.start} className={`ui-hl-${sp.class}`}>
+        {text.slice(sp.start, sp.end)}
+      </span>,
+    );
+    at = sp.end;
+  }
+  out.push(text.slice(at));
+  return out;
+}
+
+/** Multi-line code (SQL preview · DDL · raw error). `spans` color a string child (SQL: the console's colors) */
+export function CodeBlock({ children, spans, className, wrap = true, style }: { children: ReactNode; spans?: HlSpan[]; className?: string; wrap?: boolean; style?: CSSProperties }) {
   return (
     <pre className={cx("ui-code-block", !wrap && "nowrap", className)} style={style}>
-      {children}
+      {spans && typeof children === "string" ? hlNodes(children, spans) : children}
     </pre>
   );
 }

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { ask, askTextChoice } from "../lib/dialogs";
-import { Button, CodeBlock, List, ListItem, Modal, SearchField, Tabs } from "../ui";
-import { history, HistoryItem, Snippet } from "../lib/api";
+import { Button, List, ListItem, Modal, SearchField, Tabs } from "../ui";
+import { DbKind, history, HistoryItem, Snippet } from "../lib/api";
+import { SqlBlock } from "./SqlBlock";
 
 /**
  * DataGrip "Browse Query History" (⌥⌘e) + snippets (named saved queries). History lives in the config folder, shared with the TUI.
@@ -38,7 +39,7 @@ export async function saveSnippet(sql: string, connId: string, connName: string)
 
 type Row = { id: string; title: string; sql: string; sub: string };
 
-export function HistoryDialog({ connId, title, initialTab = "history", onPick, onClose }: { connId: string; title: string; initialTab?: "history" | "snippets"; onPick: (sql: string) => void; onClose: () => void }) {
+export function HistoryDialog({ connId, kind, title, initialTab = "history", onPick, onClose }: { connId: string; kind: DbKind; title: string; initialTab?: "history" | "snippets"; onPick: (sql: string) => void; onClose: () => void }) {
   const [tab, setTab] = useState<"history" | "snippets">(initialTab);
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [snips, setSnips] = useState<Snippet[]>([]);
@@ -114,7 +115,7 @@ export function HistoryDialog({ connId, title, initialTab = "history", onPick, o
             <ListItem key={r.id} mono title={r.title} trailing={r.sub} selected={r === cur} onClick={() => setIdx(i)} onDoubleClick={() => onPick(r.sql)} />
           ))}
         </List>
-        <CodeBlock className="hist-preview">{cur?.sql ?? ""}</CodeBlock>
+        <SqlBlock className="hist-preview" sql={cur?.sql ?? ""} kind={kind} />
       </div>
     </Modal>
   );

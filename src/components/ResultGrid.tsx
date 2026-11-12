@@ -18,8 +18,9 @@ import { contains, copyTable, extend, forEachCell, isSingle, type Pos, selCols, 
 import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/shortcuts";
 import { draftAt, draftToApply, leftDraft, panelText, registerValuePanel, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
 import { ResultChart } from "./ResultChart";
+import { SqlBlock } from "./SqlBlock";
 import { ValuePanel } from "./ValuePanel";
-import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { Button, CellEditor, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
@@ -1170,7 +1171,7 @@ export function ResultGrid(p: Props) {
             </>
           }
         >
-          <CodeBlock className="sql-preview">{p.query}</CodeBlock>
+          <SqlBlock className="sql-preview" sql={p.query} kind={D.quoting} />
         </Modal>
       )}
 
@@ -1190,7 +1191,7 @@ export function ResultGrid(p: Props) {
             </>
           }
         >
-          <CodeBlock className="sql-preview">{preview.sql.join("\n")}</CodeBlock>
+          <SqlBlock className="sql-preview" sql={preview.sql.join("\n")} kind={D.quoting} />
           {submitErr && <Notice tone="danger">{submitErr}</Notice>}
         </Modal>
       )}

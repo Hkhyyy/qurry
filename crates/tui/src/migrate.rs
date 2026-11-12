@@ -207,6 +207,7 @@ impl App {
                     let st = a.state.clone();
                     a.open_after_notices(Popup::Confirm {
                         opened: None,
+                        sql: None,
                         text,
                         on_yes: Box::new(move |a| {
                             a.status = "Applying migrations…".into();

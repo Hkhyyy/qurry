@@ -279,7 +279,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     if (info.kind === "conn") return setQuickDoc({ title: info.conn.name, text: `${info.conn.user}@${info.conn.host}:${info.conn.port}${info.conn.database ? "/" + info.conn.database : ""}${info.conn.ssh?.enabled ? `\nvia SSH ${info.conn.ssh.user}@${info.conn.ssh.host}` : ""}${info.conn.ssm?.enabled ? `\nvia AWS SSM ${info.conn.ssm.target}` : ""}` });
     if (!info.schema || !info.name) return setQuickDoc({ title: fqn(info), text: info.kind });
     try {
-      setQuickDoc({ title: fqn(info), text: await ddlText(info) });
+      setQuickDoc({ title: fqn(info), text: await ddlText(info), kind: info.conn.kind });
     } catch (e) {
       setQuickDoc({ title: fqn(info), text: String(e) });
     }
