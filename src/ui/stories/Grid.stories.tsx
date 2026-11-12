@@ -138,7 +138,7 @@ export const Scrolling: StoryObj = {
   ),
 };
 
-/** Settings › Appearance › Alignment: one column per value class, as ResultGrid classifies and aligns them */
+/** Settings › Appearance › Data grid › Alignment: one column per value class, as ResultGrid classifies and aligns them */
 const CLASSES: { name: string; type: string; vals: Cell[] }[] = [
   { name: "name", type: "text", vals: ["abc", null, "하나"] },
   { name: "amount", type: "numeric", vals: ["129000.00", null, "7.50"] },

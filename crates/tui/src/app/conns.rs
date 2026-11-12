@@ -77,10 +77,10 @@ impl App {
     // ───────── Connections ─────────
 
     pub fn connect(&mut self, conn: &str) {
-        if let Some(n) = self.tree.roots.iter().find(|n| n.conn == conn).cloned() {
-            if !self.tree.expanded.contains(&n.key) {
-                self.toggle_node(&n);
-            }
+        if let Some(n) = self.tree.roots.iter().find(|n| n.conn == conn).cloned()
+            && !self.tree.expanded.contains(&n.key)
+        {
+            self.toggle_node(&n);
         }
     }
 
@@ -90,6 +90,7 @@ impl App {
             let c = conn.to_string();
             self.popup = Some(Popup::Confirm {
                 opened: None,
+                sql: None,
                 text: format!("{n} console(s) on this data source have uncommitted changes. Roll them back and disconnect?"),
                 on_yes: Box::new(move |a| a.disconnect_now(&c)),
             });
@@ -295,6 +296,7 @@ impl App {
         let st = self.state.clone();
         self.popup = Some(Popup::Confirm {
             opened: None,
+            sql: None,
             text: text.into(),
             on_yes: Box::new(move |a| {
                 a.status = "Waiting for the system keychain…".into();

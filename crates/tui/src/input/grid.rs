@@ -2,17 +2,17 @@ use super::*;
 
 pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
     // Esc: if there's a selection (a range, marked rows), clear just that first
-    if k.code == KeyCode::Esc {
-        if let Some(g) = app.grid_mut().filter(|g| g.anchor.is_some() || !g.marked.is_empty()) {
-            g.anchor = None;
-            g.marked.clear();
-            return;
-        }
+    if k.code == KeyCode::Esc
+        && let Some(g) = app.grid_mut().filter(|g| g.anchor.is_some() || !g.marked.is_empty())
+    {
+        g.anchor = None;
+        g.marked.clear();
+        return;
     }
     // The grid's commands (n set NULL, a add row …: pane keys, F1 › Data grid keys), in table data and query results
     let grid = match app.tabs.get(app.active).map(|t| &t.kind) {
         Some(TabKind::Table(_)) => true,
-        Some(TabKind::Console(c)) => !c.show_output && c.grid.is_some(),
+        Some(TabKind::Console(c)) => c.grid().is_some(),
         _ => false,
     };
     if grid && let Some(a) = app.keys.lookup_in(Scope::Grid, &k) {
@@ -69,7 +69,7 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
                 app.focus = Focus::Editor;
                 return;
             }
-            if c.show_output || c.grid.is_none() {
+            if c.grid().is_none() {
                 return;
             }
             match k.code {
@@ -111,7 +111,7 @@ fn edit_cell(app: &mut App, id: u64) {
         // Into the grid it was asked for (a console run meanwhile replaced it: dropped)
         let grid = match a.tab_mut(id).map(|t| &mut t.kind) {
             Some(TabKind::Table(tt)) => tt.grid.as_mut(),
-            Some(TabKind::Console(c)) => c.grid.as_mut(),
+            Some(TabKind::Console(c)) => c.grid_mut(),
             _ => None,
         };
         if let Some(g) = grid.filter(|g| g.id == gid) {
@@ -169,6 +169,7 @@ pub(super) fn nav(app: &mut App, k: KeyEvent) {
 mod tests {
     use super::*;
     use crate::testkit::Harness;
+    use qurry_core::db::QueryResult;
 
     /// ⌘← arriving as ⌃A doesn't add a row (a adds a row)
     #[tokio::test]
@@ -684,7 +685,8 @@ mod tests {
     }
 
     /// Loading more shows in the status line as a run does (bar, words, elapsed time; the Cancel key stops it). When it fails (#80)
-    /// the result stays unfinished ("+") and the status line and the grid's edge say why, the GUI's words; scrolling on doesn't ask again
+    /// the result stays unfinished ("+") and the status line and the grid's last line say why, the GUI's words with how to run it
+    /// again (a table tab: r); scrolling on doesn't ask again
     #[tokio::test]
     async fn a_failed_load_more_stays_in_the_grid() {
         let mut h = Harness::new().await;
@@ -703,8 +705,8 @@ mod tests {
         assert!(!screen.lines().any(|l| l.contains("Loading more") && l.contains('┗')), "{screen}");
         h.settle().await;
         let g = h.table(id).grid.as_ref().unwrap();
-        let why = qurry_shared::errors::more_rows_failed("Session closed");
-        assert_eq!((g.more_error.as_deref(), g.result.truncated, g.loading_more), (Some(why.as_str()), true, false));
+        let why = "Couldn't load more rows (r runs it again): Session closed";
+        assert_eq!((g.more_error.as_deref(), g.result.truncated, g.loading_more), (Some(why), true, false));
         assert!(h.screen(120, 30).contains(&format!("✗ {why}")), "{}", h.screen(120, 30));
         assert!(h.screen(120, 30).contains("2+ rows"));
         assert_eq!(h.app.status, why);
@@ -713,9 +715,10 @@ mod tests {
         assert!(!h.table(id).grid.as_ref().unwrap().loading_more, "not asked again");
     }
 
-    /// On a result wider than the grid, a failed load-more's words on the bottom edge stay whole beside the horizontal scrollbar and its range
+    /// On a result wider than the grid, a failed load-more's words sit on the grid's last line, above the bottom edge, which keeps the
+    /// whole horizontal scrollbar and its range
     #[tokio::test]
-    async fn the_load_more_error_stays_beside_the_horizontal_scrollbar() {
+    async fn the_load_more_error_sits_above_the_horizontal_scrollbar() {
         let mut h = Harness::new().await;
         let cols: Vec<String> = (0..40).map(|i| format!("column_{i}")).collect();
         let cols: Vec<&str> = cols.iter().map(String::as_str).collect();
@@ -730,9 +733,10 @@ mod tests {
         assert!(h.table(id).grid.as_ref().unwrap().loading_more);
         h.settle().await;
         let screen = h.screen(120, 30);
-        let edge = screen.lines().find(|l| l.contains('✗')).unwrap_or_else(|| panic!("{screen}"));
-        let why = qurry_shared::errors::more_rows_failed("Session closed");
-        assert!(edge.contains(&format!("▶  ✗ {why}")) && edge.contains("┗━━") && edge.contains("─ ◀ cols 1–"), "{edge}");
+        let lines: Vec<&str> = screen.lines().collect();
+        let at = lines.iter().position(|l| l.contains("✗ Couldn't load more rows (r runs it again): Session closed")).unwrap_or_else(|| panic!("{screen}"));
+        let edge = lines[at + 1];
+        assert!(edge.contains("┗━━") && edge.contains("─ ◀ cols 1–") && edge.contains("▶ ┛"), "{edge}");
     }
 
     /// A load-more answer that arrives after the tab ran again belongs to the grid it replaced: dropped
@@ -766,5 +770,101 @@ mod tests {
         }
         h.app.fetch_more();
         assert!(!h.table(id).grid.as_ref().unwrap().loading_more);
+    }
+
+    /// A table tab on data source "test" of `kind` (Production when `prod`), rows 1 a x · 2 b y · 3 c z keyed by id; the statements
+    /// Submit sends go to `record`
+    async fn users(kind: &str, prod: bool, record: crate::app::FakeDb) -> Harness {
+        let mut h = Harness::new().await;
+        let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+            "id": "test", "name": "T", "kind": kind, "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+        }))
+        .unwrap();
+        cfg.options.confirm_changes = prod;
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        h.app.fake_db = Some(record);
+        h.table_tab("users", &["id", "name", "memo"], &[&["1", "a", "x"], &["2", "b", "y"], &["3", "c", "z"]], &["id"]);
+        h
+    }
+
+    /// Row 1's name edited, row 2 set to NULL and deleted, a new row whose name is set to NULL, a new row left as it is; Submit
+    fn edit_delete_add(h: &mut Harness) {
+        h.key("Right");
+        h.key("Enter");
+        h.key("Backspace");
+        h.type_str("a2");
+        h.key("Enter");
+        h.key("Down");
+        h.key("n");
+        h.key("d");
+        h.key("a");
+        h.key("n");
+        h.key("a");
+        h.key("Ctrl+S");
+    }
+
+    fn one_row() -> QueryResult {
+        QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 1, has_result_set: false, in_transaction: false, warning: None, editable: None }
+    }
+
+    /// Submit runs DELETE, then UPDATE, then INSERT (the GUI's order); the edited deleted row is only deleted, a new row's cell set to
+    /// NULL is sent, its untouched cells are left out, and an all-default row is `DEFAULT VALUES` on PostgreSQL
+    #[tokio::test]
+    async fn submit_on_postgres_runs_delete_update_insert() {
+        static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        fn record(q: &str) -> Result<QueryResult, String> {
+            SEEN.lock().unwrap().push(q.into());
+            Ok(one_row())
+        }
+        let mut h = users("postgres", false, record).await;
+        edit_delete_add(&mut h);
+        h.settle().await;
+        assert_eq!(
+            *SEEN.lock().unwrap(),
+            ["DELETE FROM public.users WHERE id = '2'", "UPDATE public.users SET name = 'a2' WHERE id = '1'", "INSERT INTO public.users (name) VALUES (NULL)", "INSERT INTO public.users DEFAULT VALUES"]
+        );
+        assert!(h.app.status.starts_with("4 statement(s) submitted, 4 row(s) affected"), "{}", h.app.status);
+    }
+
+    /// On MySQL an all-default row is `() VALUES ()`; a Production source lists the statements in the order they run before it asks
+    #[tokio::test]
+    async fn submit_on_mysql_production_lists_then_runs_them_in_order() {
+        static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        fn record(q: &str) -> Result<QueryResult, String> {
+            SEEN.lock().unwrap().push(q.into());
+            Ok(one_row())
+        }
+        let mut h = users("mysql", true, record).await;
+        edit_delete_add(&mut h);
+        let want = ["DELETE FROM public.users WHERE id = '2'", "UPDATE public.users SET name = 'a2' WHERE id = '1'", "INSERT INTO public.users (name) VALUES (NULL)", "INSERT INTO public.users () VALUES ()"];
+        let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
+        assert_eq!(text, &format!("Production data source \"T\" — save 4 change(s)?\n\n  {}", want.join("\n  ")));
+        assert!(SEEN.lock().unwrap().is_empty(), "nothing runs before the answer");
+        h.key("y");
+        h.settle().await;
+        assert_eq!(*SEEN.lock().unwrap(), want);
+    }
+
+    /// CSV pasted into new rows (#160): a quoted JSON value loses its CSV quotes, an empty field is NULL (not ''), "" stays an
+    /// empty string, and the integer column gets its number; the Production list shows what Submit sends
+    #[tokio::test]
+    async fn pasted_csv_rows_submit_nulls_and_unescaped_json() {
+        static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        fn record(q: &str) -> Result<QueryResult, String> {
+            SEEN.lock().unwrap().push(q.into());
+            Ok(one_row())
+        }
+        let mut h = users("postgres", true, record).await;
+        h.key("a");
+        h.paste("10,\"{\"\"k\"\": \"\"a, b\"\"}\",\r\n11,,\"\"\r\n");
+        h.key("Ctrl+S");
+        let want = ["INSERT INTO public.users (id, name, memo) VALUES ('10', '{\"k\": \"a, b\"}', NULL)", "INSERT INTO public.users (id, name, memo) VALUES ('11', NULL, '')"];
+        let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
+        assert_eq!(text, &format!("Production data source \"T\" — save 2 change(s)?\n\n  {}", want.join("\n  ")));
+        h.key("y");
+        h.settle().await;
+        assert_eq!(*SEEN.lock().unwrap(), want);
     }
 }

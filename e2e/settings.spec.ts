@@ -1,5 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
-import { dialog, editor, expect, openApp, openConsole, test, treeItem, work } from "./app";
+import { dialog, editor, expect, openApp, openConsole, openSettings, settingsRow, settingsTree, test, treeItem, work } from "./app";
 
 // Courier New ships with macOS, Windows and most Linux desktops (the specs run as on macOS)
 const FONT = "Courier New";
@@ -198,4 +198,97 @@ test("Settings › Add Font File…: a font file that can't be loaded (damaged) 
   await expect(settingsField(page, "Grid font family")).toBeFocused();
   await settingsField(page, "Grid font family").click();
   await expect(fontList(page).getByText("custom")).toHaveCount(0);
+});
+
+// #152: the pages tree (DataGrip's settings tree). Each page shows only its own fields; the dialog keeps one size
+const PAGES: [string, string[]][] = [
+  ["Appearance", ["Theme", "Editor font", "Grid font"]],
+  ["Console", ["Keyword case", "Result tabs"]],
+  ["Data grid", ["Alignment", "Status bar"]],
+  ["Updates", ["Updates", "Channel"]],
+  ["Keymap", []],
+  ["Passwords", ["Key"]],
+];
+const labels = (page: Page) => dialog(page).locator(".settings-form .ui-field-label");
+const rows = (page: Page) => settingsTree(page).getByRole("treeitem");
+
+test("Settings › pages tree: each page shows exactly its fields, the label column is 108 px and the dialog keeps one size", async ({ page }) => {
+  await page.keyboard.press("Meta+Comma");
+  await expect(rows(page)).toHaveText(["Appearance", "Console", "Data grid", "Updates", "Keymap", "Passwords"]);
+  let box: { width: number; height: number; x: number; y: number } | null = null;
+  for (const [name, fields] of PAGES) {
+    await settingsRow(page, name).click();
+    await expect(settingsRow(page, name)).toHaveAttribute("aria-selected", "true");
+    await expect(settingsTree(page).locator("[aria-selected=true]")).toHaveCount(1);
+    await expect(labels(page)).toHaveText(fields);
+    if (fields.length) expect((await labels(page).first().boundingBox())?.width).toBe(108);
+    const b = await page.locator(".ui-modal.settings").boundingBox();
+    if (box) expect(b).toEqual(box);
+    box = b;
+  }
+  // Keymap is the keymap editor; Updates has its checkbox and buttons, the GitHub one icon-only
+  await settingsRow(page, "Keymap").click();
+  await expect(dialog(page).locator(".keymap-editor")).toBeVisible();
+  await settingsRow(page, "Updates").click();
+  const d = dialog(page);
+  await expect(d.getByRole("checkbox", { name: "Check for updates automatically" })).toBeVisible();
+  await expect(d.getByRole("button", { name: "Check Now" })).toBeVisible();
+  await expect(d.getByRole("button", { name: "Open GitHub" })).toHaveText("");
+  await expect(d.getByRole("button", { name: "Open GitHub" })).toHaveAttribute("title", "Open GitHub");
+});
+
+test("Settings › Updates › Open GitHub opens the project page (window.open where the opener plugin isn't there)", async ({ page }) => {
+  await page.evaluate(() => {
+    (window as any).__opened = [];
+    window.open = (u?: string | URL) => ((window as any).__opened.push(String(u)), null);
+  });
+  await openSettings(page, "Updates");
+  await dialog(page).getByRole("button", { name: "Open GitHub" }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__opened)).toEqual(["https://github.com/Hkhyyy/qurry"]);
+  await expect(dialog(page)).toBeVisible();
+});
+
+test("Settings › pages tree keys: ↑↓ move, → opens then goes to the first child, ← goes to the parent then closes it, Home / End", async ({ page }) => {
+  await page.keyboard.press("Meta+Comma");
+  const tree = settingsTree(page);
+  await tree.focus();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await expect(settingsRow(page, "Data grid")).toHaveAttribute("aria-selected", "true");
+  await expect(labels(page)).toHaveText(["Alignment", "Status bar"]);
+  // Focused from the keyboard: the ring shows
+  expect(await tree.evaluate((e) => getComputedStyle(e).boxShadow)).not.toBe("none");
+  await page.keyboard.press("ArrowUp");
+  await expect(labels(page)).toHaveText(["Keyword case", "Result tabs"]);
+  await page.keyboard.press("ArrowLeft");
+  await expect(settingsRow(page, "Appearance")).toHaveAttribute("aria-selected", "true");
+  await expect(settingsRow(page, "Appearance")).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("ArrowLeft");
+  await expect(settingsRow(page, "Appearance")).toHaveAttribute("aria-expanded", "false");
+  await expect(rows(page)).toHaveText(["Appearance", "Updates", "Keymap", "Passwords"]);
+  await page.keyboard.press("ArrowRight");
+  await expect(rows(page)).toHaveText(["Appearance", "Console", "Data grid", "Updates", "Keymap", "Passwords"]);
+  await expect(settingsRow(page, "Appearance")).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowRight");
+  await expect(settingsRow(page, "Console")).toHaveAttribute("aria-selected", "true");
+  await expect(labels(page)).toHaveText(["Keyword case", "Result tabs"]);
+  await page.keyboard.press("End");
+  await expect(settingsRow(page, "Passwords")).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Home");
+  await expect(settingsRow(page, "Appearance")).toHaveAttribute("aria-selected", "true");
+  // The keys stay in the tree (the dialog and the focus with it); ⎋ closes the dialog
+  await expect(tree).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+});
+
+test("Settings opens on the last page used: Keyword case set to UPPER on Console, after a restart Settings opens on Console", async ({ page }) => {
+  await openSettings(page, "Console");
+  await dialog(page).getByRole("combobox", { name: "Keyword case" }).selectOption("upper");
+  await page.keyboard.press("Escape");
+  await page.reload();
+  await expect(treeItem(page, "users").first()).toBeVisible();
+  await page.keyboard.press("Meta+Comma");
+  await expect(settingsRow(page, "Console")).toHaveAttribute("aria-selected", "true");
+  await expect(dialog(page).getByRole("combobox", { name: "Keyword case" })).toHaveValue("upper");
 });

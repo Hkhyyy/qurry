@@ -1,5 +1,5 @@
 //! The status line's items for the focused grid (#132): which are on (settings.json "statusBarItems", shared with the GUI's status
-//! bar and Settings › Appearance) and what they say (qurry_shared::statusbar, the GUI's words). The TUI's selection is the marked rows
+//! bar and Settings › Appearance › Data grid) and what they say (qurry_shared::statusbar, the GUI's words). The TUI's selection is the marked rows
 //! (m) with the cursor's column, or a ⇧-arrow range; with neither, the cursor's cell
 use super::*;
 use qurry_core::editable::{ColumnEdit, Editable};
@@ -60,7 +60,7 @@ impl App {
         }
         let Some(tab) = self.tabs.get(self.active) else { return vec![] };
         let (grid, table) = match &tab.kind {
-            TabKind::Console(c) => (c.grid.as_ref(), None),
+            TabKind::Console(c) => (c.grid(), None),
             TabKind::Table(t) => (t.grid.as_ref(), Some((t.schema.clone(), t.table.clone()))),
             TabKind::Dba(d) => (d.grid.as_ref(), None),
             _ => return vec![],

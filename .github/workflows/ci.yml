@@ -1,8 +1,8 @@
 # Run tests on every PR. Don't merge if they fail.
-# Rust: unit tests + integration tests (#[ignore]) against real DBs (PostgreSQL / MySQL / Redis service containers),
-#   including the per-backend matrix in crates/core/tests/backend_matrix.rs.
+# Rust: clippy, unit tests + integration tests (#[ignore]) against real DBs (PostgreSQL / MySQL / Redis containers),
+#   including the per-backend matrix in crates/core/tests/backend_matrix.rs and the TUI and MCP real-server tests.
 #   SSL·TLS·Sentinel·Cluster·SSH tunnel tests are left out since they need separate servers.
-#   The GUI (src-tauri) needs webkit on Linux, so it's checked by the Release (macOS) build.
+#   The GUI (src-tauri) needs webkit on Linux, so it's built by the Release (macOS) build and left out of clippy here.
 # Web: vitest + tsc/vite build. E2E: Playwright against the mock app, two shards per browser and one summary check per browser.
 # A docs-only pull request (docs/**, *.md) skips the Rust and e2e jobs; their checks still report (see the changes job).
 # Known vulnerabilities in the dependencies: audit.yml. Actions pinned to the same commit SHAs as release.yml.
@@ -25,8 +25,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Whether the pull request changes more than docs: every changed file under docs/ or a .md file (but SECURITY.md, which a Rust test
-  # reads) skips rust, compat and e2e. A skipped job reports as passing, so the required checks (rust, web) don't wait. Pushes to main
+  # Whether the pull request changes more than docs: every changed file under docs/ or a .md file (but docs/release-signing.md, which a
+  # Rust test reads) skips rust, compat and e2e. A skipped job reports as passing, so the required checks (rust, web) don't wait. Pushes to main
   # and manual runs always run everything
   changes:
     runs-on: ubuntu-latest
@@ -44,11 +44,11 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           if [ "$EVENT" != pull_request ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-          # --no-renames: a moved file lists its old path too (SECURITY.md moved into docs/, or code renamed to .md, is a code change)
+          # --no-renames: a moved file lists its old path too (docs/release-signing.md moved elsewhere, or code renamed to .md, is a code change)
           files=$(git diff --name-only --no-renames HEAD^1 HEAD)
           printf '%s\n' "$files"
           # An empty list (nothing to compare) counts as code too
-          code=$(printf '%s\n' "$files" | awk '$0 == "SECURITY.md" || ($0 !~ /^docs\// && $0 !~ /\.md$/) { c = 1 } END { print c ? "true" : "false" }')
+          code=$(printf '%s\n' "$files" | awk '$0 == "docs/release-signing.md" || ($0 !~ /^docs\// && $0 !~ /\.md$/) { c = 1 } END { print c ? "true" : "false" }')
           echo "code=$code" >> "$GITHUB_OUTPUT"
           [ "$code" = true ] || echo "::notice::Docs-only change: rust, compat and e2e are skipped"
 
@@ -58,13 +58,7 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     services:
-      postgres:
-        # PG 16 with pgvector (similar-row search tests)
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports: ["5432:5432"]
-        options: --health-cmd "pg_isready -U postgres" --health-interval 2s --health-retries 30
+      # PostgreSQL is started in a step (Start PostgreSQL): it needs a command line, which a service can't take
       mysql:
         image: mysql:8.4
         env:
@@ -104,7 +98,11 @@ jobs:
           persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
 
+      # Caches the root workspace only. drivers/sqlite (its own workspace) builds into the same target directory, and listing it
+      # here too would make the save step keep only one workspace's dependencies; its few crates rebuild each run instead
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       # qurry-shared is built to WASM for the GUI and holds the read-only checks: it must not pull in a runtime or a DB client
@@ -119,15 +117,44 @@ jobs:
             exit 1
           fi
 
+      # PG 16 with pgvector (similar-row search tests) and pg_stat_statements preloaded, counting nested statements too (the MCP
+      # pg_dba_erd_explain test's slow_queries and EXPLAIN ANALYZE checks). Comes up while building; see Wait for PostgreSQL.
+      # pg_isready over TCP: during initdb the server listens on its socket only, then restarts
+      - name: Start PostgreSQL
+        run: >-
+          docker run -d --name postgres -p 5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres" --health-interval 2s --health-retries 30
+          pgvector/pgvector:pg16 postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all
+
       # Milvus standalone needs a run command, so start it directly instead of as a service (comes up while building)
       - name: Start Milvus
         run: docker run -d --name milvus -p 19530:19530 -e ETCD_USE_EMBED=true -e ETCD_DATA_DIR=/var/lib/milvus/etcd -e COMMON_STORAGETYPE=local -e DEPLOY_MODE=STANDALONE milvusdb/milvus:v2.5.4 milvus run standalone
 
       - name: Build drivers (plugin tests run against them)
-        run: cargo build --locked -p qurry-driver-sqlite -p qurry-driver-duckdb -p qurry-driver-clickhouse -p qurry-driver-mongodb -p qurry-driver-qdrant -p qurry-driver-chroma -p qurry-driver-milvus
+        # SQLite is its own workspace (see drivers/sqlite/Cargo.toml); --target-dir puts it in target/debug, where the tests find it.
+        # The SQLite tests skip without the binary, so its absence fails here instead
+        run: |
+          cargo build --locked -p qurry-driver-duckdb -p qurry-driver-clickhouse -p qurry-driver-mongodb -p qurry-driver-qdrant -p qurry-driver-chroma -p qurry-driver-milvus
+          cargo build --locked --manifest-path drivers/sqlite/Cargo.toml --target-dir target
+          test -x target/debug/qurry-driver-sqlite || { echo "::error::target/debug/qurry-driver-sqlite is missing: the SQLite driver tests would skip"; exit 1; }
+
+      # The GUI crate (qurry) needs webkit on Linux, which this job doesn't install: run `cargo clippy -p qurry --all-targets` on macOS.
+      # drivers/sqlite is its own workspace, so it's checked on its own
+      - name: Clippy
+        run: |
+          fix="run the same command locally and fix what it lists (an #[allow(...)] only with a one-line reason, never crate-wide)"
+          cargo clippy --locked --workspace --exclude qurry --all-targets -- -D warnings || { echo "::error::clippy warnings in the workspace: $fix"; exit 1; }
+          cargo clippy --locked --manifest-path drivers/sqlite/Cargo.toml --target-dir target --all-targets -- -D warnings || { echo "::error::clippy warnings in drivers/sqlite: $fix"; exit 1; }
 
       - name: Wait for Milvus
         run: for _ in $(seq 1 90); do curl -sf -XPOST localhost:19530/v2/vectordb/collections/list -d '{}' | grep -q '"code":0' && break; sleep 2; done
+
+      - name: Wait for PostgreSQL
+        run: |
+          for _ in $(seq 1 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' postgres)" = healthy ] && exit 0; sleep 2; done
+          docker logs postgres 2>&1 | tail -50
+          echo "::error::PostgreSQL didn't become healthy: its log is above"
+          exit 1
 
       - name: Unit tests
         run: cargo test --locked -p qurry-core -p qurry-tui -p qurry-mcp -p qurry-shared -p qurry-shared-wasm
@@ -145,6 +172,25 @@ jobs:
           QURRY_TEST_CHROMA: "localhost:18000:::default_database"
           QURRY_TEST_MILVUS: "localhost:19530:::default"
         run: cargo test --locked -p qurry-core -- --ignored --skip ssl --skip tls --skip sentinel --skip cluster --skip ssh_tunnel
+
+      # A step of its own: core's --skip tls would also skip the TUI tls_optin tests, which run against the plain PostgreSQL above.
+      # Left out: query_recovers_from_a_dead_ssm_tunnel (needs the AWS SSM plugin and changes PATH),
+      # dba_database_picker_when_the_database_refuses (needs QURRY_TEST_PG_REFUSED, a server that refuses the database: none here),
+      # the generators (parity_dump, kit_snapshots: they write goldens and Storybook screens) and the benches (perf_*, key_dispatch_bench).
+      # mysql_backup_leaves_out_definers_when_asked runs only with mysqldump in PATH; the runner has none, so it returns
+      - name: Integration tests (TUI, MCP)
+        env:
+          # Tests use USER as the PG user
+          USER: postgres
+          QURRY_TEST_PG: localhost:5432:postgres:postgres
+          QURRY_TEST_MY: localhost:13306:root:dbtool:shop
+          QURRY_TEST_REDIS: localhost:16379
+          QURRY_TEST_CH: localhost:18123:qurry:pw:default
+          QURRY_TEST_MONGO: localhost:17017:qurry:pw:qurrytest
+          QURRY_TEST_QDRANT: "localhost:16333:::qdrant"
+          QURRY_TEST_CHROMA: "localhost:18000:::default_database"
+          QURRY_TEST_MILVUS: "localhost:19530:::default"
+        run: cargo test --locked -p qurry-mcp -p qurry-tui -- --ignored --skip query_recovers --skip parity_dump --skip kit_snapshots --skip perf --skip key_dispatch_bench --skip dba_database_picker_when_the_database_refuses
 
   # Older server versions: whether most features work (latest versions are in the rust job above)
   compat:

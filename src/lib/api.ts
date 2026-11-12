@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { sharedOr, type Align, type Alignments, type KeywordCase, type StatusItemId, type ValueClass } from "./shared";
 import type { DataFormat } from "./transfer";
 import type { CustomTheme, ThemeSettings, ThemeSync } from "./theme";
@@ -181,6 +182,9 @@ export interface UpdateInfo {
 /** Whether this is a release URL of this repo (current name · old name). The update window opens only these (even if the cache in the config folder changes) */
 export const isReleaseUrl = (u: string) => /^https:\/\/github\.com\/Hkhyyy\/(qurry|dbtool)\/releases(\/|$)/.test(u);
 
+/** Opens a web address in the browser (window.open where the opener plugin isn't there: the mock, Storybook) */
+export const openExternal = (url: string) => void openUrl(url).catch(() => window.open(url, "_blank"));
+
 /** Automatic new-version check (at startup + every hour; turn off in Settings) */
 const UPDATE_PREF = "dbtool.updateCheck";
 export const updateCheckEnabled = () => {
@@ -229,6 +233,9 @@ export const api = {
   /** Keyword case as you type and in Reformat Code (settings.json, shared with the TUI) */
   keywordCase: () => invoke<KeywordCase>("keyword_case"),
   setKeywordCase: (keywordCase: KeywordCase) => invoke<void>("set_keyword_case", { case: keywordCase }),
+  /** Result tabs kept per console (settings.json, shared with the TUI) */
+  resultTabs: () => invoke<number>("result_tabs"),
+  setResultTabs: (n: number) => invoke<void>("set_result_tabs", { n }),
   /** Theme pick, Sync with OS and custom themes, shared with the TUI (settings.json) */
   themeSettings: () => invoke<ThemeSettings>("theme_settings"),
   setTheme: (id: string) => invoke<void>("set_theme", { id }),
@@ -246,6 +253,8 @@ export const api = {
   resetColumnWidths: (table: TableRef) => invoke<void>("reset_column_widths", { table }),
   /** Download the new version, swap it in, and restart the app (progress via the "update-progress" event) */
   installUpdate: () => invoke<void>("install_update"),
+  /** Help › Show Log: reveals the log file in Finder (its folder until the file exists) */
+  showLog: () => invoke<void>("show_log"),
   /** Open tabs·splits (restored on restart) */
   loadWorkspace: () => invoke<unknown>("load_workspace"),
   saveWorkspace: (ws: unknown) => invoke<void>("save_workspace", { ws }),
@@ -502,8 +511,9 @@ export const meta = {
   warmSearchCache: (id: string) => invoke<void>("warm_search_cache", { id }),
   fullTextSearch: (id: string, req: FtsRequest) => invoke<FtsHit[]>("full_text_search", { id, req }),
 };
-/** Redis default DB name: "" / "3" / "db3" → "db3" */
-export const redisDb = (database?: string | null) => `db${String(database ?? "").replace(/^db/, "").trim() || "0"}`;
+/** Redis DB name: "" / "3" / "db3" → "db3" (qurry_shared::kind::default_db; before the module has loaded, a rough copy) */
+export const redisDb = (database?: string | null) =>
+  sharedOr(`db${String(database ?? "").trim().replace(/^db/, "") || "0"}`, (s) => s.defaultDb("redis", database ?? ""));
 export interface RedisKeyRow { key: string; type: string; ttl: number }
 export interface RedisKeyDetail { type: string; ttl: number; length: number; memory: number | null; encoding: string | null; value: unknown; truncated: boolean }
 export type RedisReply = null | number | string | boolean | { status: string } | RedisReply[];
@@ -557,6 +567,7 @@ export const COLOR_PRESETS: { name: string; value: string | null }[] = [
   { name: "Gray", value: "#45474d" },
 ];
 
+/** A new data source's port (qurry_shared::kind::DbKind::default_port; read synchronously by the dialog, so a copy: defaultDb.test.ts pins it) */
 export const DEFAULT_PORT: Record<DbKind, number> = { postgres: 5432, mysql: 3306, redis: 6379, sqlite: 0, duckdb: 0, mssql: 1433, clickhouse: 8123, mongodb: 27017, oracle: 1521, qdrant: 6333, chroma: 8000, milvus: 19530 };
 export const KIND_LABEL: Record<DbKind, string> = {
   postgres: "PostgreSQL",
@@ -682,8 +693,11 @@ export function dbVisible(scope: Scope | undefined, db: string, defaultDb: strin
   return d.includes(SCOPE_ALL) || d.includes(db) || (d.includes(SCOPE_DEFAULT) && db === defaultDb);
 }
 
-/** The database a target without "::db" connects to (PostgreSQL: postgres when blank; MySQL: none, all schemas) */
-export const defaultDbOf = (c: Pick<ConnectionView, "database" | "kind">) => c.database || (c.kind === "postgres" ? "postgres" : "");
+/** The database a target without "::db" connects to (qurry_shared::kind::default_db: PostgreSQL postgres when blank, MySQL none, Redis db<n>,
+ *  file DBs main). Before the module has loaded, or if it failed, the PostgreSQL rule only: the tree and tabs call this while they
+ *  draw, which must not throw */
+export const defaultDbOf = (c: Pick<ConnectionView, "database" | "kind">) =>
+  sharedOr(c.database || (c.kind === "postgres" ? "postgres" : ""), (s) => s.defaultDb(c.kind, c.database ?? ""));
 
 const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
 /** A system database the explorer hides unless asked (MySQL's system schemas) */

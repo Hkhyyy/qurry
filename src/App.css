@@ -235,9 +235,10 @@ button.small { padding: 1px 8px; font-size: 12px; font-weight: 400; }
 .grid-toolbar .sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
 .grid-toolbar .muted { margin-left: 8px; }
 .grid-loading { position: sticky; left: 0; bottom: 0; padding: 4px 12px; color: var(--muted); background: var(--panel); font-size: 12px; }
-/* A failed load-more beside the row count: it covers no row */
-.grid-more-error { margin-left: 8px; min-width: 0; color: var(--danger); user-select: text; }
-.sql-preview { max-height: 360px; color: var(--c-cf8e6d); }
+/* A failed load-more below the rows (it covers none), the whole reason beside Run again */
+.grid-more-error-row { flex: none; display: flex; align-items: center; gap: 8px; margin: 4px; }
+.grid-more-error { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: text; }
+.sql-preview { max-height: 360px; }
 input:disabled, select:disabled { opacity: .45; }
 .ssh-badge { flex: none; font-size: 9px; font-weight: 700; padding: 0 4px; border-radius: 3px; border: 1px solid var(--c-8a8d93); color: var(--c-c9ccd1); }
 .ic-db { color: var(--c-6fb3d2); }
@@ -358,7 +359,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .speed-search { position: sticky; top: 0; z-index: 5; margin: 0 6px 2px; padding: 2px 8px; background: var(--c-2e436e); color: var(--c-fff); border-radius: 4px; font-size: 12px; }
 .quick-doc { width: 640px; max-height: 70vh; display: flex; flex-direction: column; background: var(--c-2b2d30); border: 1px solid var(--c-4e5157); border-radius: 8px; box-shadow: 0 12px 36px rgba(0,0,0,.55); outline: none; }
 .qd-title { padding: 10px 14px; font-weight: 600; border-bottom: 1px solid var(--c-393b40); }
-.qd-body { border: none; border-radius: 0; color: var(--c-cf8e6d); }
+.qd-body { border: none; border-radius: 0; }
 .ddl-layer { flex-direction: column; }
 .ddl-editor { flex: 1; min-height: 0; position: relative; }
 /* DDL → Structure: sections of small tables, scrolling in the same box as the SQL editor */
@@ -438,13 +439,19 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .settings-nav { flex: none; width: 150px; border-right: 1px solid var(--ui-border); padding-right: var(--ui-sp-3); }
 .settings-form { flex: 1; min-width: 0; overflow: auto; }
 .settings-form .ui-field { grid-template-columns: 108px 1fr; }
+/* Settings' pages tree (DataGrip): one focusable tree, the rows are TreeRows */
+.settings-tree { display: flex; flex-direction: column; outline: none; }
+.settings-tree:focus-visible { box-shadow: 0 0 0 2px var(--ui-accent); border-radius: var(--ui-radius-sm); }
+/* Settings › Updates › Open GitHub: a square icon button */
+.settings-github { display: inline-flex; align-items: center; justify-content: center; width: var(--ui-h-sm); padding: 0; }
+.settings-github svg { display: block; flex: none; }
 /* Settings › Editor / Grid font family (FontPicker): a select-looking field and its drop-down list with search */
 .font-picker { flex: 1; padding-right: var(--ui-sp-2); min-width: 0; display: flex; align-items: center; gap: var(--ui-sp-2); text-align: left; cursor: default; }
 .font-picker-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .font-picker-note { flex: none; font-size: var(--ui-fs-sm); color: var(--ui-warn); }
 .font-picker-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--ui-sp-3); }
 .font-picker-arrow { flex: none; display: flex; margin: 0 -4px 0 auto; color: var(--ui-text-muted); }
-/* Settings › Appearance › Alignment: one row per value class; a changed class in the keymap editor's "custom" color */
+/* Settings › Appearance › Data grid › Alignment: one row per value class; a changed class in the keymap editor's "custom" color */
 .align-grid { display: grid; grid-template-columns: 110px 120px; gap: var(--ui-sp-2) var(--ui-sp-3); align-items: center; }
 .align-label { font-size: var(--ui-fs-sm); }
 .align-label.custom { color: var(--ok); }

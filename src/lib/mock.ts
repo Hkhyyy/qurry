@@ -8,10 +8,18 @@ const conns = [
   { id: "prod", name: "[PROD] shop_app", kind: "postgres", host: "prod-db", port: 5432, user: "app", database: "shop_app", color: "#6e2a2a", hasPassword: true, connected: false, options: { confirmChanges: true },
     ssh: { enabled: true, host: "bastion.example.com", port: 22, user: "ec2-user", auth: "key", keyPath: "~/.ssh/id_ed25519" } },
   { id: "my", name: "[MySQL] shop", kind: "mysql", host: "127.0.0.1", port: 13306, user: "root", database: "shop", color: "#22524f", hasPassword: true, connected: true, options: { confirmChanges: true } },
-  { id: "rd", name: "[Redis] cache", kind: "redis", host: "127.0.0.1", port: 16379, user: "", database: "0", color: "#6e2a2a", hasPassword: false, connected: true },
+  // window.__mockRedisDb (set before load): [Redis] cache's Database field
+  { id: "rd", name: "[Redis] cache", kind: "redis", host: "127.0.0.1", port: 16379, user: "", database: (globalThis as any).__mockRedisDb ?? "0", color: "#6e2a2a", hasPassword: false, connected: true },
   { id: "local", name: "[LOCAL] TestServer", kind: "postgres", host: "localhost", port: 5432, user: "dev", database: "", color: null, hasPassword: false, connected: false },
   // A remote server without TLS: connects only after allow_plaintext. window.__mockLanProd (set before load) makes it Production
   { id: "lan", name: "LAN dev", kind: "postgres", host: "10.0.0.12", port: 5432, user: "dev", database: "lan_app", color: null, hasPassword: true, connected: false, options: { confirmChanges: !!(globalThis as any).__mockLanProd, allowPlaintext: false } },
+  // Driver sources, only with window.__mockDrivers (set before load): the other tests' lists stay as they are
+  ...((globalThis as any).__mockDrivers
+    ? [
+        { id: "lite", name: "[SQLite] app", kind: "sqlite", host: "", port: 0, user: "", database: "/tmp/app.db", color: null, hasPassword: false, connected: true },
+        { id: "ms", name: "[MSSQL] erp", kind: "mssql", host: "127.0.0.1", port: 1433, user: "sa", database: "erp", color: null, hasPassword: true, connected: true },
+      ]
+    : []),
 ];
 // The core's NEEDS_TLS for PostgreSQL (qurry_shared::errors::needs_tls_pg); the GUI recognises it through wasm tlsOptIn
 const NEEDS_TLS =
@@ -121,6 +129,8 @@ const checkTheme = (t: any) => {
 };
 /** settings.json "keywordCase" (kept across a reload, as the file is) */
 let keywordCase = localStorage.getItem("mock-keywordCase") ?? "off";
+/** settings.json "resultTabs" (kept across a reload, as the file is) */
+let resultTabs = Number(localStorage.getItem("mock-resultTabs") ?? 10);
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
 let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
 /** settings.json "statusBarItems" (kept across a reload, as the file is; read on each call, so a test can change it as the TUI would).
@@ -195,9 +205,9 @@ export function importPlan(from: string, path: string) {
   return { title: "Import Data Sources", message: `Import these data sources from ${from}?\n${shown}\n\n5 to add, 2 skipped. ${IMPORT_NOTE}`, rows, importable: 5 };
 }
 
-/** [Redis] cache's keys: db0 (the default) and db3 */
+/** [Redis] cache's keys: db0 and db3 (a target without "::db" is on the source's Database) */
 const redisKeys = (id: string) =>
-  String(id).endsWith("::db3")
+  (String(id).split("::")[1] ?? `db${conns.find((c) => c.id === "rd")?.database}`) === "db3"
     ? [
         { key: "jobs:1", type: "hash", ttl: -1 },
         { key: "jobs:2", type: "hash", ttl: 600_000 },
@@ -390,7 +400,9 @@ const handlers: Record<string, (a: any) => unknown> = {
       : [{ value: "k0", count: 15 }, { value: "k1", count: 15 }],
   // A statement on no_such_table fails (console gutter marks) at its position, as PostgreSQL says it (qurry_shared::errors::with_position)
   run_query: (a: any) =>
-    /\bno_such_table\b/i.test(a.sql) ? Promise.reject(`ERROR: relation "no_such_table" does not exist (position ${[...a.sql.slice(0, a.sql.search(/\bno_such_table\b/i))].length + 1})`) : (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN/i.test(a.sql)
+    // Each statement as it was sent (e2e reads it)
+    (((window as any).__mockRan ??= []).push(a.sql),
+    /\bno_such_table\b/i.test(a.sql) ? Promise.reject(`ERROR: relation "no_such_table" does not exist (position ${[...a.sql.slice(0, a.sql.search(/\bno_such_table\b/i))].length + 1})`) : (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN \(FORMAT JSON/i.test(a.sql)
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }
       : /^\s*(insert|update|delete)/i.test(a.sql)
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
@@ -404,7 +416,7 @@ const handlers: Record<string, (a: any) => unknown> = {
           ? { ...payments, inTransaction: (globalThis as any).__mockManual === true }
           : /\bvoc\b[\s\S]*\bjoin\b/i.test(a.sql)
           ? { ...vocJoin, inTransaction: (globalThis as any).__mockManual === true }
-          : { ...(usersLimit(a.sql) ?? { ...result, ...consoleEdit(a.sql) }), inTransaction: (globalThis as any).__mockManual === true }),
+          : { ...(usersLimit(a.sql) ?? { ...result, ...consoleEdit(a.sql) }), inTransaction: (globalThis as any).__mockManual === true })),
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
   commit_tx: () => {
@@ -509,7 +521,9 @@ const handlers: Record<string, (a: any) => unknown> = {
   close_session: () => null,
   // A console in Manual mode keeps them pending (tx_state)
   // As the core: what ran goes into the query history
+  // window.__mockSubmitted: every statement Submit sent, in order (e2e)
   submit_edits: (a: any) => {
+    ((globalThis as any).__mockSubmitted ??= []).push(...a.statements);
     const [connId, database] = String(a.id).split("::");
     for (const sql of a.statements) historyAdded.unshift({ id: `ha${historyAdded.length}`, connId, database: database || undefined, sql, ts: Date.now() });
     return { rows: a.statements.length };
@@ -541,7 +555,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   dba_report: (a: any) =>
     (((globalThis as any).__mockDbaTargets ??= []).push(a.id),
     (globalThis as any).__mockDbRefuse && String(a.id).endsWith(`::${(globalThis as any).__mockDbRefuse}`)
-      ? Promise.reject(`Couldn't connect to database ${(globalThis as any).__mockDbRefuse}. Pick another database for this report (GUI: the database list in its toolbar · TUI: d).\n(permission denied for database "${(globalThis as any).__mockDbRefuse}")`)
+      ? Promise.reject(`Couldn't connect to database ${(globalThis as any).__mockDbRefuse}. Pick another database for this report (GUI: the database list in its toolbar · TUI: the report's database list).\n(permission denied for database "${(globalThis as any).__mockDbRefuse}")`)
       : a.report === "table_sizes"
       ? new Promise((ok) => setTimeout(() => ok(tableSizes(a.id)), 2000))
       : a.report === "roles"
@@ -734,6 +748,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     return { added: n, updated: 0, message: `Imported ${n} data source${n === 1 ? "" : "s"} — passwords are asked on the first connect` };
   },
   save_keymap: () => null,
+  show_log: () => null,
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
   update_channel: () => updateChannel,
   // Fonts that ship with macOS (the specs run as on macOS), one of them proportional
@@ -806,6 +821,12 @@ const handlers: Record<string, (a: any) => unknown> = {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
     keywordCase = a.case;
     localStorage.setItem("mock-keywordCase", a.case);
+  },
+  result_tabs: () => resultTabs,
+  set_result_tabs: (a: any) => {
+    if (!(a.n >= 1)) throw "Enter 1 or more.";
+    resultTabs = a.n;
+    localStorage.setItem("mock-resultTabs", String(a.n));
   },
   grid_align: () => gridAlign,
   set_grid_align: (a: any) => {

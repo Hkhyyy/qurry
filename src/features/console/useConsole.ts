@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { analyzePlan, api, auditLog, ConnectionView, dialectOf, DbKind, meta, previewImpact, QueryResult, targetId } from "../../lib/api";
+import { analyzePlan, api, auditLog, ConnectionView, defaultDbOf, dialectOf, DbKind, meta, previewImpact, QueryResult, targetId } from "../../lib/api";
 import { ask, notice } from "../../lib/dialogs";
 import { pushHistory } from "../../components/HistoryDialog";
-import type { OutputLine, ResultEntry } from "../../components/ConsolePane";
+import type { OutputLine } from "../../components/ConsolePane";
+import { ran, type Content, type RunStmt } from "../../lib/resultTabs";
+import { resultTabs } from "../../lib/resultTabsSetting";
 import type { MarkStmt } from "../../lib/stmtMark";
 import { schemaChanged } from "../../components/SchemaTree";
 import { commitNoticeTitle } from "../../lib/commitNotice";
 import { sharedOr } from "../../lib/shared";
 import { cancelTableLoad, loadTableTab } from "../explorer/tableTab";
 import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "../../lib/stmtKind";
+import { explainSql } from "../../lib/explain";
 import { patch, updTab } from "../tabs/ops";
 import { editorApis, setTabs, useTabsStore } from "../tabs/store";
 import type { Tab } from "../tabs/types";
@@ -71,7 +74,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     const c = conns.find((x) => x.id === tab.connId);
     if (!c) return;
     if (tab.inTx && !(await ask("This console has uncommitted changes. Switching the database rolls them back. Continue?", { okLabel: "Switch and Roll Back", danger: true }))) return;
-    const database = db !== (c.database || "postgres") ? db : undefined;
+    const database = db !== defaultDbOf(c) ? db : undefined;
     api.closeSession(tab.id).catch(() => {}); // The next run opens a session on the new DB
     patch(tab.id, { database, target: targetId(c.id, database), schema: undefined, inTx: false });
     setStatus(`Console switched to database ${db}`);
@@ -142,10 +145,15 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     const f = /\bfrom\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)/i.exec(sql);
     return f ? f[1].replace(/"/g, "") : `Result ${n}`;
   };
-  /** `mark`: the gutter marks of the statements (running, then done or failed; none for those after a failure) */
-  const executeConsole = async (tabId: string, stmts: string[], explain?: "plan" | "analyze", mark?: MarkStmt) => {
+  /** `run`: each statement with its place in the script (its result tab follows it: lib/resultTabs). `mark`: the gutter marks of the
+   *  statements (running, then done or failed; none for those after a failure) */
+  const executeConsole = async (tabId: string, run: RunStmt[], explain?: "plan" | "analyze", mark?: MarkStmt) => {
     const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId);
+    const stmts = run.map((r) => r.sql);
     if (!tab || !stmts.length) return;
+    // The script may be edited until the results come (while rows are counted, while it runs): their places follow it (edited)
+    updTab(tabId, (t) => ({ ...t, pending: run }));
+    const drop = () => updTab(tabId, (t) => ({ ...t, pending: undefined }));
     const c = conns.find((x) => x.id === tab.connId);
     const kind = c?.kind ?? "postgres";
     // Confirm dangerous statements (UPDATE/DELETE without WHERE, DROP, TRUNCATE — same rules as the core guard). Not for Explain:
@@ -153,13 +161,31 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     if (!explain) {
       for (const s of stmts) {
         const why = await api.unsafeReason(kind, s).catch(() => null);
-        if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: s.slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return;
+        if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: s.slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return drop();
       }
     }
     // Explain Analyse really runs the statement: PostgreSQL · MySQL roll it back (below), other kinds don't. Ask first when the rollback
     // may not undo it all or nothing does (qurry_shared::guard::explain_analyze_ask, the TUI's rule and words)
     const wraps = kind === "postgres" || kind === "mysql";
-    if (explain === "analyze" && !(await askExplainAnalyze(c?.name, kind, stmts))) return;
+    // Each statement's Explain (qurry_shared::explain, the TUI's): PostgreSQL as JSON for the plan tree, other kinds' rows as a grid.
+    // A kind without it says so in Output and on the statement's mark, and nothing is sent
+    const [analyze, json] = [explain === "analyze", kind === "postgres"];
+    const built = explain ? stmts.map((s) => explainSql(s, kind, analyze, json)) : [];
+    const no = built.findIndex((b) => "err" in b);
+    if (no >= 0) {
+      const err = (built[no] as { err: string }).err;
+      const out = crypto.randomUUID();
+      const ts = nowTs();
+      log(tabId, "sql", `${c?.name ?? ""}> ${stmts[no]}`, out);
+      log(tabId, "error", err);
+      mark?.(no, { state: "error", out, ts, text: err });
+      updTab(tabId, (t) => ({ ...t, activeResult: "output", pending: undefined }));
+      setStatus(err);
+      return;
+    }
+    // What Explain puts before each statement (the error mark below takes it off)
+    const pre = explain ? (explainSql("", kind, analyze, json) as { sql: string }).sql.length : 0;
+    if (explain === "analyze" && !(await askExplainAnalyze(c?.name, kind, stmts))) return drop();
     // Production: for data-changing statements, count the rows that will change, show it and ask (counted with SELECT count(*))
     if (c?.options?.confirmChanges && !explain) {
       // Same check as the TUI (core guard): a write keyword only inside a string or a comment (MySQL # too) doesn't make a read a write
@@ -177,26 +203,32 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
           detail.push({ text: w.replace(/\s+/g, " ").slice(0, 300), value, tone });
         }
         setStatus("Ready");
-        if (!(await ask("These statements change data. Run them?", { title: `Production: ${c.name}`, detail, okLabel: "Run", danger: true }))) return;
+        if (!(await ask("These statements change data. Run them?", { title: `Production: ${c.name}`, detail, okLabel: "Run", danger: true }))) return drop();
       }
     }
-    // Replace unpinned result tabs with the new results
-    // If the result tab being viewed goes away, switch to Output (so the running SQL shows instead of an empty pane)
-    updTab(tabId, (t) => {
-      const results = t.results.filter((r) => r.pinned);
-      return { ...t, running: true, results, cursorEntry: undefined, activeResult: results.some((r) => r.id === t.activeResult) ? t.activeResult : "output" };
-    });
+    // Each statement's result goes to its own tab (lib/resultTabs). While running, Output shows the statements as they run (a pinned
+    // tab being viewed stays)
+    updTab(tabId, (t) => ({ ...t, running: true, cursorEntry: undefined, activeResult: t.results.some((r) => r.id === t.activeResult && r.pinned) ? t.activeResult : "output" }));
     setStatus("Executing…");
-    let n = tab.results.filter((r) => r.pinned).length;
+    const cap = resultTabs();
+    /** Put statement i's result in its tab (shown once the run ends); the entry it went to. `cursor`: the server cursor stays open on it */
+    const toTab = (i: number, content: Content, cursor = false) => {
+      let id = "";
+      updTab(tabId, (t) => {
+        const at = t.pending?.[i] ?? run[i];
+        const s = ran(t, cap, at.stmt, crypto.randomUUID(), content, at.into);
+        id = s.activeResult;
+        return { ...s, activeResult: t.activeResult, cursorEntry: cursor ? id : t.cursorEntry };
+      });
+      return id;
+    };
     let lastActive = "output";
     // Number of changing statements already committed in Auto mode (reported if a later one fails)
     let committed = 0;
     // Statements that ran but whose result the Production log couldn't record (a warning, not a failure: running them again would repeat them)
     let warned = 0;
     for (const [i, sql0] of stmts.entries()) {
-      const isMy = c?.kind === "mysql";
-      const bare = sql0.replace(/;\s*$/, "");
-      const sql = !explain ? sql0 : isMy ? `EXPLAIN ${explain === "analyze" ? "ANALYZE " : ""}${bare}` : `EXPLAIN (FORMAT JSON${explain === "analyze" ? ", ANALYZE, BUFFERS" : ""}) ${bare}`;
+      const sql = explain ? (built[i] as { sql: string }).sql : sql0;
       const out = crypto.randomUUID();
       const ts = nowTs();
       log(tabId, "sql", `${c?.name ?? ""}> ${sql0}`, out);
@@ -230,7 +262,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
           warned++;
           log(tabId, "warn", `Warning: ${r.warning}`);
         }
-        if (explain && !isMy) {
+        if (explain && kind === "postgres") {
           const raw = String(r.rows[0]?.[0] ?? "");
           const plan = await analyzePlan(raw).catch(() => null);
           const pretty = (() => {
@@ -240,14 +272,10 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
               return raw;
             }
           })();
-          const entry: ResultEntry = { id: crypto.randomUUID(), title: resultTitle(sql0, ++n), sql: sql0, kind: "plan", result: null, plan: plan ?? undefined, planJson: pretty, pinned: false };
-          updTab(tabId, (t) => ({ ...t, results: [...t.results, entry] }));
-          lastActive = entry.id;
+          lastActive = toTab(i, { title: resultTitle(sql0, i + 1), sql: sql0, kind: "plan", result: null, plan: plan ?? undefined, planJson: pretty });
           ok(`Plan retrieved in ${r.elapsedMs} ms`);
         } else if (r.hasResultSet) {
-          const entry: ResultEntry = { id: crypto.randomUUID(), title: resultTitle(sql0, ++n), sql: sql0, kind: "result", result: r, pinned: false };
-          updTab(tabId, (t) => ({ ...t, results: [...t.results, entry], cursorEntry: r.truncated ? entry.id : t.cursorEntry }));
-          lastActive = entry.id;
+          lastActive = toTab(i, { title: resultTitle(sql0, i + 1), sql: sql0, kind: "result", result: r }, r.truncated);
           ok(`${r.rows.length}${r.truncated ? "+" : ""} row${r.rows.length === 1 ? "" : "s"} retrieved starting from 1 in ${r.elapsedMs} ms`);
         } else {
           ok(`${r.rowsAffected} row${r.rowsAffected === 1 ? "" : "s"} affected in ${r.elapsedMs} ms`);
@@ -260,25 +288,24 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
       } catch (e) {
         log(tabId, "error", String(e));
         // The server's spot, in the statement's own text (Explain sent it after its EXPLAIN …)
-        const pre = explain ? sql.length - bare.length : 0;
         const pos = sharedOr(undefined, (s) => s.errorPosition(String(e), sql));
         mark?.(i, { state: "error", out, ts, text: sharedOr(String(e), (s) => s.withoutPosition(String(e))), at: pos !== undefined && pos >= pre ? pos - pre : undefined });
         if (committed > 0) log(tabId, "error", `Note: ${committed} earlier statement${committed > 1 ? "s" : ""} of this run ${committed > 1 ? "were" : "was"} already committed (Auto mode) and ${committed > 1 ? "were" : "was"} not rolled back`);
         // Even on error a transaction may be open (e.g. first statement fails in Manual) → sync the Commit/Roll back buttons
         syncTx(tabId);
         // DDL among the earlier statements may already be applied
-        if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
+        if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c ? defaultDbOf(c) : ""));
         lastActive = "output";
-        updTab(tabId, (t) => ({ ...t, running: false, activeResult: "output" }));
+        updTab(tabId, (t) => ({ ...t, running: false, activeResult: "output", pending: undefined }));
         setStatus(mark ? "Query failed: the error is marked in the editor and kept in Output — fix the statement and run it again" : "Query failed (see Output)");
         refresh();
         return;
       }
     }
-    updTab(tabId, (t) => ({ ...t, running: false, activeResult: lastActive, lastSql: stmts[stmts.length - 1] }));
+    updTab(tabId, (t) => ({ ...t, running: false, activeResult: lastActive, lastSql: stmts[stmts.length - 1], pending: undefined }));
     setStatus(`${stmts.length} statement${stmts.length > 1 ? "s" : ""} executed${warned ? ` · ${warned} with a warning (see Output)` : ""}`);
     // If tables or columns were created, altered, or dropped, show it in the explorer right away
-    if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
+    if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c ? defaultDbOf(c) : ""));
     refresh();
   };
 
@@ -293,11 +320,14 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
       updTab(tabId, (t) => ({ ...t, results: t.results.map((r) => (r.id === entryId && r.result ? { ...r, result: { ...r.result, truncated: false } } : r)) }));
       return;
     }
-    const shown = tab.results.find((x) => x.id === entryId)?.result?.rows.length ?? 0;
+    const sent = tab.results.find((x) => x.id === entryId)?.result;
+    const shown = sent?.rows.length ?? 0;
     if (shown >= MAX_ROWS) return setStatus(capMsg(shown));
     updTab(tabId, (t) => ({ ...t, loadingMore: true }));
-    // A run in the tab meanwhile has a result of its own (its cursorEntry): this answer is for the old one, so it is dropped
-    const answer = (f: (t: Tab) => Tab) => updTab(tabId, (t) => (t.cursorEntry === entryId ? f({ ...t, loadingMore: false }) : { ...t, loadingMore: false }));
+    // A run in the tab meanwhile has a result of its own (its cursorEntry), or put a new one in this tab (a rerun keeps the entry's
+    // id): this answer is for the old one, so it is dropped
+    const asked = (t?: Tab) => t?.cursorEntry === entryId && t.results.find((x) => x.id === entryId)?.result === sent;
+    const answer = (f: (t: Tab) => Tab) => updTab(tabId, (t) => (asked(t) ? f({ ...t, loadingMore: false }) : { ...t, loadingMore: false }));
     try {
       const r = await api.fetchMore(tabId);
       answer((t) => ({
@@ -308,7 +338,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     } catch (e) {
       // The result isn't complete: keep its "+" and say in the grid why no more rows came
       const moreError = moreRowsFailed(e);
-      const current = useTabsStore.getState().tabs.find((t) => t.id === tabId)?.cursorEntry === entryId;
+      const current = asked(useTabsStore.getState().tabs.find((t) => t.id === tabId));
       answer((t) => ({ ...t, cursorEntry: undefined, results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: { ...x.result, moreError } } : x)) }));
       if (current) setStatus(moreError);
     }

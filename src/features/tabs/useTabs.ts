@@ -1,4 +1,4 @@
-import { api, ConnectionView } from "../../lib/api";
+import { api, ConnectionView, defaultDbOf } from "../../lib/api";
 import { leaves } from "../../lib/panes";
 import type { EditTarget } from "../../components/ResultGrid";
 import { buildTab, closeTabs, remember } from "./ops";
@@ -23,7 +23,7 @@ export function useTabs({ setStatus, loadStale }: { setStatus: (s: string) => vo
     kind: Tab["kind"],
     opts: { title?: string; sql?: string; database?: string; tableSql?: string; edit?: EditTarget; group?: Group; where?: string; orderBy?: string; objKind?: string; ddlOf?: DdlOf },
   ) => {
-    const database = opts.database && opts.database !== (c.database || "postgres") ? opts.database : undefined;
+    const database = opts.database && opts.database !== defaultDbOf(c) ? opts.database : undefined;
     const base = database ? `${c.name}/${database}` : c.name;
     const n = useTabsStore.getState().tabs.filter((t) => t.kind === "console" && t.connId === c.id && t.database === database).length;
     const ls = leaves(useTabsStore.getState().panes);

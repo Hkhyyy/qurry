@@ -126,7 +126,7 @@ export const RowNumberCell = ({ children, width, selected, title, onMouseDown }:
   </div>
 );
 
-/** Data cell. kind = null (<null> · italic) · num (number color); align = Settings › Appearance › Alignment for its value class */
+/** Data cell. kind = null (<null> · italic) · num (number color); align = Settings › Appearance › Data grid › Alignment for its value class */
 export function GridCell({
   children,
   width,

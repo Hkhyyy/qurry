@@ -10,7 +10,7 @@ const MEMO: &str = "first order after the promotion; the customer asked for a ca
 fn widths(h: &Harness) -> Vec<u16> {
     h.app.tabs.get(h.app.active).and_then(|t| match &t.kind {
         TabKind::Table(tt) => tt.grid.as_ref(),
-        TabKind::Console(c) => c.grid.as_ref(),
+        TabKind::Console(c) => c.grid(),
         _ => None,
     })
     .map(|g| g.widths.clone())

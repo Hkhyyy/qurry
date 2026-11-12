@@ -62,9 +62,11 @@ pub fn on_event(app: &mut App, ev: Event) {
         },
         _ => {}
     }
-    // Gutter marks follow the console's edits (dropped on an edited statement)
-    if let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
+    // Gutter marks follow the console's edits (dropped on an edited statement); result tabs follow its statements and the caret
+    let kind = app.tabs.get(app.active).map(|t| app.kind_of(&t.conn));
+    if let (Some(kind), Some(TabKind::Console(c))) = (kind, app.tabs.get_mut(app.active).map(|t| &mut t.kind)) {
         c.marks.follow(c.editor.lines());
+        c.follow_statements(kind);
     }
     // A confirm that waited for the popup the user was in comes up once that one is closed (quiet, so the closing key doesn't answer it)
     if app.popup.is_none() && !app.waiting.is_empty() {
@@ -140,6 +142,10 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
         // Run key in the explorer = refresh
         if a == Action::Execute && app.focus == Focus::Tree {
             return app.run_action(Action::Refresh);
+        }
+        // Run key in a console's grid whose load failed = its result's statement again (the grid's reason says so)
+        if a == Action::Execute && app.focus == Focus::Grid && app.rerun_result() {
+            return;
         }
         return app.run_action(a);
     }
@@ -404,7 +410,7 @@ mod tests {
         h.table_tab("a", &["id"], &[&["1"]], &["id"]);
         h.table_tab("b", &["id"], &[&["1"]], &["id"]);
         h.app.run_action(Action::SplitDown);
-        let pct = |h: &mut Harness| h.app.panes.pct_mut(&vec![]).map(|p| *p);
+        let pct = |h: &mut Harness| h.app.panes.pct_mut(&[]).map(|p| *p);
         let before = pct(&mut h).unwrap();
         h.app.run_action(Action::SplitGrow);
         assert_eq!(pct(&mut h), Some(before + 5));

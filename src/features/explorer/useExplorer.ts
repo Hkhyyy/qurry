@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, backup, ConnectionView, ddl, dialectOf, meta, redisDb, targetId, VECTOR_KINDS } from "../../lib/api";
+import { api, backup, ConnectionView, ddl, defaultDbOf, dialectOf, meta, redisDb, targetId, VECTOR_KINDS } from "../../lib/api";
 import type { BackupOptions } from "../../lib/api";
 import { ask, askText, notice } from "../../lib/dialogs";
 import { invalidateCompletion } from "../../lib/completion";
@@ -39,7 +39,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
   const curWs = useWorkspacesStore((s) => s.curWs);
   const backupReq = useDialogsStore((s) => s.backupReq);
   const openTable = async (c: ConnectionView, schema: string, table: string, db?: string, objKind?: string) => {
-    const target = targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
+    const target = targetId(c.id, db && db !== defaultDbOf(c) ? db : undefined);
     const existing = useTabsStore.getState().tabs.find((t) => t.kind === "table" && t.target === target && t.edit?.schema === schema && t.edit?.table === table);
     if (existing) return activate(existing);
     return openTableTab(c, schema, table, db, undefined, "", "", objKind);
@@ -47,7 +47,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
 
   /** Open a new table data tab (when duplicated by split, a separate tab with independent filter and sort) */
   const openTableTab = async (c: ConnectionView, schema: string, table: string, db?: string, group?: Group, where = "", orderBy = "", objKind?: string) => {
-    const target = targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
+    const target = targetId(c.id, db && db !== defaultDbOf(c) ? db : undefined);
     const { q } = dialectOf(c.kind);
     let sql = `SELECT * FROM ${q(schema)}.${q(table)}`;
     if (where) sql += ` WHERE ${where}`;
@@ -60,7 +60,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
 
   const openDdl = async (info: NodeInfo) => {
     if (!info.schema || !info.name) return;
-    const target = targetId(info.conn.id, info.db && info.db !== (info.conn.database || "postgres") ? info.db : undefined);
+    const target = targetId(info.conn.id, info.db && info.db !== defaultDbOf(info.conn) ? info.db : undefined);
     const title = `${info.name} [DDL]`;
     const existing = useTabsStore.getState().tabs.find((t) => t.kind === "ddl" && t.target === target && t.title === title);
     if (existing) return activate(existing);
@@ -78,7 +78,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
   /** SQL Generator: build a statement for the selected table and put it in a new console */
   const generate = async (info: NodeInfo, what: "select" | "insert" | "update" | "delete" | "ddl") => {
     if (!info.schema || !info.name) return;
-    const target = targetId(info.conn.id, info.db && info.db !== (info.conn.database || "postgres") ? info.db : undefined);
+    const target = targetId(info.conn.id, info.db && info.db !== defaultDbOf(info.conn) ? info.db : undefined);
     const quoteIdent = dialectOf(info.conn.kind).q;
     const full = `${quoteIdent(info.schema)}.${quoteIdent(info.name)}`;
     try {
@@ -162,7 +162,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
 
   /** DBA report tab (for the same connection target, only switch the report in that tab) */
   const openDba = (c: ConnectionView, db?: string, report = "sessions", title = "Sessions") => {
-    const database = db && db !== (c.database || "postgres") ? db : undefined;
+    const database = db && db !== defaultDbOf(c) ? db : undefined;
     const target = targetId(c.id, database);
     const existing = useTabsStore.getState().tabs.find((t) => t.kind === "dba" && t.target === target);
     if (existing) {
@@ -175,7 +175,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
 
   /** ERD tab: diagram of the schemas' tables and foreign keys (if none, all user schemas of this DB) */
   const openErd = async (c: ConnectionView, db: string | undefined, schemas?: string[]) => {
-    const database = db && db !== (c.database || "postgres") ? db : undefined;
+    const database = db && db !== defaultDbOf(c) ? db : undefined;
     const target = targetId(c.id, database);
     let list = schemas;
     if (!list) {
@@ -222,7 +222,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
   // Force Refresh's line shows the second Refresh key (⌥⇧⌘R) until Force Refresh gets a key of its own
   const forceKey = sk("tree.forceRefresh") ?? (bindings("tree.refresh")[1] ? formatSpec(bindings("tree.refresh")[1]) : undefined);
   // ───────── Backup / restore ─────────
-  const dbTarget = (c: ConnectionView, db?: string) => targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
+  const dbTarget = (c: ConnectionView, db?: string) => targetId(c.id, db && db !== defaultDbOf(c) ? db : undefined);
   const startBackup = async (o: Omit<BackupOptions, "schemas">) => {
     const r0 = backupReq;
     setBackupReq(null);
@@ -243,7 +243,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     const r = await runJob(`Restore into ${where}`, (job) => backup.restore(dbTarget(c, db), clean, job));
     if (r) setStatus(`Restored ${r} into ${where}`);
   };
-  const nodeTarget = (info: NodeInfo) => targetId(info.conn.id, info.db && info.db !== (info.conn.database || "postgres") ? info.db : undefined);
+  const nodeTarget = (info: NodeInfo) => targetId(info.conn.id, info.db && info.db !== defaultDbOf(info.conn) ? info.db : undefined);
   const fqn = (info: NodeInfo) => [info.db, info.schema, info.name].filter(Boolean).join(".") || info.conn.name;
   /** Copy Reference (menu and key, one node or several): schema.name, which a console on that database reads (the TUI's y too) */
   const reference = (info: NodeInfo) => [info.schema, info.name].filter(Boolean).join(".") || info.db || info.conn.name;
@@ -279,7 +279,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     if (info.kind === "conn") return setQuickDoc({ title: info.conn.name, text: `${info.conn.user}@${info.conn.host}:${info.conn.port}${info.conn.database ? "/" + info.conn.database : ""}${info.conn.ssh?.enabled ? `\nvia SSH ${info.conn.ssh.user}@${info.conn.ssh.host}` : ""}${info.conn.ssm?.enabled ? `\nvia AWS SSM ${info.conn.ssm.target}` : ""}` });
     if (!info.schema || !info.name) return setQuickDoc({ title: fqn(info), text: info.kind });
     try {
-      setQuickDoc({ title: fqn(info), text: await ddlText(info) });
+      setQuickDoc({ title: fqn(info), text: await ddlText(info), kind: info.conn.kind });
     } catch (e) {
       setQuickDoc({ title: fqn(info), text: String(e) });
     }
@@ -338,7 +338,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       if (warning) void notice(warning, "Ran, with a warning");
       if (what === "schema" || what === "db") info.refresh?.();
       else info.refreshParent?.();
-      schemaChanged(c.id, info.db ?? (c.database || (c.kind === "postgres" ? "postgres" : "")));
+      schemaChanged(c.id, info.db ?? defaultDbOf(c));
     } catch (e) {
       setStatus(String(e));
     }

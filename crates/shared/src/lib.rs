@@ -8,6 +8,7 @@ pub mod chart;
 pub mod complete;
 pub mod errors;
 pub mod exec;
+pub mod explain;
 pub mod extract;
 pub mod format;
 pub mod fuzzy;

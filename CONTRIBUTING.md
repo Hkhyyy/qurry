@@ -4,6 +4,8 @@ Thanks for helping. Bug reports and feature ideas go in [issues](https://github.
 
 How the code is laid out (core / tui / mcp / drivers / src) and where each config file is written: [Development › Layout](docs/development.md#layout).
 
+Where new code goes, the patterns the code follows and the rules that keep it from adding debt: [ARCHITECTURE.md](ARCHITECTURE.md). Read it before changing code.
+
 ## What belongs in Qurry
 
 Qurry is a free DataGrip alternative: one Rust engine behind a desktop app, a terminal UI and an MCP server, safe to hand to AI tools, small and fast. A feature goes into a milestone only after its issue answers these, and says the outcome: **in**, **in, smaller** (which part), **later**, or **no**.
@@ -101,15 +103,16 @@ Shortcuts are written with the ⌘ ⌥ ⌃ ⇧ glyphs (`⇧⌘A`). After changin
 
 - Commit messages start with the kind of change in brackets, then a short summary: `[feat] Copy a query plan as text`, `[fix] Keep the selection after refresh`. Also used: `[test]`, `[docs]`, `[refactor]`, `[perf]`, `[ci]`, `[chore]`.
 - One topic per commit. Don't commit screenshots, generated files (`src/wasm/pkg`, `storybook-static`) or local config.
-- Pull requests go to `main`. CI runs the Rust tests with the real-server tests, vitest, the web and Storybook builds and Playwright (two shards per browser, one `e2e (<browser>)` check each); it has to pass before a merge. A new push to the pull request cancels the run of the previous one. A pull request that only changes `docs/` or `.md` files (other than `SECURITY.md`) skips the Rust and Playwright jobs; their checks still pass.
+- Demo and test data (mock backend, stories, TUI snapshots, tests, docs, screenshots) use made-up names such as `shop`, `acme`, `app_db` and `db.example.com`, never a real company, host, schema or person.
+- Pull requests go to `main`. CI runs the Rust tests with the real-server tests, vitest, the web and Storybook builds and Playwright (two shards per browser, one `e2e (<browser>)` check each); it has to pass before a merge. A new push to the pull request cancels the run of the previous one. A pull request that only changes `docs/` or `.md` files (other than `docs/release-signing.md`, which a Rust test reads) skips the Rust and Playwright jobs; their checks still pass.
 
 ## Dependencies
 
 Dependabot opens weekly pull requests for Cargo, npm and the GitHub Actions (pinned by commit SHA), minor and patch updates grouped per ecosystem.
 
-The Audit workflow (`.github/workflows/audit.yml`) fails on a known vulnerability in `Cargo.lock` (`cargo deny check advisories`) or in the production npm dependencies (`pnpm audit --prod`). It runs on pull requests that change a lockfile and every week on `main`, so it can fail with nothing changed here. When it does:
+The Audit workflow (`.github/workflows/audit.yml`) fails on a known vulnerability in `Cargo.lock` or `drivers/sqlite/Cargo.lock` (the SQLite driver is its own Cargo workspace; `cargo deny check advisories`) or in the production npm dependencies (`pnpm audit --prod`). It runs on pull requests that change a lockfile and every week on `main`, so it can fail with nothing changed here. When it does:
 
-1. Update the affected package if a fixed version is in range (`cargo update -p <crate>`; for npm, update the package that brings it in, or add an override in `package.json`).
+1. Update the affected package if a fixed version is in range (`cargo update -p <crate>`, for the SQLite driver `cargo update --manifest-path drivers/sqlite/Cargo.toml -p <crate>`; for npm, update the package that brings it in, or add an override in `package.json`).
 2. If it can't be fixed yet, accept it with the reason it can't reach Qurry or why it waits: Rust advisories go in `ignore` in `deny.toml` (`{ id = "RUSTSEC-…", reason = "…" }`), npm ones in `auditConfig.ignoreGhsas` in `pnpm-workspace.yaml` (the GHSA ID with a comment). Remove the entry once the fix is in the lockfile.
 
-Run the checks locally with [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) (`cargo deny check advisories`, the version is in the workflow) and `pnpm audit --prod`.
+Run the checks locally with [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) (`cargo deny check advisories` and `cargo deny --manifest-path drivers/sqlite/Cargo.toml check advisories`, the version is in the workflow) and `pnpm audit --prod`.

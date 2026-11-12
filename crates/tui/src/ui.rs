@@ -285,6 +285,7 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
         *r = Rect::default();
     }
     app.hits.tabs.clear();
+    app.hits.result_tabs.clear();
     app.hits.groups.clear();
     app.hits.splits.clear();
     if app.panes.is_split() {
@@ -515,6 +516,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             f.render_widget(&c.editor, ed);
             // tui-textarea doesn't expose its scroll position → use the cursor cell just drawn
             let drawn = find_caret(f, ed);
+            c.colors.update(&text, kind);
+            draw_sql_colors(f, c, ed, drawn);
             draw_marks(f, c, ed, drawn);
             draw_names(f, c, ed, drawn);
             draw_unbalanced(f, c, ed, drawn, &text, &open);
@@ -529,7 +532,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 app.hits.console = body;
                 app.hits.divider = Rect { x: res.x, y: res.y, width: res.width, height: 1 };
             }
-            if c.show_output || c.grid.is_none() {
+            // The panel's title is the result tab strip: Output, then one tab per statement (click or ⌥. / ⌥, to pick)
+            let tabs_hit = if c.results.grid().is_none() {
                 let lines: Vec<Line> = c
                     .output
                     .iter()
@@ -538,21 +542,28 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     .rev()
                     .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.starts_with(WARNING) { WARN } else if s.contains("> ") { ACCENT } else { Color::Gray })))
                     .collect();
-                let block = panel(format!(" Output ({k_out}: result) "), focus == Focus::Grid);
+                let block = panel("", focus == Focus::Grid);
                 let inner = block.inner(res);
                 let p = Paragraph::new(if lines.is_empty() { vec![Line::styled(format!("Execute a statement ({k_run}) to see the output."), Style::default().fg(DIM))] } else { lines })
                     .wrap(Wrap { trim: false });
                 // A long line wraps onto several rows: scroll so the newest line ends on the bottom row
                 let rows = p.line_count(inner.width).min(u16::MAX as usize) as u16;
                 f.render_widget(p.scroll((rows.saturating_sub(inner.height), 0)).block(block), res);
-            } else if let Some(g) = &mut c.grid {
+                draw_result_strip(f, res, &c.results, format!(" ({k_out}: result) "))
+            } else {
+                let g = c.results.grid().unwrap();
                 let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.pending(), disp("⌃z")) } else { String::new() };
-                let t = format!(" {} — {}{} rows{pend} ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
+                let tail = format!(" — {}{} rows{pend} ({k_out}: output) ", g.rows(), if g.result.truncated { "+" } else { "" });
                 let (res, side) = value_split(res, value_panel);
-                g.render(f, res, t, focus == Focus::Grid, color, &align);
+                let g = c.results.grid_mut().unwrap();
+                g.render(f, res, String::new(), focus == Focus::Grid, color, &align);
                 if let Some(side) = side {
                     g.render_value_panel(f, side, value_keys);
                 }
+                draw_result_strip(f, res, &c.results, tail)
+            };
+            if focused {
+                app.hits.result_tabs = tabs_hit;
             }
             if let (Some((x, y)), Some(cmp)) = (caret, &c.complete) {
                 draw_completion(f, cmp, x, y);
@@ -715,6 +726,55 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
 /// Console cursor cell mark (invisible since underline isn't turned on)
 const CARET_MARK: Color = Color::Rgb(1, 2, 3);
 
+/// The result tab strip over the top border of `area` (result_strip); each label's area and its tab
+fn draw_result_strip(f: &mut Frame, area: Rect, r: &crate::app::Results, tail: String) -> Vec<(Rect, Option<usize>)> {
+    let width = area.width.saturating_sub(2);
+    let (line, hits) = result_strip(r, tail, width);
+    f.buffer_mut().set_line(area.x + 1, area.y, &line, width);
+    hits.into_iter().filter(|&(x, ..)| x < width).map(|(x, w, id)| (Rect { x: area.x + 1 + x, y: area.y, width: w.min(width - x), height: 1 }, id)).collect()
+}
+
+/// The console result panel's title: " Output │ 1: customers │ 2: orders" then `tail`, the shown tab accented, bold and underlined.
+/// Too many for `width`: the leftmost tabs other than the shown one fold into ‹n after Output. With each label's (x, width, tab id)
+fn result_strip(r: &crate::app::Results, tail: String, width: u16) -> (Line<'static>, Vec<(u16, u16, Option<usize>)>) {
+    use unicode_width::UnicodeWidthStr;
+    let mut all: Vec<(String, Option<usize>)> = std::iter::once(("Output".to_string(), None)).chain(r.tabs.iter().map(|t| (t.label(), Some(t.id)))).collect();
+    let sep = " │ ";
+    let total = |all: &[(String, Option<usize>)], hidden: usize| {
+        1 + all.iter().map(|(l, _)| l.width()).sum::<usize>() + sep.width() * (all.len() - 1) + if hidden > 0 { format!("‹{hidden}").width() + sep.width() } else { 0 }
+    };
+    let room = (width as usize).saturating_sub(tail.width());
+    let mut hidden = 0;
+    while total(&all, hidden) > room
+        && let Some(i) = all.iter().skip(1).position(|(_, id)| *id != r.shown).map(|i| i + 1)
+    {
+        all.remove(i);
+        hidden += 1;
+    }
+    let (on, off) = (Style::default().fg(ACCENT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED), Style::default().fg(Color::Gray));
+    let mut spans = vec![Span::raw(" ")];
+    let mut hits = vec![];
+    let mut x = 1u16;
+    for (i, (label, id)) in all.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(sep, Style::default().fg(DIM)));
+            x += sep.width() as u16;
+        }
+        if i == 1 && hidden > 0 {
+            let n = format!("‹{hidden}");
+            x += n.width() as u16 + sep.width() as u16;
+            spans.push(Span::styled(n, off));
+            spans.push(Span::styled(sep, Style::default().fg(DIM)));
+        }
+        let w = label.width() as u16;
+        hits.push((x, w, id));
+        x += w;
+        spans.push(Span::styled(label, if id == r.shown { on } else { off }));
+    }
+    spans.push(Span::styled(tail, off));
+    (Line::from(spans), hits)
+}
+
 /// A grid's area and, with the value panel on and room for both, the panel's on its right (40%; the grid keeps at least 30 columns)
 fn value_split(area: Rect, on: bool) -> (Rect, Option<Rect>) {
     if !on || area.width < 60 {
@@ -734,6 +794,50 @@ fn find_caret(f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
         }
     }
     None
+}
+
+/// The console's SQL colors (Console::colors in kit::sql_style) on the rows on screen, under the marks and underlines drawn after.
+/// Rows and columns are counted from the cursor cell just drawn, as for the gutter marks; a tab spans up to the next stop, as
+/// tui-textarea draws it. Cells with a background (selection, search matches) and the caret's keep their look
+fn draw_sql_colors(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>) {
+    use unicode_width::UnicodeWidthChar;
+    // Each character's byte, display column and width
+    fn cells(l: &str, tab: i64) -> impl Iterator<Item = (usize, i64, i64)> + '_ {
+        let mut col = 0i64;
+        l.char_indices().map(move |(b, ch)| {
+            let w = if ch == '\t' { tab - col % tab } else { ch.width().unwrap_or(0) as i64 };
+            col += w;
+            (b, col - w, w)
+        })
+    }
+    let Some((cx, cy)) = caret else { return };
+    let (lines, (crow, ccol), tab) = (c.editor.lines(), c.editor.cursor(), c.editor.tab_length().max(1) as i64);
+    let cells = |l| cells(l, tab);
+    let top = crow as i64 - (cy as i64 - ed.y as i64 - 1);
+    let caret_col = lines.get(crow).map_or(0, |l| cells(l).nth(ccol).map_or_else(|| cells(l).last().map_or(0, |(_, x, w)| x + w), |(_, x, _)| x));
+    let shift = cx as i64 - caret_col;
+    let (left, right) = (ed.x as i64 + 1, ed.right() as i64 - 1);
+    let buf = f.buffer_mut();
+    for y in ed.y + 1..ed.bottom().saturating_sub(1) {
+        let row = top + (y - ed.y - 1) as i64;
+        let (Some(line), Some(spans)) = (lines.get(row.max(0) as usize).filter(|_| row >= 0), c.colors.rows.get(row.max(0) as usize)) else { continue };
+        let mut spans = spans.iter().peekable();
+        for (b, col, w) in cells(line) {
+            while spans.peek().is_some_and(|s| s.1 <= b) {
+                spans.next();
+            }
+            let Some(style) = spans.peek().filter(|s| s.0 <= b).and_then(|s| sql_style(s.2)) else { continue };
+            for x in (shift + col..shift + col + w).filter(|x| (left..right).contains(x)) {
+                let cell = &mut buf[(x as u16, y)];
+                if cell.bg == Color::Reset && !cell.modifier.contains(Modifier::REVERSED) {
+                    cell.set_style(style);
+                }
+            }
+            if shift + col >= right {
+                break;
+            }
+        }
+    }
 }
 
 /// Gutter marks (✓ done, ✗ failed, … running) in the blank first cell of the line-number column, on each run statement's first line.
@@ -951,8 +1055,10 @@ fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) 
     f.render_widget(List::new(items).block(panel(title, true)).style(Style::default().bg(POPUP_BG)), r);
 }
 
+type Hints = Vec<(String, &'static str)>;
+
 /// Bottom hints: (keys used on this screen, common global keys). Rebindable commands use their first key in the current keymap
-fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'static str)>) {
+fn status_hints(app: &App) -> (Hints, Hints) {
     use crate::app::Action as A;
     let key = |a: A| app.keys.keys(a).first().map(|k| disp(k));
     let fixed = |k: &str, l: &'static str| Some((disp(k), l));
@@ -1152,11 +1258,12 @@ fn job_line(label: &str, (rows, done, total): (u64, u64, u64)) -> String {
     const W: usize = 10;
     // Backup·restore progress in bytes instead of rows
     let n = if rows == 0 && done > 0 { format!("{:.1} MB", done as f64 / 1048576.0) } else { format!("{} rows", crate::transfer::thousands(rows)) };
-    let (bar, pct) = if total > 0 {
-        let pct = (done * 100 / total).min(99) as usize;
-        ("█".repeat(pct * W / 100) + &"░".repeat(W - pct * W / 100), format!(" · {pct}%"))
-    } else {
-        (bounce(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)), String::new())
+    let (bar, pct) = match (done * 100).checked_div(total) {
+        Some(pct) => {
+            let pct = pct.min(99) as usize;
+            ("█".repeat(pct * W / 100) + &"░".repeat(W - pct * W / 100), format!(" · {pct}%"))
+        }
+        None => (bounce(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)), String::new()),
     };
     format!("{label} ▕{bar}▏ {n}{pct}")
 }
@@ -1198,7 +1305,7 @@ fn conn_form_message(form: &crate::app::ConnForm) -> Vec<Line<'static>> {
         (None, Some((ok, m))) => (*ok, disp(m)),
         // A local Host with AWS SSM is the instance itself: a hint, not an error (a database on the instance is fine)
         (None, None) => {
-            let hint = Some(form.value("Host")).filter(|_| form.value("Tunnel") == "aws ssm").and_then(qurry_shared::errors::ssm_local_host);
+            let hint = (form.value("Tunnel") == "aws ssm").then_some(form.value("Host")).and_then(qurry_shared::errors::ssm_local_host);
             return hint.map(|h| vec![Line::styled(h, Style::default().fg(WARN))]).unwrap_or_default();
         }
     };
@@ -1333,10 +1440,10 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let inner = popup(f, r, format!(" Manage Shown Schemas — {name} "));
             f.render_widget(Paragraph::new(lines), inner);
         }
-        Popup::Confirm { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Confirm ", text, key_hints(&[("y / Enter", "yes"), ("n / Esc", "no")])),
+        Popup::Confirm { text, sql, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Confirm ", text, *sql, key_hints(&[("y / Enter", "yes"), ("n / Esc", "no")])),
         Popup::ImportPick(p) => draw_import(f, area, p),
         // Like Confirm, but only y allows (no Enter): the popup opened on its own
-        Popup::AllowPlaintext { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Allow Unencrypted ", text, key_hints(&[("y", "allow"), ("n / Esc", "cancel")])),
+        Popup::AllowPlaintext { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Allow Unencrypted ", text, None, key_hints(&[("y", "allow"), ("n / Esc", "cancel")])),
         Popup::Input { title, body, input, complete, filter, redis, .. } => {
             // The title goes on the border; the body (answers, reasons) in a box below, wrapped, so it isn't cut off
             let body: Vec<Line> = body.lines().map(|l| Line::raw(disp(l))).collect();
@@ -1443,7 +1550,7 @@ fn textarea_scroll(prev: u16, caret: u16, width: u16) -> u16 {
 /// SQL colors over a one-line input's text as drawn in `inner` from column `scroll`: only the color changes (comments italic), and
 /// the caret's cell (character `caret`) keeps the input's look. A tab (pasted) spans up to the next stop of `tab`, as tui-textarea draws it
 fn color_sql(buf: &mut Buffer, inner: Rect, line: &str, caret: usize, scroll: u16, tab: u8, kind: qurry_shared::DbKind) {
-    use qurry_shared::highlight::{Class, highlight};
+    use qurry_shared::highlight::highlight;
     use unicode_width::UnicodeWidthChar;
     let spans = highlight(line, kind);
     let (mut col, mut next) = (0u16, 0);
@@ -1452,14 +1559,7 @@ fn color_sql(buf: &mut Buffer, inner: Rect, line: &str, caret: usize, scroll: u1
         while spans.get(next).is_some_and(|s| s.end <= b) {
             next += 1;
         }
-        let style = match spans.get(next).filter(|s| s.start <= b).map(|s| s.class) {
-            Some(Class::Keyword) => Some(Style::default().fg(JSON_KEYWORD)),
-            Some(Class::Function) => Some(Style::default().fg(C_ROUTINE)),
-            Some(Class::Number) => Some(Style::default().fg(SQL_NUMBER)),
-            Some(Class::String) => Some(Style::default().fg(JSON_STRING)),
-            Some(Class::Comment) => Some(Style::default().fg(SQL_COMMENT).add_modifier(Modifier::ITALIC)),
-            _ => None,
-        };
+        let style = spans.get(next).filter(|s| s.start <= b).and_then(|s| sql_style(s.class));
         if let Some(style) = style.filter(|_| i != caret) {
             for x in (col..col + w).filter(|x| (scroll..scroll + inner.width).contains(x)) {
                 buf[(inner.x + x - scroll, inner.y)].set_style(style);
@@ -1473,13 +1573,21 @@ fn color_sql(buf: &mut Buffer, inner: Rect, line: &str, caret: usize, scroll: u1
 /// In a window too short for all of it, the popup takes the whole height; the first line, the questions (a line ending in "?" or
 /// with a "? " in it), the warnings (⚠) and the keys stay, and the details in between (statements, columns, tables) give way to a line saying how many are
 /// hidden and how many rows they would change. If even that doesn't fit, the keys line says to enlarge the window and the result is
-/// false: y / Enter don't answer a question that isn't on screen
-fn draw_confirm(f: &mut Frame, area: Rect, title: &'static str, text: &str, keys: Line<'static>) -> bool {
+/// false: y / Enter don't answer a question that isn't on screen. With `sql`, the statement lines (two-space indent) are drawn in the
+/// console's SQL colors; the other lines and the line counting stay as they are
+fn draw_confirm(f: &mut Frame, area: Rect, title: &'static str, text: &str, sql: Option<qurry_shared::DbKind>, keys: Line<'static>) -> bool {
     let danger = text.starts_with("Production")
         || text.ends_with("Run it anyway?")
         || text.ends_with("Run them anyway?")
         || text.lines().any(|l| l.starts_with('⚠') && l.contains("Production"));
     let mut lines = confirm_lines(text);
+    if let Some(kind) = sql {
+        for (l, t) in lines.iter_mut().zip(text.lines()) {
+            if t.strip_prefix("  ").is_some_and(|s| !s.starts_with(char::is_whitespace)) {
+                *l = sql_line(t, kind);
+            }
+        }
+    }
     let last = lines.len() - 1;
     lines[last] = keys;
     let keep: Vec<bool> = lines
@@ -1719,7 +1827,7 @@ mod tests {
         let bar = g.hbar;
         assert!(bar.width > 0);
         // A confirm that arrives (or was open) when the window shrinks
-        h.app.popup = Some(crate::app::Popup::Confirm { opened: None, text: "Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        h.app.popup = Some(crate::app::Popup::Confirm { opened: None, sql: None, text: "Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         assert!(h.screen(39, 30).contains("Terminal too small"));
         h.key("Enter");
         h.key("y");
@@ -1822,7 +1930,7 @@ mod tests {
     async fn production_confirm_keeps_its_question_in_small_windows() {
         let mut h = crate::testkit::Harness::new().await;
         let text = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?";
-        h.app.popup = Some(Popup::Confirm { opened: None, text: text.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text: text.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         let s = h.screen(80, 24);
         assert!(s.contains("12,408 rows") && s.contains("Run it?") && !s.contains("hidden"), "{s}");
         // Every row that would change shows, as its own line or in the hidden total
@@ -1834,7 +1942,7 @@ mod tests {
         }
         // One statement at the minimum size: its row count shows
         let one = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n\nRun it?";
-        h.app.popup = Some(Popup::Confirm { opened: None, text: one.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text: one.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         let (w, ht) = MIN_SIZE;
         let s = h.screen(w, ht);
         assert!(s.contains("1 row") && s.contains("Run it?"), "{s}");
@@ -1848,7 +1956,7 @@ mod tests {
         let mut h = crate::testkit::Harness::new().await;
         let lines: Vec<String> = (0..1000).map(|i| format!("  update payment set amount = 0 where id = {i}\n     → 1 row")).collect();
         let text = format!("Production data source \"[PROD] kr\" — this changes data:\n\n{}\n\nRun it?", lines.join("\n"));
-        h.app.popup = Some(Popup::Confirm { opened: None, text, on_yes: Box::new(|_| {}) });
+        h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text, on_yes: Box::new(|_| {}) });
         for (w, ht) in [MIN_SIZE, (80, 24)] {
             let t = std::time::Instant::now();
             let s = h.screen(w, ht);

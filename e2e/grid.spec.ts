@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, editor, expect, menuItem, openApp, openConsole, openInTheme, runAll, spyCancels, test, treeItem, typeSql, work } from "./app";
+import { dialog, editor, expect, menuItem, openApp, openConsole, openInTheme, openSettings, runAll, spyCancels, test, treeItem, typeSql, work } from "./app";
 
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
 /** The mock's created_at alternates no fraction / .5 / .125 */
@@ -94,7 +94,7 @@ test("a load-more that fails keeps its reason in the grid and the result unfinis
   await page.evaluate((w) => ((window as any).__mockFetchMoreError = w), why);
   const scroll = work(page).locator(".grid-scroll").first();
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
-  // The TUI's words (qurry_shared::errors::more_rows_failed), beside the row count (not over the rows), not only in the status bar
+  // The TUI's words (qurry_shared::errors::more_rows_failed), below the rows (not over them), not only in the status bar
   await expect(work(page).locator(".grid-more-error")).toHaveText(`Couldn't load more rows: ${why}`);
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
   // Scrolling on doesn't ask again
@@ -266,11 +266,11 @@ const aligns = (page: Page, col: number) =>
     .locator(".grid-row")
     .evaluateAll((rows, c) => rows.slice(0, 3).map((r) => getComputedStyle(r.querySelectorAll(".cell:not(.rownum)")[c]).textAlign), col);
 
-test("NULL sits where its column's type does by default; Settings › Appearance › Alignment puts it on the right, kept after a reload (#75, #95)", async ({ page }) => {
+test("NULL sits where its column's type does by default; Settings › Appearance › Data grid › Alignment puts it on the right, kept after a reload (#75, #95)", async ({ page }) => {
   // memo (TEXT): "note", <null>, <null>; amount (NUMERIC, arrives as text): a number
   await expect.poll(() => aligns(page, 4)).toEqual(["left", "left", "left"]);
   await expect.poll(() => aligns(page, 2)).toEqual(["right", "right", "right"]);
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Data grid");
   const nul = dialog(page).getByRole("combobox", { name: "NULL alignment" });
   await expect(nul).toHaveValue("column");
   await expect(nul.locator("option")).toHaveText(["Column type", "Left", "Center", "Right"]);
@@ -288,15 +288,15 @@ test("NULL sits where its column's type does by default; Settings › Appearance
   await expect(dialog(page).locator(".align-label.custom")).toHaveText(["NULL"]);
 });
 
-test("Settings › Appearance › Alignment that can't be saved goes back and says so", async ({ page }) => {
+test("Settings › Appearance › Data grid › Alignment that can't be saved goes back and says so", async ({ page }) => {
   await page.evaluate(() => ((window as any).__mockChannelSaveFails = true));
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Data grid");
   await dialog(page).getByRole("combobox", { name: "NULL alignment" }).selectOption("left");
   await expect(dialog(page).getByText(/Couldn't save the alignment \(.*permission denied\)\. It is back to what it was\./)).toBeVisible();
   await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("column");
 });
 
-test("a WebView that refuses WebAssembly: numbers stay on the right and Settings › Alignment says why it can't be changed", async ({ page }) => {
+test("a WebView that refuses WebAssembly: numbers stay on the right and Settings › Appearance › Data grid › Alignment says why it can't be changed", async ({ page }) => {
   await page.route((u) => u.pathname.endsWith(".wasm") && !u.search, (r) => r.abort());
   await openApp(page);
   await treeItem(page, "users").first().dblclick();
@@ -305,15 +305,15 @@ test("a WebView that refuses WebAssembly: numbers stay on the right and Settings
   await expect.poll(() => aligns(page, 0)).toEqual(["right", "right", "right"]);
   await expect.poll(() => aligns(page, 1)).toEqual(["start", "start", "start"]);
   await expect.poll(() => aligns(page, 4)).toEqual(["start", "start", "start"]);
-  await page.keyboard.press("Meta+Comma");
+  await openSettings(page, "Data grid");
   const nul = dialog(page).getByRole("combobox", { name: "NULL alignment" });
   await expect(nul).toBeDisabled();
   await expect(nul).toHaveValue("");
   await expect(dialog(page).getByText("Alignment needs WebAssembly, which this WebView refused")).toBeVisible();
 });
 
-test("Settings › Alignment: clicking a kind's name focuses its own select, not the first one", async ({ page }) => {
-  await page.keyboard.press("Meta+Comma");
+test("Settings › Appearance › Data grid › Alignment: clicking a kind's name focuses its own select, not the first one", async ({ page }) => {
+  await openSettings(page, "Data grid");
   await dialog(page).locator(".align-label", { hasText: "NULL" }).click();
   await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toBeFocused();
   await dialog(page).getByText("Alignment", { exact: true }).click();
@@ -631,4 +631,132 @@ test.describe("multi-range selection (⌘-click)", () => {
     await page.keyboard.press("Meta+V");
     await expect(page.locator(".statusbar")).toContainText("Paste needs one selected range: click a cell to select just it (⌘-click adds cells to the selection)");
   });
+});
+
+// Submit's statements come from qurry_shared::result_edit (the TUI's rules): DELETE, then UPDATE, then INSERT; a new row's cell set to
+// NULL is sent, one never set is left out; an all-default row is DEFAULT VALUES on PostgreSQL and () VALUES () on MySQL (#155)
+const submitted = (page: Page) => page.evaluate(() => ((window as any).__mockSubmitted ?? []) as string[]);
+
+test("Submit on PostgreSQL: the preview lists DELETE, UPDATE, INSERT in that order, and Submit sends them so", async ({ page }) => {
+  const button = (name: RegExp) => work(page).getByRole("button", { name });
+  await work(page).getByRole("gridcell", { name: "user_2", exact: true }).click();
+  await page.keyboard.press("Meta+Alt+KeyN");
+  await work(page).getByRole("rowheader", { name: "1", exact: true }).click();
+  await button(/^Delete Row/).click();
+  await button(/^Add Row/).click();
+  // Scrolling to the new row loads the next rows before it (the view stays): scroll to it again
+  await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows · 3 pending");
+  await work(page).locator(".grid-scroll").first().evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".grid-row.added .cell.sel")).toHaveCount(1);
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Meta+Alt+KeyN");
+  await button(/^Add Row/).click();
+  await button(/^Preview Pending Changes/).click();
+  const want = [
+    "DELETE FROM public.users WHERE id = '1';",
+    "UPDATE public.users SET user_name = NULL WHERE id = '2';",
+    "INSERT INTO public.users (user_name) VALUES (NULL);",
+    "INSERT INTO public.users DEFAULT VALUES;",
+  ];
+  await expect(dialog(page).locator(".sql-preview")).toHaveText(want.join("\n"));
+  // In the console's colors (#161)
+  await expect(dialog(page).locator(".sql-preview .ui-hl-keyword").first()).toHaveText("DELETE");
+  await expect(dialog(page).locator(".sql-preview .ui-hl-string").first()).toHaveText("'1'");
+  await dialog(page).getByRole("button", { name: "Submit", exact: true }).click();
+  await expect.poll(() => submitted(page)).toEqual(want);
+});
+
+test("Submit on MySQL: an empty new row is INSERT INTO … () VALUES (), listed by the Production confirm", async ({ page }) => {
+  // [MySQL] shop (Production) lists its tables after [DEV] shop_app's
+  await treeItem(page, "users").nth(1).dblclick();
+  await expect(page.getByRole("tab", { name: /users/ })).toHaveCount(2);
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  await work(page).getByRole("button", { name: /^Add Row/ }).click();
+  await work(page).getByRole("button", { name: /^Submit/ }).click();
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Production: [MySQL] shop");
+  await expect(dialog(page).locator(".ui-detail-text")).toHaveText(["INSERT INTO shop.users () VALUES ();"]);
+  await dialog(page).getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => submitted(page)).toEqual(["INSERT INTO shop.users () VALUES ();"]);
+});
+
+test("pasted CSV rows: a quoted JSON value loses its CSV quotes, an empty field is NULL and \"\" an empty string (#160)", async ({ page }) => {
+  const text = '10,"{""k"": ""a, b""}",,,\r\n11,,5,,""\r\n';
+  await page.evaluate((t) => (navigator.clipboard.readText = async () => t), text);
+  await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();
+  await work(page).getByRole("button", { name: /^Add Row/ }).click();
+  // Scrolling to the new row loads the next rows before it (the view stays): scroll to it again
+  const scroll = work(page).locator(".grid-scroll").first();
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows · 1 pending");
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".grid-row.added .cell.sel")).toHaveCount(1);
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Meta+V");
+  await work(page).getByRole("button", { name: /^Preview Pending Changes/ }).click();
+  const want = [
+    `INSERT INTO public.users (id, user_name, amount, created_at, memo) VALUES ('10', '{"k": "a, b"}', NULL, NULL, NULL);`,
+    "INSERT INTO public.users (id, user_name, amount, created_at, memo) VALUES ('11', NULL, '5', NULL, '');",
+  ];
+  await expect(dialog(page).locator(".sql-preview")).toHaveText(want.join("\n"));
+  await dialog(page).getByRole("button", { name: "Submit", exact: true }).click();
+  await expect.poll(() => submitted(page)).toEqual(want);
+});
+
+test("one row copied as CSV pastes back as its cells on a new row, its NULL as NULL; a typed `a, b` stays one value (#160)", async ({ page }) => {
+  // Row 2 (memo NULL) copied with the default extractor, CSV: one line, read back as CSV because the grid wrote it
+  await work(page).getByRole("rowheader", { name: "2", exact: true }).click();
+  await page.keyboard.press("Meta+C");
+  await expect.poll(() => clipboard(page)).toBe(`2,user_2,1234.50,${T2},`);
+  await work(page).getByRole("button", { name: /^Add Row/ }).click();
+  const scroll = work(page).locator(".grid-scroll").first();
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows · 1 pending");
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".grid-row.added .cell.sel")).toHaveCount(1);
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Meta+V");
+  // Text the grid didn't copy: one line without a tab is one value
+  await page.evaluate(() => (navigator.clipboard.readText = async () => "a, b"));
+  await scroll.evaluate((el) => (el.scrollTop = 0));
+  await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();
+  await page.keyboard.press("Meta+V");
+  await work(page).getByRole("button", { name: /^Preview Pending Changes/ }).click();
+  await expect(dialog(page).locator(".sql-preview")).toHaveText(
+    [
+      "UPDATE public.users SET user_name = 'a, b' WHERE id = '1';",
+      `INSERT INTO public.users (id, user_name, amount, created_at, memo) VALUES ('2', 'user_2', '1234.50', '${T2}', NULL);`,
+    ].join("\n"),
+  );
+});
+
+test("Clone Row keeps the source's NULL (sent as NULL, not the column default), and a new row's untouched cells stay untouched", async ({ page }) => {
+  // user_2's memo is NULL
+  await work(page).getByRole("gridcell", { name: "user_2", exact: true }).click();
+  await page.keyboard.press("Meta+KeyD");
+  await work(page).getByRole("button", { name: /^Add Row/ }).click();
+  await expect(work(page).locator(".grid-row.added .cell.sel")).toHaveCount(1);
+  await page.keyboard.press("Meta+KeyD");
+  await work(page).getByRole("button", { name: /^Preview Pending Changes/ }).click();
+  await expect(dialog(page).locator(".sql-preview")).toHaveText(
+    [
+      "INSERT INTO public.users (user_name, amount, created_at, memo) VALUES ('user_2', '1234.50', '2026-10-15 12:00:00.5 +09:00', NULL);",
+      "INSERT INTO public.users DEFAULT VALUES;",
+      "INSERT INTO public.users DEFAULT VALUES;",
+    ].join("\n"),
+  );
+});
+
+test("a WebView that refuses WebAssembly: Submit and Preview Pending Changes say why nothing happens", async ({ page }) => {
+  await page.route((u) => u.pathname.endsWith(".wasm") && !u.search, (r) => r.abort());
+  await openApp(page);
+  await treeItem(page, "users").first().dblclick();
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  await work(page).getByRole("button", { name: /^Add Row/ }).click();
+  const why = "Submit needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk";
+  await work(page).getByRole("button", { name: /^Submit/ }).click();
+  await expect(page.locator(".statusbar")).toContainText(why);
+  await work(page).getByRole("button", { name: /^Preview Pending Changes/ }).click();
+  await expect(page.locator(".statusbar")).toContainText(why);
+  await expect(dialog(page)).toHaveCount(0);
+  expect(await submitted(page)).toEqual([]);
 });

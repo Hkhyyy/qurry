@@ -85,7 +85,7 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
         Popup::Note { title, text, back } => {
             app.popup = match k.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1) => Some(match *back {
-                    Popup::Confirm { text, on_yes, .. } => Popup::Confirm { text, on_yes, opened: Some(Instant::now()) },
+                    Popup::Confirm { text, sql, on_yes, .. } => Popup::Confirm { text, sql, on_yes, opened: Some(Instant::now()) },
                     Popup::AllowPlaintext { text, on_yes, .. } => Popup::AllowPlaintext { text, on_yes, opened: Instant::now() },
                     back => back,
                 }),
@@ -93,20 +93,20 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
             };
         }
         // n / Esc always cancel. A confirm that came up on its own (`opened`) takes y / Enter only after a pause, like AllowPlaintext below
-        Popup::Confirm { text, on_yes, opened } => match k.code {
+        Popup::Confirm { text, sql, on_yes, opened } => match k.code {
             KeyCode::Char('n') | KeyCode::Esc => {}
             _ if opened.is_some_and(|t| t.elapsed() < App::TLS_ASK_GRACE) => {
                 if matches!(k.code, KeyCode::Char('y' | 'Y') | KeyCode::Enter) {
                     app.status = TOO_SOON.into();
                 }
-                app.popup = Some(Popup::Confirm { text, on_yes, opened: Some(Instant::now()) })
+                app.popup = Some(Popup::Confirm { text, sql, on_yes, opened: Some(Instant::now()) })
             }
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter if app.hits.confirm_unseen => {
                 app.status = "The window is too small to show the whole question: enlarge it, then answer (n / Esc cancels)".into();
-                app.popup = Some(Popup::Confirm { text, on_yes, opened });
+                app.popup = Some(Popup::Confirm { text, sql, on_yes, opened });
             }
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => on_yes(app),
-            _ => app.popup = Some(Popup::Confirm { text, on_yes, opened: opened.map(|_| Instant::now()) }),
+            _ => app.popup = Some(Popup::Confirm { text, sql, on_yes, opened: opened.map(|_| Instant::now()) }),
         },
         // Only a y after a pause counts: every other key (and any key inside the grace) starts the grace again, so typing that
         // goes on into the popup never allows plaintext. n / Esc cancel at once
@@ -310,12 +310,13 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                             f.value = opts[j].to_string();
                             // Changing the DB type also changes the default port
                             if f.label == "Type" {
-                                const PORTS: &[(&str, &str)] = &[("postgres", "5432"), ("mysql", "3306"), ("redis", "6379"), ("sqlite", "0"), ("duckdb", "0"), ("mssql", "1433"), ("clickhouse", "8123"), ("mongodb", "27017"), ("oracle", "1521"), ("qdrant", "6333"), ("chroma", "8000"), ("milvus", "19530")];
-                                let port = PORTS.iter().find(|x| x.0 == f.value).map(|x| x.1).unwrap_or("5432");
+                                let port_of = |kind: &str| serde_json::from_value::<qurry_core::store::DbKind>(serde_json::Value::String(kind.into())).ok().map(|k| k.default_port().to_string());
+                                let port = port_of(&f.value).unwrap_or_else(|| "5432".into());
+                                let defaults: Vec<String> = opts.iter().filter_map(|o| port_of(o)).collect();
                                 if let Some(p) = form.fields.iter_mut().find(|x| x.label == "Port") {
                                     // Keep a manually changed port; replace it if it was another type's default port
-                                    if p.value.is_empty() || PORTS.iter().any(|x| x.1 == p.value) {
-                                        p.value = port.into();
+                                    if p.value.is_empty() || defaults.contains(&p.value) {
+                                        p.value = port;
                                     }
                                 }
                             }

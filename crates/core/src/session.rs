@@ -125,6 +125,32 @@ pub fn is_select_like(sql: &str) -> bool {
     ["select", "with", "values", "table", "("].iter().any(|k| s.starts_with(k))
 }
 
+/// Whether the text changes the session's settings (SET, RESET, USE: search_path, the database …; a MySQL variable set with
+/// `select @v := …`), which a new connection doesn't have
+pub fn sets_session(sql: &str, kind: crate::store::DbKind) -> bool {
+    crate::sql::split_statements(sql, kind).into_iter().any(|(a, b)| {
+        let s = strip_comments_lead(&sql[a..b]);
+        let first = s.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("");
+        // `:=` inside a string counts too: then the user runs it again, which is safe
+        ["set", "reset", "use"].contains(&first) || (kind == crate::store::DbKind::Mysql && s.contains(":="))
+    })
+}
+
+/// Whether the text leaves the session in a state a new connection lacks, so a result can't go on there (AppState::fetch_more):
+/// sets_session, or anything that isn't a read (a temp table, set_config(), SELECT … INTO a variable). Not transaction control
+/// (More::tx covers it), nor a statement that only picks the schema (SET search_path, USE), which Session::reopen sets again
+pub(crate) fn changes_session(sql: &str, kind: crate::store::DbKind) -> bool {
+    crate::sql::split_statements(sql, kind).into_iter().any(|(a, b)| {
+        let one = &sql[a..b];
+        let s = strip_comments_lead(one);
+        let mut words = s.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty());
+        let (first, second) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
+        let tx = ["begin", "start", "commit", "rollback", "end", "abort", "savepoint", "release"].contains(&first);
+        let schema = (first == "use" && words.next().is_none()) || (["set", "reset"].contains(&first) && second == "search_path");
+        !first.is_empty() && !tx && !schema && (sets_session(one, kind) || !crate::guard::is_read(one, kind))
+    })
+}
+
 /// A read that takes no row locks (guard::is_read: no side-effect call either), and no transaction statement or SET: on Production
 /// it doesn't open Manual mode's transaction (Session::set_reads_outside_tx)
 pub(crate) fn plain_read(sql: &str, kind: crate::store::DbKind) -> bool {
@@ -169,11 +195,6 @@ impl PgSession {
     /// keep-alive: so idle session connections are not dropped
     pub async fn ping(&mut self) {
         let _ = self.conn.execute("select 1").await;
-    }
-
-    #[allow(dead_code)]
-    pub fn has_more(&self) -> bool {
-        self.cursor_open
     }
 
     /// Whether a user-opened transaction exists (Manual mode once a statement opened it, or BEGIN run directly in Auto). The cursor
@@ -898,6 +919,25 @@ mod tests {
         sqlx::query("drop table public.dbtool_tx_auto_t").execute(&p).await.unwrap();
     }
 
+    /// SET / RESET / USE anywhere in the text change the session (a new connection doesn't have them); reads and SET-looking names don't
+    #[test]
+    fn session_settings() {
+        use crate::store::DbKind::{Mysql, Postgres};
+        for (q, k) in [("SET search_path TO app, public", Postgres), ("/* x */ reset all", Postgres), ("use shop", Mysql), ("select 1; set @a = 1", Mysql), ("-- c\nSET\tNAMES utf8mb4", Mysql), ("select @v := 5", Mysql)] {
+            assert!(sets_session(q, k), "{q}");
+        }
+        for (q, k) in [("select settings from t", Postgres), ("select 'set x'", Postgres), ("update t set a = 1", Mysql), ("user_list", Mysql), ("select f(a := 1)", Postgres)] {
+            assert!(!sets_session(q, k), "{q}");
+        }
+        // What a result can't go on after: also anything that isn't a read, but not transaction control or picking the schema
+        for (q, k) in [("set statement_timeout = 0", Postgres), ("select set_config('search_path', 'pg_catalog', false)", Postgres), ("create temp table t (a int)", Postgres), ("set search_path = app; set timezone = 'UTC'", Postgres), ("select @v := 5", Mysql), ("set names utf8mb4", Mysql), ("update t set a = 1", Mysql)] {
+            assert!(changes_session(q, k), "{q}");
+        }
+        for (q, k) in [("select 1", Postgres), ("SET search_path TO app, public", Postgres), ("reset search_path", Postgres), ("use shop", Mysql), ("begin", Postgres), ("commit", Mysql), ("start transaction", Mysql), ("-- only a comment", Postgres)] {
+            assert!(!changes_session(q, k), "{q}");
+        }
+    }
+
     #[test]
     fn select_like() {
         assert!(is_select_like("  -- c\n /* x */ SELECT 1"));
@@ -966,7 +1006,6 @@ mod tests {
         assert_eq!(r2.rows[0][0], Value::from(501));
         let r3 = s.fetch(500).await.unwrap();
         assert_eq!((r3.rows.len(), r3.truncated), (200, false));
-        assert!(!s.has_more());
 
         // A 0-row SELECT must still return columns
         let e = s.run("select relname from pg_class where false", 500).await.unwrap();

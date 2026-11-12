@@ -5,8 +5,9 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { Cell, Dialect, dialectOf, type JoinEdit, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
+import { editStatements, joinStatements, type NewRow } from "../lib/gridEdit";
 import { ContextMenu, MenuItem } from "./Explorer";
-import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, raw } from "../lib/extract";
+import { copied, DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, pasteCells, raw } from "../lib/extract";
 import { shared, sharedOr, sharedReady, useSharedReady, type GridStatus, type StatusItemId } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
@@ -17,8 +18,9 @@ import { contains, copyTable, extend, forEachCell, isSingle, type Pos, selCols, 
 import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/shortcuts";
 import { draftAt, draftToApply, leftDraft, panelText, registerValuePanel, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
 import { ResultChart } from "./ResultChart";
+import { SqlBlock } from "./SqlBlock";
 import { ValuePanel } from "./ValuePanel";
-import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { Button, CellEditor, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
@@ -60,7 +62,8 @@ interface Props {
   query: string | null;
   onFetchMore: () => void;
   onSubmit: (statements: string[]) => Promise<void>;
-  onReload: () => void;
+  /** A console's run again resolves when it ends (Run again then gives the keys to its new grid) */
+  onReload: () => void | Promise<void>;
   onCancel: () => void;
   onExport: () => void;
   /** Table data: server-side sort (ORDER BY) */
@@ -103,7 +106,6 @@ export function ResultGrid(p: Props) {
   const D = p.dialect ?? dialectOf("postgres");
   const quoteIdent = D.q;
   const sqlLiteral = D.lit;
-  const lit = (c: Cell) => (c === DEFAULT_TOKEN ? "DEFAULT" : sqlLiteral(c));
   const cols = result.columns;
   const scrollRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -113,7 +115,8 @@ export function ResultGrid(p: Props) {
   const [editing, setEditing] = useState<{ r: number; c: number; value: string; picker?: boolean } | null>(null);
   const [changes, setChanges] = useState<Record<number, Record<number, Cell>>>({});
   const [deleted, setDeleted] = useState<Set<number>>(new Set());
-  const [added, setAdded] = useState<Cell[][]>([]);
+  /** New rows: a cell never set is undefined (left out of the INSERT, so the column default applies), one set to NULL is null */
+  const [added, setAdded] = useState<NewRow[]>([]);
   const [preview, setPreview] = useState<{ sql: string[]; readOnly?: boolean } | null>(null);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [extractor, setExtractorState] = useState<Extractor>(lastExtractor);
@@ -282,7 +285,7 @@ export function ResultGrid(p: Props) {
   // Time columns: align fractional-second digits within the column (values unchanged)
   const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows, wasmReady]);
   const shown = (v: Cell, ci: number) => (fracW[ci] && typeof v === "string" ? padFrac(v, fracW[ci]) : display(v));
-  // Value class of each cell and where it sits (Settings › Appearance › Alignment; the TUI grid's rule)
+  // Value class of each cell and where it sits (Settings › Appearance › Data grid › Alignment; the TUI grid's rule)
   const classOf = useMemo(() => cols.map((c) => cellClasses(c.typeName)), [cols, wasmReady]);
   const alignOverrides = useGridAlign();
   const aligns = useMemo(() => cols.map((c, ci) => alignTable(alignOverrides, c.typeName, result.rows, ci)), [cols, result.rows, alignOverrides, wasmReady]);
@@ -508,6 +511,14 @@ export function ResultGrid(p: Props) {
     setPanelError(err && `${cols[d.c].name} not changed: ${err}`);
   }, [panelCell?.r, panelCell?.c]);
   const focusGrid = () => (scrollRef.current ?? wrapRef.current)?.focus();
+  // The button goes with the failure: the keys go to the grid again, the new one when the run replaced it (a console's result is
+  // drawn anew in the same place after its run)
+  const runAgain = async () => {
+    const place = wrapRef.current?.parentElement;
+    focusGrid();
+    await p.onReload();
+    requestAnimationFrame(() => place?.querySelector<HTMLElement>(":scope > .grid-wrap .grid-scroll")?.focus());
+  };
   const openPanel = () => {
     setPanel(true);
     setPanelFocus((n) => n + 1);
@@ -544,7 +555,7 @@ export function ResultGrid(p: Props) {
 
   const addRow = () => {
     if (!canEdit) return;
-    setAdded((a) => [...a, cols.map(() => null)]);
+    setAdded((a) => [...a, cols.map(() => undefined)]);
     setTimeout(() => {
       virt.scrollToIndex(rowCount);
       selectCell({ r: rowCount, c: 0 }, false);
@@ -552,7 +563,8 @@ export function ResultGrid(p: Props) {
   };
   const cloneRow = () => {
     if (!canEdit || !active) return;
-    const src = cols.map((_, c) => (pkIdx.includes(c) ? null : valueAt(active.r, c)));
+    // Key cells are left untouched; the others keep the source's value, NULL included (a new row's untouched cell stays untouched)
+    const src = cols.map((_, c) => (pkIdx.includes(c) ? undefined : active.r < baseCount ? valueAt(active.r, c) : added[active.r - baseCount][c]));
     setAdded((a) => [...a, src]);
     setTimeout(() => virt.scrollToIndex(rowCount));
   };
@@ -597,49 +609,16 @@ export function ResultGrid(p: Props) {
   };
 
   const tableRef = edit ? `${quoteIdent(edit.schema)}.${quoteIdent(edit.table)}` : "MY_TABLE";
-  /** A join: per edited row, one UPDATE for each table its edits go to, found by that table's key (never by a column's name) */
-  const joinStatements = (j: JoinEdit): string[] => {
-    const out: string[] = [];
-    for (const [rs, ch] of Object.entries(changes)) {
-      const r = Number(rs);
-      const sets = new Map<number, string[]>();
-      for (const [cs, v] of Object.entries(ch)) {
-        const col = j.columns[Number(cs)];
-        if (col && "table" in col) sets.set(col.table, [...(sets.get(col.table) ?? []), `${quoteIdent(col.column)} = ${lit(v)}`]);
-      }
-      for (const [ti, set] of sets) {
-        const t = j.tables[ti];
-        const where = t.pk.map((k, i) => `${quoteIdent(k)} = ${sqlLiteral(result.rows[r][t.pkAt[i]])}`).join(" AND ");
-        out.push(`UPDATE ${quoteIdent(t.schema)}.${quoteIdent(t.table)} SET ${set.join(", ")} WHERE ${where};`);
-      }
-    }
-    return out;
-  };
-  const buildStatements = (): string[] => {
-    if (join) return joinStatements(join);
+  /** Submit's statements (lib/gridEdit: the TUI's rules), each ending with `;` */
+  const buildStatements = (): string[] | undefined => {
+    if (!sharedReady()) return void setStatusNote("Submit needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
+    if (join) return joinStatements(D.quoting, join, result.rows, changes);
     if (!edit) return [];
-    const where = (r: number) => pkIdx.map((i) => `${quoteIdent(tcol(i))} = ${sqlLiteral(result.rows[r][i])}`).join(" AND ");
-    const out: string[] = [];
-    for (const r of [...deleted].sort((a, b) => a - b)) out.push(`DELETE FROM ${tableRef} WHERE ${where(r)};`);
-    for (const [rs, ch] of Object.entries(changes)) {
-      const r = Number(rs);
-      if (deleted.has(r)) continue;
-      const sets = Object.entries(ch).map(([c, v]) => `${quoteIdent(tcol(Number(c)))} = ${lit(v)}`).join(", ");
-      out.push(`UPDATE ${tableRef} SET ${sets} WHERE ${where(r)};`);
-    }
-    for (const row of added) {
-      const idx = row.map((v, i) => (v === null ? -1 : i)).filter((i) => i >= 0);
-      out.push(
-        idx.length === 0
-          ? `INSERT INTO ${tableRef} DEFAULT VALUES;`
-          : `INSERT INTO ${tableRef} (${idx.map((i) => quoteIdent(tcol(i))).join(", ")}) VALUES (${idx.map((i) => lit(row[i])).join(", ")});`,
-      );
-    }
-    return out;
+    return editStatements(D.quoting, { ...edit, columns: cols.map((_, i) => tcol(i)) }, result.rows, changes, deleted, added);
   };
   const submit = async () => {
     const sql = buildStatements();
-    if (!sql.length) return;
+    if (!sql?.length) return;
     setSubmitErr(null);
     try {
       await p.onSubmit(sql);
@@ -647,6 +626,10 @@ export function ResultGrid(p: Props) {
       setPreview({ sql });
       setSubmitErr(String(e));
     }
+  };
+  const previewPending = () => {
+    const sql = buildStatements();
+    if (sql) setPreview({ sql, readOnly: true });
   };
   const doSubmitPreview = async () => {
     if (!preview) return;
@@ -678,24 +661,29 @@ export function ResultGrid(p: Props) {
     if (!sel || !hasSel) return;
     // The one selected cell (not sel.cur: a ⌘-click that took a cell out leaves the cursor outside the selection)
     const one = sel.ranges[0];
-    const text = isSingle(sel) && !header && (extractor === "CSV" || extractor === "TSV") ? raw(valueAt(dataIndex(one.r0), one.c0)) : formatted(() => extract(sel, extractor, header));
-    if (text !== undefined) navigator.clipboard.writeText(text);
+    const rawOne = isSingle(sel) && !header && (extractor === "CSV" || extractor === "TSV");
+    const text = rawOne ? raw(valueAt(dataIndex(one.r0), one.c0)) : formatted(() => extract(sel, extractor, header));
+    if (text === undefined) return;
+    // Paste reads this text back as its format (one copied row splits into cells); one raw value stays one value
+    copied(text, rawOne ? "other" : extractor);
+    navigator.clipboard.writeText(text);
   };
   /** Selected cells as ('a', 'b') (paste straight into WHERE x IN). If only one cell is selected, its whole column */
   const copyInList = () => {
     if (!sel || !hasSel) return;
     const c = sel.ranges[0].c0;
     const text = formatted(() => extract(isSingle(sel) ? single({ r: 0, c }, { r: rowCount - 1, c }) : sel, "SQL IN List"));
-    if (text !== undefined) navigator.clipboard.writeText(text);
+    if (text === undefined) return;
+    copied(text, "other");
+    navigator.clipboard.writeText(text);
   };
-  /** Paste: split multi-line TSV/CSV into cells, adding new rows if there are not enough (DataGrip) */
+  /** Paste: TSV/CSV into cells (pasteCells: an empty field is NULL), adding new rows if there are not enough (DataGrip) */
   const paste = async () => {
     if (!anyEdit || !cur) return;
     // Paste goes into one place (DataGrip); a ⌘-click meant as a plain click is the usual way to get several ranges here
     if ((sel?.ranges.length ?? 0) > 1) return setStatusNote("Paste needs one selected range: click a cell to select just it (⌘-click adds cells to the selection)");
-    const text = await navigator.clipboard.readText();
-    const lines = text.replace(/\r/g, "").split("\n").filter((l, i, a) => l !== "" || i < a.length - 1);
-    const grid = lines.map((l) => l.split(l.includes("\t") ? "\t" : ","));
+    if (!sharedReady()) return setStatusNote("Paste needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
+    const grid = pasteCells(await navigator.clipboard.readText());
     // A join: only into cells that can be edited, and no rows added
     if (join) {
       const spots = grid.flatMap((cells, i) => cells.map((_, j) => [cur.r + i, cur.c + j]).filter(([, c]) => c < cols.length));
@@ -706,7 +694,7 @@ export function ResultGrid(p: Props) {
       const d = cur.r + i;
       const r = d < rowCount ? dataIndex(d) : -1;
       if (r < 0) {
-        const row: Cell[] = cols.map(() => null);
+        const row: NewRow = cols.map(() => undefined);
         cells.forEach((v, j) => {
           if (cur.c + j < cols.length) row[cur.c + j] = v;
         });
@@ -869,7 +857,7 @@ export function ResultGrid(p: Props) {
     { label: "Add Row", ...cmd("grid.addRow"), action: addRow, disabled: !canEdit },
     { label: "Delete Row", ...cmd("grid.deleteRows"), action: deleteRows, disabled: !canEdit || !hasSel },
     { label: "Revert Selected", ...cmd("grid.revert"), action: revertSelected, disabled: !pendingCount },
-    { label: "Preview Pending Changes", ...cmd("grid.preview"), action: () => setPreview({ sql: buildStatements(), readOnly: true }), disabled: !pendingCount },
+    { label: "Preview Pending Changes", ...cmd("grid.preview"), action: previewPending, disabled: !pendingCount },
     { label: "Submit", ...cmd("grid.submit"), action: submit, disabled: !pendingCount },
     ...(p.onDdl ? ([{ label: "Go to DDL", ...cmd("grid.ddl"), action: p.onDdl }] as MenuItem[]) : []),
     { label: "Find on Current Page", ...cmd("grid.find"), action: openFind },
@@ -915,7 +903,7 @@ export function ResultGrid(p: Props) {
         <IconButton {...editButton("Add Row", "grid.addRow", rowReason)} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
         <IconButton {...editButton("Delete Row", "grid.deleteRows", rowReason)} onClick={deleteRows} disabled={!canEdit || !hasSel}><IcMinus /></IconButton>
         <IconButton {...editButton("Revert Selected", "grid.revert")} onClick={revertSelected} disabled={!pendingCount}><IcRevert /></IconButton>
-        <IconButton {...editButton("Preview Pending Changes", "grid.preview")} onClick={() => setPreview({ sql: buildStatements(), readOnly: true })} disabled={!pendingCount}><IcPreview /></IconButton>
+        <IconButton {...editButton("Preview Pending Changes", "grid.preview")} onClick={previewPending} disabled={!pendingCount}><IcPreview /></IconButton>
         <IconButton active={false} className={pendingCount ? "accent" : undefined} {...editButton("Submit", "grid.submit")} onClick={submit} disabled={!pendingCount}><IcSubmit /></IconButton>
         <ToolbarSep />
         <ToolButton
@@ -937,13 +925,6 @@ export function ResultGrid(p: Props) {
           <IcSearch />
         </IconButton>
         <span className="tb-info">{rowsLabel}{pendingCount ? ` · ${pendingCount} pending` : ""}</span>
-        {/* A failed load-more: why no more rows came (the status bar says it too), and running the statement again starts over */}
-        {!loadingMore && result.moreError && (
-          <>
-            <Text truncate className="grid-more-error">{result.moreError}</Text>
-            <Button size="sm" onClick={p.onReload} disabled={p.running}>Run again</Button>
-          </>
-        )}
         <Spacer />
         <ToolButton title="Data Extractor (copy format)" onClick={(e) => dropdown(e, EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })))}>
           {extractor} ▾
@@ -1164,6 +1145,14 @@ export function ResultGrid(p: Props) {
           </>
         )}
       </PanelGroup>
+      {/* A failed load-more, below the rows (covering none), in full: why no more rows came (the status bar says it too), and
+          running the statement again starts over */}
+      {!loadingMore && result.moreError && (
+        <Notice tone="danger" className="grid-more-error-row">
+          <span className="grid-more-error">{result.moreError}</span>
+          <Button size="sm" onClick={runAgain} disabled={p.running}>Run again</Button>
+        </Notice>
+      )}
 
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
 
@@ -1182,7 +1171,7 @@ export function ResultGrid(p: Props) {
             </>
           }
         >
-          <CodeBlock className="sql-preview">{p.query}</CodeBlock>
+          <SqlBlock className="sql-preview" sql={p.query} kind={D.quoting} />
         </Modal>
       )}
 
@@ -1202,7 +1191,7 @@ export function ResultGrid(p: Props) {
             </>
           }
         >
-          <CodeBlock className="sql-preview">{preview.sql.join("\n")}</CodeBlock>
+          <SqlBlock className="sql-preview" sql={preview.sql.join("\n")} kind={D.quoting} />
           {submitErr && <Notice tone="danger">{submitErr}</Notice>}
         </Modal>
       )}

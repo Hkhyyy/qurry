@@ -1,4 +1,4 @@
-import { dialog, editor, expect, openApp, openConsole, resultTabs, runAll, spyCancels, status, suggestions, test, treeItem, typeSql, work } from "./app";
+import { dialog, editor, expect, openApp, openConsole, resultTabs, runAll, spyCancels, status, suggestions, test, treeItem, treeNode, typeSql, work } from "./app";
 import type { Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
@@ -67,7 +67,7 @@ test("run one statement → one result tab", async ({ page }) => {
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+Enter");
   await expect(work(page).locator(".exec-highlight")).not.toHaveCount(0);
-  await expect(resultTabs(page)).toHaveText(["Output", /^users/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^1: users/]);
   await expect(resultTabs(page).nth(1)).toHaveAttribute("aria-selected", "true");
   await expect(status(page)).toHaveText("1 statement executed");
 });
@@ -75,7 +75,7 @@ test("run one statement → one result tab", async ({ page }) => {
 test("run several → one result tab per statement", async ({ page }) => {
   await typeSql(page, "select 1;\nselect * from users;\n-- by status\nselect * from orders;");
   await runAll(page);
-  await expect(resultTabs(page)).toHaveText(["Output", /^Result 1/, /^users/, /^by status/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^1: Result 1/, /^2: users/, /^3: by status/]);
   await expect(status(page)).toHaveText("3 statements executed");
   await resultTabs(page).first().click();
   await expect(page.locator(".work-layer:visible .output-log")).toContainText("[DEV] shop_app> select * from users[");
@@ -85,13 +85,76 @@ test("Explain Plan → plan tab with the node tree", async ({ page }) => {
   await typeSql(page, "select * from users u join contracts c on u.contract_id = c.id");
   await page.locator(".work-layer:visible .console-toolbar").getByText("Explain").click();
   await page.getByRole("menuitem", { name: "Explain Plan" }).click();
-  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: users/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: 1: users/]);
   const plan = page.locator(".work-layer:visible .plan-view");
   await expect(plan).toBeVisible();
   // The plan tree comes from analyze_plan (the mock's fixed Gather Merge → Sort → Seq Scan plan)
   await expect(plan).toContainText("2 nodes worth a look");
   for (const op of ["Gather Merge", "Sort", "Seq Scan"]) await expect(plan).toContainText(op);
   await expect(editor(page)).toBeVisible();
+  expect(await sent(page)).toContain("EXPLAIN (FORMAT JSON) select * from users u join contracts c on u.contract_id = c.id");
+});
+
+/** Each statement the mock was sent, in order */
+const sent = (page: Page) => page.evaluate(() => ((window as any).__mockRan ?? []) as string[]);
+
+// Explain is built per kind by qurry_shared::explain (as in the TUI and MCP): a driver gets its own statement, a kind without one says so
+test.describe("Explain on other kinds", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => ((window as any).__mockDrivers = true));
+    await openApp(page);
+  });
+  // A short name's middle is its databases badge: click the name
+  const openConsole = async (page: Page, conn: string) => {
+    await treeNode(page, conn).getByText(conn, { exact: true }).click();
+    await page.keyboard.press("Meta+Shift+L");
+    await expect(editor(page)).toBeVisible();
+    await editor(page).click();
+  };
+  const explainMenu = (page: Page) => page.locator(".work-layer:visible .console-toolbar").getByText("Explain").click();
+
+  for (const [conn, want] of [
+    ["[MySQL] shop", "EXPLAIN select * from users"],
+    ["[SQLite] app", "EXPLAIN QUERY PLAN select * from users"],
+  ]) {
+    test(`${conn}: Explain Plan sends "${want}" and shows its rows as a grid`, async ({ page }) => {
+      await openConsole(page, conn);
+      await typeSql(page, "select * from users;");
+      await explainMenu(page);
+      await page.getByRole("menuitem", { name: "Explain Plan" }).click();
+      await expect.poll(() => sent(page)).toContain(want);
+      await expect(resultTabs(page)).toHaveText(["Output", /^1: users/]);
+      await expect(page.locator(".work-layer:visible .plan-view")).toHaveCount(0);
+    });
+  }
+
+  test("SQLite has no Explain Analyse: the item is greyed out with why", async ({ page }) => {
+    await openConsole(page, "[SQLite] app");
+    await explainMenu(page);
+    const item = page.getByRole("menuitem", { name: "Explain Analyse" });
+    await expect(item).toBeDisabled();
+    await expect(item).toHaveAttribute("title", "SQLite has no Explain that runs the statement: use Explain without Analyze");
+  });
+
+  test("a kind without Explain says so and sends nothing", async ({ page }) => {
+    await openConsole(page, "[MSSQL] erp");
+    await typeSql(page, "select * from users");
+    const before = (await sent(page)).length;
+    await explainMenu(page);
+    const msg = "Explain isn't available for SQL Server: run the statement without Explain";
+    await expect(page.getByRole("menuitem")).toHaveText([msg]);
+    await expect(page.getByRole("menuitem", { name: msg })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    // Find Action's Explain Plan runs it anyway: Output says why, the statement is marked failed, nothing goes to the server
+    await editor(page).click();
+    await page.keyboard.press("Meta+Shift+KeyA");
+    await page.keyboard.type("Explain Plan");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".work-layer:visible .output-log")).toContainText(msg);
+    await expect(status(page)).toHaveText(msg);
+    await expect(editor(page).locator(".stmt-mark.error")).toHaveCount(1);
+    expect((await sent(page)).length).toBe(before);
+  });
 });
 
 // The backend's message for a Commit cut off by a lost connection (app.rs: `{e} — {COMMIT_UNKNOWN_ERR}`), and one that just failed
@@ -112,7 +175,7 @@ for (const [msg, title] of [
     // Look at something else first: the failure brings Output back
     await typeSql(page, "select 1");
     await runAll(page);
-    await expect(resultTabs(page)).toHaveText(["Output", /^Result/]);
+    await expect(resultTabs(page)).toHaveText(["Output", /^1: Result/]);
     await expect(resultTabs(page).nth(1)).toHaveAttribute("aria-selected", "true");
     await page.evaluate((m) => ((globalThis as any).__mockCommitError = m), msg);
     await commit.click();
@@ -172,7 +235,8 @@ test("word operators are keywords, symbol operators keep their color: `a = 1 AND
     editor(page).locator(".view-line span span").evaluateAll((els) => Object.fromEntries(els.map((e) => [e.textContent!.trim(), getComputedStyle(e).color])));
   await typeSql(page, "SELECT 1 WHERE a = 1 AND b IN (2) OR c IS NOT NULL");
   await page.keyboard.press("Escape");
-  await expect.poll(async () => (await colors())["AND"]).toBeTruthy();
+  // Wait for the last word: on a slow WebKit the line is still being drawn after the typing ended
+  await expect.poll(async () => (await colors())["NULL"]).toBeTruthy();
   const c = await colors();
   for (const w of ["AND", "IN", "OR", "IS", "NOT", "NULL"]) expect(c[w], w).toBe(c["WHERE"]);
   // `=` (with the spaces around it, one piece when they are the same color) is not drawn as a keyword

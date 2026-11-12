@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { ConnectionView, meta, targetId } from "../../lib/api";
+import { api, ConnectionView, defaultDbOf, meta, targetId } from "../../lib/api";
 import type { FtsRequest } from "../../lib/api";
 import { allThemes, getThemeSettings, setThemePick, SYSTEM } from "../../lib/theme";
 import { saveSnippet } from "../../components/HistoryDialog";
@@ -82,7 +82,7 @@ export function useSearch({
     const sel = treeSel;
     const c = sel?.conn ?? conns.find((x) => x.id === active?.connId);
     if (!c) return setStatus("Select a data source, database, schema or table to search in");
-    const db = sel?.db ?? active?.database ?? (c.database || "postgres");
+    const db = sel?.db ?? active?.database ?? defaultDbOf(c);
     if (sel && isRelation(sel.kind) && sel.schema && sel.name)
       return setFtsScope({ connId: c.id, connName: c.name, db, schemas: [], tables: [[sel.schema, sel.name]] });
     if (sel?.kind === "schema" && sel.schema) return setFtsScope({ connId: c.id, connName: c.name, db, schemas: [sel.schema], tables: [] });
@@ -147,9 +147,10 @@ export function useSearch({
       { name: "Import Data Sources: File…", ...cmd("ds.import"), group: "File", run: () => importConns() },
       { name: "Import Data Sources: Folder…", group: "File", run: () => importFrom({ folder: true }) },
       ...importLocs.map((l) => ({ name: `Import Data Sources: ${l.label} (${l.count})`, group: "File", run: () => importFrom({ path: l.path }) })),
-      { name: "Settings…", ...cmd("settings"), group: "File", run: () => setSettingsOpen("appearance") },
+      { name: "Settings…", ...cmd("settings"), group: "File", run: () => setSettingsOpen(true) },
       { name: "Keymap Reference", ...cmd("keymap"), group: "Help", run: () => setKeymapOpen(true) },
       { name: "Edit Keymap…", ...cmd("keymap.edit"), group: "Help", run: () => setSettingsOpen("keymap") },
+      { name: "Show Log", ...cmd("showLog"), group: "Help", run: () => api.showLog().catch((e) => setStatus(String(e))) },
       // Every built-in and custom theme; Dark, Light and High contrast have a command a key can be bound to
       ...allThemes(getThemeSettings()).map((th) => ({ name: `Theme: ${th.name}`, ...({ dark: cmd("theme.dark"), light: cmd("theme.light"), hc: cmd("theme.hc") } as Record<string, object>)[th.id], group: "Appearance", run: () => pickTheme(th.id) })),
       { name: "Theme: Sync with OS", ...cmd("theme.system"), group: "Appearance", run: () => pickTheme(SYSTEM) },
@@ -191,7 +192,8 @@ export function useSearch({
           if (!t?.edit) return;
           setExplorerHidden(false);
           setMaximized(false);
-          revealInTree({ connId: t.connId, db: t.database || conns.find((x) => x.id === t.connId)?.database, schema: t.edit.schema, name: t.edit.table, kind: "table" });
+          const c = conns.find((x) => x.id === t.connId);
+          revealInTree({ connId: t.connId, db: t.database || (c ? defaultDbOf(c) : undefined), schema: t.edit.schema, name: t.edit.table, kind: "table" });
         },
         disabled: !t?.edit,
       },

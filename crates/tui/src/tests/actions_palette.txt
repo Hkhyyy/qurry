@@ -80,6 +80,10 @@ NextTab	Next Tab	⌥Right / ⌃PgDn
 PrevTab	Previous Tab	⌥Left / ⌃PgUp
 ToggleExplorer	Database Explorer	⌥0
 ToggleOutput	Toggle Output / Result	⌥o
+ResultNext	Next Result Tab	⌥.
+ResultPrev	Previous Result Tab	⌥,
+PinResult	Pin / Unpin Result Tab	—
+CloseResult	Close Result Tab	—
 Complete	Code Completion	⌃Space
 Reformat	Reformat Code (the selection or the statement at the cursor)	⌥⇧F
 SplitRight	Split Right (focused pane, up to 4)	⌥\
@@ -100,11 +104,14 @@ CycleFocus	Cycle Focus (explorer → editor → results)	F6
 TrustSshHost	Trust SSH Host Key (after checking its fingerprint)	—
 PasswordKey	Password Key… (keep it in the config folder or the system keychain)	—
 KeywordCase	Keyword Case… (UPPER or lower SQL keywords as you type and in Reformat Code; shared with the GUI)	—
+ResultTabs	Result Tabs…	—
 GridAlign	Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI)	—
 StatusBarItems	Status Bar Items… (what the status line shows for a grid: position, shown columns, Sum, Size …; shared with the GUI)	—
 Theme	Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background)	—
 CheckUpdate	Check for Updates	—
 UpdateChannel	Update Channel… (stable releases only, or beta: also every merge to main)	—
 InstallUpdate	Update Qurry & Restart (download the latest release)	—
+OpenGitHub	Open GitHub	—
 Help	Keymap	F1
+ShowLog	Show Log	—
 Quit	Quit	⌃q

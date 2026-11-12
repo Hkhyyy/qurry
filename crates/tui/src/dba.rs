@@ -184,6 +184,7 @@ impl App {
         let st = self.state.clone();
         self.popup = Some(Popup::Confirm {
             opened: None,
+            sql: None,
             text: format!("{what} {pid}?\n\n{q}"),
             on_yes: Box::new(move |a| {
                 a.spawn(async move { st.kill_session(target, pid, terminate).await.map_err(|e| e.to_string()) }, move |a, r| {

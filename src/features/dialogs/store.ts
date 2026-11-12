@@ -1,11 +1,13 @@
 import { create } from "zustand";
-import type { ConnectionView, UpdateInfo } from "../../lib/api";
+import type { ConnectionView, DbKind, UpdateInfo } from "../../lib/api";
 import type { NewKind } from "../../components/ObjectEditors";
+import type { SettingsPage } from "../settings/SettingsDialog";
 import { setter } from "../setter";
 
 /** Which dialogs are open, and what each was opened for (null / false = closed) */
 interface DialogsState {
-  settingsOpen: false | "appearance" | "theme" | "keymap";
+  /** true: the last page used */
+  settingsOpen: boolean | SettingsPage | "theme";
   /** Quick Switch Theme */
   schemeOpen: boolean;
   /** Keymap Reference */
@@ -29,7 +31,7 @@ interface DialogsState {
   /** Copy a subset of production data window */
   copyReq: { target: string; schema: string; table: string; conn: ConnectionView } | null;
   backupReq: { c: ConnectionView; db?: string } | null;
-  quickDoc: { title: string; text: string } | null;
+  quickDoc: { title: string; text: string; /** The text is DDL in this kind's dialect (colored) */ kind?: DbKind } | null;
 }
 
 export const useDialogsStore = create<DialogsState>()(() => ({

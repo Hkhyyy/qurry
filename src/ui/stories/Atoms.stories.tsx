@@ -41,7 +41,7 @@ export const TextStory: S = {
       </Box>
       <Box title="truncate (마우스를 올리면 전체)">
         <div style={{ width: 220 }}>
-          <Text truncate>[PROD] rentalpay · app@db.example.com · rentalpay_main_database</Text>
+          <Text truncate>[PROD] shop · app@db.example.com · shop_main_database</Text>
         </div>
       </Box>
     </>

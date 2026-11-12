@@ -5,7 +5,7 @@ import { expect, fireEvent, userEvent, waitFor, within } from "storybook/test";
 import "../../lib/mock";
 import { monaco } from "../../lib/monaco";
 import App from "../../App";
-import { SettingsDialog } from "../../features/settings/SettingsDialog";
+import { ResultTabsField, SettingsDialog, type SettingsPage } from "../../features/settings/SettingsDialog";
 import { setFont } from "../../lib/prefs";
 import { saveCustomTheme, setThemeSync } from "../../lib/theme";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
@@ -26,6 +26,7 @@ import { RagView } from "../../components/RagView";
 import { RedisBrowser } from "../../components/RedisBrowser";
 import { ResultChart } from "../../components/ResultChart";
 import { ResultGrid } from "../../components/ResultGrid";
+import { SqlBlock } from "../../components/SqlBlock";
 import { SearchEverywhere } from "../../components/SearchEverywhere";
 import { TableEditor } from "../../components/TableEditor";
 import { TableStructureView } from "../../components/TableStructure";
@@ -91,15 +92,30 @@ export const ExplorerSeveral: S = {
   },
 };
 
-/** Settings › Appearance: theme, editor and grid fonts, grid alignment per value class, the automatic update check and the update channel (alignment and channel shared with the TUI) */
-export const Settings: S = { name: "Settings — Appearance & updates", render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} /> };
+/** Settings: a tree of pages on the left (DataGrip's settings tree: ↑↓, → opens a parent then goes to its first page, ← closes it or goes
+ *  to the parent, Home / End), one page on the right. The dialog keeps one size on every page; it opens on the last page used */
+const settingsPage = (page: SettingsPage, theme: "dark" | "light" = "dark"): S => ({
+  globals: { theme },
+  render: () => <SettingsDialog initialPage={page} onClose={noop} onUpdate={noop} onChannel={noop} />,
+});
+/** Settings › Appearance: theme, editor and grid fonts */
+export const Settings: S = { ...settingsPage("appearance"), name: "Settings — Appearance" };
+/** Settings › Appearance › Console: SQL keywords' case as you type and in Reformat Code (shared with the TUI) */
+export const SettingsConsole: S = { ...settingsPage("console"), name: "Settings — Console" };
+/** Settings › Appearance › Data grid: alignment per value class and the status bar items (shared with the TUI) */
+export const SettingsDataGrid: S = { ...settingsPage("grid"), name: "Settings — Data grid" };
+/** Settings › Updates: the automatic check, Check Now, the project page on GitHub and the update channel (shared with the TUI) */
+export const SettingsUpdates: S = { ...settingsPage("updates"), name: "Settings — Updates" };
+export const SettingsUpdatesLight: S = { ...settingsPage("updates", "light"), name: "Settings — Updates (light)" };
+/** Settings › Passwords: where the password file's key is kept (the config folder or the system keychain) */
+export const SettingsPasswords: S = { ...settingsPage("passwords"), name: "Settings — Passwords" };
 /** Editor / Grid font: each family is picked from a drop-down of the installed fonts (search, "Monospaced only" on by default, the default
  * entry first), sizes in px. A saved family that isn't installed stays on top of the list marked "(not installed)" and renders with the
  * default monospace. The choice is saved like in the app; preview.tsx resets it before every story. The drop-down is the ui kit's
  * PopupList in select mode (search box on top, fixed height), the same list as ComboBox's (GUI/3 Organisms › List popup) */
 export const SettingsFonts: S = {
   name: "Settings — Fonts (font not installed)",
-  render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
+  render: () => <SettingsDialog initialPage="appearance" onClose={noop} onUpdate={noop} onChannel={noop} />,
   play: async ({ canvasElement }) => {
     setFont("grid", { family: "No Such Mono" });
     await userEvent.click(await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Grid font family" }));
@@ -110,7 +126,7 @@ export const SettingsFonts: S = {
  * set to it goes back to the default). Here a font is added from the grid font picker, which is then opened again */
 export const SettingsFontsCustom: S = {
   name: "Settings — Fonts (added font file)",
-  render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
+  render: () => <SettingsDialog initialPage="appearance" onClose={noop} onUpdate={noop} onChannel={noop} />,
   play: async ({ canvasElement }) => {
     const body = within(canvasElement.ownerDocument.body);
     const field = await body.findByRole("combobox", { name: "Grid font family" });
@@ -121,11 +137,29 @@ export const SettingsFontsCustom: S = {
   },
 };
 
+/** Settings › Appearance › Console › Result tabs (#151): unpinned result tabs kept per console, 10 by default (shared with the TUI's ⌃k › Result Tabs…); what it
+ *  does is in its ⓘ. A value that isn't 1 or more says so and isn't saved */
+const ResultTabsForm = () => (
+  <div className="settings-form" style={{ width: 520 }}>
+    <ResultTabsField />
+  </div>
+);
+export const SettingsResultTabs: S = { name: "Settings — Result tabs", render: () => <ResultTabsForm /> };
+export const SettingsResultTabsInvalid: S = {
+  name: "Settings — Result tabs: 0",
+  render: () => <ResultTabsForm />,
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    const field = await c.findByRole("spinbutton", { name: "Result tabs" });
+    await userEvent.type(field, "{backspace}{backspace}0");
+    await c.findByText("Enter 1 or more.");
+  },
+};
 /** Settings › Appearance › Theme with Sync with OS on: a dark and a light theme of the user's choice (here One Dark and Solarized Light),
  *  shared with the TUI, which picks between them by its terminal's background */
 export const SettingsThemeSync: S = {
   name: "Settings — Theme: Sync with OS",
-  render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
+  render: () => <SettingsDialog initialPage="appearance" onClose={noop} onUpdate={noop} onChannel={noop} />,
   play: async ({ canvasElement }) => {
     const body = within(canvasElement.ownerDocument.body);
     await setThemeSync({ dark: "one-dark", light: "solarized-light" });
@@ -275,7 +309,7 @@ export const TableModifyTypes: S = {
 export const NewView: S = { name: "New View", render: () => <NewObjectDialog kind="view" target="dev" conn={DEV} schema="public" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 export const NewDatabase: S = { name: "New Database", render: () => <NewObjectDialog kind="database" target="dev" conn={DEV} schema="public" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 
-export const ProdLog: S = { name: "Production Log", render: () => <ProductionLog connId={null} onOpenUndo={noop} onClose={noop} /> };
+export const ProdLog: S = { name: "Production Log", render: () => <ProductionLog connId={null} kindOf={() => "postgres"} onOpenUndo={noop} onClose={noop} /> };
 export const GenerateData: S = { name: "Generate Test Data", render: () => <GenerateDataDialog target="dev" schema="public" table="orders" onDone={noop} onClose={noop} /> };
 export const CopyRows: S = { name: "Copy Related Rows", render: () => <CopyRowsDialog source="prod" schema="public" table="users" conn={PROD} conns={CONNS} onDone={noop} onClose={noop} /> };
 
@@ -502,12 +536,28 @@ export const GridLoadingMore: S = {
     </div>
   ),
 };
-/** A load-more that failed (#80): the reason beside the row count (not over the rows), and Run again */
+/** A load-more that failed (#80, #157: after a reconnect the core asks to run it again): the whole reason below the rows (covering
+ * none) with Run again, which runs the statement again and gives the keys back to the grid */
 export const GridLoadMoreFailed: S = {
   name: "Result Grid — load more failed",
   render: () => (
-    <div style={{ position: "relative", height: 260, border: "1px solid var(--ui-border)" }}>
-      <ResultGrid result={{ ...mixed, truncated: true, moreError: "Couldn't load more rows: Session closed" }} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    <div style={{ position: "relative", height: 300, width: 640, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid
+        result={{
+          ...mixed,
+          truncated: true,
+          moreError:
+            "Couldn't load more rows: The data source reconnected since this result was read (settings saved, disconnected or idle), and the session was changed since (SET, RESET, USE or a statement that isn't a read), so a new connection wouldn't match. Run the query again to load more rows.",
+        }}
+        running={false}
+        loadingMore={false}
+        query="select * from payment_check"
+        onFetchMore={noop}
+        onSubmit={async () => {}}
+        onReload={noop}
+        onCancel={noop}
+        onExport={noop}
+      />
     </div>
   ),
 };
@@ -548,7 +598,49 @@ export const GridMultiSelect: S = {
   },
 };
 
-export const History: S = { name: "Query History", render: () => <HistoryDialog connId="dev" title="[DEV] shop_app Query History" onPick={noop} onClose={noop} /> };
+/** Submit Changes (⌘↩ › Preview): the statements in the console's colors, in the data source's dialect */
+export const GridSubmitChanges: S = {
+  name: "Result Grid — Submit Changes",
+  render: () => (
+    <div style={{ position: "relative", height: 320, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid result={mixed} edit={{ schema: "public", table: "payment_check", pk: ["card_brand"] }} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole("gridcell", { name: "VISA" })[0]);
+    await userEvent.click(c.getByRole("button", { name: /^Add Row/ }));
+    await userEvent.click(c.getAllByRole("gridcell", { name: "MASTER" })[0]);
+    await userEvent.click(c.getByRole("button", { name: /^Delete Row/ }));
+    await userEvent.click(c.getByRole("button", { name: /^Preview Pending Changes/ }));
+    await waitFor(() => expect(canvasElement.ownerDocument.querySelector(".sql-preview .ui-hl-keyword")).not.toBeNull());
+  },
+};
+
+/** Generated or saved SQL (Submit Changes, DDL and migrate previews, history, Production log): the console's colors per dialect */
+const SAMPLE_SQL = `-- refund the duplicated payments
+UPDATE public.payments SET status = 'refunded', meta = E'{"pg":"toss","n":1}', updated_at = now() WHERE id IN (1042, 1043);
+INSERT INTO public.audit (actor, note) VALUES ('ops', NULL);
+SELECT count(*), max(amount) FROM public.payments WHERE paid_at >= DATE '2026-10-01';`;
+const SqlBlockDemo = () => (
+  <div style={{ display: "grid", gap: 12, width: 640 }}>
+    <SqlBlock sql={SAMPLE_SQL} kind="postgres" />
+    <SqlBlock sql={"# MySQL: # is a comment, \"…\" a string\nUPDATE shop.users SET note = \"vip\" WHERE id = 7;"} kind="mysql" />
+  </div>
+);
+export const SqlBlockDark: S = { name: "SQL block — dark", globals: { theme: "dark" }, render: () => <SqlBlockDemo /> };
+export const SqlBlockLight: S = { name: "SQL block — light", globals: { theme: "light" }, render: () => <SqlBlockDemo /> };
+/** Thousands of statements: colored up to SqlBlock's limit, the rest plain, so the preview opens at once */
+export const SqlBlockLarge: S = {
+  name: "SQL block — 5,000 INSERTs",
+  render: () => {
+    const json = JSON.stringify({ items: Array.from({ length: 12 }, (_, i) => ({ sku: `SKU-${i}`, qty: i, note: "long text ".repeat(4) })) });
+    const sql = Array.from({ length: 5000 }, (_, i) => `INSERT INTO public.events (id, kind, payload) VALUES (${i}, 'order', '${json}');`).join("\n");
+    return <SqlBlock className="sql-preview" sql={sql} kind="postgres" />;
+  },
+};
+
+export const History: S = { name: "Query History", render: () => <HistoryDialog connId="dev" kind="postgres" title="[DEV] shop_app Query History" onPick={noop} onClose={noop} /> };
 export const Search: S = {
   name: "Search Everywhere (⇧⇧)",
   render: () => (
@@ -705,7 +797,7 @@ export const ConsoleSplitterFailed: S = {
         tabId="story" target="dev" initialSql={"select * from customers;\nselect 1;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
         dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
         output={[{ ts: "10:24:01", text: SPLITTER_FAILED, level: "error" }]} txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onCaret={noop} onStatements={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
@@ -720,7 +812,7 @@ export const ConsoleStatementsPopup: S = {
         tabId="story-stmts" target="dev" initialSql={"select * from customers;\nselect 1;\nselect 2;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
         dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
         output={[]} txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onCaret={noop} onStatements={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
@@ -745,7 +837,7 @@ export const ConsoleAssist: S = {
         tabId="story-assist" target="dev" initialSql={"select nme, order_total(id, ) from orders o\njoin users u on o.user_id = u.id;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
         dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
         output={[]} txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onCaret={noop} onStatements={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
@@ -769,7 +861,7 @@ export const ConsoleUnclosedBracket: S = {
         tabId="story-unclosed" target="dev" initialSql={"select user_id, count(*\n  from payment\n where card_brand in ('VISA', 'MASTER')\n group by 1;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
         dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
         output={[]} txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onCaret={noop} onStatements={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
@@ -841,7 +933,7 @@ export const ConsoleLongOutput: S = {
           { ts: "10:24:02", text: "ERROR: value too long for type character varying(255)", level: "error" },
         ]}
         txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onCaret={noop} onStatements={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
@@ -857,7 +949,7 @@ const consoleUsers: QueryResult = {
 const consoleProps = {
   tabId: "story", target: "dev", connName: "[DEV] shop_app", kind: "postgres" as const, dialect: dialectOf("postgres"), database: "shop_app", schema: "public",
   dbList: [], schemaList: [], running: false, loadingMore: false, output: [], txManual: false, inTx: false,
-  onChange: noop, onExecute: noop, onCancel: noop, onSetActiveResult: noop, onPin: noop, onCloseResult: noop, onFetchMore: noop, onSubmit: async () => {}, onExport: noop, onHistory: noop,
+  onChange: noop, onExecute: noop, onCancel: noop, onSetActiveResult: noop, onCaret: noop, onStatements: noop, onPin: noop, onCloseResult: noop, onFetchMore: noop, onSubmit: async () => {}, onExport: noop, onHistory: noop,
   onTxMode: noop, onCommit: noop, onRollback: noop, onLoadDbs: noop, onLoadSchemas: noop, onSwitchDb: noop, onSwitchSchema: noop, registerApi: noop, onClearOutput: noop, onError: noop, onLoadingChange: noop,
 };
 /** One toggling button per toolbar (#107): the console's ▶ is ■ in the same spot while it runs a statement (not for a result's
@@ -890,7 +982,7 @@ export const ConsoleEditableResult: S = {
   render: () => (
     <Frame h={420}>
       <ConsolePane {...consoleProps} initialSql="select id, user_name as name, email from users;" activeResult="r1"
-        results={[{ id: "r1", title: "Result 1", sql: "select id, user_name as name, email from users", kind: "result", result: consoleUsers, pinned: false }]} />
+        results={[{ id: "r1", stmt: 0, num: 1, used: 1, title: "users", sql: "select id, user_name as name, email from users", kind: "result", result: consoleUsers, pinned: false }]} />
     </Frame>
   ),
   play: async ({ canvasElement }) => {
@@ -905,6 +997,33 @@ export const ConsoleEditableResult: S = {
     await userEvent.type(input, "Lee{Enter}");
   },
 };
+/** #151: one result tab per statement, numbered by its place in the script ("2: payments"); the caret entering a statement shows its
+ *  tab, a rerun replaces it, deleting the statement closes it. Statement 1's first result was pinned (📌): it no longer follows, and
+ *  running statement 1 again opened the tab after it. Settings › Appearance › Console › Result tabs caps the unpinned ones */
+const resultTabsPayments: QueryResult = {
+  columns: [{ name: "id", typeName: "INT8" }, { name: "order_id", typeName: "INT8" }, { name: "method", typeName: "VARCHAR" }, { name: "amount", typeName: "NUMERIC" }],
+  rows: Array.from({ length: 5 }, (_, i) => [i + 1, 1000 + i, ["card", "bank", "point"][i % 3], ((i * 53) % 400) + 10]),
+  rowsAffected: 0, truncated: false, elapsedMs: 3, hasResultSet: true,
+};
+const resultTabsSql = "select id, user_name as name, email from users";
+const ConsoleResultTabsScreen = () => (
+  <Frame h={420}>
+    <ConsolePane {...consoleProps} tabId="story-result-tabs" initialSql={`${resultTabsSql};\nselect * from payments limit 5;`} activeResult="r3"
+      output={[
+        { ts: "10:24:01", level: "sql", text: `[DEV] shop_app> ${resultTabsSql}` },
+        { ts: "10:24:01", level: "info", text: "3 rows retrieved starting from 1 in 4 ms" },
+        { ts: "10:24:09", level: "sql", text: "[DEV] shop_app> select * from payments limit 5" },
+        { ts: "10:24:09", level: "info", text: "5 rows retrieved starting from 1 in 3 ms" },
+      ]}
+      results={[
+        { id: "r1", stmt: null, num: 1, used: 1, title: "users", sql: resultTabsSql, kind: "result", result: consoleUsers, pinned: true },
+        { id: "r2", stmt: 0, num: 1, used: 2, title: "users", sql: resultTabsSql, kind: "result", result: { ...consoleUsers, rows: consoleUsers.rows.slice(0, 2) }, pinned: false },
+        { id: "r3", stmt: 1, num: 2, used: 3, title: "payments", sql: "select * from payments limit 5", kind: "result", result: resultTabsPayments, pinned: false },
+      ]} />
+  </Frame>
+);
+export const ConsoleResultTabs: S = { name: "Console — result tabs", render: () => <ConsoleResultTabsScreen /> };
+export const ConsoleResultTabsLight: S = { name: "Console — result tabs, light", globals: { theme: "light" }, render: () => <ConsoleResultTabsScreen /> };
 /** Read-only: the greyed-out edit buttons say why (QueryResult.readOnlyReason; here the key isn't in the result) */
 export const ConsoleReadOnlyResult: S = {
   name: "Console — read-only result (reason)",
@@ -914,7 +1033,7 @@ export const ConsoleReadOnlyResult: S = {
     return (
       <Frame h={420}>
         <ConsolePane {...consoleProps} initialSql={sql + ";"} activeResult="r1"
-          results={[{ id: "r1", title: "Result 1", sql, kind: "result", result: { ...rest, readOnlyReason: "Read-only: the result doesn't include the primary key of public.users (id)." }, pinned: false }]} />
+          results={[{ id: "r1", stmt: 0, num: 1, used: 1, title: "users", sql, kind: "result", result: { ...rest, readOnlyReason: "Read-only: the result doesn't include the primary key of public.users (id)." }, pinned: false }]} />
       </Frame>
     );
   },
@@ -936,7 +1055,7 @@ export const ConsoleJoinResult: S = {
   name: "Console — join result, edited per table",
   render: () => (
     <Frame h={420}>
-      <ConsolePane {...consoleProps} initialSql={vocSql + ";"} activeResult="r1" results={[{ id: "r1", title: "Result 1", sql: vocSql, kind: "result", result: vocJoin, pinned: false }]} />
+      <ConsolePane {...consoleProps} initialSql={vocSql + ";"} activeResult="r1" results={[{ id: "r1", stmt: 0, num: 1, used: 1, title: "crm.voc", sql: vocSql, kind: "result", result: vocJoin, pinned: false }]} />
     </Frame>
   ),
   play: async ({ canvasElement }) => {
@@ -995,10 +1114,10 @@ function ConsoleMarks() {
           setOutput(stmts.flatMap((s, i) => {
             const [state, text] = runs[i];
             mark?.(i, { state, out: `o${i}`, ts, text });
-            return [{ ts, text: `[DEV] shop_app> ${s}`, level: "sql" as const, stmt: `o${i}` }, ...(text ? [{ ts, text, level: state === "ok" ? ("info" as const) : ("error" as const) }] : [])];
+            return [{ ts, text: `[DEV] shop_app> ${s.sql}`, level: "sql" as const, stmt: `o${i}` }, ...(text ? [{ ts, text, level: state === "ok" ? ("info" as const) : ("error" as const) }] : [])];
           }));
         }}
-        onCancel={noop} onSetActiveResult={setActive} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onCancel={noop} onSetActiveResult={setActive} onCaret={noop} onStatements={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop}
         registerApi={(_id, a) => setTimeout(() => a.run())} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
@@ -1124,7 +1243,7 @@ export const StatusBarStory: S = {
   ),
 };
 /** Right-click the status bar (or click an item): the checklist of items by group, Restore Defaults; it stays open while items are
- *  toggled (↑↓ move, Space or ↩ toggles, Esc closes). The same setting as Settings › Appearance › Status bar and the TUI's ⌃k › Status
+ *  toggled (↑↓ move, Space or ↩ toggles, Esc closes). The same setting as Settings › Appearance › Data grid › Status bar and the TUI's ⌃k › Status
  *  Bar Items… (settings.json, here the mock's) */
 export const StatusBarMenu: S = {
   name: "Status bar — items checklist",

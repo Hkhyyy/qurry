@@ -65,9 +65,8 @@ async fn f5_runs_several_statements_in_order() {
     );
     let c = console(&h);
     assert!(!c.running);
-    assert_eq!(c.result_title, "Result 2: select id from t");
-    assert_eq!(c.grid.as_ref().map(|g| g.result.rows.len()), Some(2));
-    assert!(!c.show_output, "the result grid is shown, not Output");
+    assert_eq!(c.results.shown_tab().map(|t| t.label()), Some("2: t".into()));
+    assert_eq!(c.grid().map(|g| g.result.rows.len()), Some(2));
     assert_eq!(h.app.status, "3 row(s) affected in 7 ms");
 }
 
@@ -92,7 +91,7 @@ async fn f5_stops_at_the_first_error() {
             "Note: 1 earlier statement(s) of this run were already committed (Auto mode) and were not rolled back",
         ]
     );
-    assert!(console(&h).show_output);
+    assert!(console(&h).results.shown.is_none(), "Output is shown");
 }
 
 /// A statement that ran but whose result the Production log couldn't record: a later statement's status doesn't hide its warning
@@ -177,7 +176,7 @@ async fn explain_analyze_wraps_changes_in_a_rolled_back_transaction() {
     h.app.fake_db = Some(record);
     h.console_with("delete from t where a = 1", 0, 0);
     h.app.analyze_next = true;
-    h.app.run_stmts(vec!["delete from t where a = 1".into()], true, false);
+    h.app.run_stmts(vec!["delete from t where a = 1".into()], vec![], true, false);
     h.app.analyze_next = false;
     h.settle().await;
     assert_eq!(*SEEN.lock().unwrap(), ["BEGIN", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) delete from t where a = 1", "ROLLBACK"]);
@@ -196,7 +195,7 @@ async fn explain_analyze_asks_before_what_a_rollback_cant_undo() {
     let sql = "select nextval('s')";
     h.console_with(sql, 0, 0);
     h.app.analyze_next = true;
-    h.app.run_stmts(vec![sql.into()], true, false);
+    h.app.run_stmts(vec![sql.into()], vec![], true, false);
     h.app.analyze_next = false;
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
     assert!(text.contains("a rollback can't undo what it does outside the transaction: sequence values"), "{text}");
@@ -220,7 +219,7 @@ async fn explain_analyze_lists_each_statement_with_its_reason() {
     let mut h = Harness::new().await;
     h.console_with("select nextval('s'); delete from audit", 0, 0);
     h.app.analyze_next = true;
-    h.app.run_stmts(vec!["select nextval('s')".into(), "delete from audit".into()], true, false);
+    h.app.run_stmts(vec!["select nextval('s')".into(), "delete from audit".into()], vec![], true, false);
     h.app.analyze_next = false;
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
     assert!(text.starts_with("Explain Analyze really runs the statements, and 2 of them need a look:"), "{text}");
@@ -254,7 +253,7 @@ async fn explain_analyze_wraps_reads() {
     let sql = "select archive_old_orders()";
     h.console_with(sql, 0, 0);
     h.app.analyze_next = true;
-    h.app.run_stmts(vec![sql.into()], true, false);
+    h.app.run_stmts(vec![sql.into()], vec![], true, false);
     h.app.analyze_next = false;
     assert!(h.app.popup.is_none(), "a read that calls a user-defined function doesn't ask");
     h.settle().await;
@@ -262,7 +261,7 @@ async fn explain_analyze_wraps_reads() {
     SEEN.lock().unwrap().clear();
     let before = h.console_output().len();
     h.app.analyze_next = true;
-    h.app.run_stmts(vec!["select count(*) from t".into()], true, false);
+    h.app.run_stmts(vec!["select count(*) from t".into()], vec![], true, false);
     h.app.analyze_next = false;
     assert!(h.app.popup.is_none(), "a plain read doesn't ask");
     h.settle().await;
@@ -291,7 +290,7 @@ async fn explain_analyze_in_a_transaction_on_a_read_only_source_runs() {
         c.in_tx = true;
     }
     h.app.analyze_next = true;
-    h.app.run_stmts(vec![sql.into()], true, false);
+    h.app.run_stmts(vec![sql.into()], vec![], true, false);
     h.app.analyze_next = false;
     assert!(h.app.popup.is_none(), "a plain read doesn't ask");
     h.settle().await;
@@ -300,6 +299,78 @@ async fn explain_analyze_in_a_transaction_on_a_read_only_source_runs() {
     assert!(!out.iter().any(|l| l.contains("Read-only mode")), "{out:?}");
     let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!() };
     assert!(c.in_tx, "still in the transaction the user opened");
+}
+
+/// A console on a source of `kind` (saved, so its kind is known) with `sql`, its caret at the start
+async fn kind_console(kind: &str, sql: &str) -> Harness {
+    let mut h = Harness::new().await;
+    // In the test's folder: a file DB's path is opened (an empty file is made) when the console loads its metadata
+    let db = h.app.import_home.with_file_name("d.db");
+    let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "k", "name": "K", "kind": kind, "host": "127.0.0.1", "port": 1, "user": "u", "database": db
+    }))
+    .unwrap();
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    let id = h.app.restore_console("k", "d".into(), "console".into(), sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    h
+}
+
+/// Explain sends the kind's statement (qurry_shared::explain, the GUI's and MCP's), without the trailing ;
+#[tokio::test]
+async fn explain_sends_the_kinds_statement() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    // One row with PostgreSQL's JSON plan, whatever the kind
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        let plan = r#"[{"Plan": {"Node Type": "Seq Scan", "Relation Name": "t", "Total Cost": 1.0, "Plan Rows": 1, "Plan Width": 4}}]"#;
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "QUERY PLAN".into(), type_name: "json".into() }], rows: vec![vec![plan.into()]], has_result_set: true, ..fake("x")? })
+    }
+    for (kind, want, column) in [
+        ("postgres", "EXPLAIN (FORMAT JSON) select * from t", "operation"),
+        ("mysql", "EXPLAIN select * from t", "QUERY PLAN"),
+        ("sqlite", "EXPLAIN QUERY PLAN select * from t", "QUERY PLAN"),
+    ] {
+        let mut h = kind_console(kind, "select * from t;").await;
+        h.app.fake_db = Some(record);
+        SEEN.lock().unwrap().clear();
+        h.app.run_action(crate::app::Action::Explain);
+        h.settle().await;
+        assert_eq!(*SEEN.lock().unwrap(), [want], "{kind}");
+        // Only PostgreSQL's JSON becomes the plan tree; the others' rows are shown as they came
+        let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!() };
+        assert_eq!(c.results.tabs[0].grid.result.columns[0].name, column, "{kind}");
+    }
+}
+
+/// Redis has no Explain: Output, the status line and the statement's mark say so, and nothing is sent (it used to run as is).
+/// Output comes in front of an earlier run's result, so the reason is what shows
+#[tokio::test]
+async fn explain_on_redis_says_it_isnt_available_and_sends_nothing() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "value".into(), type_name: "string".into() }], rows: vec![vec!["v".into()]], has_result_set: true, ..fake(q)? })
+    }
+    let mut h = kind_console("redis", "GET k").await;
+    h.app.fake_db = Some(record);
+    h.app.execute(false);
+    h.settle().await;
+    assert!(console(&h).results.shown.is_some(), "the run's result is shown");
+    SEEN.lock().unwrap().clear();
+    let before = h.console_output().len();
+    h.app.run_action(crate::app::Action::Explain);
+    h.settle().await;
+    assert!(SEEN.lock().unwrap().is_empty(), "{:?}", SEEN.lock().unwrap());
+    let msg = "Explain isn't available for Redis: run the statement without Explain";
+    assert_eq!(h.console_output()[before..], ["K> GET k", msg]);
+    assert!(console(&h).results.shown.is_none(), "Output with the reason is in front");
+    assert_eq!(h.app.status, msg);
+    assert_eq!(console(&h).marks.at(0), Some(crate::app::MarkState::Err));
 }
 
 /// ⌃Space lists columns after "alias." (from the loaded metadata); Enter replaces the typed prefix with the picked one
@@ -334,7 +405,7 @@ async fn failed_commit_is_in_output() {
     h.settle().await;
     // No session for this console: commit_tx fails
     assert_eq!(h.console_output(), ["Session closed"]);
-    assert!(console(&h).show_output);
+    assert!(console(&h).results.shown.is_none(), "Output is shown");
     assert_eq!(h.app.status, "Session closed");
     // And a notice to acknowledge, as in the GUI
     let Some(crate::app::Popup::Message { title, text }) = &h.app.popup else { panic!("no notice") };
@@ -346,7 +417,7 @@ async fn failed_commit_is_in_output() {
     assert!(h.app.popup.is_none());
     // A popup opened while the COMMIT was running (a confirmation here) stays: the notice goes over it, and Esc goes back to it
     h.app.tx(crate::app::Action::Commit);
-    h.app.popup = Some(crate::app::Popup::Confirm { opened: None, text: "Roll back and close the tab?".into(), on_yes: Box::new(|_| {}) });
+    h.app.popup = Some(crate::app::Popup::Confirm { opened: None, sql: None, text: "Roll back and close the tab?".into(), on_yes: Box::new(|_| {}) });
     h.settle().await;
     let Some(crate::app::Popup::Note { title, back, .. }) = &h.app.popup else { panic!("no notice over the confirmation") };
     assert_eq!(title, "Commit failed");
@@ -432,7 +503,7 @@ async fn prod_console(sql: &str) -> Harness {
 async fn console_result_edits_and_submits_like_a_table() {
     let mut h = prod_console("select id, user_name as name from users").await;
     assert!(console(&h).tx_manual, "Production starts in Manual");
-    assert!(console(&h).grid.is_some(), "{}", h.app.status);
+    assert!(console(&h).grid().is_some(), "{}", h.app.status);
     h.key("Down");
     h.key("Right");
     h.key("Enter");
@@ -441,9 +512,9 @@ async fn console_result_edits_and_submits_like_a_table() {
     }
     h.type_str("LEE");
     h.key("Enter");
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 1);
+    assert_eq!(console(&h).grid().unwrap().pending(), 1);
     h.key("a");
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    assert_eq!(console(&h).grid().unwrap().pending(), 2);
     h.key("Ctrl+S");
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
     let sql = "\n\n  UPDATE public.users SET user_name = 'LEE' WHERE id = '2'\n  INSERT INTO public.users DEFAULT VALUES";
@@ -465,7 +536,7 @@ async fn console_join_result_edits_per_table() {
     use qurry_shared::errors as e;
     let mut h = prod_console("select vo.idx, vo.status, pu.idx, pu.role, upper(pu.role) as shout from crm.voc vo left join users pu on pu.idx = vo.user_idx").await;
     let edit = |h: &mut Harness, row: usize, col: usize, v: &str| {
-        let g = console_mut(h).grid.as_mut().unwrap();
+        let g = console_mut(h).grid_mut().unwrap();
         (g.row, g.col) = (row, col);
         h.key("Enter");
         if h.app.popup.is_some() {
@@ -475,7 +546,7 @@ async fn console_join_result_edits_per_table() {
     };
     edit(&mut h, 0, 1, "-done");
     edit(&mut h, 0, 3, "-x");
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    assert_eq!(console(&h).grid().unwrap().pending(), 2);
     // users' side of voc 2: no row matched
     edit(&mut h, 1, 3, "x");
     assert_eq!(h.app.status, e::edit_no_row("public.users"));
@@ -485,13 +556,13 @@ async fn console_join_result_edits_per_table() {
     assert_eq!(h.app.status, e::EDIT_JOIN_ROWS);
     h.key("d");
     assert_eq!(h.app.status, e::EDIT_JOIN_ROWS);
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    assert_eq!(console(&h).grid().unwrap().pending(), 2);
     // A paste reaching a read-only cell writes nothing
-    let g = console_mut(&mut h).grid.as_mut().unwrap();
+    let g = console_mut(&mut h).grid_mut().unwrap();
     (g.row, g.col) = (0, 3);
     h.app.paste_grid("a\tb");
     assert_eq!(h.app.status, e::edit_computed("shout"));
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    assert_eq!(console(&h).grid().unwrap().pending(), 2);
     h.key("Ctrl+S");
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
     assert!(text.ends_with("\n\n  UPDATE crm.voc SET status = 'open-done' WHERE idx = '1'\n  UPDATE public.users SET role = 'member-x' WHERE idx = '10'"), "{text}");
@@ -545,7 +616,7 @@ async fn console_result_read_only_says_why() {
         c.tx_manual = true;
     }
     h.key("a");
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 1);
+    assert_eq!(console(&h).grid().unwrap().pending(), 1);
 }
 
 /// Running again with pending edits asks first: no keeps them, yes drops them and runs
@@ -558,13 +629,13 @@ async fn console_rerun_with_pending_edits_asks_first() {
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
     assert_eq!(text, "1 pending change(s) are not saved to the database (⌃s submits them). Discard them and run the statement?");
     h.key("n");
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 1);
+    assert_eq!(console(&h).grid().unwrap().pending(), 1);
     let before = h.console_output().len();
     h.key("F5");
     h.key("y");
     h.settle().await;
     assert!(h.console_output().len() > before, "it ran");
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 0);
+    assert_eq!(console(&h).grid().unwrap().pending(), 0);
 }
 
 /// Metadata with a foreign key (orders.user_id → users.id) and a user function, for the console's target
@@ -807,4 +878,246 @@ async fn a_picked_subquery_goes_through_the_guards() {
     let out = h.console_output();
     assert_eq!(out[0], "> with d as (delete from payment where id = 4 returning id) select id from d");
     assert!(out[1].contains("Read-only"), "{out:?}");
+}
+
+/// The theme's color of a highlight token (keyword, number, string, function, comment)
+pub(super) fn token(h: &Harness, tok: &str) -> ratatui::style::Color {
+    let t = h.app.themes.resolve(qurry_shared::theme::SYSTEM, !h.app.auto_light);
+    let (r, g, b) = qurry_shared::theme::rgb(t.color(tok)).unwrap();
+    ratatui::style::Color::Rgb(r, g, b)
+}
+
+/// The cell where `pat` (a part of `after`) is, on the first screen row holding `after`
+pub(super) fn cell_at<'a>(buf: &'a ratatui::buffer::Buffer, after: &str, pat: &str) -> &'a ratatui::buffer::Cell {
+    let (w, ht) = (buf.area.width, buf.area.height);
+    let row = |y: u16| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    let y = (0..ht).find(|&y| row(y).contains(after)).unwrap_or_else(|| panic!("no row with {after:?}"));
+    let r = row(y);
+    let at = r[..r.find(after).unwrap()].chars().count() + after[..after.find(pat).unwrap()].chars().count();
+    &buf[(at as u16, y)]
+}
+
+const COLORED: &str = "select count(*), 'it''s' from t where id = 42; -- tail\n/* block\n   inside the comment */\ncreate function f() returns int as $$\n  select 1 from body;\n$$ language sql; select 2;";
+
+/// #150: the console draws its SQL in the theme's colors, as the GUI console and the table filter do; a block comment and a
+/// dollar-quoted body keep their color on every line they span
+#[tokio::test]
+async fn console_draws_sql_in_colors() {
+    use ratatui::style::Modifier;
+    let mut h = Harness::new().await;
+    for theme in ["dark", "light"] {
+        h.app.themes.theme = Some(theme.into());
+        h.console_with(COLORED, 3, 0);
+        let buf = h.buffer(100, 30);
+        let fg = |after: &str, pat: &str| cell_at(&buf, after, pat).fg;
+        assert_eq!(fg("select count", "select"), token(&h, "keyword"), "{theme}");
+        assert_eq!(fg("t where id", "where"), token(&h, "keyword"), "{theme}");
+        assert_eq!(fg("select count", "count"), token(&h, "function"), "{theme}");
+        assert_eq!(fg("= 42", "42"), token(&h, "number"), "{theme}");
+        assert_eq!(fg("'it''s'", "'it"), token(&h, "string"), "{theme}");
+        assert_eq!(fg("'it''s'", "''s'"), token(&h, "string"), "{theme}");
+        assert_eq!(fg("-- tail", "--"), token(&h, "comment"), "{theme}");
+        assert!(cell_at(&buf, "-- tail", "tail").modifier.contains(Modifier::ITALIC), "{theme}");
+        // Lines inside a block comment and a $$ body
+        assert_eq!(fg("inside the comment", "inside"), token(&h, "comment"), "{theme}");
+        assert_eq!(fg("the comment */", "*/"), token(&h, "comment"), "{theme}");
+        assert_eq!(fg("select 1 from body", "select"), token(&h, "string"), "{theme}");
+        assert_eq!(fg("select 1 from body", "1"), token(&h, "string"), "{theme}");
+        assert_eq!(fg("; select 2", "select"), token(&h, "keyword"), "{theme}");
+        // Names and symbols keep the text color
+        let colored = ["keyword", "function", "number", "string", "comment"].map(|t| token(&h, t));
+        for (after, pat) in [("t where", "t"), ("id = 42", "id"), ("id = 42", "="), ("function f()", "f")] {
+            assert!(!colored.contains(&fg(after, pat)), "{theme}: {after}");
+        }
+        h.app.close_tab_now(h.app.active);
+    }
+}
+
+/// The selection, search matches and the caret keep their look over the colors
+#[tokio::test]
+async fn console_colors_give_way_to_selection_search_and_caret() {
+    use ratatui::style::Modifier;
+    use tui_textarea::CursorMove;
+    let mut h = Harness::new().await;
+    h.console_with(COLORED, 0, 0);
+    let plain = cell_at(&h.buffer(100, 30), "select count", "elect").clone();
+    {
+        let c = console_mut(&mut h);
+        c.editor.start_selection();
+        c.editor.move_cursor(CursorMove::Jump(0, 6));
+        let _ = c.editor.set_search_pattern("where");
+    }
+    let buf = h.buffer(100, 30);
+    let kw = token(&h, "keyword");
+    assert_eq!(plain.fg, kw);
+    let sel = cell_at(&buf, "select count", "elect");
+    assert_ne!(sel.fg, kw, "selected text is drawn as selected");
+    assert_ne!(sel.bg, plain.bg, "the selection has its background");
+    let found = cell_at(&buf, "t where", "where");
+    assert_ne!(found.fg, kw, "a search match is drawn as a match");
+    assert_ne!(found.bg, plain.bg);
+    // The caret right after the selection (on the space) and an unselected keyword elsewhere
+    assert!(cell_at(&buf, "select count", " count").modifier.contains(Modifier::REVERSED));
+    assert_eq!(cell_at(&buf, "; select 2", "select").fg, kw);
+}
+
+/// Scrolled down and sideways (tui-textarea's scroll, read from the caret): the colors stay on their characters, a block comment
+/// opened above the first row on screen included
+#[tokio::test]
+async fn console_colors_follow_the_scroll() {
+    let mut h = Harness::new().await;
+    let mut sql = String::from("/* opened far above\n");
+    sql += &"   still the comment\n".repeat(60);
+    sql += "end */ select 1;\n";
+    sql += &(0..40).map(|i| format!("{i} as n{i}, 'v{i}'")).collect::<Vec<_>>().join(", ");
+    sql += " from t;";
+    let last = sql.lines().count() as u16 - 1;
+    let screen = |buf: &ratatui::buffer::Buffer| (0..30).map(|y| (0..80).map(|x| buf[(x, y)].symbol()).collect::<String>() + "\n").collect::<String>();
+    // Scrolled down to the comment's end: the rows above it on screen are inside the comment
+    h.console_with(&sql, last - 1, 0);
+    let buf = h.buffer(80, 30);
+    assert!(!screen(&buf).contains("opened far above") && screen(&buf).contains("still the comment"), "{}", screen(&buf));
+    assert_eq!(cell_at(&buf, "still the comment", "still").fg, token(&h, "comment"));
+    assert_eq!(cell_at(&buf, "still the comment", "comment").fg, token(&h, "comment"));
+    assert_eq!(cell_at(&buf, "end */ select", "*/").fg, token(&h, "comment"));
+    assert_eq!(cell_at(&buf, "end */ select", "select").fg, token(&h, "keyword"));
+    assert_eq!(cell_at(&buf, "select 1;", "1;").fg, token(&h, "number"));
+    // The end of the long last line: scrolled sideways, its tail on screen
+    h.app.close_tab_now(h.app.active);
+    h.console_with(&sql, last, u16::MAX);
+    let buf = h.buffer(80, 30);
+    assert!(screen(&buf).contains("from t;") && !screen(&buf).contains("end */ select"), "{}", screen(&buf));
+    assert_eq!(cell_at(&buf, "from t;", "from").fg, token(&h, "keyword"));
+    assert_eq!(cell_at(&buf, "'v39'", "'v39'").fg, token(&h, "string"));
+    assert_eq!(cell_at(&buf, "'v39'", "39'").fg, token(&h, "string"));
+    assert_eq!(cell_at(&buf, "39 as", "39").fg, token(&h, "number"));
+    assert_eq!(cell_at(&buf, "39 as", "as").fg, token(&h, "keyword"));
+}
+
+/// A pasted tab is drawn up to the next stop: the colors after it stay on their characters
+#[tokio::test]
+async fn console_colors_after_a_tab() {
+    let mut h = Harness::new().await;
+    h.console_with("x\tselect\t\t42 from t;", 0, 0);
+    let buf = h.buffer(100, 30);
+    assert_eq!(cell_at(&buf, "select", "select").fg, token(&h, "keyword"));
+    assert_eq!(cell_at(&buf, "select", "elect").fg, token(&h, "keyword"));
+    assert_eq!(cell_at(&buf, "42 from", "42").fg, token(&h, "number"));
+    assert_eq!(cell_at(&buf, "42 from", "from").fg, token(&h, "keyword"));
+}
+
+/// NO_COLOR draws the console without colors; 16 colors only with the terminal's own (no truecolor or 256 escapes)
+#[tokio::test]
+async fn console_colors_without_truecolor() {
+    use crate::theme::ColorMode;
+    use ratatui::style::Color;
+    let mut h = Harness::new().await;
+    h.console_with(COLORED, 3, 0);
+    // The editor's text cells (inside its border, past the line numbers)
+    let text = |buf: &ratatui::buffer::Buffer| {
+        let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
+        let y0 = (0..30).find(|&y| row(y).contains("select count")).unwrap();
+        let x0 = row(y0).find("select").unwrap() as u16;
+        (y0..y0 + 6).flat_map(|y| (x0..90).map(move |x| (x, y))).map(|p| buf[p].clone()).collect::<Vec<_>>()
+    };
+    h.app.color = ColorMode::NoColor;
+    assert!(text(&h.buffer(100, 30)).iter().all(|c| c.fg == Color::Reset), "NO_COLOR: no fg colors");
+    h.app.color = ColorMode::Ansi16;
+    let cells = text(&h.buffer(100, 30));
+    assert!(cells.iter().all(|c| !matches!(c.fg, Color::Rgb(..) | Color::Indexed(_))), "16 colors: no truecolor or 256 escapes");
+    assert!(cells.iter().any(|c| c.fg != Color::Reset), "16 colors still tell the classes apart");
+}
+
+/// After a failed load (#157), the console's grid says why, wrapped, with the run key that runs its result's statement again: that
+/// key in the grid runs the result's own statement (as the GUI's Run Again), not the one at the editor cursor; a rebound run key shows
+#[tokio::test]
+async fn run_key_in_the_grid_after_a_failed_load_runs_the_results_statement() {
+    use crate::{app::Action, keys::Slot};
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    h.console_with("select id from t;\nupdate t set a = 1 where id = 2;", 0, 0);
+    let fail_a_load = |h: &mut Harness| {
+        let c = console_mut(h);
+        let g = c.results.grid_mut().unwrap();
+        g.result.truncated = true;
+        g.row = g.rows() - 1;
+        // The editor's cursor on the other statement: the run key in the editor would run that one
+        c.editor.move_cursor(tui_textarea::CursorMove::Jump(1, 0));
+        h.app.fetch_more();
+    };
+    // The run key in the editor asks which statement: the one at the cursor
+    h.key("F5");
+    h.key("Enter");
+    h.settle().await;
+    fail_a_load(&mut h);
+    h.settle().await;
+    let why = console(&h).results.grid().and_then(|g| g.more_error.clone()).expect("the load failed");
+    assert_eq!(why, "Couldn't load more rows (F5 in the grid runs it again): Session closed");
+    // In a narrow grid the reason wraps on the grid's last lines, and its end still shows
+    let s = h.screen(60, 30);
+    assert!(s.contains("│✗ Couldn't load more rows (F5 in│") && s.contains("│the grid runs it again): Session│") && s.contains("│closed "), "{s}");
+    h.app.focus = crate::app::Focus::Grid;
+    SEEN.lock().unwrap().clear();
+    h.key("F5");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["select id from t"], "the result's statement, not the editor's");
+    assert_eq!(console(&h).results.tabs.len(), 1, "into the same result tab");
+    assert!(console(&h).results.grid().is_some_and(|g| g.more_error.is_none()));
+    // Without a failed load, the run key in the grid runs the editor's statement as before
+    SEEN.lock().unwrap().clear();
+    h.key("F5");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(SEEN.lock().unwrap().len(), 1);
+    assert!(SEEN.lock().unwrap()[0].starts_with("update t"), "{:?}", SEEN.lock().unwrap());
+    // A rebound run key: the hint names it, and it runs the result's statement again
+    h.app.keys.bind(Slot::global(Action::Execute), "F9".into(), false);
+    h.app.focus = crate::app::Focus::Editor;
+    console_mut(&mut h).editor.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+    h.key("F9");
+    h.key("Enter");
+    h.settle().await;
+    fail_a_load(&mut h);
+    h.settle().await;
+    let why = console(&h).results.grid().and_then(|g| g.more_error.clone()).unwrap_or_default();
+    assert!(why.starts_with("Couldn't load more rows (F9 in the grid runs it again)"), "{why}");
+    h.app.focus = crate::app::Focus::Grid;
+    SEEN.lock().unwrap().clear();
+    h.key("F9");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["select id from t"]);
+}
+
+/// The run key in the grid after a failed load, with a pending edit, asks first as the editor's run does: no keeps the edit, yes
+/// drops it and runs the result's statement again
+#[tokio::test]
+async fn rerun_after_a_failed_load_with_pending_edits_asks_first() {
+    let mut h = prod_console("select id, user_name as name from users").await;
+    h.key("a");
+    assert_eq!(console(&h).grid().unwrap().pending(), 1);
+    let g = console_mut(&mut h).results.grid_mut().unwrap();
+    g.result.truncated = true;
+    g.row = g.rows() - 1;
+    h.app.fetch_more();
+    h.settle().await;
+    assert!(console(&h).results.grid().is_some_and(|g| g.more_error.is_some()), "the load failed");
+    h.app.focus = crate::app::Focus::Grid;
+    let before = h.console_output().len();
+    h.key("F5");
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    assert_eq!(text, "1 pending change(s) are not saved to the database (⌃s submits them). Discard them and run the statement?");
+    h.key("n");
+    assert_eq!(console(&h).grid().unwrap().pending(), 1, "the edit stays");
+    assert_eq!(h.console_output().len(), before, "nothing ran");
+    h.key("F5");
+    h.key("y");
+    h.settle().await;
+    assert!(h.console_output().len() > before, "it ran");
+    assert_eq!(console(&h).grid().unwrap().pending(), 0);
+    assert!(console(&h).results.grid().is_some_and(|g| g.more_error.is_none()));
 }

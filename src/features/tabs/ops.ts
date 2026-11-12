@@ -1,4 +1,4 @@
-import { api, ConnectionView, targetId } from "../../lib/api";
+import { api, ConnectionView, defaultDbOf, targetId } from "../../lib/api";
 import { sharedOr } from "../../lib/shared";
 import type { OutputLine } from "../../components/ConsolePane";
 import { ask } from "../../lib/dialogs";
@@ -59,7 +59,7 @@ const buildTab = (
   group: Group,
   title: string,
 ): Tab => {
-  const database = opts.database && opts.database !== (c.database || "postgres") ? opts.database : undefined;
+  const database = opts.database && opts.database !== defaultDbOf(c) ? opts.database : undefined;
   return {
     id: crypto.randomUUID(),
     kind,

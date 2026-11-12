@@ -57,7 +57,7 @@ fn typed(key: &str) -> String {
 async fn default_keys_apply_their_command() {
     type Applied = fn(&Harness) -> bool;
     let cases: [(Action, Applied); 7] = [
-        (Action::ToggleOutput, |h| matches!(&h.app.tabs[h.app.active].kind, TabKind::Console(c) if !c.show_output)),
+        (Action::ToggleOutput, |h| matches!(&h.app.tabs[h.app.active].kind, TabKind::Console(c) if c.results.shown.is_none())),
         (Action::Help, |h| matches!(h.app.popup, Some(Popup::Help { .. }))),
         (Action::Palette, |h| matches!(h.app.popup, Some(Popup::Palette(_)))),
         (Action::Find, |h| matches!(h.app.popup, Some(Popup::Find(_)))),
@@ -87,6 +87,40 @@ async fn palette_list_is_unchanged() {
     golden("actions_palette.txt", &list);
 }
 
+/// ⌃k › Show Log says where the log file is on the status line (nothing is opened in a test)
+#[tokio::test]
+async fn show_log_puts_the_path_on_the_status_line() {
+    let mut h = Harness::new().await;
+    let file = std::env::temp_dir().join(format!("qurry-show-log-{}", uuid::Uuid::new_v4())).join("qurry.log");
+    h.app.log_file = file.clone();
+    h.key("Ctrl+K");
+    h.type_str("Show Log");
+    h.key("Enter");
+    assert_eq!(h.app.ran.last(), Some(&Action::ShowLog));
+    assert_eq!(h.app.status, format!("Show Log: {}", file.display()));
+    assert!(!file.parent().unwrap().exists(), "a test opens nothing and creates no folder");
+    assert!(h.screen(120, 30).contains("Show Log: "), "the path is on the status line");
+}
+
+/// ⌃k › Open GitHub puts the address on the status line whether the browser started or not (SSH: no browser); nothing is launched
+#[tokio::test]
+async fn open_github_puts_the_address_on_the_status_line() {
+    use crate::app::{OPENER_FAILS, REPO_URL};
+    let mut h = Harness::new().await;
+    for (fails, want) in [(None, format!("Opening {REPO_URL} in the browser")), (Some(std::io::ErrorKind::NotFound), format!("Couldn't open a browser: {REPO_URL} (entity not found)"))] {
+        OPENER_FAILS.set(fails);
+        h.app.status.clear();
+        h.key("Ctrl+K");
+        h.type_str("Open GitHub");
+        h.key("Enter");
+        assert_eq!(h.app.ran.last(), Some(&Action::OpenGitHub));
+        assert_eq!(h.app.status, want);
+        let s = h.screen(120, 30);
+        assert!(s.contains(REPO_URL), "the address is on the status line:\n{s}");
+    }
+    OPENER_FAILS.set(None);
+}
+
 /// --help (and the F1 window, drawn from the same COMMANDS) lists the commands in keys::ORDER with the same names
 #[test]
 fn help_text_is_unchanged() {
@@ -104,7 +138,7 @@ async fn key_dispatch_bench() {
     const N: u32 = 10_000;
     let mut h = Harness::new().await;
     let id = h.console_tab();
-    let shown = |h: &Harness| matches!(&h.app.tabs[h.app.tab_index(id).unwrap()].kind, TabKind::Console(c) if c.show_output);
+    let shown = |h: &Harness| matches!(&h.app.tabs[h.app.tab_index(id).unwrap()].kind, TabKind::Console(c) if c.results.shown.is_none());
     let before = shown(&h);
     // Lowercase: "Alt+O" is the Shift form, bound to nothing
     for key in ["Alt+o", "Ctrl+Alt+Right", "F12"] {

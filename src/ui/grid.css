@@ -22,7 +22,7 @@
 .cell .json-number { color: var(--ui-json-number); }
 .cell .json-keyword { color: var(--ui-json-keyword); }
 .cell .json-punct { color: var(--ui-json-punct); }
-/* Settings › Appearance › Alignment, per value class (lib/gridAlign.ts); without WebAssembly no al-* class is set and .num stays right */
+/* Settings › Appearance › Data grid › Alignment, per value class (lib/gridAlign.ts); without WebAssembly no al-* class is set and .num stays right */
 .cell.al-left { text-align: left; }
 .cell.al-right { text-align: right; }
 .cell.al-center { text-align: center; }

@@ -50,6 +50,39 @@ pub const R_SET: Color = Color::Rgb(208, 139, 76);
 pub const R_ZSET: Color = Color::Rgb(201, 96, 92);
 pub const R_STREAM: Color = Color::Rgb(90, 164, 105);
 
+/// The look of a piece of SQL (qurry_shared::highlight) in the console and the WHERE / ORDER BY inputs: only the color (comments
+/// italic); names and symbols keep the text's
+pub fn sql_style(class: qurry_shared::highlight::Class) -> Option<Style> {
+    use qurry_shared::highlight::Class;
+    let fg = |c: Color| Some(Style::default().fg(c));
+    match class {
+        Class::Keyword => fg(JSON_KEYWORD),
+        Class::Function => fg(C_ROUTINE),
+        Class::Number => fg(SQL_NUMBER),
+        Class::String => fg(JSON_STRING),
+        Class::Comment => Some(Style::default().fg(SQL_COMMENT).add_modifier(Modifier::ITALIC)),
+        Class::Other => None,
+    }
+}
+
+/// `text` as one line in the console's SQL colors (sql_style), the text unchanged
+pub fn sql_line(text: &str, kind: qurry_shared::DbKind) -> Line<'static> {
+    let mut out = vec![];
+    let mut at = 0;
+    for s in qurry_shared::highlight::highlight(text, kind) {
+        let Some(style) = sql_style(s.class) else { continue };
+        if s.start > at {
+            out.push(Span::raw(text[at..s.start].to_string()));
+        }
+        out.push(Span::styled(text[s.start..s.end].to_string(), style));
+        at = s.end;
+    }
+    if at < text.len() {
+        out.push(Span::raw(text[at..].to_string()));
+    }
+    Line::from(out)
+}
+
 /// Selected row background
 pub fn selected(focused: bool) -> Color {
     if focused {

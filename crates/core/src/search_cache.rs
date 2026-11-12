@@ -30,10 +30,10 @@ fn unhex(s: &str) -> Option<String> {
 }
 
 fn save<T: Serialize>(base: &Path, target: &str, part: &str, v: &T) {
-    if let Ok(data) = serde_json::to_vec(v) {
-        if let Err(e) = crate::secrets::write_private(&file(base, target, part), &data) {
-            crate::log!("[qurry] search cache write failed: {e}");
-        }
+    if let Ok(data) = serde_json::to_vec(v)
+        && let Err(e) = crate::secrets::write_private(&file(base, target, part), &data)
+    {
+        crate::log!("[qurry] search cache write failed: {e}");
     }
 }
 

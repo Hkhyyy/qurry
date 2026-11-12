@@ -70,7 +70,8 @@ const stop = (page: Page) => page.locator(".work-layer:visible").getByTitle(/^Ca
 const reload = (page: Page) => page.locator(".work-layer:visible").getByTitle(/^Reload Page/);
 
 test("the table tab's own Cancel before a reconnect shows ends its load, and its rows never load", async ({ page }) => {
-  await reconnect(page, {});
+  // Listed as reconnecting for only half a second, so the toast (shown after a second) never comes, however slow the browser is
+  await reconnect(page, { listFor: 500 });
   await treeItem(page, "users").first().dblclick();
   await expect(tableBody(page).getByText("Loading…", { exact: true })).toBeVisible();
   // Within the first second nothing says the source reconnects yet
@@ -122,10 +123,11 @@ test("a load that fails for its own reason after its source reconnected says tha
 });
 
 test("the waiting toast goes once the backend no longer lists the source", async ({ page }) => {
-  await reconnect(page, { listFor: 1500 });
+  // Listed for 3 s: the toast (shown after a second) has two seconds to be seen even on a slow browser, then goes
+  await reconnect(page, { listFor: 3000 });
   await treeItem(page, "users").first().dblclick();
   await expect(toast(page)).toContainText(WAITING);
   await expect(running(page)).toContainText(WAITING);
-  await expect(toast(page)).toHaveCount(0, { timeout: 5000 });
+  await expect(toast(page)).toHaveCount(0, { timeout: 8000 });
   await expect(running(page)).not.toContainText("Reconnecting");
 });

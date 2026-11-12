@@ -50,10 +50,10 @@ pub(super) fn hscroll_at(app: &mut App, x: u16, y: u16, d: isize) {
     }
     if inside(app.hits.tree, x, y) {
         app.tree.hoff = (app.tree.hoff as isize + d).max(0) as usize;
-    } else if inside(app.hits.results, x, y) || inside(app.hits.redis_value, x, y) {
-        if let Some(g) = app.grid_mut() {
-            g.hscroll(d.signum());
-        }
+    } else if (inside(app.hits.results, x, y) || inside(app.hits.redis_value, x, y))
+        && let Some(g) = app.grid_mut()
+    {
+        g.hscroll(d.signum());
     }
 }
 
@@ -97,6 +97,13 @@ pub(super) fn mouse_down(app: &mut App, x: u16, y: u16) {
         }
         if inside(app.hits.run, x, y) {
             return app.execute(false);
+        }
+        // A result tab's label (on the result panel's top border, which is also the divider)
+        if let Some(&(_, id)) = app.hits.result_tabs.iter().find(|(r, _)| inside(*r, x, y)) {
+            if let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
+                c.results.show(id);
+            }
+            return;
         }
         if inside(app.hits.divider, x, y) {
             app.drag = Some(Drag::Console);
@@ -169,15 +176,15 @@ pub(super) fn mouse_drag(app: &mut App, x: u16, y: u16) {
             }
         }
         Some(Drag::Grid) => {
-            if let Some(g) = app.grid_mut() {
-                if let Some((r, c)) = g.hit(x, y) {
-                    let anchor = g.anchor.unwrap_or((g.row, g.col));
-                    g.row = r;
-                    if let Some(c) = c {
-                        g.col = c;
-                    }
-                    g.anchor = (anchor != (g.row, g.col)).then_some(anchor).or(g.anchor);
+            if let Some(g) = app.grid_mut()
+                && let Some((r, c)) = g.hit(x, y)
+            {
+                let anchor = g.anchor.unwrap_or((g.row, g.col));
+                g.row = r;
+                if let Some(c) = c {
+                    g.col = c;
                 }
+                g.anchor = (anchor != (g.row, g.col)).then_some(anchor).or(g.anchor);
             }
         }
         Some(Drag::Editor { anchor, selecting }) => {
@@ -245,14 +252,14 @@ fn click(app: &mut App, x: u16, y: u16) {
     let dbl = double(app, x, y);
     // Popups: only palette items are clickable (clicking elsewhere closes)
     if let Some(p) = &mut app.popup {
-        if let Popup::Palette(pal) = p {
-            if inside(app.hits.palette, x, y) {
-                let i = app.hits.palette_off + (y - app.hits.palette.y) as usize;
-                let items = App::palette_matches(pal);
-                if let Some(it) = items.get(i).map(|x| (*x).clone()) {
-                    pal.sel = i;
-                    app.run_palette(it, false);
-                }
+        if let Popup::Palette(pal) = p
+            && inside(app.hits.palette, x, y)
+        {
+            let i = app.hits.palette_off + (y - app.hits.palette.y) as usize;
+            let items = App::palette_matches(pal);
+            if let Some(it) = items.get(i).map(|x| (*x).clone()) {
+                pal.sel = i;
+                app.run_palette(it, false);
             }
         }
         return;
@@ -286,7 +293,7 @@ fn click(app: &mut App, x: u16, y: u16) {
             && let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind)
             && c.marks.at(row).is_some()
         {
-            c.show_output = true;
+            c.results.show(None);
             return;
         }
         if let Some(pos) = editor_pos(app, x, y) {
@@ -332,18 +339,18 @@ fn click(app: &mut App, x: u16, y: u16) {
         }
         let is_table = matches!(app.tabs.get(app.active).map(|t| &t.kind), Some(TabKind::Table(_)));
         let mut start = false;
-        if let Some(g) = app.grid_mut() {
-            if let Some((r, c)) = g.hit(x, y) {
-                g.row = r;
-                if let Some(c) = c {
-                    g.col = c;
-                }
-                g.anchor = None;
-                start = true;
-                if dbl && is_table {
-                    grid_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-                    start = false;
-                }
+        if let Some(g) = app.grid_mut()
+            && let Some((r, c)) = g.hit(x, y)
+        {
+            g.row = r;
+            if let Some(c) = c {
+                g.col = c;
+            }
+            g.anchor = None;
+            start = true;
+            if dbl && is_table {
+                grid_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                start = false;
             }
         }
         // Drag to select a range

@@ -39,12 +39,12 @@ async fn marks_stop_at_the_failed_statement() {
 
     // Clicking a mark shows Output (where its line is)
     if let TabKind::Console(c) = &mut h.app.tabs[h.app.active].kind {
-        c.show_output = false;
+        c.results.show(c.results.tabs.first().map(|t| t.id));
     }
     let buf = h.buffer(100, 24);
     let (x, y) = (0..24).flat_map(|y| (0..100).map(move |x| (x, y))).find(|&(x, y)| buf[(x, y)].symbol() == "✓").unwrap();
     h.mouse("down", x, y);
-    assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Console(c) if c.show_output));
+    assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Console(c) if c.results.shown.is_none()));
 }
 
 /// Each statement's mark changes as it finishes, not when the whole run ends

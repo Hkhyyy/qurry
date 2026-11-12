@@ -850,6 +850,17 @@ pub fn set_keyword_case(state: State<'_, AppState>, case: qurry_core::format::Ke
     state.store.set_keyword_case(case)
 }
 
+/// Result tabs kept per console (Settings › Result tabs; the TUI shares it)
+#[tauri::command]
+pub fn result_tabs(state: State<'_, AppState>) -> usize {
+    state.store.result_tabs()
+}
+
+#[tauri::command]
+pub fn set_result_tabs(state: State<'_, AppState>, n: usize) -> AppResult<()> {
+    state.store.set_result_tabs(n)
+}
+
 /// Theme, Sync with OS and custom themes (Settings › Appearance › Theme; settings.json, shared with the TUI)
 #[tauri::command]
 pub fn theme_settings(state: State<'_, AppState>) -> qurry_core::theme::ThemeSettings {
@@ -908,6 +919,15 @@ pub fn set_column_widths(state: State<'_, AppState>, table: qurry_core::store::T
 #[tauri::command]
 pub fn reset_column_widths(state: State<'_, AppState>, table: qurry_core::store::TableRef) -> AppResult<()> {
     state.store.reset_column_widths(&table)
+}
+
+/// Help › Show Log and Find Action: reveals the log file in Finder, or opens its folder until the file exists
+#[tauri::command]
+pub fn show_log() -> AppResult<()> {
+    let (dir, file) = (qurry_core::logfile::dir(), qurry_core::logfile::path());
+    std::fs::create_dir_all(&dir)?;
+    let opened = if file.exists() { tauri_plugin_opener::reveal_item_in_dir(&file) } else { tauri_plugin_opener::open_path(&dir, None::<&str>) };
+    opened.map_err(|e| crate::error::AppError::Msg(format!("Couldn't open the log ({e}). Open it from Finder: {}", file.display())))
 }
 
 /// Saves the channel, then answers what it offers from the saved check only (no request): None if nothing was checked yet or checks are off

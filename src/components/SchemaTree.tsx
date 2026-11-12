@@ -1,6 +1,6 @@
 import { connBg, connStripe } from "../lib/theme";
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redis, redisDb, dbShown, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
+import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redis, dbShown, defaultDbOf, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
 import { ScopePopup } from "./ScopePopup";
 import { Button, Notice, TreeRow } from "../ui";
 import { invalidateCompletion } from "../lib/completion";
@@ -208,7 +208,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
   const [keyCounts, setKeyCounts] = useState<Record<string, number>>({});
   const [openDbs, setOpenDbs] = useState<Set<string>>(new Set());
   const [gen, setGen] = useState(0); // Remount child nodes on refresh
-  const defaultDb = conn.kind === "redis" ? redisDb(conn.database) : conn.kind === "sqlite" || conn.kind === "duckdb" ? "main" : conn.database || (conn.kind === "postgres" ? "postgres" : "");
+  const defaultDb = defaultDbOf(conn);
 
   // Single database mode: only the default DB
   const shown = (d: string) => dbShown(conn, d, defaultDb, showSystem);

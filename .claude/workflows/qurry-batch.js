@@ -24,6 +24,8 @@ const OPEN_PR = A.pr !== false
 const MAX_FIX_ROUNDS = Math.min(A.fixRounds ?? 2, 2)
 // Items worked on at the same time (each item runs build → reviews → fixes); keep low on a laptop
 const PARALLEL = A.parallel ?? 3
+// The lead (plan, integrate) and deep reviews (lens reviewers + skeptics) run on Fable; builds, fixes and standard reviews inherit the session model
+const DEEP_MODEL = 'fable'
 
 const OWNER_TYPE = { 'qurry-security': 'qurry-security', 'qurry-ui': 'qurry-ui', 'qurry-perf': 'qurry-perf', implementer: 'general-purpose' }
 
@@ -125,7 +127,7 @@ const plan = A.items?.length
     `Request:\n${A.request}\n\n` +
     'Read the relevant code first so the items are accurate (file names, functions). Split into independently mergeable items following your planning rules; ' +
     'put work that must edit the same function into one item. Give each item a review level (' + REVIEW_RULE + '). Return the plan in the given structure.',
-  { agentType: 'qurry-lead', schema: PLAN, label: 'lead: plan' },
+  { agentType: 'qurry-lead', schema: PLAN, label: 'lead: plan', model: DEEP_MODEL },
 )
 if (!plan || !plan.items?.length) return { error: 'The lead returned no plan' }
 const batch = BATCH || plan.batch
@@ -153,15 +155,8 @@ const lensesFor = (it) => {
   return keys.map((k) => LENSES[k] || LENSES.correctness)
 }
 
-// Resume support: items whose round-1 review ran under the older four-lens rule keep it for round 1 (cache hits)
-const legacyLensesFor = (it) => [
-  { key: 'security', type: 'qurry-security', focus: 'security and data safety (credentials, what reaches a database or an AI tool, injection, temp files), and who this breaks after an update' },
-  ...(it.userVisible ? [{ key: 'ui', type: 'qurry-ui', focus: 'UI/UX and GUI–TUI parity, Storybook updated, themes, keyboard flow, error/empty/loading states' }] : []),
-  ...(it.runtime ? [{ key: 'perf', type: 'qurry-perf', focus: 'performance and resources (blocking in async, leaks, unbounded growth, per-frame cost, large data)' }] : []),
-  { key: 'correctness', type: 'general-purpose', focus: 'correctness: does it do what the task asked, edge cases, tests that actually prove it, regressions in nearby behavior; and design — YAGNI (speculative options/abstractions), KISS (needless complexity), DRY (duplicated logic or rules that should have one home)' },
-]
 const review = async (it, round) => {
-  const lenses = round === 1 && (A.legacyR1 || []).includes(it.slug) ? legacyLensesFor(it) : lensesFor(it)
+  const lenses = lensesFor(it)
   let head = ''
   const found = (
     await parallel(
@@ -172,7 +167,7 @@ const review = async (it, round) => {
             `Task it implements:\n${it.task}\n\nYour lens: ${l.focus}.\n` +
             'Read the code; run tests or real-server checks when a claim depends on behavior. Report only concrete problems with file:line and a scenario — no style nits. Empty list if it is fine. ' +
             'Do not modify any branch.\n' + houseRules,
-          { agentType: l.type, isolation: 'worktree', schema: FINDINGS, phase: 'Review', label: `review r${round} ${l.key}: ${it.slug}` },
+          { agentType: l.type, isolation: 'worktree', schema: FINDINGS, phase: 'Review', label: `review r${round} ${l.key}: ${it.slug}`, ...(levelOf(it) === 'deep' ? { model: DEEP_MODEL } : {}) },
         ).then((r) => {
           head ||= r?.head || ''
           return (r?.findings || []).map((f) => ({ ...f, lens: l.key }))
@@ -192,7 +187,7 @@ const review = async (it, round) => {
         readBranch(it.branch) +
           `Try to REFUTE this review finding on branch ${it.branch} of Qurry. Check the code (and run it if needed). Default to real=false if you cannot confirm it.\n\n` +
           `${f.severity.toUpperCase()} [${f.lens}] ${f.title}\nWhere: ${f.where}\nScenario: ${f.scenario}\n\n${houseRules}`,
-        { isolation: 'worktree', schema: VERDICT, phase: 'Review', label: `verify: ${f.title.slice(0, 40)}`, effort: 'high' },
+        { isolation: 'worktree', schema: VERDICT, phase: 'Review', label: `verify: ${f.title.slice(0, 40)}`, effort: 'high', model: DEEP_MODEL },
       ).then((v) => ({ f, real: !!v?.real, why: v?.why || '' })),
     ),
   )
@@ -294,7 +289,7 @@ const integration = ready.length
           ? `If everything passes: push ${batch} to origin (\`git push -u origin ${batch}\`) and open a PR to main titled "${plan.title}" (or update the existing open PR for ${batch}: append sections, keep what's there). The user merges; never merge.\n`
           : 'Do not push or open a PR; report what would go in it.\n') +
         `${houseRules.replace("Never push, merge, or comment on GitHub. ", 'Never merge. ')}\nWhen done, run \`git checkout --detach\` so ${batch} is free for the next run. Return: merged branches, verification commands and results, PR URL (if any), anything skipped.`,
-      { agentType: 'qurry-lead', isolation: 'worktree', phase: 'Integrate', label: 'lead: integrate' },
+      { agentType: 'qurry-lead', isolation: 'worktree', phase: 'Integrate', label: 'lead: integrate', model: DEEP_MODEL },
     )
   : 'Nothing ready to integrate.'
 

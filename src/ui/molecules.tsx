@@ -4,7 +4,7 @@
  */
 import { forwardRef, HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Avatar, Badge, Button, IconButton, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
+import { Avatar, Badge, Button, hlNodes, HlSpan, IconButton, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { Chevron, IcInfo } from "./icons";
 import { placePopup } from "./popup";
@@ -222,7 +222,7 @@ export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttribu
  * string · comment, ui.css .ui-hl-*; others stay plain). The input's own text is transparent and a copy in the same font and padding
  * is drawn over it, following its scroll, so the caret, selection and keys stay the input's
  */
-export const HighlightInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { value: string; spans: { start: number; end: number; class: string }[] }>(function HighlightInput({ value, spans, className, onScroll, onSelect, ...rest }, ref) {
+export const HighlightInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { value: string; spans: HlSpan[] }>(function HighlightInput({ value, spans, className, onScroll, onSelect, ...rest }, ref) {
   const input = useRef<HTMLInputElement>(null);
   const text = useRef<HTMLSpanElement>(null);
   useImperativeHandle(ref, () => input.current!);
@@ -230,19 +230,6 @@ export const HighlightInput = forwardRef<HTMLInputElement, InputHTMLAttributes<H
     if (text.current && input.current) text.current.style.transform = `translateX(${-input.current.scrollLeft}px)`;
   };
   useLayoutEffect(sync);
-  const out: ReactNode[] = [];
-  let at = 0;
-  for (const sp of spans) {
-    if (sp.class === "other") continue;
-    if (sp.start > at) out.push(value.slice(at, sp.start));
-    out.push(
-      <span key={sp.start} className={`ui-hl-${sp.class}`}>
-        {value.slice(sp.start, sp.end)}
-      </span>,
-    );
-    at = sp.end;
-  }
-  out.push(value.slice(at));
   return (
     <span className={cx("ui-hl", className)}>
       <TextInput
@@ -259,7 +246,7 @@ export const HighlightInput = forwardRef<HTMLInputElement, InputHTMLAttributes<H
         }}
       />
       <span className="ui-hl-layer" aria-hidden>
-        <span ref={text}>{out}</span>
+        <span ref={text}>{hlNodes(value, spans)}</span>
       </span>
     </span>
   );

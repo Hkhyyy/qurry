@@ -4,7 +4,7 @@
 import { useSyncExternalStore } from "react";
 import init, * as wasm from "../wasm/pkg/qurry_shared_wasm";
 import wasmUrl from "../wasm/pkg/qurry_shared_wasm_bg.wasm?url";
-import type { Cell, CompletionTable, DbKind, QueryResult, RedisReply } from "./api";
+import type { Cell, CompletionTable, DbKind, JoinEdit, QueryResult, RedisReply, ResultEditTarget } from "./api";
 import type { ExecPlan, ExecSettings, Stmt } from "./execPlan";
 import type { Extractor } from "./extract";
 import type { Segment } from "./sqlSplit";
@@ -247,6 +247,12 @@ const api = {
   editNoRow: (table: string): string => wasm.editNoRow(table),
   /** Why Add / Delete / Clone Row are greyed out on a join result (qurry_shared::errors::EDIT_JOIN_ROWS) */
   editJoinRows: (): string => wasm.editJoinRows(),
+  /** Submit's statements for one table (qurry_shared::result_edit::edit_statements): rows = raw text, edits = [row, column, value],
+   *  added = per new row the [column, value] of each cell set */
+  editStatements: (kind: DbKind, to: ResultEditTarget, rows: (string | null)[][], edits: [number, number, string | null][], deleted: number[], added: [number, string | null][][]): { Ok: string[] } | { Err: string } =>
+    wasm.editStatements(kind, to, rows, edits, deleted, added),
+  /** Submit's statements for a join result (qurry_shared::result_edit::join_statements) */
+  joinStatements: (kind: DbKind, edit: JoinEdit, rows: (string | null)[][], edits: [number, number, string | null][]): string[] => wasm.joinStatements(kind, edit, rows, edits),
   /** What a Production console that starts in Manual mode says the first time (qurry_shared::errors::PRODUCTION_MANUAL) */
   productionManual: (): string => wasm.productionManual(),
   /** The result grid's line when loading more rows failed (qurry_shared::errors::more_rows_failed, the TUI's words) */
@@ -269,11 +275,17 @@ const api = {
   ssmLocalHost: (host: string): string | undefined => wasm.ssmLocalHost(host),
   /** The connect error is one where "Allow unencrypted connection" for the source is the way forward (qurry_shared::errors::tls_opt_in) */
   tlsOptIn: (msg: string): boolean => wasm.tlsOptIn(msg),
+  /** The database a target without "::db" connects to (qurry_shared::kind::default_db) */
+  defaultDb: (kind: DbKind, database: string): string => wasm.defaultDb(kind, database),
+  /** A new data source's port for the kind, 0 for file DBs (qurry_shared::kind::DbKind::default_port) */
+  defaultPort: (kind: DbKind): number => wasm.defaultPort(kind),
   isRead: (sql: string, kind: DbKind): boolean => wasm.isRead(sql, kind),
   isDdl: (sql: string, kind: DbKind): boolean => wasm.isDdl(sql, kind),
   explainAnalyzeAsk: (sql: string, kind: DbKind): string | undefined => wasm.explainAnalyzeAsk(sql, kind),
   /** [warn, text after "Explain Analyse "] */
   explainAnalyzeNote: (sql: string, kind: DbKind): [boolean, string] | undefined => wasm.explainAnalyzeNote(sql, kind),
+  /** The Explain statement for the kind (qurry_shared::explain::explain_sql), or why the kind has none */
+  explainSql: (sql: string, kind: DbKind, analyze: boolean, json: boolean): { Ok: string } | { Err: string } => wasm.explainSql(sql, kind, analyze, json),
   splitStatements: (text: string, kind: DbKind, opts: SplitOptions): [number, number][] => wasm.splitStatements(text, kind, opts),
   splitScript: (text: string, kind: DbKind, opts: SplitOptions): [number, number][] => wasm.splitScript(text, kind, opts),
   planExecution: (text: string, offset: number, segs: Segment[], kind: DbKind, settings: ExecSettings): ExecPlan | undefined => wasm.planExecution(text, offset, segs, kind, settings),
@@ -344,6 +356,7 @@ const api = {
   sqlLiteral: (kind: DbKind, value: string | null): string => wasm.sqlLiteral(kind, value),
   inList: (rows: Cell[][], types: string[], kind: DbKind, opts: ExtractOptions): string => wasm.inList(rows, types, kind, opts),
   extractRows: (fmt: Extractor, rows: ExtractRowsInput, kind: DbKind, opts: ExtractOptions): string => wasm.extractRows(fmt, rows, kind, opts),
+  pasteCells: (text: string, format: "auto" | "CSV" | "TSV"): (string | null)[][] => wasm.pasteCells(text, format),
   fuzzyScore: (query: string, text: string, wordStarts: boolean): number | undefined => wasm.fuzzyScore(query, text, wordStarts),
   keyTree: (names: string[], opts: KeyTreeOptions): SharedKeyNode[] => wasm.keyTree(names, opts),
   redisAssist: (before: string): RedisAssist => wasm.redisAssist(before),
@@ -432,5 +445,5 @@ const subscribe = (l: () => void) => {
   return () => listeners.delete(l);
 };
 
-/** sharedReady() as React state: the component renders again once the module has loaded */
-export const useSharedReady = () => useSyncExternalStore(subscribe, sharedReady);
+/** sharedReady() as React state: the component renders again once the module has loaded (a server render, in tests, reads it as is) */
+export const useSharedReady = () => useSyncExternalStore(subscribe, sharedReady, sharedReady);

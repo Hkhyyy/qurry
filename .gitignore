@@ -1,5 +1,7 @@
 # ── Rust (workspace: a single target/ at the root) ──
 /target/
+# The SQLite driver is its own workspace: built without --target-dir target, it gets a target/ of its own
+drivers/sqlite/target/
 **/*.rs.bk
 *.pdb
 

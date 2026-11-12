@@ -37,11 +37,15 @@ URL 에 없는 부분은 `psql` · `mysql` · `redis-cli` 처럼 환경에서 �
 
 ## 상태 줄
 
-맨 아래 줄 왼쪽에는 상태 글이 (Production · Read-only 배지 다음에) 나오고, 그 뒤에 화면의 키와 공통 키, 그리고 포커스가 있는 결과 · 테이블 그리드라면 GUI 상태 표시줄의 항목이 나옵니다: `… ⌃k actions   Not null: 2 │ Sum: 1,329,000 │ cols 1–4 of 9 │ 2 rows · Col 3`. Position 은 맨 끝에 있습니다. **⌃k › Status Bar Items…** 에서 고르고 (기본은 Position 과 Shown columns. Not null, Sum, Avg, Min, Max, Size), GUI 와 같은 설정입니다 ([Settings › 상태 표시줄 항목](settings.md#상태-표시줄-항목)). `↑` `↓` 이동, `Space` 나 `Enter` 로 켜고 끄며 목록은 열려 있고, **Restore defaults** 는 기본으로 되돌립니다.
+맨 아래 줄 왼쪽에는 상태 글이 (Production · Read-only 배지 다음에) 나오고, 그 뒤에 화면의 키와 공통 키, 그리고 포커스가 있는 결과 · 테이블 그리드라면 GUI 상태 표시줄의 항목이 나옵니다: `… ⌃k actions   Not null: 2 │ Sum: 1,329,000 │ cols 1–4 of 9 │ 2 rows · Col 3`. Position 은 맨 끝에 있습니다. **⌃k › Status Bar Items…** 에서 고르고 (기본은 Position 과 Shown columns. Not null, Sum, Avg, Min, Max, Size), GUI 와 같은 설정입니다 ([Settings › Appearance › Data grid › 상태 표시줄 항목](settings.md#상태-표시줄-항목)). `↑` `↓` 이동, `Space` 나 `Enter` 로 켜고 끄며 목록은 열려 있고, **Restore defaults** 는 기본으로 되돌립니다.
 
 항목이 읽는 선택은 표시한 행 (`m`) 의 커서 컬럼, 또는 `⇧↑↓←→` (또는 드래그) 로 고른 범위입니다. 둘 다 없으면 Position 은 커서 셀이고 Size 도 그 셀입니다. 테이블 탭은 컬럼에 선언된 한도를 알고, 콘솔 결과는 그 컬럼이 테이블의 컬럼일 때만 압니다.
 
 줄이 좁으면 화면의 키가 먼저 빠지고, 그다음 `⌃k actions` 를 뺀 공통 키, 그다음 항목 (컬럼 한도, Max, Min, Avg, Sum, Not null, Size, Shown columns), 마지막으로 `⌃k actions` 가 빠집니다. Position 은 남습니다. 상태 글은 항목이 없을 때처럼 줄의 절반까지 차지합니다. 그러면 항목이 빠져야 할 때만 3 분의 1 까지 양보하고 `…` 로 잘립니다. 실행 중이거나 내보내기 · 가져오기 중인 줄은 항목 때문에 잘리지 않습니다.
+
+## 로그 파일
+
+**⌃k › Show Log** 는 Finder 에서 로그 파일을 보여 주고 (Linux 에서는 그 폴더를 엽니다) 상태 줄에 경로를 띄웁니다 ([위치와 담기는 것](getting-started.md#설정이-저장되는-곳)). SSH 로 접속했을 때는 내 화면에 아무것도 열리지 않으니 그 경로를 그쪽에서 읽으세요 (`tail -f`). GUI 에서는 **Help › Show Log** 입니다.
 
 ## 색
 
@@ -72,6 +76,8 @@ TUI 는 GUI 의 테마를 그대로 씁니다: 기본 테마 일곱 가지 (Dark
 | **Dracula**, **One Dark**, **Solarized Dark**, **Solarized Light**, 사용자 테마 | 테마 자신의 배경과 글자 색까지 (트루컬러 · 256색) |
 
 트루컬러에서 **Red** (운영) 나 **Green** 으로 칠한 Data Source 는 GUI 처럼 테마의 운영 · 초록 배경색을 쓰고 (사용자 테마의 색도. 활성 탭은 더 진하게), NULL 은 테마의 NULL 색을, 결과 표의 범위 선택은 선택 색과 배경의 중간 색을 씁니다. 256색 · 16색은 그 팔레트가 보여 줄 수 있는 Data Source 색 자신의 색조를 씁니다. 밝은 테마는 GUI 의 밝은 색을 씁니다: 그 밖의 Data Source 색은 같은 색조의 아주 옅은 색이 되어 그 위의 아이콘과 흐린 글자도 잘 읽히고 (활성 탭이 더 진합니다. 옅은 색조가 없는 256색 · 16색은 색조가 남도록 더 진한 색을 씁니다), 선택·고친 셀·배지는 서로 구분되고, JSON 셀은 테마의 JSON 색을, 운영은 계속 빨간색을 씁니다. 모든 테마가 위의 모든 색 모드에서 동작합니다: 256색은 가장 가까운 팔레트 색으로 (상태 줄이나 머리글이 배경과 같은 색이 되지 않게), 16색은 터미널 자체의 배경을 두고 밝은 테마에서는 (밝은 색이 아닌) 보통 터미널 색으로, `NO_COLOR` 는 어느 테마에서나 같은 규칙의 흑백입니다. 트리의 객체 아이콘과 Redis 키 종류는 TUI 고유의 색을 씁니다.
+
+콘솔은 GUI 콘솔과 `w` / `o` 입력처럼 SQL 을 테마의 색으로 그립니다: 키워드, 함수, 숫자, 문자열, 주석을 칠하고, 여러 줄에 걸친 블록 주석이나 `$$` 본문은 모든 줄에서 같은 색이며, 선택 · 검색 결과 · 커서 · 오류 표시는 그 위에 그립니다.
 
 iTerm2, rxvt, Konsole 같은 터미널은 배경색에 맞춰 `COLORFGBG` 를 설정하지만, 많은 터미널 (kitty, WezTerm, Ghostty, Alacritty) 은 설정하지 않으므로 밝은 배경이라면 직접 밝은 테마를 고르세요. 0.3.1 까지 TUI 는 고른 테마를 `"tuiTheme"` (Auto, Dark, Light) 으로 저장했습니다: 어느 앱에서든 테마를 고르기 전까지는 그 값을 씁니다 (Auto 는 Sync with OS).
 

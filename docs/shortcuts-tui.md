@@ -76,6 +76,8 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `⌥c` | Commit |
 | `⌥r` | Roll Back |
 | `⌥o` | Toggle Output / Result |
+| `⌥.` | Next Result Tab |
+| `⌥,` | Previous Result Tab |
 | `⌃⌥Up` | Go to the Split Above |
 | `⌃⌥Down` | Go to the Split Below |
 | `⌃⌥Left` | Go to the Split on the Left |
@@ -90,11 +92,14 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 
 | Key | Action |
 |---|---|
+| — | Show Log |
 | — | Import Data Sources… (DataGrip, IntelliJ, DBeaver, a Qurry export) |
 | — | Data Source Properties… |
 | — | New Data Source… |
 | — | Refresh |
 | — | Query History… (shared with the GUI) |
+| — | Pin / Unpin Result Tab |
+| — | Close Result Tab |
 | — | Value Panel (the current cell's whole value, beside the grid) |
 | — | Narrow Column (the current one) |
 | — | Widen Column (the current one) |
@@ -152,12 +157,14 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | — | Trust SSH Host Key (after checking its fingerprint) |
 | — | Password Key… (keep it in the config folder or the system keychain) |
 | — | Keyword Case… (UPPER or lower SQL keywords as you type and in Reformat Code; shared with the GUI) |
+| — | Result Tabs… |
 | — | Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI) |
 | — | Status Bar Items… (what the status line shows for a grid: position, shown columns, Sum, Size …; shared with the GUI) |
 | — | Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background) |
 | — | Check for Updates |
 | — | Update Channel… (stable releases only, or beta: also every merge to main) |
 | — | Update Qurry & Restart (download the latest release) |
+| — | Open GitHub |
 
 ## Database Explorer keys (when the explorer has focus; change them in the F1 window)
 
@@ -241,7 +248,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `w or / · o` | Edit WHERE · ORDER BY (table data) |
 | `r` | Reload (table data) |
 | `y  ⌘c` | Copy cell value (a selected range or marked rows: as TSV, pastes into spreadsheets as cells) |
-| `⌘v` | Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data) |
+| `⌘v` | Paste into cells from the selected one (TSV or CSV fills several, an empty field is NULL; extra lines add rows; table data) |
 | `Esc` | Back (query results: to the editor) |
 
 ## DDL / routine view

@@ -22,6 +22,8 @@ mod explorer;
 mod palette;
 mod redis;
 mod reformat;
+mod result_tabs;
+pub use result_tabs::Results;
 mod run;
 mod splits;
 mod status_items;
@@ -30,6 +32,8 @@ mod tables;
 mod tabs;
 
 pub use actions::{title, ACTIONS};
+#[cfg(test)]
+pub use actions::{OPENER_FAILS, REPO_URL};
 pub use tables::Resize;
 #[cfg(test)]
 pub(crate) use run::explain_analyze_ask_text;
@@ -46,12 +50,11 @@ pub enum Focus {
 pub struct Console {
     pub editor: TextArea<'static>,
     pub session: String,
-    pub grid: Option<Grid>,
-    pub result_title: String,
-    /// The statement the grid shows the result of (run again after its edits are submitted)
-    pub result_sql: String,
+    /// One result tab per statement and the one shown (None: Output)
+    pub results: Results,
+    /// The script's statements as last split, so result tabs follow edits and the caret (follow_statements)
+    pub stmts: Stmts,
     pub output: Vec<(bool, String)>,
-    pub show_output: bool,
     pub running: bool,
     pub tx_manual: bool,
     pub in_tx: bool,
@@ -68,6 +71,57 @@ pub struct Console {
     pub run_error: Option<RunError>,
     /// Replacements (Reformat Code, keyword case) that ⌃u / ⌃r undo and redo as one step (reformat.rs)
     pub joined: Vec<reformat::Joined>,
+    /// The text's SQL colors, highlighted again only when the text changes
+    pub colors: SqlColors,
+}
+
+/// The console's statements (qurry_shared::sql::split_script, as ⌃↩ plans them) for the lines and source kind they were split for:
+/// each one's byte range from its first non-blank character, its text, and the caret last looked up and the statement it was in
+#[derive(Default)]
+pub struct Stmts {
+    lines: Vec<String>,
+    kind: Option<DbKind>,
+    segs: Vec<(usize, usize)>,
+    texts: Vec<String>,
+    caret: Option<(usize, usize)>,
+    stmt: Option<usize>,
+}
+
+/// qurry_shared::highlight of the whole console text (a string or comment can span lines), split per line: each line's byte ranges
+/// and classes, names and symbols left out. Kept for the text and source kind it was made for
+#[derive(Default)]
+pub struct SqlColors {
+    text: String,
+    kind: Option<DbKind>,
+    pub rows: Vec<Vec<(usize, usize, qurry_shared::highlight::Class)>>,
+}
+
+impl SqlColors {
+    /// Highlight `text` (the editor's lines joined by \n) unless it is the text last highlighted
+    pub fn update(&mut self, text: &str, kind: DbKind) {
+        use qurry_shared::highlight::{Class, highlight};
+        if self.kind == Some(kind) && self.text == text {
+            return;
+        }
+        let starts: Vec<usize> = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
+        let mut rows = vec![vec![]; starts.len()];
+        let mut r = 0;
+        for s in highlight(text, kind).into_iter().filter(|s| s.class != Class::Other) {
+            while starts.get(r + 1).is_some_and(|&n| n <= s.start) {
+                r += 1;
+            }
+            // A span over several lines: its piece on each
+            loop {
+                let end = starts.get(r + 1).map_or(text.len(), |&n| n - 1);
+                rows[r].push((s.start.max(starts[r]) - starts[r], s.end.min(end) - starts[r], s.class));
+                if s.end <= end + 1 || r + 1 == starts.len() {
+                    break;
+                }
+                r += 1;
+            }
+        }
+        *self = SqlColors { text: text.to_string(), kind: Some(kind), rows };
+    }
 }
 
 /// What the console shows about the text near the caret: the signature of the call it's in (the hint line) and the tables and
@@ -203,6 +257,51 @@ const OUTPUT_MAX: usize = 1000;
 pub const WARNING: &str = "Warning: ";
 
 impl Console {
+    /// A new console's state around its editor and session
+    pub fn new(editor: TextArea<'static>, session: String, output: Vec<(bool, String)>, tx_manual: bool) -> Self {
+        Console { editor, session, results: Default::default(), stmts: Default::default(), output, running: false, tx_manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![], colors: Default::default() }
+    }
+
+    /// Result tabs follow the script (#151): after an edit they follow their statements, and the caret entering another statement
+    /// shows its tab (moving within one keeps the tab picked; not while the shown grid has pending edits: that would drop them).
+    /// Split again only when the text changed
+    pub fn follow_statements(&mut self, kind: DbKind) {
+        let lines = self.editor.lines();
+        let st = &mut self.stmts;
+        if st.kind != Some(kind) || st.lines != lines {
+            let text = lines.join("\n");
+            let segs: Vec<(usize, usize)> = sql::split_script(&text, kind).into_iter().map(|(s, e)| (s + text[s..e].len() - text[s..e].trim_start().len(), e)).collect();
+            let texts: Vec<String> = segs.iter().map(|&(s, e)| text[s..e].trim().to_string()).collect();
+            if st.kind == Some(kind) && st.texts != texts {
+                self.results.edited(&st.texts, &texts);
+            }
+            // A statement added or deleted: the one at the caret's index may be another now (its line deleted), so it is looked up again
+            let (caret, stmt) = if st.kind == Some(kind) && st.texts.len() != texts.len() { (None, None) } else { (st.caret, st.stmt) };
+            *st = Stmts { lines: lines.to_vec(), kind: Some(kind), segs, texts, caret, stmt };
+        }
+        let caret = self.editor.cursor();
+        if st.caret == Some(caret) {
+            return;
+        }
+        st.caret = Some(caret);
+        let at = byte_offset(lines, caret.0, caret.1);
+        // Right after its `;` is still in it, as ⌃↩ plans it
+        let stmt = st.segs.iter().position(|&(s, e)| s <= at && at <= e + 1);
+        if stmt == std::mem::replace(&mut st.stmt, stmt) || self.results.grid().is_some_and(|g| g.pending() > 0) {
+            return;
+        }
+        self.results.caret(stmt);
+    }
+
+    /// The shown result tab's grid (None while Output is shown)
+    pub fn grid(&self) -> Option<&Grid> {
+        self.results.grid()
+    }
+
+    pub fn grid_mut(&mut self) -> Option<&mut Grid> {
+        self.results.grid_mut()
+    }
+
     /// One line in the Output log (old lines are dropped)
     pub fn log(&mut self, err: bool, s: String) {
         self.output.push((err, s));
@@ -444,7 +543,7 @@ impl Tab {
     /// What a run or a load-more in flight says in the status line (as the GUI's RunningBar), or None when the tab isn't busy
     pub fn busy(&self) -> Option<String> {
         let (running, grid, what) = match &self.kind {
-            TabKind::Console(c) => (c.running, c.grid.as_ref(), "Executing".to_string()),
+            TabKind::Console(c) => (c.running, c.grid(), "Executing".to_string()),
             TabKind::Table(tt) => (tt.running, tt.grid.as_ref(), format!("Loading {}.{}", tt.schema, tt.table)),
             _ => return None,
         };
@@ -597,6 +696,11 @@ impl ConnForm {
     }
 }
 
+/// Input's on_ok: called with the entered text
+pub type OnInput = Box<dyn FnOnce(&mut App, String)>;
+
+// One popup is open at a time, so its size doesn't add up; boxing the bigger ones would only add derefs at every use
+#[allow(clippy::large_enum_variant)]
 pub enum Popup {
     /// F1 keymap. The Commands section at the top is selectable (sel). record = waiting for a new key (true = add to existing keys)
     /// sel counts the top Commands and the fixed key list below as one sequence (only Commands can be changed)
@@ -606,10 +710,11 @@ pub enum Popup {
     Note { title: String, text: String, back: Box<Popup> },
     /// Single-line input. filter = a table tab's WHERE / ORDER BY completes like the console, complete = its open list
     /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
-    Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, filter: Option<FilterSource>, redis: Option<RedisPrompt>, complete: Option<Completion> },
+    Input { title: String, body: String, input: TextArea<'static>, on_ok: OnInput, filter: Option<FilterSource>, redis: Option<RedisPrompt>, complete: Option<Completion> },
     /// `opened` is set when the confirm comes up on its own (open_after_notices, or a notice over it closing): then, as for
     /// AllowPlaintext, y / Enter count only after TLS_ASK_GRACE without any key, so typing meant for the editor or a form never answers it
-    Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: Option<std::time::Instant> },
+    /// `sql`: the statement lines (two-space indent) are SQL of this kind, drawn in the console's colors
+    Confirm { text: String, sql: Option<DbKind>, on_yes: Box<dyn FnOnce(&mut App)>, opened: Option<std::time::Instant> },
     /// The TLS opt-in (offer_tls_opt_in). It opens on its own when a background load fails, so only a y pressed after TLS_ASK_GRACE
     /// without any key (`opened` restarts at each other key) allows plaintext: never Enter, never a key that was meant for the editor or the tree
     AllowPlaintext { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: std::time::Instant },
@@ -728,13 +833,20 @@ pub enum Action {
     ManageSchemas,
     PasswordKey,
     KeywordCase,
+    ResultTabs,
+    ResultNext,
+    ResultPrev,
+    PinResult,
+    CloseResult,
     GridAlign,
     StatusBarItems,
     Theme,
     CheckUpdate,
     UpdateChannel,
     InstallUpdate,
+    OpenGitHub,
     Help,
+    ShowLog,
     Quit,
 }
 
@@ -773,6 +885,8 @@ pub struct Hits {
     pub text: ratatui::layout::Rect,
     /// Workspace strip: (number, area)
     pub workspaces: Vec<(usize, ratatui::layout::Rect)>,
+    /// The focused console's result tab strip: each label's area and its tab (None: Output)
+    pub result_tabs: Vec<(ratatui::layout::Rect, Option<usize>)>,
     /// The open confirm's question or warnings didn't fit the window: y / Enter don't answer it
     pub confirm_unseen: bool,
 }
@@ -887,10 +1001,12 @@ pub struct App {
     /// The theme settings shared with the GUI (settings.json, read at startup and by ⌃k › Theme…) and whether this terminal is light (COLORFGBG, set at startup: Sync with OS goes by it)
     pub themes: qurry_core::theme::ThemeSettings,
     pub auto_light: bool,
-    /// Grid alignment per value class, shared with the GUI's Settings › Appearance › Alignment (settings.json, read at startup and by ⌃k › Grid Alignment…)
+    /// Grid alignment per value class, shared with the GUI's Settings › Appearance › Data grid › Alignment (settings.json, read at startup and by ⌃k › Grid Alignment…)
     pub align: qurry_core::format::Alignments,
-    /// Keyword case as you type and in Reformat Code, shared with the GUI's Settings › Appearance › Keyword case (settings.json, read at startup and by ⌃k › Keyword Case…)
+    /// Keyword case as you type and in Reformat Code, shared with the GUI's Settings › Appearance › Console › Keyword case (settings.json, read at startup and by ⌃k › Keyword Case…)
     pub keyword_case: qurry_core::format::KeywordCase,
+    /// Unpinned result tabs kept per console, shared with the GUI's Settings › Appearance › Console › Result tabs (settings.json, read at startup and by ⌃k › Result Tabs…)
+    pub result_tabs: usize,
     /// The status line's items for a grid, shared with the GUI's status bar (settings.json, read at startup and by ⌃k › Status Bar Items…)
     pub status_items: Vec<qurry_core::statusbar::Item>,
     /// Tables' column types for the Size item, by (target, schema, table)
@@ -907,6 +1023,8 @@ pub struct App {
     pub ran: Vec<Action>,
     /// Where Import Data Sources looks for DataGrip / IntelliJ / DBeaver settings (the home folder; tests use a fake one)
     pub import_home: std::path::PathBuf,
+    /// What Show Log reveals (qurry_core::logfile::path(); tests use a temporary one)
+    pub log_file: std::path::PathBuf,
 }
 
 /// Tests only (testkit): stands in for the database, answering each query by its text
@@ -936,6 +1054,7 @@ impl App {
         let themes = state.store.theme_settings();
         let mut a = App {
             keyword_case: state.store.keyword_case(),
+            result_tabs: state.store.result_tabs(),
             status_items: state.store.status_bar_items(),
             table_cols: HashMap::new(),
             stats_cache: None,
@@ -992,6 +1111,7 @@ impl App {
             #[cfg(test)]
             ran: vec![],
             import_home: qurry_core::import::home(),
+            log_file: qurry_core::logfile::path(),
             next_id: 1,
             exec: Default::default(),
             ddl_structure: false,
@@ -1042,7 +1162,7 @@ impl App {
 
     pub fn grid_mut(&mut self) -> Option<&mut Grid> {
         match &mut self.tabs.get_mut(self.active)?.kind {
-            TabKind::Console(c) => c.grid.as_mut(),
+            TabKind::Console(c) => c.grid_mut(),
             TabKind::Table(t) => t.grid.as_mut(),
             TabKind::Redis(r) => r.value.as_mut(),
             TabKind::Dba(d) => d.grid.as_mut(),

@@ -828,7 +828,20 @@ impl Store {
         self.set_setting("keywordCase", serde_json::to_value(case)?)
     }
 
-    /// Grid alignment per value class: only the classes the user changed (GUI Settings › Appearance › Alignment; the TUI reads it)
+    /// Result tabs kept per console, for the GUI and the TUI: past it, the least recently shown unpinned one closes (10 unless set;
+    /// a value that isn't a whole number of 1 or more is 10 too)
+    pub fn result_tabs(&self) -> usize {
+        self.settings().get("resultTabs").and_then(|v| v.as_u64()).filter(|n| *n >= 1).map_or(10, |n| n as usize)
+    }
+
+    pub fn set_result_tabs(&self, n: usize) -> AppResult<()> {
+        if n < 1 {
+            return Err(AppError::Msg("Enter 1 or more.".into()));
+        }
+        self.set_setting("resultTabs", n.into())
+    }
+
+    /// Grid alignment per value class: only the classes the user changed (GUI Settings › Appearance › Data grid › Alignment; the TUI reads it)
     pub fn grid_align(&self) -> crate::format::Alignments {
         self.settings().get("gridAlign").map(crate::format::alignments).unwrap_or_default()
     }
@@ -846,7 +859,7 @@ impl Store {
         Ok(next)
     }
 
-    /// The status bar items on (GUI status bar and Settings › Appearance, TUI ⌃k › Status Bar Items…): the defaults until changed
+    /// The status bar items on (GUI status bar and Settings › Appearance › Data grid, TUI ⌃k › Status Bar Items…): the defaults until changed
     pub fn status_bar_items(&self) -> Vec<crate::statusbar::Item> {
         crate::statusbar::items(self.settings().get("statusBarItems"))
     }
@@ -1126,6 +1139,26 @@ mod tests {
         assert_eq!(saved["keywordCase"], "upper");
         fs::write(dir.path().join("cfg/settings.json"), r#"{"keywordCase": "title"}"#).unwrap();
         assert_eq!(store.keyword_case(), KeywordCase::Off);
+    }
+
+    /// Result tabs: 10 until set, saved as "resultTabs" next to the other settings and read back by another app (GUI ↔ TUI); 0 is
+    /// refused, and a saved value that isn't a whole number of 1 or more is 10
+    #[test]
+    fn result_tabs_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        assert_eq!(store.result_tabs(), 10);
+        store.set_keyword_case(crate::format::KeywordCase::Lower).unwrap();
+        store.set_result_tabs(3).unwrap();
+        let other = Store::new(dir.path().join("cfg"));
+        assert_eq!(other.result_tabs(), 3);
+        assert_eq!(other.keyword_case(), crate::format::KeywordCase::Lower);
+        assert!(other.set_result_tabs(0).is_err());
+        assert_eq!(store.result_tabs(), 3);
+        for bad in [r#"{"resultTabs": 0}"#, r#"{"resultTabs": "5"}"#, r#"{"resultTabs": 2.5}"#, r#"{"resultTabs": -1}"#] {
+            fs::write(dir.path().join("cfg/settings.json"), bad).unwrap();
+            assert_eq!(store.result_tabs(), 10, "{bad}");
+        }
     }
 
     /// Grid alignment: defaults until a class is changed, other settings kept, a value this version doesn't know skipped; a change

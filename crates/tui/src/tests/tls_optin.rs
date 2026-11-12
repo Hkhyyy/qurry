@@ -357,7 +357,7 @@ async fn a_y_right_after_closing_a_notice_over_it_doesnt_allow() {
 #[tokio::test]
 async fn an_open_popup_is_never_replaced() {
     let mut h = lan(false).await;
-    h.app.popup = Some(Popup::Confirm { opened: None, text: "Production: this changes data. Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+    h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text: "Production: this changes data. Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
     h.app.focus = Focus::Tree;
     h.app.reexpand("test");
     h.settle().await;

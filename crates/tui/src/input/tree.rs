@@ -84,11 +84,7 @@ pub(super) fn tree_key(app: &mut App, k: KeyEvent) {
             app.tree.marked.clear();
             app.status = "Marks cleared".into();
         }
-        KeyCode::Tab | KeyCode::Esc => {
-            if !app.tabs.is_empty() {
-                app.activate(app.active);
-            }
-        }
+        KeyCode::Tab | KeyCode::Esc if !app.tabs.is_empty() => app.activate(app.active),
         _ => {}
     }
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Release: set <version> in the Qurry crate manifests and sync only the workspace versions in Cargo.lock
+# and drivers/sqlite/Cargo.lock
 # (external deps stay as locked, so the --locked builds after it still pass).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -26,3 +27,5 @@ for f in crates/core/Cargo.toml crates/tui/Cargo.toml crates/mcp/Cargo.toml crat
 done
 
 cargo update --workspace
+# drivers/sqlite is its own workspace with its own Cargo.lock (see its Cargo.toml): sync its versions there too
+cargo update --manifest-path drivers/sqlite/Cargo.toml -p qurry-driver -p qurry-driver-sqlite

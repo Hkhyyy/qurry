@@ -92,8 +92,28 @@ export const work = (page: Page) => page.locator(".work-layer:visible");
 export const suggestions = (page: Page) => page.locator(".suggest-widget.visible .monaco-list-row");
 export const resultTabs = (page: Page) => page.locator(".work-layer:visible .result-tabs [role=tab]");
 export const dialog = (page: Page) => page.getByRole("dialog");
+/** Settings' pages tree and one of its rows */
+export const settingsTree = (page: Page) => page.getByRole("tree", { name: "Settings" });
+export const settingsRow = (page: Page, name: string) => settingsTree(page).getByRole("treeitem", { name, exact: true });
+/** Opens Settings (⌘,) on a page of its tree */
+export async function openSettings(page: Page, name: string) {
+  await page.keyboard.press("Meta+Comma");
+  await settingsRow(page, name).click();
+  await expect(settingsRow(page, name)).toHaveAttribute("aria-selected", "true");
+}
 export const menuItem = (page: Page, name: string | RegExp) => page.getByRole("menuitem", { name });
 export const status = (page: Page) => page.locator(".statusbar .sb-text");
+
+/** Counts run_query calls from now on (a caret move must not run anything) */
+export async function spyRuns(page: Page) {
+  await page.evaluate(() => {
+    const w = window as any;
+    const orig = w.__TAURI_INTERNALS__.invoke;
+    w.__runs = 0;
+    w.__TAURI_INTERNALS__.invoke = (cmd: string, args: any) => (cmd === "run_query" && w.__runs++, orig(cmd, args));
+  });
+  return () => page.evaluate(() => (window as any).__runs as number);
+}
 
 /** Counts cancel_query calls from now on (the status bar shows a run instead of its text, so a cancel is seen reaching the backend) */
 export async function spyCancels(page: Page) {

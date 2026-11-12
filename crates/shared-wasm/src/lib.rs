@@ -12,6 +12,7 @@ use qurry_shared::DbKind;
 use qurry_shared::complete::{self, Options};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use qurry_shared::chart::{self, Column};
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
@@ -24,6 +25,18 @@ pub fn ping(req: JsValue) -> Result<JsValue, JsError> {
 
 fn parse_kind(v: JsValue) -> Result<DbKind, JsError> {
     Ok(serde_wasm_bindgen::from_value(v)?)
+}
+
+/// The database a target without "::db" connects to, from the data source's Database field (the backend's and the TUI's rule)
+#[wasm_bindgen(js_name = defaultDb)]
+pub fn default_db(kind: JsValue, database: &str) -> Result<String, JsError> {
+    Ok(qurry_shared::kind::default_db(parse_kind(kind)?, database))
+}
+
+/// A new data source's port for the kind (0 for file DBs)
+#[wasm_bindgen(js_name = defaultPort)]
+pub fn default_port(kind: JsValue) -> Result<u16, JsError> {
+    Ok(parse_kind(kind)?.default_port())
 }
 
 /// UI only, not a security check (the backend enforces read-only): the statement doesn't change data
@@ -42,6 +55,12 @@ pub fn explain_analyze_ask(sql: &str, kind: JsValue) -> Result<Option<String>, J
 #[wasm_bindgen(js_name = explainAnalyzeNote)]
 pub fn explain_analyze_note(sql: &str, kind: JsValue) -> Result<JsValue, JsError> {
     to(&qurry_shared::guard::explain_analyze_note(sql, parse_kind(kind)?))
+}
+
+/// The Explain statement for the kind (qurry_shared::explain::explain_sql, the TUI's and MCP's): { Ok: statement } or { Err: why there is none }
+#[wasm_bindgen(js_name = explainSql)]
+pub fn explain_sql(sql: &str, kind: JsValue, analyze: bool, json: bool) -> Result<JsValue, JsError> {
+    to(&qurry_shared::explain::explain_sql(sql, parse_kind(kind)?, analyze, json))
 }
 
 /// UI only, not a security check: the statement changes structure (reload the explorer tree)
@@ -134,6 +153,27 @@ pub fn edit_no_row(table: &str) -> String {
 #[wasm_bindgen(js_name = editJoinRows)]
 pub fn edit_join_rows() -> String {
     qurry_shared::errors::EDIT_JOIN_ROWS.into()
+}
+
+/// Submit's edits as JS sends them: [row, column, value (null = NULL)] per edited cell
+fn edits_of(edits: JsValue) -> Result<BTreeMap<(usize, usize), Option<String>>, JsError> {
+    Ok(from::<Vec<(usize, usize, Option<String>)>>(edits)?.into_iter().map(|(r, c, v)| ((r, c), v)).collect())
+}
+
+/// Submit's statements for one table (qurry_shared::result_edit::edit_statements, the TUI's): {Ok: statements} or {Err: why}.
+/// rows = the result rows' raw text (null = NULL), edits = [row, column, value], deleted = row indexes, added = per new row the
+/// [column, value] of each cell the user set
+#[wasm_bindgen(js_name = editStatements)]
+pub fn edit_statements(kind: JsValue, target: JsValue, rows: JsValue, edits: JsValue, deleted: JsValue, added: JsValue) -> Result<JsValue, JsError> {
+    let added: Vec<BTreeMap<usize, Option<String>>> = from::<Vec<Vec<(usize, Option<String>)>>>(added)?.into_iter().map(|r| r.into_iter().collect()).collect();
+    let deleted: BTreeSet<usize> = from::<Vec<usize>>(deleted)?.into_iter().collect();
+    to(&qurry_shared::result_edit::edit_statements(parse_kind(kind)?, &from(target)?, &from::<Vec<Vec<Option<String>>>>(rows)?, &edits_of(edits)?, &deleted, &added))
+}
+
+/// Submit's statements for a join result (qurry_shared::result_edit::join_statements, the TUI's); rows and edits as editStatements
+#[wasm_bindgen(js_name = joinStatements)]
+pub fn join_statements(kind: JsValue, edit: JsValue, rows: JsValue, edits: JsValue) -> Result<Vec<String>, JsError> {
+    Ok(qurry_shared::result_edit::join_statements(parse_kind(kind)?, &from(edit)?, &from::<Vec<Vec<Option<String>>>>(rows)?, &edits_of(edits)?))
 }
 
 /// What a Production console that starts in Manual mode says the first time (the TUI's words)
@@ -712,6 +752,13 @@ pub fn in_list(rows: JsValue, types: JsValue, kind: JsValue, opts: JsValue) -> R
 pub fn extract_rows(format: JsValue, rows: JsValue, kind: JsValue, opts: JsValue) -> Result<String, JsError> {
     let rows: qurry_shared::extract::Rows = serde_wasm_bindgen::from_value(rows)?;
     Ok(qurry_shared::extract::rows(serde_wasm_bindgen::from_value(format)?, &rows, parse_kind(kind)?, serde_wasm_bindgen::from_value(opts)?))
+}
+
+/// Pasted text as grid cells, one array per row, null for NULL (qurry_shared::extract::paste_cells: TSV or CSV, the reverse of the
+/// copy); `format` "auto", or "CSV" / "TSV" to read it as that
+#[wasm_bindgen(js_name = pasteCells)]
+pub fn paste_cells(text: &str, format: JsValue) -> Result<JsValue, JsError> {
+    Ok(qurry_shared::extract::paste_cells(text, from(format)?).serialize(&serde_wasm_bindgen::Serializer::json_compatible())?)
 }
 
 /// Search score of `text` for `query` (higher first), undefined if it doesn't match. `word_starts` is the one fuzzy option, passed

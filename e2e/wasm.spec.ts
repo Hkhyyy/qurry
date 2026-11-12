@@ -27,7 +27,7 @@ test("⌘↩ while the WebAssembly module is still loading runs once it has load
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+Enter");
   release();
-  await expect(resultTabs(page)).toHaveText(["Output", /^users/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^1: users/]);
   await expect(status(page)).toHaveText("1 statement executed");
 });
 
@@ -50,7 +50,7 @@ test("while the WebAssembly module loads, ⌘↩ shows it and runs once, what th
   await typeSql(page, "select * from contracts");
   await page.keyboard.press("Meta+Enter");
   release();
-  await expect(resultTabs(page)).toHaveText(["Output", /^contracts/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^1: contracts/]);
   await expect(page.locator(".statusbar .running-bar")).toHaveCount(0);
   await resultTabs(page).first().click();
   await expect(work(page).locator(".output-log .ol.sql")).toHaveCount(1);
@@ -86,7 +86,7 @@ test("a ⌘↩ waiting for the module runs the text it was pressed on, not an ed
     new MutationObserver(() => (w.flashed ||= !!document.querySelector(".exec-highlight"))).observe(document.body, { subtree: true, childList: true, attributes: true });
   });
   await release();
-  await expect(resultTabs(page)).toHaveText(["Output", /^users/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^1: users/]);
   await page.waitForTimeout(300);
   expect(await page.evaluate(() => (window as unknown as { flashed: boolean }).flashed)).toBe(false);
   await resultTabs(page).first().click();
@@ -126,7 +126,7 @@ test("a run started while a ⌘↩ waits for the module replaces it", async ({ p
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+A");
   await page.keyboard.press("Meta+Enter");
-  await expect(resultTabs(page)).toHaveText(["Output", /^users/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^1: users/]);
   await release();
   await page.waitForTimeout(500);
   await resultTabs(page).first().click();
@@ -173,7 +173,7 @@ test("without the WebAssembly module a selection run as one statement still runs
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+A");
   await page.keyboard.press("Meta+Enter");
-  await expect(resultTabs(page)).toHaveText(["Output", /^users/]);
+  await expect(resultTabs(page)).toHaveText(["Output", /^1: users/]);
 });
 
 test("⌘F2 cancels a ⌘↩ still waiting for the WebAssembly module, like a run", async ({ page }) => {

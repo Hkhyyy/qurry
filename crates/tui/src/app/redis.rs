@@ -43,12 +43,11 @@ impl App {
             }
         };
         if let Some(k) = key {
-            if let Some(t) = self.tab_mut(id) {
-                if let TabKind::Redis(r) = &mut t.kind {
-                    if !r.reveal(&k) {
-                        r.want = Some(k.clone());
-                    }
-                }
+            if let Some(t) = self.tab_mut(id)
+                && let TabKind::Redis(r) = &mut t.kind
+                && !r.reveal(&k)
+            {
+                r.want = Some(k.clone());
             }
             self.redis_load_key(id, k);
         }
@@ -275,7 +274,7 @@ impl App {
             Some(why) => format!("{head}{why}:\n  {line}\nRun it anyway?"),
             None => format!("{head}this command changes data:\n  {line}\nRun it?"),
         };
-        self.popup = Some(Popup::Confirm { opened: None, text, on_yes: Box::new(move |a| run(a, line)) });
+        self.popup = Some(Popup::Confirm { opened: None, sql: None, text, on_yes: Box::new(move |a| run(a, line)) });
     }
 
     /// Runs the line; the reply (by type: a hash as a field / value table …) in a notice. A write reads the keys again

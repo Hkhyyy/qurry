@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { ask, askText } from "../lib/dialogs";
-import { ConnectionView, DataDiff, meta, migrate, Migration, SchemaChange, targetId } from "../lib/api";
-import { Button, Checkbox, CodeBlock, List, ListItem, Named, Notice, Row, Select, Spacer, Table, Tabs, Td, Text, Th } from "../ui";
+import { ConnectionView, DataDiff, defaultDbOf, meta, migrate, Migration, SchemaChange, targetId } from "../lib/api";
+import { Button, Checkbox, List, ListItem, Named, Notice, Row, Select, Spacer, Table, Tabs, Td, Text, Th } from "../ui";
+import { SqlBlock } from "./SqlBlock";
 
 /** Compare·migration target: Data Source · DB · schema (· table) */
 interface End {
@@ -13,7 +14,7 @@ interface End {
 
 const isSql = (c: ConnectionView) => c.kind === "postgres" || c.kind === "mysql";
 /** Connection target id: conn::db for PG; in MySQL the DB is the schema */
-const tid = (c: ConnectionView | undefined, e: End) => (c ? targetId(c.id, c.kind === "postgres" && e.db && e.db !== (c.database || "postgres") ? e.db : undefined) : "");
+const tid = (c: ConnectionView | undefined, e: End) => (c ? targetId(c.id, c.kind === "postgres" && e.db && e.db !== defaultDbOf(c) ? e.db : undefined) : "");
 const schemaOf = (c: ConnectionView | undefined, e: End) => (c?.kind === "mysql" ? e.db : e.schema);
 
 function EndPicker({ label, conns, value, onChange, table, noSchema }: { label: string; conns: ConnectionView[]; value: End; onChange: (e: End) => void; table?: boolean; noSchema?: boolean }) {
@@ -172,7 +173,7 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
                   />
                 ))}
               </List>
-              <CodeBlock className="mig-sql">{pickedSql || "-- check changes to see their SQL"}</CodeBlock>
+              <SqlBlock className="mig-sql" sql={pickedSql || "-- check changes to see their SQL"} kind={dc?.kind ?? "postgres"} />
             </div>
           )}
         </>
@@ -197,7 +198,7 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
                 <b>{data.same.toLocaleString()}</b> same · <b>{data.different.toLocaleString()}</b> different · <b>{data.onlySource.toLocaleString()}</b> only in source · <b>{data.onlyTarget.toLocaleString()}</b> only in target
                 {data.truncated && <span className="danger"> · compared the first 200,000 rows only</span>}
               </div>
-              <CodeBlock className="mig-sql full">{data.sql || "-- the tables hold the same data"}</CodeBlock>
+              <SqlBlock className="mig-sql full" sql={data.sql || "-- the tables hold the same data"} kind={dc?.kind ?? "postgres"} />
             </>
           )}
         </>

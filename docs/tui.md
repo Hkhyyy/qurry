@@ -37,11 +37,15 @@ What the URL leaves out comes from the environment, as `psql`, `mysql` and `redi
 
 ## Status line
 
-The bottom line shows the status text on the left (the Production and Read-only badges first), then the keys of the screen and the common keys, and for a focused result or table grid the GUI status bar's items: `… ⌃k actions   Not null: 2 │ Sum: 1,329,000 │ cols 1–4 of 9 │ 2 rows · Col 3`, Position in the corner. **⌃k › Status Bar Items…** chooses them (Position and Shown columns by default; Not null, Sum, Avg, Min, Max, Size), the same setting as the GUI's ([Settings › Status bar items](settings.md#status-bar-items)): `↑` `↓` move, `Space` or `Enter` toggles and the list stays open, **Restore defaults** goes back.
+The bottom line shows the status text on the left (the Production and Read-only badges first), then the keys of the screen and the common keys, and for a focused result or table grid the GUI status bar's items: `… ⌃k actions   Not null: 2 │ Sum: 1,329,000 │ cols 1–4 of 9 │ 2 rows · Col 3`, Position in the corner. **⌃k › Status Bar Items…** chooses them (Position and Shown columns by default; Not null, Sum, Avg, Min, Max, Size), the same setting as the GUI's ([Settings › Appearance › Data grid › Status bar](settings.md#status-bar-items)): `↑` `↓` move, `Space` or `Enter` toggles and the list stays open, **Restore defaults** goes back.
 
 The selection the items read is the marked rows (`m`) in the cursor's column, or a range selected with `⇧↑↓←→` (or dragged); with neither, Position is the cursor's cell and Size is about that cell. A table tab knows its columns' declared limits; a console result only where its column is a table's column.
 
 When the line is too narrow, the screen's keys go first, then the common keys but `⌃k actions`, then the items (the column limit, Max, Min, Avg, Sum, Not null, Size, Shown columns), then `⌃k actions`; Position stays. The status text keeps up to half the line, as without items; only when an item would otherwise go does it give way down to a third (cut with `…`). A run's or a transfer's line is never cut to make room for items.
+
+## Log file
+
+**⌃k › Show Log** reveals the log file in Finder (on Linux it opens its folder) and puts its path on the status line ([where it is and what it holds](getting-started.md#where-qurry-keeps-your-settings)). Over SSH nothing opens on your screen; read that path there (`tail -f`). The GUI's is **Help › Show Log**.
 
 ## Colors
 
@@ -72,6 +76,8 @@ The TUI draws the GUI's themes: the seven built-in ones (Dark, Light, High contr
 | **Dracula**, **One Dark**, **Solarized Dark**, **Solarized Light**, custom themes | The theme's colors on its own background and text (in truecolor and 256 colors) |
 
 In truecolor a Data Source colored **Red** (Production) or **Green** takes the theme's Production or Green tint, as in the GUI (custom themes' too; the active tab a stronger one), NULL the theme's NULL color, and a range in the grid the selection's color halfway to the background; 256 and 16 colors keep the Data Source color's own hue, which their palettes can show. A light theme takes the GUI's light colors: the other Data Source colors become pale tints of the same hue, so icons and dim text on them stay readable (the active tab is the stronger one; 256 and 16 colors, which have no pale hues, keep a stronger tint so the hue survives), selections, edited cells and badges stay apart from each other, JSON cells use the theme's JSON colors, and production keeps its red. Every theme works in every color mode above: 256 colors map it to the nearest palette colors (a status line or header never lands on the background's color), 16 colors keep the terminal's own background and use the normal (not the bright) terminal colors in a light theme, and `NO_COLOR` stays monochrome with the same rules in every theme. The tree's object icons and Redis key types keep the TUI's own colors.
+
+The console draws its SQL in the theme's colors, as the GUI console and the `w` / `o` inputs do: keywords, functions, numbers, strings and comments, a block comment or a `$$` body on every line it spans, with selections, search matches, the caret and error marks drawn over them.
 
 Terminals such as iTerm2, rxvt and Konsole set `COLORFGBG` from their background color; many others (kitty, WezTerm, Ghostty, Alacritty) don't, so on a light background there pick a light theme yourself. Up to 0.3.1 the TUI saved its pick as `"tuiTheme"` (Auto, Dark or Light): it is used until a theme is picked in either app (Auto is Sync with OS).
 

@@ -169,7 +169,7 @@ pub fn parse_fk(spec: &str, schema: &str) -> Result<ForeignKeyDef, String> {
     let rest: Vec<String> = r[2..].iter().map(|x| x.to_uppercase()).collect();
     let mut i = 0;
     while i < rest.len() {
-        if rest[i] != "ON" || i + 2 >= rest.len() + 1 {
+        if rest[i] != "ON" || i + 1 >= rest.len() {
             return Err(bad());
         }
         let which = rest.get(i + 1).ok_or_else(bad)?.clone();
@@ -422,7 +422,7 @@ fn apply(app: &mut App) {
     match app.production_name(&d.conn) {
         Some(p) => {
             let text = format!("Production data source \"{p}\" — this changes the schema:\n\n{}\n\nRun it?", d.sql.as_ref().unwrap().iter().map(|s| format!("  {}", s.split_whitespace().collect::<Vec<_>>().join(" "))).collect::<Vec<_>>().join("\n"));
-            app.popup = Some(Popup::Confirm { opened: None, text, on_yes: Box::new(run) });
+            app.popup = Some(Popup::Confirm { opened: None, sql: Some(app.kind_of(&d.conn)), text, on_yes: Box::new(run) });
         }
         None => run(app),
     }
@@ -432,7 +432,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let Some(d) = app.designer.as_ref() else { return };
     let w = 110u16.min(area.width.saturating_sub(2));
     let r = centered(area, w, area.height.saturating_sub(2));
-    let title = if d.before.is_some() { format!(" Modify Table: {} ", d.before.as_ref().unwrap().name) } else { " New Table ".into() };
+    let title = if let Some(b) = &d.before { format!(" Modify Table: {} ", b.name) } else { " New Table ".into() };
     let inner = popup(f, r, title);
     let mut lines: Vec<Line> = vec![];
     let schema = if d.def.schema.is_empty() { String::new() } else { format!("{}.", d.def.schema) };
@@ -649,6 +649,7 @@ impl App {
         );
         Popup::Confirm {
             opened: None,
+            sql: Some(self.kind_of(&conn)),
             text,
             on_yes: Box::new(move |a| {
                 let st = a.state.clone();

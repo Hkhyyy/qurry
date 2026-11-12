@@ -2,7 +2,7 @@ use super::*;
 use qurry_core::theme::{Kind, SYSTEM};
 use qurry_core::format::{align, Align, ValueClass};
 
-/// The GUI's names (Settings › Appearance › Alignment, src/lib/gridAlign.ts VALUE_CLASSES)
+/// The GUI's names (Settings › Appearance › Data grid › Alignment, src/lib/gridAlign.ts VALUE_CLASSES)
 fn class_name(c: ValueClass) -> &'static str {
     match c {
         ValueClass::String => "String",
@@ -173,7 +173,7 @@ impl App {
             // Columns go after tables·actions with the same name (same as the GUI's All)
             let mut v: Vec<(i64, usize)> = p.items.iter().enumerate().filter_map(|(i, it)| fuzzy(&q, &it.label).map(|s| (s - if it.hint.starts_with("column ") { 50 } else { 0 }, i))).collect();
             if !q.is_empty() {
-                v.sort_by(|a, b| b.0.cmp(&a.0));
+                v.sort_by_key(|x| std::cmp::Reverse(x.0));
             }
             *cache = Some((q, p.items.len(), v.into_iter().take(300).map(|x| x.1).collect()));
         }
@@ -389,7 +389,7 @@ impl App {
     }
 
     /// ⌃K › Keyword Case…: Off, UPPER or lower for SQL keywords as you type and in Reformat Code (the GUI's Settings › Appearance ›
-    /// Keyword case, shared through settings.json). Reads the file again, so a pick made in the GUI since the TUI started shows here
+    /// Console › Keyword case, shared through settings.json). Reads the file again, so a pick made in the GUI since the TUI started shows here
     pub fn palette_keyword_case(&mut self) {
         use qurry_core::format::KeywordCase;
         self.keyword_case = self.state.store.keyword_case();
@@ -408,7 +408,32 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: "Keyword Case".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
-    /// ⌃K › Grid Alignment…: one row per value class with where it sits (the GUI's Settings › Appearance › Alignment, shared through
+    /// ⌃K › Result Tabs…: unpinned result tabs kept per console (the GUI's Settings › Appearance › Console › Result tabs, shared through settings.json).
+    /// Opens on the saved number, read again so a change made in the GUI shows here; a number that isn't 1 or more isn't saved
+    pub fn palette_result_tabs(&mut self) {
+        self.result_tabs = self.state.store.result_tabs();
+        self.result_tabs_input(&self.result_tabs.to_string(), "Unpinned result tabs kept per console; past it, the least recently shown closes.");
+    }
+
+    fn result_tabs_input(&mut self, value: &str, body: &str) {
+        self.input("Result tabs", value, |a, v| match v.trim().parse::<usize>() {
+            Ok(n) if n >= 1 => {
+                a.status = match a.state.store.set_result_tabs(n) {
+                    Ok(()) => {
+                        a.result_tabs = n;
+                        format!("Result tabs: {n} — saved for the GUI too")
+                    }
+                    Err(e) => format!("Couldn't save the result tabs: {e}"),
+                }
+            }
+            _ => a.result_tabs_input(&v, "Enter 1 or more."),
+        });
+        if let Some(Popup::Input { body: b, .. }) = &mut self.popup {
+            *b = body.into();
+        }
+    }
+
+    /// ⌃K › Grid Alignment…: one row per value class with where it sits (the GUI's Settings › Appearance › Data grid › Alignment, shared through
     /// settings.json). Reads the file again, so a change made in the GUI since the TUI started shows here and in the grids
     pub fn palette_grid_align(&mut self, sel: ValueClass) {
         self.align = self.state.store.grid_align();

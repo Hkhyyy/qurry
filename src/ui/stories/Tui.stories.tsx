@@ -49,6 +49,17 @@ export const ScreenConsoleUnknownName = { ...by("Console: unknown name"), name: 
 export const ScreenConsoleUnclosed = { ...by("Console: unclosed bracket"), name: "Screen · Console: unclosed bracket" };
 export const ScreenConsoleRunSubquery = { ...by("Console: run a subquery"), name: "Screen · Console: run a subquery (F5)" };
 export const ScreenConsoleRunError = { ...by("Console: run error"), name: "Screen · Console: run error" };
+// #151: one result tab per statement in the result panel's title; the caret shows a statement's tab, ⌥. / ⌥, cycle, ⌃k › Result Tabs… caps them
+export const ScreenResultTabsTwoRuns = { ...by("Console result tabs: run 1, then 2"), name: "Screen · Console result tabs: run 1, then 2" };
+export const ScreenResultTabsCaretBack = { ...by("Console result tabs: caret back on 1"), name: "Screen · Console result tabs: caret back on 1" };
+export const LightResultTabsCaretBack = { ...by("Console result tabs: caret back on 1 (light)"), name: "Light · Console result tabs: caret back on 1" };
+export const ScreenResultTabsRerun = { ...by("Console result tabs: edit 1 and run again"), name: "Screen · Console result tabs: edit 1 and run again" };
+export const ScreenResultTabsPinned = { ...by("Console result tabs: pinned, run again"), name: "Screen · Console result tabs: pinned, run again" };
+export const ScreenResultTabsDeleted = { ...by("Console result tabs: statement deleted"), name: "Screen · Console result tabs: statement deleted" };
+export const ScreenResultTabsEleventh = { ...by("Console result tabs: 11th tab"), name: "Screen · Console result tabs: 11th tab" };
+export const ScreenResultTabsError = { ...by("Console result tabs: error"), name: "Screen · Console result tabs: error" };
+export const ScreenResultTabsSetting = { ...by("Console result tabs: Result Tabs… (default)"), name: "Screen · Console result tabs: Result Tabs…" };
+export const ScreenResultTabsSettingInvalid = { ...by("Console result tabs: Result Tabs… (invalid 0)"), name: "Screen · Console result tabs: Result Tabs… (invalid 0)" };
 export const ScreenGridMarked = { ...by("Grid: marked rows"), name: "Screen · Grid: marked rows (m)" };
 // Status line items (#132): the GUI status bar's items after the key hints, Position in the corner
 export const ScreenStatusSelection = { ...by("Status line: selection items"), name: "Screen · Status line: selection items (marked rows)" };
@@ -58,13 +69,15 @@ export const ScreenStatusNarrow = { ...by("Status line: narrow"), name: "Small �
 export const ScreenChart = { ...by("Chart"), name: "Screen · Chart" };
 export const ScreenGridLoadingMore = { ...by("Grid: loading more"), name: "Screen · Grid: loading more" };
 export const ScreenGridLoadingMoreNoColor = { ...by("Grid: loading more, NO_COLOR"), name: "Screen · Grid: loading more, NO_COLOR" };
+// #157: a failed load keeps its reason on the grid, wrapped, with the run key that runs the result's statement again
+export const ScreenConsoleLoadMoreFailed = { ...by("Console: load more failed"), name: "Small · Console: load more failed (80 columns)" };
 // The grid's horizontal scrollbar on its bottom border (#107)
 export const ScreenGridScrollbar = { ...by("Grid scrollbar: focused"), name: "Screen · Grid scrollbar: focused" };
 export const ScreenGridScrollbarBlur = { ...by("Grid scrollbar: not focused"), name: "Screen · Grid scrollbar: not focused" };
 export const ScreenGridScrollbarLight = { ...by("Grid scrollbar: light"), name: "Screen · Grid scrollbar: light" };
 export const ScreenGridScrollbar16 = { ...by("Grid scrollbar: 16 colors"), name: "Screen · Grid scrollbar: 16 colors" };
 export const ScreenGridScrollbarNoColor = { ...by("Grid scrollbar: NO_COLOR"), name: "Screen · Grid scrollbar: NO_COLOR" };
-export const ScreenGridScrollbarError = { ...by("Grid scrollbar: beside a failed load-more"), name: "Screen · Grid scrollbar: beside a failed load-more" };
+export const ScreenGridScrollbarError = { ...by("Grid scrollbar: with a failed load-more"), name: "Screen · Grid scrollbar: with a failed load-more" };
 export const ScreenProductionLog = { ...by("Production log"), name: "Screen · Production log" };
 export const ScreenProductionLogNote = { ...by("Production log · note"), name: "Screen · Production log · note" };
 export const ScreenTableDesigner = { ...by("Table designer"), name: "Screen · Table designer (⌃F6)" };
@@ -93,6 +106,7 @@ export const ScreenCopyRows80 = { ...by("Copy related rows: 80×24"), name: "Sma
 export const ScreenConfirmTooSmall = { ...by("Confirm: too small to answer"), name: "Small · Confirm too small to answer" };
 export const ScreenDataSourceForm80 = { ...by("Data source form: 80×24"), name: "Small · Data source form (80×24)" };
 export const ScreenUpdateChannel = { ...by("Update channel"), name: "Screen · Update channel" };
+export const ScreenOpenGitHub = { ...by("Open GitHub"), name: "Screen · Open GitHub" };
 export const ScreenTheme = { ...by("Theme"), name: "Screen · Theme" };
 export const ScreenThemeSyncLight = { ...by("Theme: Sync with OS on a light terminal"), name: "Screen · Theme: Sync with OS on a light terminal" };
 export const ScreenGridAlign = { ...by("Grid alignment"), name: "Screen · Grid alignment" };

@@ -1,4 +1,4 @@
-// Grid cell alignment per value class (Settings › Appearance › Alignment). The class rule and the defaults are qurry_shared::format
+// Grid cell alignment per value class (Settings › Appearance › Data grid › Alignment). The class rule and the defaults are qurry_shared::format
 // through WASM, the TUI grid's rule; the classes the user changed are kept in settings.json, which the TUI reads too.
 // Until the module is loaded (or when the WebView refuses WebAssembly) cells get no alignment class: the stylesheet's fallback
 // keeps numbers on the right and the rest on the left, as before this setting, and Settings can't change it

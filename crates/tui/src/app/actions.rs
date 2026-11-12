@@ -102,6 +102,10 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::PrevTab, hint: "", run: |app| app.cycle_tab(-1) },
     ActionDef { action: Action::ToggleExplorer, hint: "", run: toggle_explorer },
     ActionDef { action: Action::ToggleOutput, hint: "", run: toggle_output },
+    ActionDef { action: Action::ResultNext, hint: "", run: |app| cycle_result(app, 1) },
+    ActionDef { action: Action::ResultPrev, hint: "", run: |app| cycle_result(app, -1) },
+    ActionDef { action: Action::PinResult, hint: "", run: pin_result },
+    ActionDef { action: Action::CloseResult, hint: "", run: close_result },
     ActionDef { action: Action::Complete, hint: "", run: complete },
     ActionDef { action: Action::Reformat, hint: "", run: |app| app.reformat() },
     ActionDef { action: Action::SplitRight, hint: "", run: |app| app.split_focused(SplitDir::Right) },
@@ -123,13 +127,16 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::TrustSshHost, hint: "", run: trust_ssh_host },
     ActionDef { action: Action::PasswordKey, hint: "", run: |app| app.password_key() },
     ActionDef { action: Action::KeywordCase, hint: "", run: |app| app.palette_keyword_case() },
+    ActionDef { action: Action::ResultTabs, hint: "", run: |app| app.palette_result_tabs() },
     ActionDef { action: Action::GridAlign, hint: "", run: |app| app.palette_grid_align(qurry_core::format::ValueClass::String) },
     ActionDef { action: Action::StatusBarItems, hint: "", run: |app| app.palette_status_items(0) },
     ActionDef { action: Action::Theme, hint: "", run: |app| app.palette_theme() },
     ActionDef { action: Action::CheckUpdate, hint: "", run: |app| app.check_update() },
     ActionDef { action: Action::UpdateChannel, hint: "", run: |app| app.palette_update_channel() },
     ActionDef { action: Action::InstallUpdate, hint: "", run: install_update },
+    ActionDef { action: Action::OpenGitHub, hint: "", run: open_github },
     ActionDef { action: Action::Help, hint: "", run: |app| app.popup = Some(Popup::Help { sel: 0, scroll: 0, record: None, message: None }) },
+    ActionDef { action: Action::ShowLog, hint: "", run: show_log },
     ActionDef { action: Action::Quit, hint: "", run: quit },
 ];
 
@@ -155,6 +162,7 @@ fn delete_data_source(app: &mut App) {
     if let Some(c) = app.tree.selected().and_then(|n| app.conn(&n.conn).map(|c| c.config.clone())) {
         app.popup = Some(Popup::Confirm {
             opened: None,
+            sql: None,
             text: format!("Remove data source \"{}\"?", c.name),
             on_yes: Box::new(move |a| {
                 let st = a.state.clone();
@@ -330,10 +338,51 @@ fn toggle_explorer(app: &mut App) {
     }
 }
 
+/// ⌥o: Output, or back to the result tab shown last
 fn toggle_output(app: &mut App) {
     if let Some(Tab { kind: TabKind::Console(c), .. }) = app.tabs.get_mut(app.active) {
-        c.show_output = !c.show_output;
+        c.results.toggle_output();
     }
+}
+
+/// ⌥. / ⌥,: the next or previous result tab, Output included
+fn cycle_result(app: &mut App, d: isize) {
+    if let Some(Tab { kind: TabKind::Console(c), .. }) = app.tabs.get_mut(app.active) {
+        c.results.cycle(d);
+    }
+}
+
+/// Pin and Close act on the shown result tab: how to show one
+fn no_result_tab(keys: &crate::keys::Keymap) -> String {
+    format!("Show a result tab first ({} / {})", keys.label(Action::ResultNext), keys.label(Action::ResultPrev))
+}
+
+/// ⌃k › Pin Result Tab: the shown result tab is never overwritten and stops following its statement (again: unpinned)
+fn pin_result(app: &mut App) {
+    let Some(Tab { kind: TabKind::Console(c), .. }) = app.tabs.get_mut(app.active) else { return };
+    app.status = match c.results.shown_mut() {
+        Some(t) => {
+            t.pinned = !t.pinned;
+            format!("{} {}", if t.pinned { "Pinned" } else { "Unpinned" }, t.label())
+        }
+        None => no_result_tab(&app.keys),
+    };
+}
+
+/// ⌃k › Close Result Tab: the shown one (its grid's pending edits asked about first)
+fn close_result(app: &mut App) {
+    let Some(Tab { kind: TabKind::Console(c), id, .. }) = app.tabs.get(app.active) else { return };
+    let Some(t) = c.results.shown_tab() else { return app.status = no_result_tab(&app.keys) };
+    let (tab, rid, n) = (*id, t.id, t.grid.pending());
+    let close = move |a: &mut App| {
+        if let Some(TabKind::Console(c)) = a.tab_mut(tab).map(|t| &mut t.kind) {
+            c.results.close(rid);
+        }
+    };
+    if n == 0 {
+        return close(app);
+    }
+    app.popup = Some(Popup::Confirm { opened: None, sql: None, text: app.pending_text(n, "close the result tab"), on_yes: Box::new(close) });
 }
 
 fn other_split(app: &mut App) {
@@ -392,16 +441,81 @@ fn manage_schemas(app: &mut App) {
 fn install_update(app: &mut App) {
     let n = app.pending_tabs(None).len();
     if n > 0 {
-        app.popup = Some(Popup::Confirm { opened: None, text: format!("{n} console(s) have uncommitted changes. Roll them back, update and restart?"), on_yes: Box::new(|a| a.install_update()) });
+        app.popup = Some(Popup::Confirm { opened: None, sql: None, text: format!("{n} console(s) have uncommitted changes. Roll them back, update and restart?"), on_yes: Box::new(|a| a.install_update()) });
     } else {
         app.install_update();
     }
 }
 
+/// Reveals the log file in Finder (`open -R`; its folder until the file exists), or opens the folder on Linux (`xdg-open`): fixed argv,
+/// no shell. The status line shows the file's path; over SSH (and in tests) nothing opens, the path is what matters
+fn show_log(app: &mut App) {
+    let file = app.log_file.clone();
+    let dir = file.parent().unwrap_or(&file);
+    app.status = format!("Show Log: {}", file.display());
+    let ssh = std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
+    if cfg!(test) || ssh {
+        return;
+    }
+    let mut cmd = std::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" });
+    match cfg!(target_os = "macos") && file.exists() {
+        true => cmd.arg("-R").arg(&file),
+        false => cmd.arg(dir),
+    };
+    let null = std::process::Stdio::null;
+    match std::fs::create_dir_all(dir).and_then(|_| cmd.stdin(null()).stdout(null()).stderr(null()).spawn()) {
+        // Reaped off the UI thread so it doesn't linger as a zombie
+        Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+        Err(e) => app.status = format!("Show Log: couldn't open it ({e}). Open it yourself: {}", file.display()),
+    }
+}
+
+/// The project page ⌃k › Open GitHub opens (the GUI's Settings › Updates › Open GitHub)
+pub const REPO_URL: &str = "https://github.com/Hkhyyy/qurry";
+
+/// Opens REPO_URL in the browser and always puts the address on the status line: over SSH no browser may open, and a started
+/// opener (xdg-open without a display) can still fail, so success says "Opening", not "Opened"
+fn open_github(app: &mut App) {
+    app.status = match spawn_opener(REPO_URL) {
+        Ok(()) => format!("Opening {REPO_URL} in the browser"),
+        // The address before the reason: a long reason is what gets cut on a narrow status line
+        Err(e) => format!("Couldn't open a browser: {REPO_URL} ({e})"),
+    };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: what starting the browser gives (None: it started); nothing is launched
+    pub static OPENER_FAILS: std::cell::Cell<Option<std::io::ErrorKind>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn spawn_opener(_url: &str) -> std::io::Result<()> {
+    OPENER_FAILS.get().map_or(Ok(()), |k| Err(k.into()))
+}
+/// Starts the platform's opener for a URL: fixed argv, no shell (on Windows only cmd's built-in `start`)
+#[cfg(not(test))]
+fn spawn_opener(url: &str) -> std::io::Result<()> {
+    use std::process::{Command, Stdio};
+    let mut cmd = if cfg!(target_os = "macos") {
+        Command::new("open")
+    } else if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", ""]);
+        c
+    } else {
+        Command::new("xdg-open")
+    };
+    let mut child = cmd.arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    // Reaped off the UI thread so it doesn't linger as a zombie
+    drop(std::thread::spawn(move || child.wait()));
+    Ok(())
+}
+
 fn quit(app: &mut App) {
     let n = app.pending_tabs(None).len();
     if n > 0 {
-        app.popup = Some(Popup::Confirm { opened: None, text: format!("{n} console(s) have uncommitted changes. Roll them back and quit?"), on_yes: Box::new(|a| a.quit = true) });
+        app.popup = Some(Popup::Confirm { opened: None, sql: None, text: format!("{n} console(s) have uncommitted changes. Roll them back and quit?"), on_yes: Box::new(|a| a.quit = true) });
     } else {
         app.quit = true;
     }

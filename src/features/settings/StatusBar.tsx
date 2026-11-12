@@ -32,7 +32,7 @@ function useSegments(w: FocusWidgets, items?: StatusItemId[]): StatusSegment[] {
  * Information only (DataGrip): what the focused tab is doing (`busy`: a run, a load-more, and since when, shown instead of the status
  * text; its ✕ on hover cancels it), then on the right the focused grid's items (each its own segment: Position, Shown columns and the
  * ones the user turned on), the focused editor's position, Read-only, UTF-8. Right-click the bar, or click an item, for the checklist
- * of items (shared with Settings › Appearance and the TUI). When it is too narrow the status text shrinks to 140 px first, then the
+ * of items (shared with Settings › Appearance › Data grid and the TUI). When it is too narrow the status text shrinks to 140 px first, then the
  * segments go in qurry_shared::statusbar::DROP order after UTF-8; Position and Read-only stay. `widgets` and `items`: what Storybook shows
  * instead of the focused editor's or grid's, and of the items saved
  */
@@ -72,7 +72,7 @@ function StatusBar({ status, busy, readOnly, update, onUpdate, jobs, widgets, it
     ...segs.map((s) => ({
       key: s.id,
       node: (
-        // Not a button: a click (or right-click) on the bar opens the checklist; Settings › Appearance is the keyboard's way there
+        // Not a button: a click (or right-click) on the bar opens the checklist; Settings › Appearance › Data grid is the keyboard's way there
         <span className="sb-seg" onClick={openMenu}>
           <StatusItem>
             {s.label && <span className="sb-label">{s.label}:</span>}

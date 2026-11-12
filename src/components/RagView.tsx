@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ask } from "../lib/dialogs";
-import { ConnectionView, dialectOf, KIND_LABEL, meta, QueryResult, rag, RAG_DEFAULT_MODEL, RagIndex, targetId, VECTOR_KINDS } from "../lib/api";
+import { ConnectionView, defaultDbOf, dialectOf, KIND_LABEL, meta, QueryResult, rag, RAG_DEFAULT_MODEL, RagIndex, targetId, VECTOR_KINDS } from "../lib/api";
 import { ResultGrid } from "./ResultGrid";
 import { Button, EmptyState, List, ListItem, Notice, Row, Select, Spacer, Text, TextInput } from "../ui";
 
@@ -10,7 +10,7 @@ const isSqlSource = (c: ConnectionView) => c.kind !== "redis" && c.kind !== "mon
 const isStore = (c: ConnectionView) => c.kind === "postgres" || VECTOR_KINDS.includes(c.kind);
 const FLAT = ["mysql", "sqlite", "clickhouse"];
 /** Connection target: the Data Source id as is for the default DB */
-const tid = (c: ConnectionView, db?: string) => targetId(c.id, db && db !== (c.database || (c.kind === "postgres" ? "postgres" : "")) ? db : undefined);
+const tid = (c: ConnectionView, db?: string) => targetId(c.id, db && db !== defaultDbOf(c) ? db : undefined);
 const isText = (t: string) => /char|text|string|clob|json|xml/i.test(t);
 
 const blank = (connId: string, db?: string, schema?: string, table?: string): Draft => ({
