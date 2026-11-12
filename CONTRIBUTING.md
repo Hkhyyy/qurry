@@ -4,6 +4,8 @@ Thanks for helping. Bug reports and feature ideas go in [issues](https://github.
 
 How the code is laid out (core / tui / mcp / drivers / src) and where each config file is written: [Development › Layout](docs/development.md#layout).
 
+Where new code goes, the patterns the code follows and the rules that keep it from adding debt: [ARCHITECTURE.md](ARCHITECTURE.md). Read it before changing code.
+
 ## What belongs in Qurry
 
 Qurry is a free DataGrip alternative: one Rust engine behind a desktop app, a terminal UI and an MCP server, safe to hand to AI tools, small and fast. A feature goes into a milestone only after its issue answers these, and says the outcome: **in**, **in, smaller** (which part), **later**, or **no**.
