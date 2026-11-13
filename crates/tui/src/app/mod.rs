@@ -38,6 +38,8 @@ pub use actions::{OPENER_FAILS, REPO_URL};
 pub use tables::Resize;
 pub(crate) use palette::{is_search, scope_name};
 #[cfg(test)]
+pub(crate) use palette::sort_objects;
+#[cfg(test)]
 pub(crate) use run::explain_analyze_ask_text;
 
 pub type Apply = Box<dyn FnOnce(&mut App) + Send>;

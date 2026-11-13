@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionView, dbShown, defaultDbOf, meta, SearchScope, targetId } from "../lib/api";
 import { nextScope, SEARCH_SCOPES, scopeConns, shownScope } from "../features/search/scope";
+import { compareRanked } from "../features/search/rank";
 import { fuzzyScore } from "../lib/fuzzy";
 import { useSharedReady } from "../lib/shared";
 import { objectIcon } from "../ui/icons";
@@ -228,8 +229,13 @@ export function SearchEverywhere(p: Props) {
           if (s !== null) out.push({ t: "action", a, score: s - (tab === "all" ? 20 : 0) });
         }
     }
-    // Same score: shorter name first (stable sort)
-    return out.sort((a, b) => b.score - a.score).slice(0, 200);
+    // Same score: database results first (as they were added) in a fixed order, not the order their sources answered in; files and
+    // actions after them in their own order
+    const ranked = (o: DbObject) => ({ name: o.name, kind: o.kind, where: o.table ? `${o.schema}.${o.table}` : o.schema, source: connName(o.connId), db: o.db });
+    const at = new Map(out.map((r, i) => [r, i]));
+    const tie = (a: Row, b: Row) =>
+      a.t === "db" && b.t === "db" ? compareRanked(ranked(a.o), ranked(b.o)) : a.t === "db" ? -1 : b.t === "db" ? 1 : at.get(a)! - at.get(b)!;
+    return out.sort((a, b) => b.score - a.score || tie(a, b)).slice(0, 200);
   }, [q, tab, objects, columns, p.files, p.actions, wasmReady]);
 
   useEffect(() => setSel(0), [q, tab]);

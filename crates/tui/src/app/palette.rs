@@ -44,6 +44,14 @@ pub(crate) fn is_search(title: &str) -> bool {
     title == "Search Everywhere" || title == "Go to Database Object"
 }
 
+/// Objects and columns in a fixed order whatever order their sources answer in, so results with the same score always line up the
+/// same way (GUI: features/search/rank.ts, same order): by name, then kind, schema, data source, database — the hint holds them in
+/// that order ("table public · [PROD] shop/shop"). Only the object rows, which follow the tabs and actions, are sorted
+pub(crate) fn sort_objects(items: &mut [PItem]) {
+    let from = items.iter().position(|i| matches!(i.action, PAction::Object { .. })).unwrap_or(items.len());
+    items[from..].sort_by(|a, b| (&a.label, &a.hint).cmp(&(&b.label, &b.hint)));
+}
+
 fn object_items(conn: &str, name: &str, db: &str, es: Vec<IndexEntry>, tag: &str) -> Vec<PItem> {
     es.into_iter()
         .map(|e| PItem {
@@ -161,6 +169,7 @@ impl App {
                 items.extend(column_items(conn, &name, &db, c.columns, " (cached)"));
             }
         }
+        sort_objects(&mut items);
         let empty = conns.is_empty() && items.iter().all(|i| !matches!(i.action, PAction::Object { .. }));
         self.popup = Some(Popup::Palette(Palette { title: title.into(), input: TextArea::default(), items, sel: 0, loading: conns.len(), cache: Default::default() }));
         if empty {
@@ -221,6 +230,7 @@ impl App {
                     p.loading = p.loading.saturating_sub(1);
                     if let Ok(es) = r {
                         p.items.extend(object_items(&conn, &name, &db, es, ""));
+                        sort_objects(&mut p.items);
                     }
                 }
             });
@@ -239,6 +249,7 @@ impl App {
             }
             let (Some(Popup::Palette(p)), Ok(ts)) = (a.popup_under(), r) else { return };
             p.items.extend(column_items(&conn, &name, &db, ts, ""));
+            sort_objects(&mut p.items);
         });
     }
 
