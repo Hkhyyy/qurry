@@ -176,6 +176,13 @@ pub fn join_statements(kind: JsValue, edit: JsValue, rows: JsValue, edits: JsVal
     Ok(qurry_shared::result_edit::join_statements(parse_kind(kind)?, &from(edit)?, &from::<Vec<Vec<Option<String>>>>(rows)?, &edits_of(edits)?))
 }
 
+/// Under a failed Submit: { text, sql } when its new row's key sequence is behind the table (qurry_shared::errors::sequence_behind,
+/// the TUI's), else undefined. filled = the table's columns the database numbers (ColumnMeta.autoIncrement)
+#[wasm_bindgen(js_name = sequenceBehind)]
+pub fn sequence_behind(kind: JsValue, error: &str, schema: &str, table: &str, filled: Vec<String>) -> Result<JsValue, JsError> {
+    to(&qurry_shared::errors::sequence_behind(parse_kind(kind)?, error, schema, table, &filled))
+}
+
 /// What a Production console that starts in Manual mode says the first time (the TUI's words)
 #[wasm_bindgen(js_name = productionManual)]
 pub fn production_manual() -> String {

@@ -347,6 +347,24 @@ export function TlsOptIn({ host, production, inDialog, onAllow }: { host: string
   );
 }
 /**
+ * Under an error with a fix to run by hand (qurry_shared::errors::ErrorFix: a key sequence behind its table): what happened, then
+ * the SQL on a code line with Copy. Qurry never runs it
+ */
+export function FixSql({ text, sql }: { text: string; sql: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="ui-fix-sql">
+      <span>{text}</span>
+      <div className="ui-fix-sql-line">
+        <code className="ui-code ui-fix-sql-code">{sql}</code>
+        <Button size="sm" title="Copy this SQL to run it yourself" onClick={() => navigator.clipboard.writeText(sql).then(() => setCopied(true))}>
+          {copied ? "Copied" : "Copy"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+/**
  * What a wait in the background says (a data source that reconnects), bottom right above the status bar (inside Toasts): its text,
  * then its actions on the right. tone="danger": it failed (role alert, a danger border); onClose: a × in the corner
  */

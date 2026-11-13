@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
-import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormGrid, FormSection, HighlightInput, Hint, InfoTip, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Named, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow, TxPending } from "..";
+import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FixSql, FormGrid, FormSection, HighlightInput, Hint, InfoTip, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Named, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow, TxPending } from "..";
 import { shared } from "../../lib/shared";
 import { connTabVars } from "../../lib/theme";
 import { ConsoleIcon, DatabaseIcon, FolderIcon, PgIcon, ReportIcon, SchemaIcon, TabIcon, TableIcon } from "../icons";
@@ -291,6 +291,17 @@ export const TlsOptInProduction: S = {
         In Data Source Properties (inDialog): the Options tab is right there
         <TlsOptIn host="prod-db.internal" production inDialog onAllow={slow} />
       </Notice>
+    </Frame>
+  ),
+};
+
+/** Under a Submit error with a fix to run by hand (a key sequence behind its table): the SQL wraps in a narrow dialog */
+export const FixSqlUnderError: S = {
+  name: "FixSql",
+  render: () => (
+    <Frame width={420}>
+      <Notice tone="danger">{'error returned from database: duplicate key value violates unique constraint "orders_pkey"\nKey (id)=(41) already exists.'}</Notice>
+      <FixSql text="The key's sequence is behind the table's highest id; new rows get numbers that already exist." sql="SELECT setval(pg_get_serial_sequence('public.orders', 'id'), (SELECT max(id) FROM public.orders));" />
     </Frame>
   ),
 };
