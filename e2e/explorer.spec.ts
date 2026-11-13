@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, editor, expect, menuItem, openApp, status, tabStrips, test, treeItem } from "./app";
+import { dialog, editor, expand, expect, menuItem, openApp, status, tabStrips, test, treeItem } from "./app";
 
 test.beforeEach(async ({ page }) => openApp(page));
 
@@ -208,4 +208,33 @@ test("Manage Shown Schemas: unchecking one database under All databases hides on
   await page.keyboard.press("Enter");
   await expect(db("shop_app_test")).toBeVisible();
   await expect(badge).toHaveText("3");
+});
+
+/** The explorer toolbar's ↻ */
+const refreshButton = (page: Page) => page.locator(".ws-explorer.on .panel-header").getByRole("button", { name: /^Refresh/ });
+
+test("toolbar ↻ refreshes the selected schema, as ⌘R does", async ({ page }) => {
+  await expect(refreshButton(page)).toHaveAttribute("title", "Refresh (⌘r)");
+  await expand(page, "billing");
+  await expand(page, "tables 2");
+  await page.evaluate(() => ((window as any).__mockBillingTables = ["refunds"]));
+  await treeItem(page, "billing").click();
+  await refreshButton(page).click();
+  await expect(treeItem(page, "refunds")).toBeVisible();
+});
+
+test("toolbar ↻ refreshes every selected node", async ({ page }) => {
+  await expand(page, "billing");
+  await expand(page, "tables 2");
+  await page.evaluate(() => ((window as any).__mockBillingTables = ["refunds"]));
+  await treeItem(page, "users").first().click();
+  await treeItem(page, "billing").click({ modifiers: ["Meta"] });
+  await refreshButton(page).click();
+  await expect(treeItem(page, "refunds")).toBeVisible();
+});
+
+test("toolbar ↻ with nothing selected reloads the data source list", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockMoreConns = [{ id: "qa", name: "[QA] shop_app", kind: "postgres", host: "qa-db.example.com", port: 5432, user: "app", database: "shop_app", color: null, hasPassword: true, connected: false }]));
+  await refreshButton(page).click();
+  await expect(treeItem(page, "[QA] shop_app")).toBeVisible();
 });
