@@ -643,8 +643,7 @@ impl Grid {
         let mut shown_w: Vec<u16> = vec![];
         let mut used = 0u16;
         let mut full = 0usize;
-        for c in self.col_off..self.cols() {
-            let w = self.widths[c];
+        for (c, &w) in self.widths.iter().enumerate().take(self.cols()).skip(self.col_off) {
             if used + w + 1 > avail && !cols.is_empty() {
                 let rest = avail.saturating_sub(used + 1);
                 if rest >= 3 {
