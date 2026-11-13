@@ -229,9 +229,10 @@ const redisMatch = (pattern: string | undefined, key: string) =>
 const historyAdded: { id: string; connId: string; database?: string; sql: string; ts: number }[] = [];
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
-  // window.__mockRedis (set before load): { readOnly, production, managed } for [Redis] cache (managed: CONFIG refused, as on ElastiCache)
+  // window.__mockRedis (set before load): { readOnly, production, managed } for [Redis] cache (managed: CONFIG refused, as on ElastiCache).
+  // window.__mockMoreConns: data sources added elsewhere (they show after a reload of the list)
   list_connections: () =>
-    structuredClone(conns).map((c: any) => {
+    structuredClone([...conns, ...((globalThis as any).__mockMoreConns ?? [])]).map((c: any) => {
       const r = (globalThis as any).__mockRedis;
       return c.id === "rd" && r ? { ...c, readOnly: !!r.readOnly, options: { ...c.options, confirmChanges: !!r.production } } : c;
     }),
@@ -305,8 +306,9 @@ const handlers: Record<string, (a: any) => unknown> = {
   ],
   list_schemas: (a: any) => (String(a.id).startsWith("rd") ? [{ name: String(a.id).split("::")[1] || "db0", isSystem: false }] : null) ?? (String(a.id).startsWith("my") ? [{ name: String(a.id).split("::")[1] || "shop", isSystem: false }] : null) ?? [{ name: "public", isSystem: false }, { name: "billing", isSystem: false }, { name: "pg_catalog", isSystem: true }],
   list_objects: async (a: any) => (await reconnectWait(a), String(a.id).startsWith("rd") ? { relations: [["events", "stream"], ["rank", "zset"], ["session:abc", "string"], ["tags", "set"], ["user:1", "hash"]].map(([name, t]) => ({ name, kind: "key", comment: t, rowEstimate: null })), routines: [] } : a.schema === "billing" ? {
-    // users in two schemas (same-name table tabs)
-    relations: [{ name: "invoices", kind: "table", comment: null, rowEstimate: 800 }, { name: "users", kind: "table", comment: "billing accounts", rowEstimate: 40 }],
+    // users in two schemas (same-name table tabs); window.__mockBillingTables: tables created elsewhere (they show on Refresh)
+    relations: [{ name: "invoices", kind: "table", comment: null, rowEstimate: 800 }, { name: "users", kind: "table", comment: "billing accounts", rowEstimate: 40 },
+      ...((globalThis as any).__mockBillingTables ?? []).map((name: string) => ({ name, kind: "table", comment: null, rowEstimate: 0 }))],
     routines: [],
   } : ({
     relations: [

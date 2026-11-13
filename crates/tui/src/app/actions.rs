@@ -197,16 +197,14 @@ fn refresh(app: &mut App) {
                 app.refresh_node(&n)
             }
         }
-        _ => {
-            if let Some(t) = app.tabs.get(app.active) {
-                let id = t.id;
-                match t.kind {
-                    TabKind::Table(_) => app.reload_table_checked(id),
-                    TabKind::Redis(_) => app.redis_scan(id, true),
-                    _ => {}
-                }
-            }
-        }
+        // Nothing selected in the explorer: the data source list (as the GUI's ↻)
+        (Focus::Tree, None) => app.reload_conns(),
+        _ => match app.tabs.get(app.active).map(|t| (t.id, &t.kind)) {
+            Some((id, TabKind::Table(_))) => app.reload_table_checked(id),
+            Some((id, TabKind::Redis(_))) => app.redis_scan(id, true),
+            // Elsewhere (a console, no tab): the data source list, as the GUI's Refresh
+            _ => app.reload_conns(),
+        },
     }
 }
 
