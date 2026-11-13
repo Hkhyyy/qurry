@@ -104,3 +104,32 @@ async fn a_late_list_for_an_earlier_scope_is_dropped() {
     let Some(Popup::Palette(p)) = &h.app.popup else { panic!() };
     assert_eq!(p.loading, 0);
 }
+
+/// Results with the same score come in the same order whichever data source answers first (they used to follow the answers)
+#[tokio::test]
+async fn equal_scores_keep_one_order_whichever_source_answers_first() {
+    use crate::app::{IndexEntryLite, PItem, Palette};
+    let obj = |name: &str, hint: &str| PItem {
+        label: name.into(),
+        hint: hint.into(),
+        action: PAction::Object { conn: "c".into(), db: "shop".into(), e: IndexEntryLite { schema: "public".into(), name: name.into(), kind: "table".into() } },
+    };
+    let prod = || vec![obj("payment", "table public · [PROD] shop/shop"), obj("payment_refund", "table public · [PROD] shop/shop")];
+    let mysql = || vec![obj("payment", "table shop · [MySQL] shop/shop"), obj("payment_method", "table shop · [MySQL] shop/shop")];
+    let tab = || PItem { label: "orders".into(), hint: "tab · shop".into(), action: PAction::Tab(1) };
+    let shown = |first: Vec<PItem>, then: Vec<PItem>, query: &str| {
+        // A tab row first, then the sources' answers as they come, sorted on each arrival as the palette does
+        let mut items = vec![tab()];
+        for batch in [first, then] {
+            items.extend(batch);
+            crate::app::sort_objects(&mut items);
+        }
+        let mut p = Palette { title: "Search Everywhere".into(), input: Default::default(), items, sel: 0, loading: 0, cache: Default::default() };
+        p.input.insert_str(query);
+        crate::app::App::palette_matches(&p).iter().map(|i| format!("{} {}", i.label, i.hint)).collect::<Vec<_>>()
+    };
+    for q in ["pay", ""] {
+        assert_eq!(shown(prod(), mysql(), q), shown(mysql(), prod(), q), "query {q:?}");
+    }
+    assert_eq!(shown(mysql(), prod(), "")[0], "orders tab · shop", "the tab rows stay first");
+}
