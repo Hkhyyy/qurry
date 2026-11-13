@@ -233,7 +233,7 @@ impl App {
             && !explain
             && let Some((why, s)) = stmts.iter().find_map(|s| qurry_core::guard::unsafe_statement(s, kind).map(|w| (w, s.clone())))
         {
-            let preview: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+            let preview: String = sql::without_comments(&s, kind).chars().take(80).collect();
             self.popup = Some(Popup::Confirm { opened: None, sql: Some(kind), text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Self::in_console(id, move |a| a.run_stmts_checked(stmts, explain, true, prod_ok)) });
             return;
         }
@@ -266,7 +266,7 @@ impl App {
                         let lines: Vec<String> = counts
                             .iter()
                             .map(|(s, n)| {
-                                let head: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(70).collect();
+                                let head: String = sql::without_comments(s, kind).chars().take(70).collect();
                                 let n = match n {
                                     Ok(Some(n)) => format!("{} row{}", crate::transfer::thousands(*n as u64), if *n == 1 { "" } else { "s" }),
                                     Ok(None) if qurry_core::guard::is_ddl(s, kind) => "schema change".into(),
@@ -309,7 +309,7 @@ impl App {
         };
         let pre = if explain { qurry_shared::explain::explain_prefix_len(kind, analyze, json) } else { 0 };
         let asks: Vec<(String, String)> = match analyze && !confirmed {
-            true => stmts.iter().filter_map(|s| qurry_core::guard::explain_analyze_ask(s, kind).map(|w| (s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect(), w))).collect(),
+            true => stmts.iter().filter_map(|s| qurry_core::guard::explain_analyze_ask(s, kind).map(|w| (sql::without_comments(s, kind).chars().take(80).collect(), w))).collect(),
             false => vec![],
         };
         if !asks.is_empty() {

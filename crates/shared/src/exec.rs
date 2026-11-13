@@ -175,11 +175,13 @@ pub fn plan(text: &str, offset: usize, kind: DbKind, s: ExecSettings) -> Plan {
     plan_in(text, offset, &sql::split_script(text, kind), kind, s)
 }
 
-/// plan over statements already split (byte ranges in text, in order): the GUI splits with its own editor rules and console dialects
+/// plan over statements already split (byte ranges in text, in order): the GUI splits with its own editor rules and console dialects.
+/// A piece that is only comments (a comment block after the last `;`) is no statement: it isn't run, offered or counted
 pub fn plan_in(text: &str, offset: usize, segs: &[(usize, usize)], kind: DbKind, s: ExecSettings) -> Plan {
     // (start for cursor matching — including title lines, the statement to run — without title lines)
     let segs: Vec<(usize, Stmt)> = segs
         .iter()
+        .filter(|&&(a, b)| !sql::is_comment_only(&text[a..b], kind))
         .map(|&(a, b)| {
             let raw = &text[a..b];
             let from = a + (raw.len() - raw.trim_start().len());
@@ -209,7 +211,7 @@ pub fn plan_in(text: &str, offset: usize, segs: &[(usize, usize)], kind: DbKind,
         Inside::Whole => Plan::Run(all),
         Inside::FromCaret => Plan::Run(all[idx..].to_vec()),
         Inside::Ask => {
-            let label = |sql: &str| -> String { sql.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect() };
+            let label = |sql: &str| -> String { sql::without_comments(sql, kind).chars().take(80).collect() };
             let mut opts = vec![(label(&all[idx].sql), vec![all[idx].clone()])];
             // The subqueries around the caret, innermost first (DataGrip): each runs exactly as highlighted
             for (start, end) in sql::enclosing_subqueries(text, all[idx].start, all[idx].end, offset, kind) {
@@ -230,14 +232,14 @@ pub fn plan_in(text: &str, offset: usize, segs: &[(usize, usize)], kind: DbKind,
     }
 }
 
-/// Statements to run from a selection (empty: nothing)
+/// Statements to run from a selection (empty: nothing); comment-only pieces are left out, as in plan
 pub fn plan_selection(sel: &str, kind: DbKind, s: ExecSettings) -> Vec<Stmt> {
-    plan_selection_in(sel, &sql::split_script(sel, kind), s)
+    plan_selection_in(sel, &sql::split_script(sel, kind), kind, s)
 }
 
 /// plan_selection over statements already split (byte ranges in sel, as for plan_in), ranges in sel. The GUI runs a selection
 /// as one statement without this too, so that works while the shared WASM is missing
-pub fn plan_selection_in(sel: &str, segs: &[(usize, usize)], s: ExecSettings) -> Vec<Stmt> {
+pub fn plan_selection_in(sel: &str, segs: &[(usize, usize)], kind: DbKind, s: ExecSettings) -> Vec<Stmt> {
     let trimmed = |a: usize, b: usize| {
         let raw = &sel[a..b];
         let start = a + (raw.len() - raw.trim_start().len());
@@ -247,7 +249,7 @@ pub fn plan_selection_in(sel: &str, segs: &[(usize, usize)], s: ExecSettings) ->
         Selection::Single => vec![trimmed(0, sel.len())],
         Selection::Separate => segs.iter().map(|&(a, b)| trimmed(a, b)).collect(),
     };
-    v.into_iter().filter(|x| !x.sql.is_empty()).collect()
+    v.into_iter().filter(|x| !x.sql.is_empty() && !sql::is_comment_only(&x.sql, kind)).collect()
 }
 
 #[cfg(test)]
@@ -387,6 +389,32 @@ mod tests {
         assert_eq!(sqls(plan(one, 3, DbKind::Postgres, ExecSettings::default())), run(&[one]));
         let smallest = ExecSettings { inside: Inside::Smallest, ..Default::default() };
         assert_eq!(sqls(plan(one, one.find("a_id").unwrap(), DbKind::Postgres, smallest)), run(&[one]));
+    }
+
+    /// A pg_dump-style script (#171): each statement runs with its comments as written, a comment-only piece (the dump's trailing
+    /// block) is no statement — not run, offered or counted — and the chooser shows each statement without its comments
+    #[test]
+    fn comment_only_pieces_are_not_statements() {
+        let sql = "--\n-- Name: orders; Type: TABLE\n--\n\nCREATE TABLE orders (id int);\n\n-- Name: items; Type: TABLE\nCREATE TABLE items (id int);\n\n--\n-- dump complete\n--\n";
+        let whole = ExecSettings { inside: Inside::Whole, outside: Outside::Whole, ..Default::default() };
+        let all = ["--\n-- Name: orders; Type: TABLE\n--\n\nCREATE TABLE orders (id int)", "-- Name: items; Type: TABLE\nCREATE TABLE items (id int)"];
+        assert_eq!(sqls(plan(sql, 1, DbKind::Postgres, whole)), run(&all));
+        let Plan::Run(v) = plan(sql, 1, DbKind::Postgres, whole) else { panic!("should run") };
+        assert_eq!(v.iter().map(|x| &sql[x.start..x.end]).collect::<Vec<_>>(), all);
+        // The caret in the trailing block is outside every statement
+        let tail = sql.find("dump complete").unwrap();
+        assert_eq!(plan(sql, tail, DbKind::Postgres, ExecSettings { inside: Inside::Smallest, ..Default::default() }), Plan::Nothing);
+        let below = ExecSettings { outside: Outside::Below, ..Default::default() };
+        assert_eq!(sqls(plan(sql, tail, DbKind::Postgres, below)), run(&[]));
+        let Plan::Ask(opts) = plan(sql, sql.find("CREATE TABLE items").unwrap(), DbKind::Postgres, ExecSettings::default()) else { panic!("should ask") };
+        assert_eq!(opts.iter().map(|o| o.0.as_str()).collect::<Vec<_>>(), ["CREATE TABLE items (id int)", "All statements (2)"]);
+        // A selection: the same, and one that is only comments runs nothing, as one statement too
+        assert_eq!(texts(&plan_selection(sql, DbKind::Postgres, ExecSettings::default())), all);
+        let single = ExecSettings { selection: Selection::Single, ..Default::default() };
+        assert!(plan_selection("-- a\n/* b */", DbKind::Postgres, single).is_empty());
+        assert!(plan_selection("# a", DbKind::Mysql, ExecSettings::default()).is_empty());
+        // MySQL /*! … */ runs: it is a statement
+        assert_eq!(texts(&plan_selection("/*!40101 SET NAMES utf8 */;\n-- end", DbKind::Mysql, ExecSettings::default())), ["/*!40101 SET NAMES utf8 */"]);
     }
 
     /// Each statement's range is where its text is (the GUI highlights the range), title lines and blanks outside it

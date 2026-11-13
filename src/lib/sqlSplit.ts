@@ -1,7 +1,7 @@
 // Statement splitting for the console: qurry_shared::sql through WASM, by the data source's kind (strings, comments, dollar quotes,
 // MySQL # and \ escapes, [names] …), so the GUI splits like the TUI and the server.
 import type { DbKind } from "./api";
-import { shared, type SplitOptions } from "./shared";
+import { shared, sharedOr, type SplitOptions } from "./shared";
 
 export interface Segment {
   start: number;
@@ -33,4 +33,12 @@ export function statementAt(text: string, offset: number, kind: DbKind = "postgr
  */
 export function splitScript(text: string, kind: DbKind = "postgres"): Segment[] {
   return segments(shared().splitScript(text, kind, EDITOR));
+}
+
+/**
+ * A statement as the confirm dialogs show it (qurry_shared::sql::without_comments, the TUI's): its comments left out as the server
+ * reads them, whitespace collapsed; it still runs as written. Without the WASM module, whitespace collapsed only
+ */
+export function withoutComments(sql: string, kind: DbKind = "postgres"): string {
+  return sharedOr(sql.replace(/\s+/g, " ").trim(), (s) => s.withoutComments(sql, kind));
 }

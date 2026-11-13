@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_EXEC, planExecution, planSelection } from "./execPlan";
-import { splitStatements } from "./sqlSplit";
+import { splitScript, splitStatements } from "./sqlSplit";
 
 const SQL = "BEGIN;\nGRANT a TO x;\n\nGRANT b TO x;\nCOMMIT;";
 const plan = (offset: number, s = DEFAULT_EXEC) => planExecution(SQL, offset, splitStatements(SQL), s);
@@ -83,6 +83,24 @@ describe("planExecution (DataGrip Query Execution)", () => {
     // None outside a transaction
     const q = planExecution(sql, sql.indexOf("SELECT 1") + 1, splitStatements(sql), DEFAULT_EXEC);
     expect(q && "ask" in q && q.ask.map((o) => o.label)).toEqual(["SELECT 1", "All statements (5)"]);
+  });
+});
+
+describe("comment-only pieces (#171)", () => {
+  const dump = "-- Name: orders\nCREATE TABLE orders (id int);\n\n-- Name: items\nCREATE TABLE items (id int);\n\n--\n-- dump complete\n--\n";
+  it("are not run, offered or counted; statements keep their comments", () => {
+    const p = planExecution(dump, 1, splitScript(dump), { ...DEFAULT_EXEC, inside: "whole" });
+    expect(p && "run" in p && p.run.map((s) => s.sql)).toEqual(["-- Name: orders\nCREATE TABLE orders (id int)", "-- Name: items\nCREATE TABLE items (id int)"]);
+    const ask = planExecution(dump, dump.indexOf("CREATE TABLE items"), splitScript(dump), DEFAULT_EXEC);
+    expect(ask && "ask" in ask && ask.ask.map((o) => o.label)).toEqual(["CREATE TABLE items (id int)", "All statements (2)"]);
+    expect(planExecution(dump, dump.indexOf("dump complete"), splitScript(dump), { ...DEFAULT_EXEC, inside: "smallest" })).toBeNull();
+  });
+
+  it("a selection of only comments runs nothing, as separate statements or as one", () => {
+    const sel = "-- a\n/* b */";
+    expect(planSelection(sel, splitScript(sel), DEFAULT_EXEC)).toEqual([]);
+    expect(planSelection(sel, splitScript(sel), { ...DEFAULT_EXEC, selection: "single" })).toEqual([]);
+    expect(planSelection("# a", splitScript("# a", "mysql"), { ...DEFAULT_EXEC, selection: "single" }, "mysql")).toEqual([]);
   });
 });
 

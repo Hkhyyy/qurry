@@ -40,6 +40,32 @@ test("dangerous statement asks first, then the Production confirmation follows",
   await expect(status(page)).toHaveText("1 statement executed");
 });
 
+// A pg_dump-style script (#171): each change is listed by its SQL, not by the comments above it; the dump's trailing comment block is
+// no statement (not listed, run or counted); each statement runs as written, and its result follows it (#151)
+test("a commented script lists each change by its SQL and leaves out the trailing comment-only piece", async ({ page }) => {
+  const create = "--\n-- Name: orders; Type: TABLE\n--\n\nCREATE TABLE public.orders (id integer)";
+  const select = "-- users list\nSELECT * FROM users limit 2";
+  const insert = "--\n-- Data for Name: orders\n--\n\nINSERT INTO public.orders /* one row */ VALUES (1)";
+  await typeSql(page, `${create};\n\n${select};\n\n${insert};\n\n--\n-- dump complete\n--\n`);
+  await page.evaluate(() => ((window as any).__mockRan = []));
+  await runAll(page);
+  const rows = dialog(page).locator(".ui-detail-row");
+  await expect(rows.locator(".ui-detail-text")).toHaveText(["CREATE TABLE public.orders (id integer)", "INSERT INTO public.orders VALUES (1)"]);
+  await expect(rows.locator(".ui-detail-value")).toHaveText(["schema change", "can't count"]);
+  await dialog(page).getByRole("button", { name: "Run" }).click();
+  await expect(status(page)).toHaveText("3 statements executed");
+  expect(await page.evaluate(() => (window as any).__mockRan)).toEqual([create, select, insert]);
+  await resultTabs(page).filter({ hasText: "Output" }).click();
+  const output = page.locator(".work-layer:visible .output-log");
+  await expect(output).toContainText("CREATE TABLE public.orders");
+  await expect(output).not.toContainText("dump complete");
+  // The caret in the SELECT (line 8) shows its tab: the second statement's
+  await editor(page).click();
+  await page.keyboard.press("Meta+ArrowUp");
+  for (let i = 1; i < 8; i++) await page.keyboard.press("ArrowDown");
+  await expect(page.locator(".work-layer:visible .result-tabs [role=tab][aria-selected=true] .tab-label")).toHaveText("2: users list");
+});
+
 test("reads run without a confirmation", async ({ page }) => {
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+Enter");

@@ -247,7 +247,7 @@ export function ConsolePane(p: Props) {
     if (selection && selection.text.trim()) {
       const sel = selection.text;
       // As one statement without the module too (the way to run while it failed to load)
-      const stmts = settings.selection === "single" && !sharedReady() ? [{ start: 0, end: sel.length, sql: sel.trim() }] : planSelection(sel, splitFn(sel), settings);
+      const stmts = settings.selection === "single" && !sharedReady() ? [{ start: 0, end: sel.length, sql: sel.trim() }] : planSelection(sel, splitFn(sel), settings, p.kind);
       if (!stmts.length) return;
       const ranges = stmts.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end }));
       const at = places(text, ranges, true);

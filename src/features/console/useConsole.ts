@@ -13,6 +13,7 @@ import { sharedOr } from "../../lib/shared";
 import { cancelTableLoad, loadTableTab } from "../explorer/tableTab";
 import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "../../lib/stmtKind";
 import { explainSql } from "../../lib/explain";
+import { withoutComments } from "../../lib/sqlSplit";
 import { noticeLines } from "./notices";
 import { patch, updTab } from "../tabs/ops";
 import { editorApis, setTabs, useTabsStore } from "../tabs/store";
@@ -30,7 +31,7 @@ async function askExplainAnalyze(name: string | undefined, kind: DbKind, stmts: 
   if (!asks.length) return true;
   // Several: each statement with its own reason (as the TUI lists them)
   const one = asks.length === 1;
-  const detail = asks.map(({ s, why }) => ({ text: s.replace(/\s+/g, " ").slice(0, 300), note: one ? undefined : why }));
+  const detail = asks.map(({ s, why }) => ({ text: withoutComments(s, kind).slice(0, 300), note: one ? undefined : why }));
   const text = one ? `Explain Analyse really runs the statement, and ${asks[0].why}. Run it anyway?` : `Explain Analyse really runs the statements, and ${asks.length} of them need a look. Run them anyway?`;
   return ask(text, { title: name ? `${name}: Explain Analyse` : "Explain Analyse", detail, okLabel: "Run Anyway", danger: true });
 }
@@ -162,7 +163,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     if (!explain) {
       for (const s of stmts) {
         const why = await api.unsafeReason(kind, s).catch(() => null);
-        if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: s.slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return drop();
+        if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: withoutComments(s, kind).slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return drop();
       }
     }
     // Explain Analyse really runs the statement: PostgreSQL · MySQL roll it back (below), other kinds don't. Ask first when the rollback
@@ -201,7 +202,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
           const value = typeof n === "number" ? `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}` : n === null ? (ddl ? "schema change" : ddl === null ? "can't count · may change the schema" : "can't count") : n;
           // More rows changed = more prominent: 0 rows normal, 1~99 warning, 100+ · uncountable · DDL danger
           const tone = typeof n === "number" ? (n >= 100 ? "danger" : n > 0 ? "warn" : undefined) : "danger";
-          detail.push({ text: w.replace(/\s+/g, " ").slice(0, 300), value, tone });
+          detail.push({ text: withoutComments(w, kind).slice(0, 300), value, tone });
         }
         setStatus("Ready");
         if (!(await ask("These statements change data. Run them?", { title: `Production: ${c.name}`, detail, okLabel: "Run", danger: true }))) return drop();

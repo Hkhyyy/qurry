@@ -291,7 +291,9 @@ const api = {
   splitStatements: (text: string, kind: DbKind, opts: SplitOptions): [number, number][] => wasm.splitStatements(text, kind, opts),
   splitScript: (text: string, kind: DbKind, opts: SplitOptions): [number, number][] => wasm.splitScript(text, kind, opts),
   planExecution: (text: string, offset: number, segs: Segment[], kind: DbKind, settings: ExecSettings): ExecPlan | undefined => wasm.planExecution(text, offset, segs, kind, settings),
-  planSelection: (sel: string, segs: Segment[], settings: ExecSettings): Stmt[] => wasm.planSelection(sel, segs, settings),
+  planSelection: (sel: string, segs: Segment[], kind: DbKind, settings: ExecSettings): Stmt[] => wasm.planSelection(sel, segs, kind, settings),
+  /** A statement as the confirm dialogs show it: comments left out as the server reads them, whitespace collapsed */
+  withoutComments: (sql: string, kind: DbKind): string => wasm.withoutComments(sql, kind),
   statementAt: (text: string, offset: number, kind: DbKind): string | undefined => wasm.statementAt(text, offset, kind),
   /** Reformat Code: the selection (selStart < selEnd) or the statement at the caret; text[start, end) becomes `text`, undefined when nothing changes */
   reformat: (text: string, selStart: number, selEnd: number, caret: number, kind: DbKind, keywordCase: KeywordCase): { start: number; end: number; text: string } | undefined =>

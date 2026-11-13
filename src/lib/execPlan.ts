@@ -28,6 +28,6 @@ export function planExecution(text: string, offset: number, segs: Segment[], s: 
 }
 
 /** What a selection runs (`selection` setting), over its statements (`segs`, ranges in `sel`): ranges in `sel`, empty for nothing */
-export function planSelection(sel: string, segs: Segment[], s: ExecSettings): Stmt[] {
-  return shared().planSelection(sel, segs, s);
+export function planSelection(sel: string, segs: Segment[], s: ExecSettings, kind: DbKind = "postgres"): Stmt[] {
+  return shared().planSelection(sel, segs, kind, s);
 }
