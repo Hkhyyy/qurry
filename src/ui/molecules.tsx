@@ -450,8 +450,20 @@ export function ListItem({
   onContextMenu?: (e: MouseEvent) => void;
   className?: string;
 }) {
+  const row = useRef<HTMLDivElement>(null);
+  // A row selected by the keys stays in view: scroll only its list (scrollIntoView would also scroll a dialog or the page under it)
+  useLayoutEffect(() => {
+    const el = row.current;
+    const list = el?.parentElement;
+    if (!selected || !el || !list || list.scrollHeight <= list.clientHeight) return;
+    const l = list.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    if (r.top < l.top) list.scrollTop -= l.top - r.top;
+    else if (r.bottom > l.bottom) list.scrollTop += r.bottom - l.bottom;
+  }, [selected]);
   return (
     <div
+      ref={row}
       className={cx("ui-list-item", selected && "selected", dim && "dim", className)}
       role="option"
       aria-selected={selected}
