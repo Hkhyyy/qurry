@@ -8,7 +8,7 @@ description = "Qurry shared engine: data sources, drivers (PostgreSQL, MySQL, Re
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "mysql", "chrono", "uuid", "json"] }
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "mysql", "chrono", "uuid", "json"] }
 uuid = { version = "1.28.0", features = ["v4", "v5", "serde"] }
 chrono = "0.4.45"
 # timestamptz in the session's time zone: reads a zone's rules from the system tz database (/usr/share/zoneinfo) instead of building one in (crate::zone)
@@ -17,21 +17,21 @@ thiserror = "2.0.21"
 futures = "0.3.34"
 # PostgreSQL notices: sqlx reports them only as tracing events (crate::notice). Already in the tree through sqlx
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
-russh = "0.64.1"
-aes-gcm = "0.10"
-base64 = "0.22"
-rand = "0.8"
+russh = "0.65.1"
+aes-gcm = "0.11"
+base64 = "0.23"
+rand = "0.10"
 redis = { version = "1.7.1", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp", "tls-rustls", "tls-rustls-insecure", "cluster-async"] }
-dirs = "6"
+dirs = "7"
 csv = "1"
-calamine = { version = "=0.36.1", features = ["dates"] }
+calamine = { version = "=0.38.0", features = ["dates"] }
 regex = "1"
-minisign-verify = "0.2"
+minisign-verify = "0.3"
 # Order of releases and betas (0.3.1-beta.2 < 0.3.1), the same rules as the GUI updater
 semver = "1"
 # For keeping the password file's master key in the OS keychain (enabled in settings). Linux uses a pure-Rust Secret Service (no libdbus)
 keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
-sha2 = "0.10"
+sha2 = "0.11"
 # Import Data Sources: DataGrip / IntelliJ dataSources.xml (no DTD or external entities: crate::import)
 quick-xml = "0.42"
 qurry-driver = { workspace = true }
