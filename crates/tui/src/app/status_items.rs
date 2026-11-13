@@ -6,10 +6,11 @@ use qurry_core::editable::{ColumnEdit, Editable};
 use qurry_core::statusbar::{self, ColumnType, Item, Segment, Span, Stats, Status, ITEMS, MAX_CELLS};
 use std::hash::{Hash, Hasher};
 
-/// A table's columns and their declared types for Size (while they load or when they couldn't be read, Size shows the bytes only)
+/// A table's columns and their declared types for Size (while they load or when they couldn't be read, Size shows the bytes only),
+/// and the columns the database numbers (ColumnMeta::auto_increment: Submit's hint when their sequence is behind)
 pub enum TableCols {
     Loading,
-    Loaded(Vec<(String, ColumnType)>),
+    Loaded(Vec<(String, ColumnType)>, Vec<String>),
     /// Asked again once this long has passed (the connection may be back)
     Failed(std::time::Instant),
 }
@@ -132,19 +133,20 @@ impl App {
             let (t, sc, tb) = key.clone();
             let k = key.clone();
             self.spawn(async move { st.table_detail(t, sc, tb).await.ok() }, move |a, d| {
-                a.table_cols.insert(k, d.map_or(TableCols::Failed(std::time::Instant::now()), |d| TableCols::Loaded(column_types(d.columns))));
+                a.table_cols.insert(k, d.map_or(TableCols::Failed(std::time::Instant::now()), |d| loaded(d.columns)));
             });
         }
         match self.table_cols.get(&key)? {
-            TableCols::Loaded(c) => Some(c),
+            TableCols::Loaded(c, _) => Some(c),
             _ => None,
         }
     }
 }
 
-/// The table's columns as Size reads them
-pub fn column_types(cols: Vec<qurry_core::meta::ColumnMeta>) -> Vec<(String, ColumnType)> {
-    cols.into_iter().map(|c| (c.name, ColumnType { data_type: c.data_type, charset: c.charset })).collect()
+/// The table's columns as Size and Submit's hint read them
+pub fn loaded(cols: Vec<qurry_core::meta::ColumnMeta>) -> TableCols {
+    let filled = cols.iter().filter(|c| c.auto_increment).map(|c| c.name.clone()).collect();
+    TableCols::Loaded(cols.into_iter().map(|c| (c.name, ColumnType { data_type: c.data_type, charset: c.charset })).collect(), filled)
 }
 
 /// The selected rows and columns (in grid order): the marked rows (and a range's rows) in the cursor's column, else the range, else the

@@ -882,7 +882,7 @@ async fn all_scenes() -> Vec<Value> {
         h.key("Esc");
         h.key("Right");
         let target = h.app.tabs[h.app.active].target.clone();
-        h.app.table_cols.insert((target.clone(), "public".into(), "payment".into()), crate::app::TableCols::Loaded(vec![("card_brand".into(), ColumnType { data_type: "character varying(16)".into(), charset: None })]));
+        h.app.table_cols.insert((target.clone(), "public".into(), "payment".into()), crate::app::TableCols::Loaded(vec![("card_brand".into(), ColumnType { data_type: "character varying(16)".into(), charset: None })], vec![]));
         h.app.status_items = h.app.state.store.set_status_bar_item(Item::Size, true).unwrap();
         h.app.status = "4 rows".into();
         scenes.push(app_scene(&mut h, "Status line: Size", "Size turned on, nothing marked: Position is the cursor's cell, Size its bytes and the column's declared limit (from the table's metadata)", 120, 22));
@@ -1021,8 +1021,27 @@ async fn all_scenes() -> Vec<Value> {
     tab_bars(&mut scenes).await;
     reconnect_scenes(&mut scenes).await;
     result_tab_scenes(&mut scenes).await;
+    scenes.push(sequence_behind_scene().await);
     scenes.push(temporary_scene().await);
     scenes
+}
+
+/// #167: a new row's INSERT got a key its sequence had already given out; the notice says so under the server's error, with the
+/// SQL to copy (Qurry doesn't run it)
+async fn sequence_behind_scene() -> Value {
+    fn dup(q: &str) -> Result<qurry_core::db::QueryResult, String> {
+        Err(format!("error returned from database: duplicate key value violates unique constraint \"orders_pkey\"\nKey (id)=(487) already exists.\n→ {q}"))
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(dup);
+    h.table_tab("orders", &["id", "order_no", "memo"], &[&["486", "O-20261101", "gift wrap"], &["487", "O-20261102", ""]], &["id"]);
+    let target = h.app.tabs[h.app.active].target.clone();
+    h.app.table_cols.insert((target, "public".into(), "orders".into()), crate::app::TableCols::Loaded(vec![], vec!["id".into()]));
+    h.app.focus = crate::app::Focus::Grid;
+    h.key("a");
+    h.key("Ctrl+S");
+    h.settle().await;
+    app_scene(&mut h, "Submit failed: key sequence behind", "A new row's id came from a sequence behind the table's highest id: the server's error, what happened, and the setval to copy and run", 120, 26)
 }
 
 /// #135: a table tab and an explorer node waiting on [PROD] shop while it reconnects through AWS SSM: the status line says so with
