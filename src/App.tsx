@@ -22,6 +22,7 @@ import { StatusBar } from "./features/settings/StatusBar";
 import { ReconnectToasts } from "./components/ReconnectToasts";
 import { cancelReconnect, useReconnect, waitingToast } from "./lib/reconnect";
 import { useTabsStore } from "./features/tabs/store";
+import { wsConns } from "./features/workspaces/ops";
 import { stash, useWorkspacesStore } from "./features/workspaces/store";
 import { useWorkspaces } from "./features/workspaces/useWorkspaces";
 import { useConsole } from "./features/console/useConsole";
@@ -293,7 +294,7 @@ export default function App() {
           {workspaces
             .filter((w) => shownWs.includes(w.id))
             .map((w) => {
-              const mine = w.connIds.map((id) => conns.find((c) => c.id === id)).filter((c): c is ConnectionView => !!c);
+              const mine = wsConns(w.connIds, conns);
               return (
                 <div key={w.id} className={"ws-explorer" + (w.id === curWs ? " on" : "")} style={{ display: w.id === curWs ? "block" : "none" }}>
                   <Explorer

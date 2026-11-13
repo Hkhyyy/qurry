@@ -13,6 +13,7 @@ mod perf;
 mod reconnect;
 mod reformat;
 mod result_tabs;
+mod search_scope;
 mod status_items;
 mod tabs;
 mod temporary;

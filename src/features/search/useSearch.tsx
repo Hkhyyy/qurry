@@ -20,6 +20,7 @@ import { snapKey, Tab } from "../tabs/types";
 import type { useTabs } from "../tabs/useTabs";
 import { useWorkspacesStore } from "../workspaces/store";
 import type { useWorkspaces } from "../workspaces/useWorkspaces";
+import { setSearchScope, useSearchScope } from "./scope";
 
 type Deps = {
   conns: ConnectionView[];
@@ -45,6 +46,7 @@ export function useSearch({
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
   const split = useTabsStore((s) => s.panes.t === "split");
+  const searchScope = useSearchScope();
   // ───────── Switcher / Recent Files / Maximize ─────────
   const [switcher, setSwitcher] = useState<{ items: SwitchItem[]; start: number } | null>(null);
   const [recentOpen, setRecentOpen] = useState(false);
@@ -245,6 +247,9 @@ export function useSearch({
             initialTab={se}
             conns={conns}
             contextConnId={treeSel?.conn.id ?? active?.connId}
+            wsConnIds={workspaces.find((w) => w.id === curWs)?.connIds ?? []}
+            scope={searchScope}
+            onScopeChange={(s) => setSearchScope(s).catch((e) => setStatus(`Couldn't save the search scope: ${e}`))}
             files={seLists?.files ?? []}
             actions={seLists?.actions ?? []}
             onClose={() => setSe(null)}

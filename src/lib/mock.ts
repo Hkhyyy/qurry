@@ -129,6 +129,8 @@ const checkTheme = (t: any) => {
 };
 /** settings.json "keywordCase" (kept across a reload, as the file is) */
 let keywordCase = localStorage.getItem("mock-keywordCase") ?? "off";
+/** settings.json "searchScope" (kept across a reload, as the file is) */
+let searchScope = localStorage.getItem("mock-searchScope") ?? "workspace";
 /** settings.json "resultTabs" (kept across a reload, as the file is) */
 let resultTabs = Number(localStorage.getItem("mock-resultTabs") ?? 10);
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
@@ -280,7 +282,14 @@ const handlers: Record<string, (a: any) => unknown> = {
   cached_index: () => [
     { target: "prod::shop_app", objects: [{ schema: "public", name: "payments", kind: "table" }, { schema: "public", name: "refunds", kind: "table" }], columns: [{ schema: "public", name: "refunds", columns: [["payment_id", "bigint"]] }] },
   ],
-  object_index: () => [
+  // [MySQL] shop: its database's tables, views and routines; [Redis] cache: its keys; every other source: the PostgreSQL list
+  object_index: (a: any) => String(a.id).startsWith("my::") ? [
+    { schema: "shop", name: "shop", kind: "schema" },
+    { schema: "shop", name: "orders", kind: "table" },
+    { schema: "shop", name: "product_reviews", kind: "table" },
+    { schema: "shop", name: "order_summary", kind: "view" },
+    { schema: "shop", name: "restock_items", kind: "procedure" },
+  ] : String(a.id).startsWith("rd") ? redisKeys(a.id).map((k) => ({ schema: String(a.id).split("::")[1] ?? "db0", name: k.key, kind: "key" })) : [
     { schema: "public", name: "public", kind: "schema" },
     { schema: "billing", name: "billing", kind: "schema" },
     { schema: "public", name: "users", kind: "table" },
@@ -828,6 +837,11 @@ const handlers: Record<string, (a: any) => unknown> = {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
     keywordCase = a.case;
     localStorage.setItem("mock-keywordCase", a.case);
+  },
+  search_scope: () => searchScope,
+  set_search_scope: (a: any) => {
+    searchScope = a.scope;
+    localStorage.setItem("mock-searchScope", a.scope);
   },
   result_tabs: () => resultTabs,
   set_result_tabs: (a: any) => {

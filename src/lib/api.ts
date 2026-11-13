@@ -212,6 +212,8 @@ export const setUpdateCheckEnabled = (on: boolean) => {
 
 /** stable: releases from a version tag only; beta: also the pre-release built from every merge to main. Kept in the config folder, shared with the TUI */
 export type UpdateChannel = "stable" | "beta";
+/** Search Everywhere's scope (qurry_core::search_cache::SearchScope) */
+export type SearchScope = "workspace" | "all" | "context";
 
 /** An installed font family (Settings › Appearance fonts); mono: every face is monospaced */
 export type FontFamily = { name: string; mono: boolean };
@@ -244,6 +246,9 @@ export const api = {
   /** Result tabs kept per console (settings.json, shared with the TUI) */
   resultTabs: () => invoke<number>("result_tabs"),
   setResultTabs: (n: number) => invoke<void>("set_result_tabs", { n }),
+  /** Search Everywhere's scope, the last one picked (settings.json, shared with the TUI) */
+  searchScope: () => invoke<SearchScope>("search_scope"),
+  setSearchScope: (scope: SearchScope) => invoke<void>("set_search_scope", { scope }),
   /** Theme pick, Sync with OS and custom themes, shared with the TUI (settings.json) */
   themeSettings: () => invoke<ThemeSettings>("theme_settings"),
   setTheme: (id: string) => invoke<void>("set_theme", { id }),

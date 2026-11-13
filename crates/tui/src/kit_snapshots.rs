@@ -1029,6 +1029,7 @@ async fn all_scenes() -> Vec<Value> {
     result_tab_scenes(&mut scenes).await;
     scenes.push(sequence_behind_scene().await);
     scenes.push(temporary_scene().await);
+    search_scenes(&mut scenes).await;
     scenes
 }
 
@@ -1048,6 +1049,32 @@ async fn sequence_behind_scene() -> Value {
     h.key("Ctrl+S");
     h.settle().await;
     app_scene(&mut h, "Submit failed: key sequence behind", "A new row's id came from a sequence behind the table's highest id: the server's error, what happened, and the setval to copy and run", 120, 26)
+}
+
+/// #169: Go to Database Object in This Workspace (the default) — [PROD] shop and [MySQL] shop are in it, [DEV] shop in Reports — then
+/// ⌃o again: All Places. The sources aren't connected, so the objects come from the search cache (marked cached)
+async fn search_scenes(scenes: &mut Vec<Value>) {
+    let mut h = Harness::new().await;
+    explorer(&mut h).await;
+    let my: ConnectionConfig = serde_json::from_value(json!({ "id": "my", "name": "[MySQL] shop", "kind": "mysql", "host": "db.example.com", "port": 3306, "user": "app", "database": "shop", "color": "#22524f" })).unwrap();
+    h.app.state.save_connection(my, None, None).await.unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    let entry = |schema: &str, name: &str, kind: &str| qurry_core::meta::IndexEntry { schema: schema.into(), name: name.into(), kind: kind.into() };
+    let dir = h.app.state.store.dir();
+    qurry_core::search_cache::save_objects(&dir, "prod::shop", &[entry("public", "payment", "table"), entry("public", "payment_refund", "table"), entry("public", "v_payment_daily", "view")]);
+    qurry_core::search_cache::save_objects(&dir, "my::shop", &[entry("shop", "payment_method", "table"), entry("shop", "repay_order", "procedure")]);
+    qurry_core::search_cache::save_objects(&dir, "dev::shop", &[entry("public", "payment_test", "table")]);
+    h.app.workspaces[0].conns = vec!["prod".into(), "my".into()];
+    h.app.workspaces.push(crate::app::Workspace { id: "w2".into(), name: "Reports".into(), conns: vec!["dev".into()], saved: None });
+    h.app.rebuild_roots();
+    h.app.popup = None;
+    h.key("Ctrl+O");
+    h.type_str("pay");
+    scenes.push(app_scene(&mut h, "Go to Database Object: This Workspace", "⌃o: objects of the data sources in this workspace's explorer, MySQL as well as PostgreSQL (not connected: from the search cache); the title shows the scope, shared with the GUI", 120, 22));
+    h.key("Ctrl+O");
+    scenes.push(app_scene(&mut h, "Go to Database Object: All Places", "⌃o again: the next scope, All Places, with what was typed (then Context Data Sources: the explorer cursor's source); the pick is kept for both apps", 120, 22));
+    scenes.push(app_scene(&mut h, "Go to Database Object: 60×14", "In a small window the title keeps the scope and the key hints stay", 60, 14));
 }
 
 /// #135: a table tab and an explorer node waiting on [PROD] shop while it reconnects through AWS SSM: the status line says so with

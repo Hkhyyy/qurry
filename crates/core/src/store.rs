@@ -828,6 +828,15 @@ impl Store {
         self.set_setting("keywordCase", serde_json::to_value(case)?)
     }
 
+    /// Search Everywhere's scope, for the GUI and the TUI (search_cache::SearchScope)
+    pub fn search_scope(&self) -> crate::search_cache::SearchScope {
+        self.settings().remove("searchScope").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+    }
+
+    pub fn set_search_scope(&self, scope: crate::search_cache::SearchScope) -> AppResult<()> {
+        self.set_setting("searchScope", serde_json::to_value(scope)?)
+    }
+
     /// Result tabs kept per console, for the GUI and the TUI: past it, the least recently shown unpinned one closes (10 unless set;
     /// a value that isn't a whole number of 1 or more is 10 too)
     pub fn result_tabs(&self) -> usize {
@@ -1139,6 +1148,25 @@ mod tests {
         assert_eq!(saved["keywordCase"], "upper");
         fs::write(dir.path().join("cfg/settings.json"), r#"{"keywordCase": "title"}"#).unwrap();
         assert_eq!(store.keyword_case(), KeywordCase::Off);
+    }
+
+    /// Search scope: This Workspace until picked, saved as "searchScope" and read back by another app (GUI ↔ TUI); a value this
+    /// version doesn't know is This Workspace
+    #[test]
+    fn search_scope_setting() {
+        use crate::search_cache::SearchScope;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        assert_eq!(store.search_scope(), SearchScope::Workspace);
+        store.set_keyword_case(crate::format::KeywordCase::Lower).unwrap();
+        store.set_search_scope(SearchScope::All).unwrap();
+        let other = Store::new(dir.path().join("cfg"));
+        assert_eq!(other.search_scope(), SearchScope::All);
+        assert_eq!(other.keyword_case(), crate::format::KeywordCase::Lower);
+        let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(dir.path().join("cfg/settings.json")).unwrap()).unwrap();
+        assert_eq!(saved["searchScope"], "all");
+        fs::write(dir.path().join("cfg/settings.json"), r#"{"searchScope": "project"}"#).unwrap();
+        assert_eq!(store.search_scope(), SearchScope::Workspace);
     }
 
     /// Result tabs: 10 until set, saved as "resultTabs" next to the other settings and read back by another app (GUI ↔ TUI); 0 is

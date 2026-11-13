@@ -310,6 +310,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | Key | Action |
 |---|---|
 | `Go to DDL key` | DDL of the selected object (in Search Everywhere / Go to Database Object) |
+| `Its open key again` | Next scope of Search Everywhere / Go to Database Object: This Workspace, All Places, Context Data Sources |
 | `type` | Filter (palettes) |
 | `↑ ↓ / PgUp PgDn` | Move / scroll |
 | `Enter` | Run / confirm |
