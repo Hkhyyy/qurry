@@ -139,11 +139,12 @@ impl Backend for PgPool {
     }
 
     async fn table_detail(&self, schema: &str, table: &str) -> AppResult<TableDetail> {
-        type Col = (String, String, bool, Option<String>, Option<String>, bool);
+        type Col = (String, String, bool, Option<String>, Option<String>, bool, bool);
         let cols: Vec<Col> = sqlx::query_as(&format!(
             "select a.attname::text, format_type(a.atttypid, a.atttypmod), not a.attnotnull, \
                     pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum), \
-                    coalesce(a.attnum = any(pk.conkey), false) \
+                    coalesce(a.attnum = any(pk.conkey), false), \
+                    a.attidentity <> '' or coalesce(pg_get_expr(d.adbin, d.adrelid) like 'nextval(%', false) \
              from pg_attribute a \
              left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum \
              left join pg_constraint pk on pk.conrelid = a.attrelid and pk.contype = 'p' \
@@ -175,7 +176,7 @@ impl Backend for PgPool {
         Ok(TableDetail {
             columns: cols
                 .into_iter()
-                .map(|(name, data_type, nullable, default_value, comment, is_pk)| ColumnMeta {
+                .map(|(name, data_type, nullable, default_value, comment, is_pk, auto_increment)| ColumnMeta {
                     name,
                     data_type,
                     nullable,
@@ -183,6 +184,7 @@ impl Backend for PgPool {
                     comment,
                     is_pk,
                     charset: None,
+                    auto_increment,
                 })
                 .collect(),
             indexes: idx
@@ -740,7 +742,7 @@ impl Backend for PgPool {
                 return Err(crate::audit::stopped(e, false));
             }
             let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(st.as_str()).await };
-            let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
+            let n = r.map_err(|e| crate::error::in_statement(e.into(), st))?.rows_affected();
             check_exact_one(st, n, exact_one)?;
             shots.push(shot.map(|s| (s, n)));
             affected += n;

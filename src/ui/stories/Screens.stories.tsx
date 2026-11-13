@@ -617,6 +617,36 @@ export const GridSubmitChanges: S = {
   },
 };
 
+/** Submit Changes after a new row's key came out of a sequence behind the table (#167): the server's error, then what happened and
+ *  the SQL that fixes it, to copy (Qurry doesn't run it) */
+export const GridSubmitSequenceBehind: S = {
+  name: "Result Grid — Submit Changes, key sequence behind",
+  render: () => (
+    <div style={{ position: "relative", height: 420, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid
+        result={consoleUsers}
+        edit={{ schema: "public", table: "users", pk: ["id"] }}
+        target="dev"
+        running={false}
+        loadingMore={false}
+        query="select * from users"
+        onFetchMore={noop}
+        onSubmit={(sql) => Promise.reject(`error returned from database: duplicate key value violates unique constraint "users_pkey"\nKey (id)=(1) already exists.\n→ ${sql[sql.length - 1]}`)}
+        onReload={noop}
+        onCancel={noop}
+        onExport={noop}
+      />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole("gridcell", { name: "kim" })[0]);
+    await userEvent.click(c.getByRole("button", { name: /^Add Row/ }));
+    await userEvent.click(c.getByRole("button", { name: /^Submit/ }));
+    await waitFor(() => expect(canvasElement.ownerDocument.querySelector(".ui-fix-sql code")?.textContent).toBe("SELECT setval(pg_get_serial_sequence('public.users', 'id'), (SELECT max(id) FROM public.users));"));
+  },
+};
+
 /** Generated or saved SQL (Submit Changes, DDL and migrate previews, history, Production log): the console's colors per dialect */
 const SAMPLE_SQL = `-- refund the duplicated payments
 UPDATE public.payments SET status = 'refunded', meta = E'{"pg":"toss","n":1}', updated_at = now() WHERE id IN (1042, 1043);

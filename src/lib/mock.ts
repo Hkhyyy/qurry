@@ -311,7 +311,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   })),
   table_detail: async (a: any) => (await reconnectWait(a), {
     columns: [
-      { name: "id", dataType: "bigint", nullable: false, defaultValue: "nextval('users_id_seq'::regclass)", comment: null, isPk: true },
+      { name: "id", dataType: "bigint", nullable: false, defaultValue: "nextval('users_id_seq'::regclass)", comment: null, isPk: true, autoIncrement: true },
       { name: "user_name", dataType: "character varying(50)", nullable: false, defaultValue: null, comment: "이름", isPk: false },
       { name: "contract_id", dataType: "bigint", nullable: true, defaultValue: null, comment: null, isPk: false },
       { name: "created_at", dataType: "timestamp with time zone", nullable: false, defaultValue: "now()", comment: null, isPk: false },
@@ -329,7 +329,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     const fail = (globalThis as any).__mockStructureFail;
     if (fail) throw fail;
     const columns = [
-      { name: "id", dataType: "bigint", nullable: false, defaultValue: "nextval('users_id_seq'::regclass)", comment: null, isPk: true },
+      { name: "id", dataType: "bigint", nullable: false, defaultValue: "nextval('users_id_seq'::regclass)", comment: null, isPk: true, autoIncrement: true },
       { name: "user_name", dataType: "character varying(50)", nullable: false, defaultValue: null, comment: "이름", isPk: false },
       { name: "email", dataType: "text", nullable: true, defaultValue: "concat('user-', currval('users_id_seq'::regclass), '@', current_setting('app.mail_domain'))", comment: "Login and receipts; unique when set", isPk: false },
       { name: "contract_id", dataType: "bigint", nullable: true, defaultValue: null, comment: null, isPk: false },
@@ -522,7 +522,11 @@ const handlers: Record<string, (a: any) => unknown> = {
   // A console in Manual mode keeps them pending (tx_state)
   // As the core: what ran goes into the query history
   // window.__mockSubmitted: every statement Submit sent, in order (e2e)
+  // window.__mockSequenceBehind (e2e, stories): an INSERT into users that leaves out id fails as the core words PostgreSQL's error
+  // when the key's sequence is behind the table (#167), and nothing is saved
   submit_edits: (a: any) => {
+    const behind = (globalThis as any).__mockSequenceBehind && a.statements.find((s: string) => /^INSERT INTO public\.users (DEFAULT VALUES|\((?!id\b)(?![^)]*, id\b))/.test(s));
+    if (behind) throw `error returned from database: duplicate key value violates unique constraint "users_pkey"\nKey (id)=(1) already exists.\n→ ${behind}`;
     ((globalThis as any).__mockSubmitted ??= []).push(...a.statements);
     const [connId, database] = String(a.id).split("::");
     for (const sql of a.statements) historyAdded.unshift({ id: `ha${historyAdded.length}`, connId, database: database || undefined, sql, ts: Date.now() });

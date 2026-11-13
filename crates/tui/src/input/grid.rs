@@ -828,6 +828,28 @@ mod tests {
         assert!(h.app.status.starts_with("4 statement(s) submitted, 4 row(s) affected"), "{}", h.app.status);
     }
 
+    /// A new row's INSERT leaves out id, which the database numbers, and the number exists (#167): the notice says the sequence is
+    /// behind and gives the SQL that moves it, to copy; with an id the database doesn't number, only the server's error
+    #[tokio::test]
+    async fn submit_says_when_the_key_sequence_is_behind() {
+        fn dup(q: &str) -> Result<QueryResult, String> {
+            Err(format!("error returned from database: duplicate key value violates unique constraint \"users_pkey\"\nKey (id)=(1) already exists.\n→ {q}"))
+        }
+        for (filled, hint) in [(vec!["id".to_string()], true), (vec![], false)] {
+            let mut h = users("postgres", false, dup).await;
+            let target = h.app.tabs[h.app.active].target.clone();
+            h.app.table_cols.insert((target, "public".into(), "users".into()), crate::app::TableCols::Loaded(vec![], filled));
+            h.key("a");
+            h.key("Ctrl+S");
+            h.settle().await;
+            let Some(crate::app::Popup::Message { title, text }) = &h.app.popup else { panic!("no notice: {}", h.app.status) };
+            assert_eq!(title, "Submit failed");
+            let fix = "\n\nThe key's sequence is behind the table's highest id; new rows get numbers that already exist.\nSELECT setval(pg_get_serial_sequence('public.users', 'id'), (SELECT max(id) FROM public.users));";
+            assert_eq!(text.ends_with(fix), hint, "{text}");
+            assert!(text.starts_with("error returned from database: duplicate key value"), "{text}");
+        }
+    }
+
     /// On MySQL an all-default row is `() VALUES ()`; a Production source lists the statements in the order they run before it asks
     #[tokio::test]
     async fn submit_on_mysql_production_lists_then_runs_them_in_order() {

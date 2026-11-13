@@ -331,7 +331,7 @@ export interface SchemaInfo { name: string; isSystem: boolean }
 export interface RelationInfo { name: string; kind: "table" | "partitioned" | "view" | "matview" | "foreign" | "sequence" | "key"; comment: string | null; rowEstimate: number | null }
 export interface RoutineInfo { name: string; args: string; returns: string | null; kind: string }
 export interface SchemaObjects { relations: RelationInfo[]; routines: RoutineInfo[] }
-export interface ColumnMeta { name: string; dataType: string; nullable: boolean; defaultValue: string | null; comment: string | null; isPk: boolean; /** MySQL: a text column's character set */ charset?: string }
+export interface ColumnMeta { name: string; dataType: string; nullable: boolean; defaultValue: string | null; comment: string | null; isPk: boolean; /** MySQL: a text column's character set */ charset?: string; /** The database numbers it (a nextval default, identity, AUTO_INCREMENT) */ autoIncrement?: boolean }
 export interface IndexMeta { name: string; definition: string; isUnique: boolean; isPrimary: boolean; columns: string[] }
 export interface ConstraintMeta { name: string; kind: "p" | "f" | "u" | "c"; definition: string }
 export interface TableDetail { columns: ColumnMeta[]; indexes: IndexMeta[]; constraints: ConstraintMeta[] }

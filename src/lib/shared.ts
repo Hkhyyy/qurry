@@ -253,6 +253,8 @@ const api = {
     wasm.editStatements(kind, to, rows, edits, deleted, added),
   /** Submit's statements for a join result (qurry_shared::result_edit::join_statements) */
   joinStatements: (kind: DbKind, edit: JoinEdit, rows: (string | null)[][], edits: [number, number, string | null][]): string[] => wasm.joinStatements(kind, edit, rows, edits),
+  /** Under a failed Submit: what happened and the SQL to copy when its new row's key sequence is behind (qurry_shared::errors::sequence_behind) */
+  sequenceBehind: (kind: DbKind, error: string, schema: string, table: string, filled: string[]): { text: string; sql: string } | undefined => wasm.sequenceBehind(kind, error, schema, table, filled),
   /** What a Production console that starts in Manual mode says the first time (qurry_shared::errors::PRODUCTION_MANUAL) */
   productionManual: (): string => wasm.productionManual(),
   /** The result grid's line when loading more rows failed (qurry_shared::errors::more_rows_failed, the TUI's words) */

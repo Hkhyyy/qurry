@@ -50,6 +50,10 @@ pub struct ColumnMeta {
     /// MySQL: a text column's character set (the status bar's Size words its limit in bytes with it); None elsewhere
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub charset: Option<String>,
+    /// The database numbers it when an INSERT leaves it out: PostgreSQL's nextval(…) default (serial) or identity, MySQL's
+    /// AUTO_INCREMENT (Submit's hint when the numbers fall behind: qurry_shared::errors::sequence_behind)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_increment: bool,
 }
 
 #[derive(Serialize, Deserialize)]
