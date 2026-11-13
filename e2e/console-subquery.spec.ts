@@ -96,7 +96,8 @@ test("a failed statement after the first: the error is marked at the server's po
   const at = "select id, n from ".length;
   await expect.poll(() => overlays(page, "squiggly-error")).toEqual([{ line: 2, from: at, to: at + "no_such_table".length }]);
   await expect(work(page).locator(".output-log")).toContainText('ERROR: relation "no_such_table" does not exist');
-  // Its message on hover, with the way out
+  // Its message on hover, with the way out (the decoration is drawn a frame after it is set: wait for it on a slow WebKit)
+  await expect(editor(page).locator(".squiggly-error")).toBeVisible();
   await editor(page).locator(".squiggly-error").hover({ force: true });
   await expect(page.locator(".monaco-hover:visible")).toContainText('relation "no_such_table" does not exist');
   await expect(page.locator(".monaco-hover:visible")).toContainText("Fix the statement and run it again");
