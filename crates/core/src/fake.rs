@@ -501,6 +501,7 @@ impl AppState {
             in_transaction: false,
             warning: None,
             editable: None,
+            notices: vec![],
         };
         Ok(FakePreview { plan, result, warnings: p.warnings })
     }

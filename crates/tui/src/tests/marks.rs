@@ -8,7 +8,7 @@ fn fake(q: &str) -> Result<QueryResult, String> {
     if q.contains("boom") {
         return Err("ERROR: relation \"boom\" does not exist".into());
     }
-    Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 7, has_result_set: false, in_transaction: false, warning: None, editable: None })
+    Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 7, has_result_set: false, in_transaction: false, warning: None, editable: None, notices: vec![] })
 }
 
 /// The focused console editor's lines as drawn, from the line-number column on ("✓1 select 1;")
@@ -203,7 +203,7 @@ async fn run_error_is_not_marked_on_text_edited_while_production_rows_counted() 
             return positioned(q);
         }
         let col = qurry_core::db::ColumnInfo { name: "count".into(), type_name: "int8".into() };
-        Ok(QueryResult { columns: vec![col], rows: vec![vec![1.into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None })
+        Ok(QueryResult { columns: vec![col], rows: vec![vec![1.into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] })
     }
     let mut h = Harness::new().await;
     let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({

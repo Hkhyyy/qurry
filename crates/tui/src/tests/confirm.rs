@@ -126,7 +126,7 @@ async fn production_confirm_draws_statements_in_sql_colors() {
     use ratatui::style::Modifier;
     fn counts(_: &str) -> Result<QueryResult, String> {
         let col = qurry_core::db::ColumnInfo { name: "count".into(), type_name: "int8".into() };
-        Ok(QueryResult { columns: vec![col], rows: vec![vec![1.into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None })
+        Ok(QueryResult { columns: vec![col], rows: vec![vec![1.into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] })
     }
     let mut h = Harness::new().await;
     let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({

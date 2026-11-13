@@ -255,6 +255,8 @@ impl Marks {
 const OUTPUT_MAX: usize = 1000;
 /// Output line prefix of a warning (drawn in the warn color, like the GUI): it ran, so not an error to run again
 pub const WARNING: &str = "Warning: ";
+/// Output line prefix of a server WARNING notice (qurry_core::notice::Notice::line), drawn in the warn color too
+pub const SERVER_WARNING: &str = "WARNING: ";
 
 impl Console {
     /// A new console's state around its editor and session

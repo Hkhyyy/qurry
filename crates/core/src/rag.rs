@@ -394,7 +394,7 @@ impl AppState {
             let ids: Vec<String> = hits.iter().map(|h| literal(src_kind, Some(&h.0))).collect();
             self.run_query(idx.source.clone(), format!("SELECT * FROM {}.{} WHERE {} IN ({})", q(&idx.schema), q(&idx.table), q(&idx.id_column), ids.join(", ")), Some(limit), None).await.ok()
         };
-        let mut out = QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None };
+        let mut out = QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] };
         match src.as_ref().and_then(|s| s.columns.iter().position(|c| c.name.eq_ignore_ascii_case(&idx.id_column)).map(|p| (s, p))) {
             Some((s, pos)) => {
                 out.columns = std::iter::once(col_info("score", "FLOAT8")).chain(s.columns.iter().cloned()).collect();

@@ -593,6 +593,20 @@ mod tests {
         assert!(text.contains("] run failed: insert into t (a, b) values ('…', 42)\n"), "{text}");
     }
 
+    /// A statement's notice collector (crate::notice::collect) is a tracing dispatcher: Qurry's own lines don't go through tracing,
+    /// so they still reach the file while it runs
+    #[tokio::test]
+    async fn log_lines_pass_a_notice_collector() {
+        let _one = SET.lock().await;
+        let t = tempfile::tempdir().unwrap();
+        init_at(t.path(), "gui");
+        let ((), notices) = crate::notice::collect(async { crate::log!("[qurry] while collecting notices") }).await;
+        *SINK.lock().unwrap() = None;
+        assert!(notices.is_empty());
+        let text = std::fs::read_to_string(t.path().join("qurry.log")).unwrap();
+        assert!(text.contains("] while collecting notices\n"), "{text}");
+    }
+
     /// A save and connect to a real server: the file has the connect with its time, never the password.
     /// QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres[:<password>] cargo test -p qurry-core logfile_real_connect -- --ignored
     /// Without a password (CI's trust auth) a made-up one is saved: the server ignores it, and the file still must not show it.
