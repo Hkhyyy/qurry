@@ -15,6 +15,8 @@ chrono = "0.4.45"
 tz-rs = { version = "0.7", default-features = false, features = ["std"] }
 thiserror = "2.0.21"
 futures = "0.3.34"
+# PostgreSQL notices: sqlx reports them only as tracing events (crate::notice). Already in the tree through sqlx
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 russh = "0.64.1"
 aes-gcm = "0.10"
 base64 = "0.22"

@@ -423,7 +423,8 @@ impl App {
                         let _ = hist.history.add(&hist_conn, Some(&hist_db), &s);
                     }
                     match r {
-                        Ok(res) => {
+                        Ok(mut res) => {
+                            let notices = std::mem::take(&mut res.notices);
                             // PG execution plan: indented operations · share (%) · warnings table
                             let res = match (explain && kind == DbKind::Postgres, res.rows.first().and_then(|r| r.first())) {
                                 (true, Some(v)) => match qurry_core::plan::parse_pg(&crate::grid::raw_text(v).unwrap_or_default()) {
@@ -441,6 +442,10 @@ impl App {
                                 }
                             } else if !res.in_transaction && !qurry_core::guard::is_read(&s, kind) {
                                 committed += 1;
+                            }
+                            // What the server said while it ran, under the statement (as the GUI writes it)
+                            for n in &notices {
+                                c.log(false, n.line());
                             }
                             if res.has_result_set {
                                 let msg = format!("{}{} row(s) retrieved in {} ms", res.rows.len(), if res.truncated { "+" } else { "" }, res.elapsed_ms);

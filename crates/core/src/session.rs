@@ -612,7 +612,7 @@ impl Session {
     }
     pub async fn run(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         match self {
-            Session::Pg(s) => s.run(sql, limit).await,
+            Session::Pg(s) => crate::notice::attach(crate::notice::collect(s.run(sql, limit)).await),
             Session::My(s) => s.run(sql, limit).await,
             Session::Redis(m) => crate::redisdb::run(m, sql, limit).await,
             Session::Plugin(c) => c.query(sql, limit).await,
@@ -624,7 +624,10 @@ impl Session {
     /// deadlocked (audit::stops_change): then the change doesn't run either. → (snapshot, change)
     pub async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
         match self {
-            Session::Pg(s) => s.run_with_snapshot(snap, sql, limit).await,
+            Session::Pg(s) => {
+                let ((shot, r), notices) = crate::notice::collect(s.run_with_snapshot(snap, sql, limit)).await;
+                (shot, crate::notice::attach((r, notices)))
+            }
             Session::My(s) => s.run_with_snapshot(snap, sql, limit).await,
             _ => (Err(AppError::Msg("Undo is kept for PostgreSQL and MySQL only".into())), self.run(sql, limit).await),
         }

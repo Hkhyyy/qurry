@@ -128,6 +128,14 @@ export interface QueryResult {
   editJoin?: JoinEdit;
   /** A console result whose rows can't be edited, and why (instead of `edit`). None of the three: not checked */
   readOnlyReason?: string;
+  /** What the server said while it ran (PostgreSQL NOTICE / WARNING / INFO), in order; level "" is the "… N more" line after the cap */
+  notices?: Notice[];
+}
+
+/** A server notice (qurry_core::notice::Notice) */
+export interface Notice {
+  level: string;
+  message: string;
 }
 
 /** A join result's edits (qurry_shared::result_edit::JoinEdit): tables = the ones that can be edited, each found by its key (result

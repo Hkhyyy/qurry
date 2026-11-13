@@ -68,7 +68,7 @@ async fn console_result_widths_are_not_saved() {
     let mut h = Harness::new().await;
     h.app.fake_db = Some(|_| {
         let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: "text".into() };
-        Ok(qurry_core::db::QueryResult { columns: vec![col("a"), col("b")], rows: vec![vec!["x".into(), "y".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None })
+        Ok(qurry_core::db::QueryResult { columns: vec![col("a"), col("b")], rows: vec![vec!["x".into(), "y".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] })
     });
     h.console_with("select a, b from t", 0, 0);
     h.key("F5");
@@ -126,7 +126,7 @@ async fn fit_counts_wide_characters_and_repeated_names_resize_on_their_own() {
     let mut h = Harness::new().await;
     h.app.fake_db = Some(|_| {
         let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: "text".into() };
-        Ok(qurry_core::db::QueryResult { columns: vec![col("id"), col("memo"), col("id")], rows: vec![vec!["1".into(), HANGUL.into(), "2".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None })
+        Ok(qurry_core::db::QueryResult { columns: vec![col("id"), col("memo"), col("id")], rows: vec![vec!["1".into(), HANGUL.into(), "2".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] })
     });
     h.console_with("select o.id, memo, u.id from o join u on true", 0, 0);
     h.key("F5");

@@ -662,7 +662,7 @@ mod tests {
     /// A change that hits more rows than the snapshot saved keeps no undo (it would miss rows); as many or fewer is fine
     #[test]
     fn undo_needs_every_changed_row() {
-        let qr = |rows: Vec<Vec<Value>>| -> AppResult<QueryResult> { Ok(QueryResult { columns: vec![], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None }) };
+        let qr = |rows: Vec<Vec<Value>>| -> AppResult<QueryResult> { Ok(QueryResult { columns: vec![], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] }) };
         let cols = vec![col("id", true), col("v", false)];
         let plan = |sql: &str, kind: DbKind| {
             let d = crate::guard::simple_dml(sql, kind).unwrap();
@@ -723,7 +723,7 @@ mod tests {
         let d = std::env::temp_dir().join(format!("qurry-audit-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         let a = Audit::new(&d);
-        let q = |rows_affected: u64, in_transaction: bool| -> AppResult<QueryResult> { Ok(QueryResult { columns: vec![], rows: vec![], rows_affected, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction, warning: None, editable: None }) };
+        let q = |rows_affected: u64, in_transaction: bool| -> AppResult<QueryResult> { Ok(QueryResult { columns: vec![], rows: vec![], rows_affected, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction, warning: None, editable: None, notices: vec![] }) };
         let run = |conn: &str, tab: Option<&str>, sql: &str, r: AppResult<QueryResult>, undo: Option<Result<String, String>>| {
             let started = a.before(conn, "[PROD] kr", DbKind::Postgres, tab, sql).unwrap();
             a.after(started, conn, "[PROD] kr", DbKind::Postgres, tab, sql, &r, undo).unwrap();
@@ -748,7 +748,7 @@ mod tests {
         let d = std::env::temp_dir().join(format!("qurry-audit-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         let a = Audit::new(&d);
-        let changed = Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction: true, warning: None, editable: None });
+        let changed = Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction: true, warning: None, editable: None, notices: vec![] });
         let lost: AppResult<QueryResult> = Err(AppError::Db(sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset by peer"))));
         let run = |sql: &str, r: &AppResult<QueryResult>| {
             let started = a.before("c1", "[PROD] kr", DbKind::Postgres, Some("tab"), sql).unwrap();
@@ -772,7 +772,7 @@ mod tests {
         let d = std::env::temp_dir().join(format!("qurry-audit-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         let a = Audit::new(&d);
-        let changed = Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction: true, warning: None, editable: None });
+        let changed = Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction: true, warning: None, editable: None, notices: vec![] });
         for word in [ENDED_UNKNOWN, IMPLICIT_COMMIT] {
             let started = a.before("c1", "[PROD] kr", DbKind::Mysql, Some("tab"), "update t set a = 1 where id = 1").unwrap();
             a.after(started, "c1", "[PROD] kr", DbKind::Mysql, Some("tab"), "update t set a = 1 where id = 1", &changed, None).unwrap();
@@ -792,7 +792,7 @@ mod tests {
         let d = std::env::temp_dir().join(format!("qurry-audit-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         let a = Audit::new(&d);
-        let ok = Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction: false, warning: None, editable: None });
+        let ok = Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction: false, warning: None, editable: None, notices: vec![] });
         assert!(a.before("c1", "[PROD] kr", DbKind::Postgres, None, "select 1").unwrap().is_none());
         let started = a.before("c1", "[PROD] kr", DbKind::Postgres, None, "delete from t where id = 1").unwrap();
         let e = a.list(None, "", 10).remove(0);

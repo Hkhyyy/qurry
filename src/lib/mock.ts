@@ -404,6 +404,9 @@ const handlers: Record<string, (a: any) => unknown> = {
     (((window as any).__mockRan ??= []).push(a.sql),
     /\bno_such_table\b/i.test(a.sql) ? Promise.reject(`ERROR: relation "no_such_table" does not exist (position ${[...a.sql.slice(0, a.sql.search(/\bno_such_table\b/i))].length + 1})`) : (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN \(FORMAT JSON/i.test(a.sql)
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }
+      : /^\s*do\b/i.test(a.sql)
+        // A DO block that reports what it did (RAISE NOTICE / WARNING): the server's notices with the result
+        ? { ...result, columns: [], rows: [], rowsAffected: 0, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true, notices: [{ level: "NOTICE", message: "role app_owner isn't a member, owner change skipped" }, { level: "WARNING", message: "table shop.orders has no primary key" }, { level: "", message: "… 3 more" }] }
       : /^\s*(insert|update|delete)/i.test(a.sql)
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
         : /\bwide_demo\b/i.test(a.sql)

@@ -1,6 +1,6 @@
 //! Screen drawing
 use crate::keys::disp;
-use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind, WARNING};
+use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SERVER_WARNING, SplitDir, TabKind, WARNING};
 use crate::tree::NodeKind;
 use qurry_core::keymap::Scope;
 use qurry_core::statusbar::{self, Segment};
@@ -540,7 +540,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     .rev()
                     .take(res.height as usize)
                     .rev()
-                    .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.starts_with(WARNING) { WARN } else if s.contains("> ") { ACCENT } else { Color::Gray })))
+                    .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.starts_with(WARNING) || s.starts_with(SERVER_WARNING) { WARN } else if s.contains("> ") { ACCENT } else { Color::Gray })))
                     .collect();
                 let block = panel("", focus == Focus::Grid);
                 let inner = block.inner(res);

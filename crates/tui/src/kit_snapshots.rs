@@ -241,6 +241,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.results.ran(10, Some(0), None, String::new(), "payment".into(), crate::grid::Grid::new(res));
@@ -285,6 +286,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         let mut g = crate::grid::Grid::new(wide);
@@ -336,6 +338,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: Some(editable),
+        notices: vec![],
     };
     let target = qurry_core::editable::EditTarget { schema: "public".into(), table: "users".into(), pk: vec!["id".into()], columns: vec!["id".into(), "user_name".into(), "email".into()] };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
@@ -496,6 +499,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.results.ran(10, Some(0), None, String::new(), "payment_check".into(), crate::grid::Grid::new(res));
@@ -569,6 +573,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.results.ran(10, Some(0), None, String::new(), "webhook_event".into(), crate::grid::Grid::new(res));
@@ -688,6 +693,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     };
     let timeout = "The report ran into its time limit (30 s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.\n(error returned from database: canceling statement due to statement timeout)";
     let info = |kind, id| qurry_core::dba::reports(kind).into_iter().find(|r| r.id == id);
@@ -1169,6 +1175,7 @@ fn shop_db(q: &str) -> Result<qurry_core::db::QueryResult, String> {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     })
 }
 

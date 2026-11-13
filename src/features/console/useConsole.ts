@@ -13,6 +13,7 @@ import { sharedOr } from "../../lib/shared";
 import { cancelTableLoad, loadTableTab } from "../explorer/tableTab";
 import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "../../lib/stmtKind";
 import { explainSql } from "../../lib/explain";
+import { noticeLines } from "./notices";
 import { patch, updTab } from "../tabs/ops";
 import { editorApis, setTabs, useTabsStore } from "../tabs/store";
 import type { Tab } from "../tabs/types";
@@ -258,6 +259,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
         pushHistory({ connId: tab.connId, database: tab.database, sql: sql0 });
         updTab(tabId, (t) => ({ ...t, inTx: !!r.inTransaction, txIdle: undefined }));
         if (!r.inTransaction && !isRead(kind, sql0) && !dry) committed++;
+        for (const n of noticeLines(r.notices)) log(tabId, n.level, n.text);
         if (r.warning) {
           warned++;
           log(tabId, "warn", `Warning: ${r.warning}`);

@@ -19,6 +19,7 @@ fn fake(q: &str) -> Result<QueryResult, String> {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     })
 }
 
@@ -119,6 +120,45 @@ async fn f5_keeps_an_earlier_warning_in_the_status() {
     assert_eq!(h.app.status, "Warning: It ran, but the result couldn't be written to the Production log");
 }
 
+/// The server's notices (PostgreSQL RAISE NOTICE / WARNING) in Output under their statement, the GUI's text, warnings in the warn color (#168)
+#[tokio::test]
+async fn notices_are_written_under_the_statement() {
+    fn raises(q: &str) -> Result<QueryResult, String> {
+        let mut r = fake(q)?;
+        r.rows_affected = 0;
+        let n = |level: &str, message: &str| qurry_core::notice::Notice { level: level.into(), message: message.into() };
+        r.notices = vec![n("NOTICE", "role app_owner isn't a member, owner change skipped"), n("WARNING", "table shop.orders has no primary key"), n("", "… 3 more")];
+        Ok(r)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(raises);
+    h.console_with("DO $$ BEGIN RAISE NOTICE 'x'; END $$", 0, 3);
+    h.key("F5");
+    h.settle().await;
+    assert_eq!(
+        h.console_output(),
+        [
+            "> DO $$ BEGIN RAISE NOTICE 'x'; END $$",
+            "NOTICE: role app_owner isn't a member, owner change skipped",
+            "WARNING: table shop.orders has no primary key",
+            "… 3 more",
+            "0 row(s) affected in 7 ms",
+        ]
+    );
+    // Qurry's own warning line, for its color
+    console_mut(&mut h).log(false, format!("{}own warning", crate::app::WARNING));
+    let (w, ht) = (120u16, 40u16);
+    let buf = h.buffer(w, ht);
+    let fg_of = |text: &str| {
+        let row = (0..ht).find(|&y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>().contains(text)).unwrap_or_else(|| panic!("{text} not drawn"));
+        let line: String = (0..w).map(|x| buf[(x, row)].symbol()).collect();
+        buf[(line[..line.find(text).unwrap()].chars().count() as u16, row)].fg
+    };
+    let warn = fg_of("Warning: own warning");
+    assert_eq!(fg_of("WARNING: table shop.orders"), warn);
+    assert_ne!(fg_of("NOTICE: role app_owner"), warn);
+}
+
 /// Production Data Source: the counted rows of each changing statement are shown before anything runs; yes runs them
 #[tokio::test]
 async fn production_confirm_shows_counted_rows() {
@@ -128,7 +168,7 @@ async fn production_confirm_shows_counted_rows() {
             return fake(q);
         }
         let n: serde_json::Value = if q.contains("id = 4") { 1.into() } else { "12408".into() };
-        Ok(QueryResult { columns: vec![ColumnInfo { name: "count".into(), type_name: "int8".into() }], rows: vec![vec![n]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None })
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "count".into(), type_name: "int8".into() }], rows: vec![vec![n]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] })
     }
     let mut h = Harness::new().await;
     let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
@@ -458,7 +498,7 @@ fn users(q: &str) -> Result<QueryResult, String> {
     } else {
         None
     };
-    Ok(QueryResult { columns: vec![col("id"), col("name")], rows: vec![vec!["1".into(), "kim".into()], vec!["2".into(), "lee".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable })
+    Ok(QueryResult { columns: vec![col("id"), col("name")], rows: vec![vec!["1".into(), "kim".into()], vec!["2".into(), "lee".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable, notices: vec![] })
 }
 
 /// #102's join, as the backend reports it: voc (idx, status) left join users (idx, role, and a computed column); voc 2 has no user
@@ -472,7 +512,7 @@ fn voc_join(_: &str) -> Result<QueryResult, String> {
         columns: vec![to(0, "idx"), to(0, "status"), to(1, "idx"), to(1, "role"), ColumnEdit::ReadOnly { read_only: qurry_shared::errors::edit_computed("shout") }],
     };
     let rows = vec![vec!["1".into(), "open".into(), "10".into(), "member".into(), "MEMBER".into()], vec!["2".into(), "new".into(), Value::Null, Value::Null, Value::Null]];
-    Ok(QueryResult { columns: ["idx", "status", "idx", "role", "shout"].map(col).to_vec(), rows, rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: Some(Editable::Join(j)) })
+    Ok(QueryResult { columns: ["idx", "status", "idx", "role", "shout"].map(col).to_vec(), rows, rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: Some(Editable::Join(j)), notices: vec![] })
 }
 
 /// A Production console whose result is shown, with the grid focused
