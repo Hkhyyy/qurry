@@ -1296,7 +1296,7 @@
     "planExecution(ask)": {
       "ask": [
         {
-          "label": "-- note select 2",
+          "label": "select 2",
           "stmts": [
             "-- note \nselect 2"
           ]
@@ -1329,7 +1329,7 @@
     "planExecution(outside:whole)": {
       "ask": [
         {
-          "label": "-- note select 2",
+          "label": "select 2",
           "stmts": [
             "-- note \nselect 2"
           ]
@@ -1346,7 +1346,7 @@
     "planExecution(outside:below)": {
       "ask": [
         {
-          "label": "-- note select 2",
+          "label": "select 2",
           "stmts": [
             "-- note \nselect 2"
           ]

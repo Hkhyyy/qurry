@@ -40,6 +40,7 @@ import {
   Toolbar,
   ToolbarSep,
 } from "..";
+import { withoutComments } from "../../lib/sqlSplit";
 import { connTabVars } from "../../lib/theme";
 import { TabIcon } from "../icons";
 
@@ -265,6 +266,23 @@ export const ConfirmProduction: S = {
         { text: "delete from orders where created_at < now() - interval '1 year'", value: "12,408 rows", tone: "danger" },
         { text: "create table refunds(id int)", value: "schema change", tone: "danger" },
       ]}
+      okLabel="Run"
+      danger
+    />
+  ),
+};
+/** A pg_dump-style script (#171): each change is listed by its SQL, without the comments above it (withoutComments, the TUI's rule) */
+const COMMENTED_SCRIPT = [
+  "--\n-- Name: orders; Type: TABLE; Schema: public; Owner: -\n--\n\nCREATE TABLE public.orders (\n    id integer NOT NULL,\n    total numeric(12,2)\n)",
+  "--\n-- Data for Name: orders; Type: TABLE DATA; Schema: public; Owner: -\n--\n\nINSERT INTO public.orders VALUES (1, 9.90)",
+];
+export const ConfirmProductionCommentedScript: S = {
+  parameters: { layout: "fullscreen" },
+  render: () => (
+    <OpenConfirm
+      title="Production: [PROD] shop"
+      message="These statements change data. Run them?"
+      detail={COMMENTED_SCRIPT.map((s, i) => ({ text: withoutComments(s, "postgres").slice(0, 300), value: i ? "can't count" : "schema change", tone: "danger" as const }))}
       okLabel="Run"
       danger
     />
