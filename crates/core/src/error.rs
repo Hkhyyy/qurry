@@ -36,3 +36,16 @@ fn db_text(e: &sqlx::Error) -> String {
         None => e.to_string(),
     }
 }
+
+/// A batch's failed statement (Submit, execute_batch): the error, PostgreSQL's DETAIL when the server gave one (a unique violation's
+/// `Key (id)=(5) already exists.`, which qurry_shared::errors::sequence_behind reads), then `→ <the statement>`
+pub fn in_statement(e: AppError, st: &str) -> AppError {
+    let detail = match &e {
+        AppError::Db(sqlx::Error::Database(d)) => d.try_downcast_ref::<sqlx::postgres::PgDatabaseError>().and_then(|p| p.detail()),
+        _ => None,
+    };
+    AppError::Msg(match detail {
+        Some(d) => format!("{e}\n{d}\n→ {st}"),
+        None => format!("{e}\n→ {st}"),
+    })
+}

@@ -271,6 +271,39 @@ pub fn error_position(msg: &str, sql: &str) -> Option<usize> {
     Some(sql[start..].find(near).map_or(start, |j| start + j))
 }
 
+/// A fix offered under a failed Submit's error (GUI and TUI): what happened, once, and SQL for the person to copy and run (Qurry
+/// never runs it)
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ErrorFix {
+    pub text: String,
+    pub sql: String,
+}
+
+/// A grid Submit's INSERT left out a key column the database numbers (`filled`: the table's columns with a nextval(…) default or
+/// identity, ColumnMeta::auto_increment) and the number it got already exists: the column's sequence is behind the table's highest
+/// value (rows were added with their keys: a restore, a paste). `error` is Submit's error as the core words it: the server's
+/// message, its DETAIL (`Key (col)=(…) already exists.`) and `→ <the statement>`. PostgreSQL only: MySQL and MariaDB (InnoDB) move
+/// AUTO_INCREMENT past the highest key by themselves, after an INSERT with a key and an UPDATE of one alike
+pub fn sequence_behind(kind: crate::DbKind, error: &str, schema: &str, table: &str, filled: &[String]) -> Option<ErrorFix> {
+    use crate::sql::{literal, quote_ident};
+    if kind != crate::DbKind::Postgres {
+        return None;
+    }
+    let (msg, stmt) = error.rsplit_once("\n→ ")?;
+    let detail = msg.split_once("duplicate key value violates unique constraint ")?.1;
+    let key = detail.split_once("Key (")?.1.split_once(")=(")?.0;
+    let q = |s: &str| quote_ident(kind, s);
+    let col = filled.iter().find(|c| key == c.as_str() || key == q(c) || key == format!("\"{}\"", c.replace('"', "\"\"")))?;
+    let rel = format!("{}.{}", q(schema), q(table));
+    // Submit's own INSERT (result_edit::edit_statements), with or without the GUI's `;`: the column is left out of its list
+    let ins = stmt.trim().trim_end_matches(';').strip_prefix(&format!("INSERT INTO {rel} "))?;
+    let left_out = ins == "DEFAULT VALUES" || ins.strip_prefix('(')?.split_once(") VALUES (")?.0.split(", ").all(|c| c != q(col));
+    left_out.then(|| ErrorFix {
+        text: format!("The key's sequence is behind the table's highest {col}; new rows get numbers that already exist."),
+        sql: format!("SELECT setval(pg_get_serial_sequence({}, {}), (SELECT max({}) FROM {rel}));", literal(kind, Some(&rel)), literal(kind, Some(col)), q(col)),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,6 +405,39 @@ mod tests {
         assert_eq!(disconnected("prod", "SSH tunnel", Disconnected::Idle), "Disconnected (idle): prod");
         assert_eq!(disconnected("prod", "AWS SSM tunnel", Disconnected::TunnelSilent), "Disconnected: the AWS SSM tunnel of prod stopped answering — the next query opens a new one");
         assert!(disconnected("prod", "SSH tunnel", Disconnected::TunnelStopped).starts_with("Disconnected: the SSH tunnel of prod stopped —"));
+    }
+
+    /// Submit's INSERT left out a key the database numbers, and the number exists: the fix moves the sequence past the highest
+    #[test]
+    fn sequence_behind_offers_setval() {
+        use crate::DbKind::{Mysql, Postgres};
+        let err = |key: &str, stmt: &str| format!("error returned from database: duplicate key value violates unique constraint \"orders_pkey\"\nKey ({key})=(3) already exists.\n→ {stmt}");
+        let id = ["id".to_string()];
+        let fix = sequence_behind(Postgres, &err("id", "INSERT INTO public.orders (note) VALUES ('a');"), "public", "orders", &id).unwrap();
+        assert_eq!(fix.text, "The key's sequence is behind the table's highest id; new rows get numbers that already exist.");
+        assert_eq!(fix.sql, "SELECT setval(pg_get_serial_sequence('public.orders', 'id'), (SELECT max(id) FROM public.orders));");
+        // All defaults; the TUI sends no `;`
+        assert!(sequence_behind(Postgres, &err("id", "INSERT INTO public.orders DEFAULT VALUES"), "public", "orders", &id).is_some());
+        // Names that need quotes: quoted in the SQL, the table as the text pg_get_serial_sequence parses, the column as it is
+        let e = "duplicate key value violates unique constraint \"Order Lines_pkey\"\nKey (\"LineId\")=(3) already exists.\n→ INSERT INTO \"Sales\".\"Order Lines\" (qty) VALUES ('1')";
+        let fix = sequence_behind(Postgres, e, "Sales", "Order Lines", &["LineId".into()]).unwrap();
+        assert_eq!(fix.sql, "SELECT setval(pg_get_serial_sequence('\"Sales\".\"Order Lines\"', 'LineId'), (SELECT max(\"LineId\") FROM \"Sales\".\"Order Lines\"));");
+        let e = "duplicate key value violates unique constraint \"t_pkey\"\nKey (id)=(1) already exists.\n→ INSERT INTO public.\"it's\" (v) VALUES ('x')";
+        assert!(sequence_behind(Postgres, e, "public", "it's", &id).unwrap().sql.starts_with("SELECT setval(pg_get_serial_sequence('public.\"it''s\"', 'id'), "));
+        let no = |e: &str| err("id", e);
+        for (why, kind, e, filled) in [
+            ("the INSERT set the key itself", Postgres, no("INSERT INTO public.orders (id, note) VALUES ('3', 'a')"), &id[..]),
+            ("the duplicate is in another column", Postgres, err("email", "INSERT INTO public.orders (note) VALUES ('a')"), &id[..]),
+            ("a key of two columns", Postgres, err("id, line", "INSERT INTO public.orders (note) VALUES ('a')"), &id[..]),
+            ("the database doesn't number it", Postgres, no("INSERT INTO public.orders (note) VALUES ('a')"), &[][..]),
+            ("an UPDATE", Postgres, no("UPDATE public.orders SET id = '3' WHERE id = '2'"), &id[..]),
+            ("another table", Postgres, no("INSERT INTO public.items (note) VALUES ('a')"), &id[..]),
+            ("not a duplicate", Postgres, "null value in column \"id\" violates not-null constraint\n→ INSERT INTO public.orders (note) VALUES ('a')".into(), &id[..]),
+            ("no statement", Postgres, "duplicate key value violates unique constraint \"orders_pkey\"\nKey (id)=(3) already exists.".into(), &id[..]),
+            ("MySQL", Mysql, "1062 (23000): Duplicate entry '3' for key 'orders.PRIMARY'\n→ INSERT INTO shop.orders (note) VALUES ('a')".into(), &id[..]),
+        ] {
+            assert_eq!(sequence_behind(kind, &e, "public", "orders", filled), None, "{why}");
+        }
     }
 
     #[test]

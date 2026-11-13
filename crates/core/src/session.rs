@@ -647,7 +647,7 @@ impl Session {
                 None => (None, self.run(st, 1).await),
             };
             // A lost connection keeps its error as it is: app::recover reads it
-            let r = r.map_err(|e| if crate::app::is_conn_lost(&e) { e } else { AppError::Msg(format!("{e}\n→ {st}")) });
+            let r = r.map_err(|e| if crate::app::is_conn_lost(&e) { e } else { crate::error::in_statement(e, st) });
             match r.and_then(|q| check_exact_one(st, q.rows_affected, true).map(|_| q.rows_affected)) {
                 Ok(k) => {
                     n += k;
