@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ConnectionView, dbVisible, defaultDbOf, meta, targetId } from "../lib/api";
+import { ConnectionView, dbShown, defaultDbOf, meta, SearchScope, targetId } from "../lib/api";
+import { nextScope, SEARCH_SCOPES, scopeConns, shownScope } from "../features/search/scope";
+import { compareRanked } from "../features/search/rank";
 import { fuzzyScore } from "../lib/fuzzy";
 import { useSharedReady } from "../lib/shared";
 import { objectIcon } from "../ui/icons";
 import { bindable, cmd, eventSpec, hit } from "../lib/shortcuts";
-import { Kbd, KeyHints, List, ListGroup, ListItem, Notice, Overlay, Popover, Row, SearchField, Select, Spacer, Tabs } from "../ui";
+import { InfoTip, Kbd, KeyHints, List, ListGroup, ListItem, Notice, Overlay, Popover, Row, SearchField, Select, Spacer, Tabs } from "../ui";
 
 /** First key of a command, for the key hints */
 const sk = (id: string) => cmd(id).shortcut;
@@ -61,11 +63,13 @@ export function invalidateSearchIndex(connId?: string) {
   for (const m of [objCache, colCache, dbCache] as Map<string, unknown>[])
     for (const k of [...m.keys()]) if (!connId || k === connId || k.startsWith(connId + "::")) m.delete(k);
 }
+/** The databases searched (as the TUI's ⌃p): the ones the explorer shows, the default one first, at most 8. Redis: its default database's keys */
 async function targetsOf(c: ConnectionView): Promise<string[]> {
-  if (c.options?.singleDb) return [defaultDbOf(c)];
-  if (!dbCache.has(c.id)) dbCache.set(c.id, meta.databases(c.id).catch(() => [defaultDbOf(c)]));
-  const dbs = await dbCache.get(c.id)!;
-  return dbs.filter((d) => dbVisible(c.scope, d, defaultDbOf(c)) && !["template0", "template1", "rdsadmin"].includes(d)).slice(0, 8);
+  const def = defaultDbOf(c);
+  if (c.options?.singleDb || c.kind === "redis") return [def];
+  if (!dbCache.has(c.id)) dbCache.set(c.id, meta.databases(c.id).catch(() => [def]));
+  const dbs = [...new Set([def, ...(await dbCache.get(c.id)!).filter((d) => dbShown(c, d, def))])].filter(Boolean);
+  return (dbs.length ? dbs : [def]).slice(0, 8);
 }
 function objectsOf(c: ConnectionView, db: string): Promise<DbObject[]> {
   const key = targetId(c.id, db);
@@ -103,6 +107,11 @@ interface Props {
   conns: ConnectionView[];
   /** Context Data Sources: connections currently in use */
   contextConnId?: string;
+  /** This Workspace: the data sources in the current workspace's explorer */
+  wsConnIds: string[];
+  /** The scope picked last (settings.json, shared with the TUI) */
+  scope: SearchScope;
+  onScopeChange: (s: SearchScope) => void;
   files: FileItem[];
   actions: ActionItem[];
   onClose: () => void;
@@ -117,17 +126,19 @@ export function SearchEverywhere(p: Props) {
   const [tab, setTab] = useState<SeTab>(p.initialTab);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
-  const [onlyContext, setOnlyContext] = useState(false);
   const [objects, setObjects] = useState<DbObject[]>([]);
   const [columns, setColumns] = useState<DbObject[]>([]);
   const [loading, setLoading] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const scopeConns = p.conns.filter((c) => c.connected && c.kind === "postgres" && (!onlyContext || c.id === p.contextConnId));
-  // Unconnected Data Sources are searched in the list read last time (connects when picked)
-  const cachedConns = p.conns.filter((c) => !c.connected && c.kind === "postgres" && (!onlyContext || c.id === p.contextConnId));
-  const scopeKey = [...scopeConns, ...cachedConns].map((c) => c.id + (c.connected ? "+" : "")).join(",");
+  // Every kind with objects: PostgreSQL, MySQL / MariaDB, driver databases, Redis keys (the TUI's ⌃p searches the same)
+  const scope = shownScope(p.scope, p.contextConnId);
+  const inScope = scopeConns(scope, p.conns, p.wsConnIds, p.contextConnId);
+  const liveConns = inScope.filter((c) => c.connected);
+  // Unconnected Data Sources are searched in the list read last time (connects when picked; Redis keys are never kept)
+  const cachedConns = inScope.filter((c) => !c.connected);
+  const scopeKey = inScope.map((c) => c.id + (c.connected ? "+" : "")).join(",");
 
   // Load the target DB index
   useEffect(() => {
@@ -148,8 +159,10 @@ export function SearchEverywhere(p: Props) {
           if (wantCols) cols.push(ci.columns.flatMap((t) => t.columns.map(([name, type]) => ({ connId: cid, db, schema: t.schema, name, kind: "column", table: t.name, type, cached: true }))));
         }
       }
-      for (const c of scopeConns) {
+      for (const c of liveConns) {
         for (const db of await targetsOf(c)) {
+          // The scope changed while the list was read (the cached index, the databases): the next run counts its own loads
+          if (!alive) return;
           setLoading((n) => n + 1);
           jobs.push(
             objectsOf(c, db)
@@ -161,7 +174,7 @@ export function SearchEverywhere(p: Props) {
                 if (alive) setLoading((n) => n - 1);
               }),
           );
-          if (wantCols) jobs.push(columnsOf(c, db).then((xs) => void cols.push(xs)).catch(() => {}));
+          if (wantCols && c.kind !== "redis") jobs.push(columnsOf(c, db).then((xs) => void cols.push(xs)).catch(() => {}));
         }
       }
       // Show whichever finishes first
@@ -216,8 +229,13 @@ export function SearchEverywhere(p: Props) {
           if (s !== null) out.push({ t: "action", a, score: s - (tab === "all" ? 20 : 0) });
         }
     }
-    // Same score: shorter name first (stable sort)
-    return out.sort((a, b) => b.score - a.score).slice(0, 200);
+    // Same score: database results first (as they were added) in a fixed order, not the order their sources answered in; files and
+    // actions after them in their own order
+    const ranked = (o: DbObject) => ({ name: o.name, kind: o.kind, where: o.table ? `${o.schema}.${o.table}` : o.schema, source: connName(o.connId), db: o.db });
+    const at = new Map(out.map((r, i) => [r, i]));
+    const tie = (a: Row, b: Row) =>
+      a.t === "db" && b.t === "db" ? compareRanked(ranked(a.o), ranked(b.o)) : a.t === "db" ? -1 : b.t === "db" ? 1 : at.get(a)! - at.get(b)!;
+    return out.sort((a, b) => b.score - a.score || tie(a, b)).slice(0, 200);
   }, [q, tab, objects, columns, p.files, p.actions, wasmReady]);
 
   useEffect(() => setSel(0), [q, tab]);
@@ -238,6 +256,11 @@ export function SearchEverywhere(p: Props) {
       return p.onOpenFile(r.f.key);
     }
     const o = r.o.kind === "column" ? { ...r.o, kind: "table", name: r.o.table!, table: undefined } : r.o;
+    // A Redis key isn't in the tree: it opens in the Redis tab (as the explorer's databases do), or its DDL
+    if (o.kind === "key") {
+      p.onClose();
+      return how === "ddl" ? p.onDdl(o) : p.onOpenData(o);
+    }
     if (how === "doc") return p.onQuickDoc(o);
     p.onClose();
     const relation = ["table", "view", "matview", "foreign"].includes(o.kind);
@@ -259,6 +282,8 @@ export function SearchEverywhere(p: Props) {
     // Only command shortcuts (a modifier or an F key): Backspace, Delete, Insert or ⇧↩ given to a tree command stay the search field's
     const s = eventSpec(e);
     const spec = s && bindable(s) ? s : null;
+    // The key that opens Go to Database Object, again: the next scope (DataGrip: the key again includes non-project items)
+    if (hit(spec, "goto.object")) return go(() => p.onScopeChange(nextScope(scope, p.contextConnId)));
     if (hit(spec, "tree.editData")) return go(() => run(cur, "data"));
     if (hit(spec, "tree.ddl")) return go(() => run(cur, "ddl"));
     if (hit(spec, "selectIn")) return go(() => run(cur, "select"));
@@ -277,7 +302,7 @@ export function SearchEverywhere(p: Props) {
     if (r.t === "file") return <ListItem {...common} icon={r.f.icon} title={r.f.title} dim={!r.f.open} trailing={r.f.hint} />;
     const o = r.o;
     const Icon = objectIcon(o.kind);
-    const where = o.kind === "schema" ? "" : o.kind === "column" ? `${o.schema}.${o.table}` : o.schema;
+    const where = o.kind === "schema" || o.kind === "key" ? "" : o.kind === "column" ? `${o.schema}.${o.table}` : o.schema;
     return (
       <ListItem
         {...common}
@@ -306,12 +331,25 @@ export function SearchEverywhere(p: Props) {
               <Tabs size="sm" items={TABS.map((t) => ({ id: t.id, label: t.label }))} value={tab} onChange={setTab} />
               <Spacer />
               {(tab === "database" || tab === "symbols" || tab === "all") && (
-                <Select value={onlyContext ? "ctx" : "all"} onChange={(e) => setOnlyContext(e.target.value === "ctx")} title="Search scope">
-                  <option value="all">All Places</option>
-                  <option value="ctx" disabled={!p.contextConnId}>
-                    Context Data Sources
-                  </option>
-                </Select>
+                <>
+                  <Select value={scope} onChange={(e) => p.onScopeChange(e.target.value as SearchScope)} aria-label="Search scope">
+                    {SEARCH_SCOPES.map((s) => (
+                      <option key={s.id} value={s.id} disabled={s.id === "context" && !p.contextConnId}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </Select>
+                  <InfoTip
+                    about="Search scope"
+                    info={[
+                      "This Workspace: the data sources in this workspace's Database Explorer.",
+                      "All Places: every data source.",
+                      "Context Data Sources: the data source of the selected explorer node or the active tab; off when there is none.",
+                      "Data sources that aren't connected are searched in the list read the last time they were.",
+                      `${sk("goto.object") ?? "Go to Database Object"} again: the next scope. The last one picked is kept, for the TUI too.`,
+                    ]}
+                  />
+                </>
               )}
             </Row>
             <SearchField bare autoFocus busy={loading > 0} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} placeholder={tab === "actions" ? "Type action name" : "Type / to see commands"} />
@@ -320,7 +358,9 @@ export function SearchEverywhere(p: Props) {
         foot={
           <KeyHints
             items={
-              cur?.t === "db"
+              cur?.t === "db" && cur.o.kind === "key"
+                ? ([["↩", "Open"], [sk("tree.ddl"), "Go to DDL"], ["⇥", "Next tab"]].filter((h): h is [string, string] => !!h[0]))
+                : cur?.t === "db"
                 ? ([["↩", "Select in Database Explorer"], [sk("tree.editData"), "Edit Data"], [sk("tree.ddl"), "Go to DDL"], [sk("tree.quickDoc"), "Quick Documentation"], ["⇥", "Next tab"]].filter((h): h is [string, string] => !!h[0]))
                 : [["↩", "Open"], ["⇥", "Next tab"], ["⇧⇧", "Search Everywhere"]]
             }
@@ -329,7 +369,7 @@ export function SearchEverywhere(p: Props) {
       >
         <List
           listRef={listRef}
-          empty={loading > 0 ? "Loading…" : !scopeConns.length && !objects.length && tab !== "files" && tab !== "actions" ? "No connected data sources. Connect one to search database objects." : "Nothing found"}
+          empty={loading > 0 ? "Loading…" : !liveConns.length && !objects.length && tab !== "files" && tab !== "actions" ? (scope === "workspace" && !inScope.length ? "No data sources in this workspace. Pick All Places to search the others." : "No connected data sources. Connect one to search database objects.") : scope === "workspace" && tab !== "files" && tab !== "actions" ? "Nothing found in This Workspace" : "Nothing found"}
         >
           {rows.map((r, i) => {
             const g = groupOf(r);

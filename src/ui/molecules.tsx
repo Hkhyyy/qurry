@@ -347,6 +347,24 @@ export function TlsOptIn({ host, production, inDialog, onAllow }: { host: string
   );
 }
 /**
+ * Under an error with a fix to run by hand (qurry_shared::errors::ErrorFix: a key sequence behind its table): what happened, then
+ * the SQL on a code line with Copy. Qurry never runs it
+ */
+export function FixSql({ text, sql }: { text: string; sql: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="ui-fix-sql">
+      <span>{text}</span>
+      <div className="ui-fix-sql-line">
+        <code className="ui-code ui-fix-sql-code">{sql}</code>
+        <Button size="sm" title="Copy this SQL to run it yourself" onClick={() => navigator.clipboard.writeText(sql).then(() => setCopied(true))}>
+          {copied ? "Copied" : "Copy"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+/**
  * What a wait in the background says (a data source that reconnects), bottom right above the status bar (inside Toasts): its text,
  * then its actions on the right. tone="danger": it failed (role alert, a danger border); onClose: a × in the corner
  */
@@ -432,8 +450,20 @@ export function ListItem({
   onContextMenu?: (e: MouseEvent) => void;
   className?: string;
 }) {
+  const row = useRef<HTMLDivElement>(null);
+  // A row selected by the keys stays in view: scroll only its list (scrollIntoView would also scroll a dialog or the page under it)
+  useLayoutEffect(() => {
+    const el = row.current;
+    const list = el?.parentElement;
+    if (!selected || !el || !list || list.scrollHeight <= list.clientHeight) return;
+    const l = list.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    if (r.top < l.top) list.scrollTop -= l.top - r.top;
+    else if (r.bottom > l.bottom) list.scrollTop += r.bottom - l.bottom;
+  }, [selected]);
   return (
     <div
+      ref={row}
       className={cx("ui-list-item", selected && "selected", dim && "dim", className)}
       role="option"
       aria-selected={selected}

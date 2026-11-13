@@ -254,6 +254,11 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                         return app.run_palette(it, false);
                     }
                 }
+                // The key that opened a search (⌃p, ⌃o) again: the next scope (DataGrip: the key again includes non-project items)
+                _ if crate::app::is_search(&p.title) && matches!(app.keys.lookup(&k), Some(Action::SearchEverywhere | Action::GoToObject)) => {
+                    app.popup = Some(Popup::Palette(p));
+                    return app.next_search_scope();
+                }
                 // The Go to DDL key (⌃b): DDL of the selected object
                 _ if app.keys.lookup(&k) == Some(Action::Ddl) => {
                     if let Some(it) = App::palette_matches(&p).get(p.sel).map(|x| (*x).clone()) {

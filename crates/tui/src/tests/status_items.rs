@@ -119,7 +119,7 @@ async fn narrow_keeps_position() {
     h.app.status_items = vec![Item::Size, Item::ShownColumns, Item::Position];
     payment(&mut h);
     let target = h.app.tabs[h.app.active].target.clone();
-    h.app.table_cols.insert((target, "public".into(), "payment".into()), TableCols::Loaded(vec![("id".into(), ColumnType { data_type: "character varying(8)".into(), charset: None })]));
+    h.app.table_cols.insert((target, "public".into(), "payment".into()), TableCols::Loaded(vec![("id".into(), ColumnType { data_type: "character varying(8)".into(), charset: None })], vec![]));
     let wide = status_line(&mut h, 200);
     assert!(wide.ends_with("⌃k actions   Size: 1 byte │ varchar(8): up to 8 chars (32 bytes in UTF-8) │ Row 1, Col 1"), "{wide}");
     assert!(wide.contains("Enter edit"), "{wide}");
@@ -187,6 +187,7 @@ async fn size_in_a_console_result() {
         in_transaction: false,
         warning: None,
         editable,
+        notices: vec![],
     };
     let set = |h: &mut Harness, r: QueryResult| {
         let i = h.app.tab_index(id).unwrap();
@@ -199,7 +200,7 @@ async fn size_in_a_console_result() {
     set(&mut h, res(None));
     assert!(status_line(&mut h, 200).ends_with("   Size: 11 bytes (7 chars) │ Row 1, Col 2"), "{}", status_line(&mut h, 200));
     let target = h.app.tabs[h.app.active].target.clone();
-    h.app.table_cols.insert((target, "public".into(), "users".into()), TableCols::Loaded(vec![("user_name".into(), ColumnType { data_type: "character varying(8)".into(), charset: None })]));
+    h.app.table_cols.insert((target, "public".into(), "users".into()), TableCols::Loaded(vec![("user_name".into(), ColumnType { data_type: "character varying(8)".into(), charset: None })], vec![]));
     set(&mut h, res(Some(Editable::Table(EditTarget { schema: "public".into(), table: "users".into(), pk: vec!["id".into()], columns: vec!["id".into(), "user_name".into()] }))));
     assert!(status_line(&mut h, 200).ends_with("   Size: 11 bytes (7 chars) │ varchar(8): up to 8 chars (32 bytes in UTF-8) │ Row 1, Col 2"), "{}", status_line(&mut h, 200));
     // A number has no Size

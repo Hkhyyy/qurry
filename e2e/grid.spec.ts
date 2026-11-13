@@ -679,6 +679,27 @@ test("Submit on MySQL: an empty new row is INSERT INTO … () VALUES (), listed 
   await expect.poll(() => submitted(page)).toEqual(["INSERT INTO shop.users () VALUES ();"]);
 });
 
+test("Submit failing on a key whose sequence is behind the table: the fix SQL under the error, to copy, never run (#167)", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockSequenceBehind = true));
+  await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();
+  await work(page).getByRole("button", { name: /^Add Row/ }).click();
+  await work(page).getByRole("button", { name: /^Submit/ }).click();
+  await expect(dialog(page).locator(".ui-notice.tone-danger")).toContainText('duplicate key value violates unique constraint "users_pkey"');
+  const fix = dialog(page).locator(".ui-fix-sql");
+  await expect(fix).toContainText("The key's sequence is behind the table's highest id; new rows get numbers that already exist.");
+  const sql = "SELECT setval(pg_get_serial_sequence('public.users', 'id'), (SELECT max(id) FROM public.users));";
+  await expect(fix.locator("code")).toHaveText(sql);
+  await fix.getByRole("button", { name: "Copy", exact: true }).click();
+  await expect.poll(() => clipboard(page)).toBe(sql);
+  await expect(fix.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
+  expect(await submitted(page)).toEqual([]);
+  // With the sequence fixed (by hand), Submit in the dialog saves the row
+  await page.evaluate(() => ((window as any).__mockSequenceBehind = false));
+  await dialog(page).getByRole("button", { name: "Submit", exact: true }).click();
+  await expect.poll(() => submitted(page)).toEqual(["INSERT INTO public.users DEFAULT VALUES;"]);
+  await expect(dialog(page)).toHaveCount(0);
+});
+
 test("pasted CSV rows: a quoted JSON value loses its CSV quotes, an empty field is NULL and \"\" an empty string (#160)", async ({ page }) => {
   const text = '10,"{""k"": ""a, b""}",,,\r\n11,,5,,""\r\n';
   await page.evaluate((t) => (navigator.clipboard.readText = async () => t), text);

@@ -936,7 +936,7 @@ mod tests {
         let mut r = QueryResult {
             columns: vec![col("user"), col("blocking_query"), col("query")],
             rows: vec![vec![json!("app'1"), json!("update t set x = 'secret' where id = 42"), Value::Null], vec![json!("b"), json!("select $1"), json!("select E'a\\'b', 7")]],
-            rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None,
+            rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![],
         };
         mask_query_text(&mut r, DbKind::Postgres);
         assert_eq!(r.rows[0], vec![json!("app'1"), json!("update t set x = ? where id = ?"), Value::Null]);
@@ -952,7 +952,7 @@ mod tests {
         let mut r = QueryResult {
             columns: vec![col("Replica_IO_Running"), col("Last_Errno"), col("Last_Error"), col("Last_IO_Error"), col("Last_SQL_Error")],
             rows: vec![vec![json!("Yes"), json!(1062), json!(sql_error), json!(""), json!(worker)]],
-            rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None,
+            rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![],
         };
         mask_query_text(&mut r, DbKind::Mysql);
         assert_eq!(r.rows[0], vec![json!("Yes"), json!(1062), json!("Error ?"), json!(""), json!("Worker 1 failed executing transaction ?, Error_code: 1062")]);

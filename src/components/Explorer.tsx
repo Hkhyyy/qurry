@@ -200,6 +200,12 @@ export function Explorer(p: Props) {
     const visible = rows().flatMap((el) => (el.id ? [el.id] : []));
     publish(clickSelect(cur, id, how, visible));
   };
+  /** ↻: the Refresh key's command on the selected nodes (their menu runs it, for all of them); nothing selected, the data source list */
+  const refresh = () => {
+    const all = selected(selRef.current);
+    if (!all.length) return p.onRefresh();
+    runById(p.buildMenu(infos.get(selRef.current.lead ?? "") ?? all[0], all), "tree.refresh");
+  };
 
   return (
     <div className="panel">
@@ -229,7 +235,7 @@ export function Explorer(p: Props) {
             />
           )}
         </span>
-        <IconButton size="sm" title={keyTitle("Refresh", "refresh")} onClick={p.onRefresh}>
+        <IconButton size="sm" title={keyTitle("Refresh", "tree.refresh")} onClick={refresh}>
           <IcReload />
         </IconButton>
         <IconButton size="sm" title={keyTitle("Collapse All", "tree.collapseAll")} onClick={collapseTree}>

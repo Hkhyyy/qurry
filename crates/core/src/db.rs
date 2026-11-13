@@ -46,10 +46,13 @@ pub struct QueryResult {
     /// None: not checked (not a console run, no result set, or the check couldn't tell)
     #[serde(flatten)]
     pub editable: Option<crate::editable::Editable>,
+    /// What the server said while it ran (PostgreSQL NOTICE / WARNING / INFO), in order, capped (crate::notice). A console run only
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<crate::notice::Notice>,
 }
 
 pub(crate) fn query_result(columns: Vec<ColumnInfo>, rows: Vec<Vec<Value>>, rows_affected: u64, truncated: bool, start: Instant, has_result_set: bool) -> QueryResult {
-    QueryResult { columns, rows, rows_affected, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set, in_transaction: false, warning: None, editable: None }
+    QueryResult { columns, rows, rows_affected, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set, in_transaction: false, warning: None, editable: None, notices: vec![] }
 }
 
 /// Max connections per DB (number of tabs + metadata queries such as the tree and autocomplete)
@@ -262,6 +265,7 @@ pub(crate) async fn run_pg_on(conn: &mut sqlx::PgConnection, sql: &str, limit: u
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     })
 }
 
@@ -285,7 +289,7 @@ pub async fn run_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> A
         }
     }
     let rows = pg_values(conn, &columns, &rows, &mut None).await;
-    Ok(QueryResult { columns, rows, rows_affected: 0, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set: true, in_transaction: false, warning: None, editable: None })
+    Ok(QueryResult { columns, rows, rows_affected: 0, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] })
 }
 
 /// Export on an already acquired connection of `pool` (possibly a read-only transaction). The time zone for timestamptz is read

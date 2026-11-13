@@ -386,6 +386,7 @@ mod tests {
             in_transaction: false,
             warning: None,
             editable: None,
+            notices: vec![],
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res("pid", 4123))), loaded: None, error: None, running: true, run: 0, auto: true };
@@ -425,6 +426,7 @@ mod tests {
             in_transaction: false,
             warning: None,
             editable: None,
+            notices: vec![],
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res(&[10, 20, 30]))), loaded: None, error: None, running: false, run: 0, auto: true };
@@ -457,6 +459,7 @@ mod tests {
             in_transaction: false,
             warning: None,
             editable: None,
+            notices: vec![],
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: true };
@@ -489,6 +492,7 @@ mod tests {
             in_transaction: false,
             warning: None,
             editable: None,
+            notices: vec![],
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "vacuum_progress");
         let d = crate::app::DbaTab { report: "vacuum_progress".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, run: 0, auto: true };
@@ -636,6 +640,7 @@ mod tests {
             in_transaction: false,
             warning: None,
             editable: None,
+            notices: vec![],
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Mysql).into_iter().find(|r| r.id == "slow_queries");
         let d = crate::app::DbaTab { report: "slow_queries".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, run: 0, auto: true };
@@ -745,7 +750,7 @@ mod tests {
         let mut h = Harness::new().await;
         let id = h.table_tab("users", &["id"], &[&["1"], &["2"]], &["id"]);
         let fresh = || {
-            let mut g = crate::grid::Grid::new(qurry_core::db::QueryResult { columns: vec![qurry_core::db::ColumnInfo { name: "id".into(), type_name: "text".into() }], rows: vec![vec!["9".into()]], rows_affected: 0, truncated: true, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
+            let mut g = crate::grid::Grid::new(qurry_core::db::QueryResult { columns: vec![qurry_core::db::ColumnInfo { name: "id".into(), type_name: "text".into() }], rows: vec![vec!["9".into()]], rows_affected: 0, truncated: true, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] });
             g.more_session = Some("s".into());
             g
         };
@@ -806,7 +811,7 @@ mod tests {
     }
 
     fn one_row() -> QueryResult {
-        QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 1, has_result_set: false, in_transaction: false, warning: None, editable: None }
+        QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 1, has_result_set: false, in_transaction: false, warning: None, editable: None, notices: vec![] }
     }
 
     /// Submit runs DELETE, then UPDATE, then INSERT (the GUI's order); the edited deleted row is only deleted, a new row's cell set to
@@ -826,6 +831,28 @@ mod tests {
             ["DELETE FROM public.users WHERE id = '2'", "UPDATE public.users SET name = 'a2' WHERE id = '1'", "INSERT INTO public.users (name) VALUES (NULL)", "INSERT INTO public.users DEFAULT VALUES"]
         );
         assert!(h.app.status.starts_with("4 statement(s) submitted, 4 row(s) affected"), "{}", h.app.status);
+    }
+
+    /// A new row's INSERT leaves out id, which the database numbers, and the number exists (#167): the notice says the sequence is
+    /// behind and gives the SQL that moves it, to copy; with an id the database doesn't number, only the server's error
+    #[tokio::test]
+    async fn submit_says_when_the_key_sequence_is_behind() {
+        fn dup(q: &str) -> Result<QueryResult, String> {
+            Err(format!("error returned from database: duplicate key value violates unique constraint \"users_pkey\"\nKey (id)=(1) already exists.\n→ {q}"))
+        }
+        for (filled, hint) in [(vec!["id".to_string()], true), (vec![], false)] {
+            let mut h = users("postgres", false, dup).await;
+            let target = h.app.tabs[h.app.active].target.clone();
+            h.app.table_cols.insert((target, "public".into(), "users".into()), crate::app::TableCols::Loaded(vec![], filled));
+            h.key("a");
+            h.key("Ctrl+S");
+            h.settle().await;
+            let Some(crate::app::Popup::Message { title, text }) = &h.app.popup else { panic!("no notice: {}", h.app.status) };
+            assert_eq!(title, "Submit failed");
+            let fix = "\n\nThe key's sequence is behind the table's highest id; new rows get numbers that already exist.\nSELECT setval(pg_get_serial_sequence('public.users', 'id'), (SELECT max(id) FROM public.users));";
+            assert_eq!(text.ends_with(fix), hint, "{text}");
+            assert!(text.starts_with("error returned from database: duplicate key value"), "{text}");
+        }
     }
 
     /// On MySQL an all-default row is `() VALUES ()`; a Production source lists the statements in the order they run before it asks

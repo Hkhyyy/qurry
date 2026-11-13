@@ -204,9 +204,18 @@ pub(crate) fn dash_comment(b: &[u8], i: usize, e: usize, kind: DbKind) -> bool {
     b[i] == b'-' && i + 1 < e && b[i + 1] == b'-' && (kind != DbKind::Mysql || i + 2 >= e || b[i + 2].is_ascii_whitespace() || b[i + 2].is_ascii_control())
 }
 
-/// Where the scan goes on when b[i] starts what isn't code — a comment, a string, a quoted name, a dollar quote — past its end
-/// (the text's end if unclosed). MySQL `/*!` · `/*M!` give the position after the marker: their inside is code. None: b[i] is code
-fn skip_non_code(text: &str, i: usize, kind: DbKind, opts: SplitOptions) -> Option<usize> {
+/// Length of the MySQL `/*!` · MariaDB `/*M!` marker at b[i] (executed code, not a comment), 0 if there is none
+fn exec_marker(b: &[u8], i: usize, kind: DbKind) -> usize {
+    match kind == DbKind::Mysql && b[i..].starts_with(b"/*") {
+        true if b[i + 2..].starts_with(b"!") => 3,
+        true if b[i + 2..].starts_with(b"M!") => 4,
+        _ => 0,
+    }
+}
+
+/// Where the comment starting at b[i] ends (a line comment: after its newline; unclosed: the text's end), None if b[i] starts none.
+/// MySQL `/*! … */` · `/*M! … */` are not comments: the server runs their inside
+fn comment_end(text: &str, i: usize, kind: DbKind) -> Option<usize> {
     let b = text.as_bytes();
     let n = b.len();
     let c = b[i];
@@ -214,15 +223,7 @@ fn skip_non_code(text: &str, i: usize, kind: DbKind, opts: SplitOptions) -> Opti
     if dash_comment(b, i, n, kind) || (c == b'#' && hash_comment(kind, d)) {
         return Some(text[i..].find('\n').map(|j| i + j + 1).unwrap_or(n));
     }
-    if c == b'/' && d == b'*' {
-        // MySQL /*! … */ is executed code, not a comment: read its inside as normal
-        if kind == DbKind::Mysql && i + 2 < n && b[i + 2] == b'!' {
-            return Some(i + 3);
-        }
-        // MariaDB /*M! … */ is executed code too
-        if kind == DbKind::Mysql && i + 3 < n && b[i + 2] == b'M' && b[i + 3] == b'!' {
-            return Some(i + 4);
-        }
+    if c == b'/' && d == b'*' && exec_marker(b, i, kind) == 0 {
         // PG comments nest
         let (mut depth, mut j) = (1, i + 2);
         while j < n && depth > 0 {
@@ -237,6 +238,23 @@ fn skip_non_code(text: &str, i: usize, kind: DbKind, opts: SplitOptions) -> Opti
             }
         }
         return Some(j);
+    }
+    None
+}
+
+/// Where the scan goes on when b[i] starts what isn't code — a comment, a string, a quoted name, a dollar quote — past its end
+/// (the text's end if unclosed). MySQL `/*!` · `/*M!` give the position after the marker: their inside is code. None: b[i] is code
+fn skip_non_code(text: &str, i: usize, kind: DbKind, opts: SplitOptions) -> Option<usize> {
+    if let Some(j) = comment_end(text, i, kind) {
+        return Some(j);
+    }
+    let b = text.as_bytes();
+    let n = b.len();
+    let c = b[i];
+    // MySQL /*! … */ · MariaDB /*M! … */ are executed code, not comments: read their inside as normal
+    let m = exec_marker(b, i, kind);
+    if m > 0 {
+        return Some(i + m);
     }
     if c == b'\'' || c == b'"' || c == b'`' {
         // In PG E'…' strings \ is an escape
@@ -312,6 +330,48 @@ pub fn split_statements_with(text: &str, kind: DbKind, opts: SplitOptions) -> Ve
     }
     out.push((start, n));
     out.into_iter().filter(|(s, e)| !text[*s..*e].trim().is_empty()).collect()
+}
+
+/// Once there is a backslash, the server's settings decide where strings end (MySQL NO_BACKSLASH_ESCAPES and ANSI_QUOTES,
+/// PostgreSQL standard_conforming_strings), so the text may be read more than one way (guard::is_read checks every reading)
+pub(crate) fn quotes_vary(text: &str, kind: DbKind) -> bool {
+    matches!(kind, DbKind::Mysql | DbKind::Postgres) && text.contains('\\')
+}
+
+/// A statement as the confirm dialogs and the Execute chooser show it: its comments left out as the server reads them (`--`, `/* */`
+/// nested in PostgreSQL, MySQL `#`; not inside strings, quoted names or dollar quotes) and its whitespace collapsed. What the
+/// server runs stays as written: strings, names, MySQL `/*! … */`. Where the quotes vary (quotes_vary), a comment holding a quote
+/// character stays: under another reading it can be where a string ends and code begins. Redis and REST text: whitespace only
+pub fn without_comments(text: &str, kind: DbKind) -> String {
+    let vary = quotes_vary(text, kind);
+    code(text, kind, |c| !(vary && c.contains(['\'', '"', '`', '$']))).split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Whether the text is nothing but comments and whitespace, so a server runs nothing (the run plans and the statement checks drop such pieces)
+pub fn is_comment_only(text: &str, kind: DbKind) -> bool {
+    code(text, kind, |_| true).trim().is_empty()
+}
+
+/// The text with each comment for which `strip` holds replaced by a space (the server reads a comment as a space)
+fn code(text: &str, kind: DbKind, strip: impl Fn(&str) -> bool) -> String {
+    if kind == DbKind::Redis || kind.is_vector() {
+        return text.into();
+    }
+    let (mut out, mut at, mut i) = (String::with_capacity(text.len()), 0, 0);
+    while i < text.len() {
+        if let Some(j) = comment_end(text, i, kind) {
+            if strip(&text[i..j]) {
+                out.push_str(&text[at..i]);
+                out.push(' ');
+                at = j;
+            }
+            i = j;
+        } else {
+            i = skip_non_code(text, i, kind, SplitOptions::default()).unwrap_or(i + 1);
+        }
+    }
+    out.push_str(&text[at..]);
+    out
 }
 
 /// REST request: from a line starting with a method like "GET /x" up to the next request (including JSON body). # · // lines are comments
@@ -725,6 +785,79 @@ mod tests {
         assert_eq!(n("/* a /* b */ ; */ select 1", DbKind::Postgres), 1);
         assert_eq!(n("select E'\\'; x'; select 2", DbKind::Postgres), 2);
         assert_eq!(n("select '\\'; select 2", DbKind::Postgres), 2);
+    }
+
+    /// The confirm dialogs show what the server runs: comments go (as the server reads them), the SQL around and after them stays
+    #[test]
+    fn without_comments_shows_what_runs() {
+        let pg = |t: &str| without_comments(t, DbKind::Postgres);
+        let my = |t: &str| without_comments(t, DbKind::Mysql);
+        // pg_dump: a comment block before each statement
+        let dump = "--\n-- Name: orders; Type: TABLE; Schema: public; Owner: -\n--\n\nCREATE TABLE public.orders (\n    id integer NOT NULL\n)";
+        assert_eq!(pg(dump), "CREATE TABLE public.orders ( id integer NOT NULL )");
+        // SQL after a comment on the same line, a comment around part of a statement, a comment between two words
+        assert_eq!(pg("/* note */ DROP TABLE t"), "DROP TABLE t");
+        assert_eq!(pg("DELETE FROM t /* WHERE id = 1 */"), "DELETE FROM t");
+        assert_eq!(pg("DELETE FROM t -- WHERE id = 1"), "DELETE FROM t");
+        assert_eq!(pg("DROP/**/TABLE t"), "DROP TABLE t");
+        // Not inside strings, quoted names or dollar quotes
+        assert_eq!(pg("UPDATE t SET a = '--x' WHERE b = '/* y */'"), "UPDATE t SET a = '--x' WHERE b = '/* y */'");
+        assert_eq!(pg("select \"a--b\", \"/*c*/\" from t"), "select \"a--b\", \"/*c*/\" from t");
+        assert_eq!(pg("DO $$ BEGIN -- body\nDELETE FROM t; END $$"), "DO $$ BEGIN -- body DELETE FROM t; END $$");
+        assert_eq!(my("select `a#b`, `c-- d`, 'e#f' from t"), "select `a#b`, `c-- d`, 'e#f' from t");
+        // PostgreSQL comments nest; MySQL's end at the first */, so what follows it runs and is shown
+        assert_eq!(pg("/* a /* b */ DELETE FROM t */ select 1"), "select 1");
+        assert_eq!(my("/* a /* b */ DELETE FROM t */"), "DELETE FROM t */");
+        // MySQL # comments; in PostgreSQL # is an operator
+        assert_eq!(my("# note\nDELETE FROM t # all of it"), "DELETE FROM t");
+        assert_eq!(pg("select 1 # 2"), "select 1 # 2");
+        // MySQL `--` needs a space after it: `1--1` is arithmetic
+        assert_eq!(my("select 1--1"), "select 1--1");
+        assert_eq!(my("select 1 -- 1"), "select 1");
+        // MySQL /*! … */ and MariaDB /*M! … */ run: shown as written
+        assert_eq!(my("/*!40101 SET NAMES utf8 */"), "/*!40101 SET NAMES utf8 */");
+        assert_eq!(my("/* c */ /*M!100100 DROP TABLE t */"), "/*M!100100 DROP TABLE t */");
+        // An unclosed comment runs to the end; whitespace collapses; Redis lines stay as they are
+        assert_eq!(pg("select 1 /* open"), "select 1");
+        assert_eq!(pg("  select\n\t1  "), "select 1");
+        assert_eq!(without_comments("SET k -- v", DbKind::Redis), "SET k -- v");
+    }
+
+    /// With a backslash the server's settings decide where strings end: a comment holding a quote may be code under another
+    /// reading, so it stays in what is shown (one without a quote still goes)
+    #[test]
+    fn without_comments_keeps_comments_another_quote_reading_runs() {
+        // standard_conforming_strings = off reads `'a\' -- '` as one string and runs the DROP
+        let t = "select 'a\\' -- '; drop table x; --'";
+        assert!(without_comments(t, DbKind::Postgres).contains("drop table x"));
+        assert_eq!(without_comments("select E'\\n' -- note", DbKind::Postgres), "select E'\\n'");
+        // NO_BACKSLASH_ESCAPES ends the string at `'a\'`, so `' # '` is a string and `release_lock('k')` runs
+        let t = "select 'a\\' , ' # ' , release_lock('k')";
+        assert_eq!(without_comments(t, DbKind::Mysql), t);
+        // A dollar quote can open in a string another reading ends early
+        assert_eq!(without_comments("select '\\' -- $x$", DbKind::Postgres), "select '\\' -- $x$");
+        // Without a backslash there is one reading
+        assert_eq!(without_comments("select 'a' -- it's", DbKind::Postgres), "select 'a'");
+    }
+
+    #[test]
+    fn comment_only_pieces() {
+        for (t, kind, only) in [
+            ("-- a\n/* b */\n", DbKind::Postgres, true),
+            ("", DbKind::Postgres, true),
+            ("-- x\nselect 1", DbKind::Postgres, false),
+            ("'x'", DbKind::Postgres, false),
+            ("# x", DbKind::Mysql, true),
+            ("# x", DbKind::Postgres, false),
+            ("/*!40101 SET x = 1 */", DbKind::Mysql, false),
+            ("/* a /* b */ select 1 */", DbKind::Postgres, true),
+            ("/* a /* b */ select 1 */", DbKind::Mysql, false),
+            ("--1", DbKind::Mysql, false),
+            ("-- '\\'", DbKind::Postgres, true),
+            ("# note", DbKind::Redis, false),
+        ] {
+            assert_eq!(is_comment_only(t, kind), only, "{t:?} {kind:?}");
+        }
     }
 
     #[test]

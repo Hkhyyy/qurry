@@ -129,6 +129,8 @@ const checkTheme = (t: any) => {
 };
 /** settings.json "keywordCase" (kept across a reload, as the file is) */
 let keywordCase = localStorage.getItem("mock-keywordCase") ?? "off";
+/** settings.json "searchScope" (kept across a reload, as the file is) */
+let searchScope = localStorage.getItem("mock-searchScope") ?? "workspace";
 /** settings.json "resultTabs" (kept across a reload, as the file is) */
 let resultTabs = Number(localStorage.getItem("mock-resultTabs") ?? 10);
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
@@ -227,9 +229,10 @@ const redisMatch = (pattern: string | undefined, key: string) =>
 const historyAdded: { id: string; connId: string; database?: string; sql: string; ts: number }[] = [];
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
-  // window.__mockRedis (set before load): { readOnly, production, managed } for [Redis] cache (managed: CONFIG refused, as on ElastiCache)
+  // window.__mockRedis (set before load): { readOnly, production, managed } for [Redis] cache (managed: CONFIG refused, as on ElastiCache).
+  // window.__mockMoreConns: data sources added elsewhere (they show after a reload of the list)
   list_connections: () =>
-    structuredClone(conns).map((c: any) => {
+    structuredClone([...conns, ...((globalThis as any).__mockMoreConns ?? [])]).map((c: any) => {
       const r = (globalThis as any).__mockRedis;
       return c.id === "rd" && r ? { ...c, readOnly: !!r.readOnly, options: { ...c.options, confirmChanges: !!r.production } } : c;
     }),
@@ -280,7 +283,14 @@ const handlers: Record<string, (a: any) => unknown> = {
   cached_index: () => [
     { target: "prod::shop_app", objects: [{ schema: "public", name: "payments", kind: "table" }, { schema: "public", name: "refunds", kind: "table" }], columns: [{ schema: "public", name: "refunds", columns: [["payment_id", "bigint"]] }] },
   ],
-  object_index: () => [
+  // [MySQL] shop: its database's tables, views and routines; [Redis] cache: its keys; every other source: the PostgreSQL list
+  object_index: (a: any) => String(a.id).startsWith("my::") ? [
+    { schema: "shop", name: "shop", kind: "schema" },
+    { schema: "shop", name: "orders", kind: "table" },
+    { schema: "shop", name: "product_reviews", kind: "table" },
+    { schema: "shop", name: "order_summary", kind: "view" },
+    { schema: "shop", name: "restock_items", kind: "procedure" },
+  ] : String(a.id).startsWith("rd") ? redisKeys(a.id).map((k) => ({ schema: String(a.id).split("::")[1] ?? "db0", name: k.key, kind: "key" })) : [
     { schema: "public", name: "public", kind: "schema" },
     { schema: "billing", name: "billing", kind: "schema" },
     { schema: "public", name: "users", kind: "table" },
@@ -296,8 +306,9 @@ const handlers: Record<string, (a: any) => unknown> = {
   ],
   list_schemas: (a: any) => (String(a.id).startsWith("rd") ? [{ name: String(a.id).split("::")[1] || "db0", isSystem: false }] : null) ?? (String(a.id).startsWith("my") ? [{ name: String(a.id).split("::")[1] || "shop", isSystem: false }] : null) ?? [{ name: "public", isSystem: false }, { name: "billing", isSystem: false }, { name: "pg_catalog", isSystem: true }],
   list_objects: async (a: any) => (await reconnectWait(a), String(a.id).startsWith("rd") ? { relations: [["events", "stream"], ["rank", "zset"], ["session:abc", "string"], ["tags", "set"], ["user:1", "hash"]].map(([name, t]) => ({ name, kind: "key", comment: t, rowEstimate: null })), routines: [] } : a.schema === "billing" ? {
-    // users in two schemas (same-name table tabs)
-    relations: [{ name: "invoices", kind: "table", comment: null, rowEstimate: 800 }, { name: "users", kind: "table", comment: "billing accounts", rowEstimate: 40 }],
+    // users in two schemas (same-name table tabs); window.__mockBillingTables: tables created elsewhere (they show on Refresh)
+    relations: [{ name: "invoices", kind: "table", comment: null, rowEstimate: 800 }, { name: "users", kind: "table", comment: "billing accounts", rowEstimate: 40 },
+      ...((globalThis as any).__mockBillingTables ?? []).map((name: string) => ({ name, kind: "table", comment: null, rowEstimate: 0 }))],
     routines: [],
   } : ({
     relations: [
@@ -311,7 +322,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   })),
   table_detail: async (a: any) => (await reconnectWait(a), {
     columns: [
-      { name: "id", dataType: "bigint", nullable: false, defaultValue: "nextval('users_id_seq'::regclass)", comment: null, isPk: true },
+      { name: "id", dataType: "bigint", nullable: false, defaultValue: "nextval('users_id_seq'::regclass)", comment: null, isPk: true, autoIncrement: true },
       { name: "user_name", dataType: "character varying(50)", nullable: false, defaultValue: null, comment: "이름", isPk: false },
       { name: "contract_id", dataType: "bigint", nullable: true, defaultValue: null, comment: null, isPk: false },
       { name: "created_at", dataType: "timestamp with time zone", nullable: false, defaultValue: "now()", comment: null, isPk: false },
@@ -329,7 +340,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     const fail = (globalThis as any).__mockStructureFail;
     if (fail) throw fail;
     const columns = [
-      { name: "id", dataType: "bigint", nullable: false, defaultValue: "nextval('users_id_seq'::regclass)", comment: null, isPk: true },
+      { name: "id", dataType: "bigint", nullable: false, defaultValue: "nextval('users_id_seq'::regclass)", comment: null, isPk: true, autoIncrement: true },
       { name: "user_name", dataType: "character varying(50)", nullable: false, defaultValue: null, comment: "이름", isPk: false },
       { name: "email", dataType: "text", nullable: true, defaultValue: "concat('user-', currval('users_id_seq'::regclass), '@', current_setting('app.mail_domain'))", comment: "Login and receipts; unique when set", isPk: false },
       { name: "contract_id", dataType: "bigint", nullable: true, defaultValue: null, comment: null, isPk: false },
@@ -404,6 +415,9 @@ const handlers: Record<string, (a: any) => unknown> = {
     (((window as any).__mockRan ??= []).push(a.sql),
     /\bno_such_table\b/i.test(a.sql) ? Promise.reject(`ERROR: relation "no_such_table" does not exist (position ${[...a.sql.slice(0, a.sql.search(/\bno_such_table\b/i))].length + 1})`) : (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN \(FORMAT JSON/i.test(a.sql)
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }
+      : /^\s*do\b/i.test(a.sql)
+        // A DO block that reports what it did (RAISE NOTICE / WARNING): the server's notices with the result
+        ? { ...result, columns: [], rows: [], rowsAffected: 0, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true, notices: [{ level: "NOTICE", message: "role app_owner isn't a member, owner change skipped" }, { level: "WARNING", message: "table shop.orders has no primary key" }, { level: "", message: "… 3 more" }] }
       : /^\s*(insert|update|delete)/i.test(a.sql)
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
         : /\bwide_demo\b/i.test(a.sql)
@@ -522,7 +536,11 @@ const handlers: Record<string, (a: any) => unknown> = {
   // A console in Manual mode keeps them pending (tx_state)
   // As the core: what ran goes into the query history
   // window.__mockSubmitted: every statement Submit sent, in order (e2e)
+  // window.__mockSequenceBehind (e2e, stories): an INSERT into users that leaves out id fails as the core words PostgreSQL's error
+  // when the key's sequence is behind the table (#167), and nothing is saved
   submit_edits: (a: any) => {
+    const behind = (globalThis as any).__mockSequenceBehind && a.statements.find((s: string) => /^INSERT INTO public\.users (DEFAULT VALUES|\((?!id\b)(?![^)]*, id\b))/.test(s));
+    if (behind) throw `error returned from database: duplicate key value violates unique constraint "users_pkey"\nKey (id)=(1) already exists.\n→ ${behind}`;
     ((globalThis as any).__mockSubmitted ??= []).push(...a.statements);
     const [connId, database] = String(a.id).split("::");
     for (const sql of a.statements) historyAdded.unshift({ id: `ha${historyAdded.length}`, connId, database: database || undefined, sql, ts: Date.now() });
@@ -821,6 +839,11 @@ const handlers: Record<string, (a: any) => unknown> = {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
     keywordCase = a.case;
     localStorage.setItem("mock-keywordCase", a.case);
+  },
+  search_scope: () => searchScope,
+  set_search_scope: (a: any) => {
+    searchScope = a.scope;
+    localStorage.setItem("mock-searchScope", a.scope);
   },
   result_tabs: () => resultTabs,
   set_result_tabs: (a: any) => {

@@ -41,11 +41,16 @@ impl App {
 
     /// Top of the explorer: the temporary Data Sources from the command line (in every workspace, never in a workspace's list, which
     /// is shared with the GUI), then the current workspace's (in the order added to the workspace)
-    pub fn rebuild_roots(&mut self) {
+    /// The current workspace's Database Explorer list: temporary sources, then the workspace's in its order (This Workspace search too)
+    pub fn explorer_conns(&self) -> impl Iterator<Item = &ConnectionView> {
         let mine = &self.workspaces[self.cur_ws].conns;
         let temporary = self.conns.iter().filter(|c| c.temporary);
-        self.tree.roots = temporary
-            .chain(mine.iter().filter_map(|id| self.conns.iter().find(|c| &c.config.id == id && !c.temporary)))
+        temporary.chain(mine.iter().filter_map(|id| self.conns.iter().find(|c| &c.config.id == id && !c.temporary)))
+    }
+
+    pub fn rebuild_roots(&mut self) {
+        self.tree.roots = self
+            .explorer_conns()
             .map(|c| Node {
                 key: c.config.id.clone(),
                 label: c.config.name.clone(),

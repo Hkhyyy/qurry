@@ -241,6 +241,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.results.ran(10, Some(0), None, String::new(), "payment".into(), crate::grid::Grid::new(res));
@@ -285,6 +286,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         let mut g = crate::grid::Grid::new(wide);
@@ -336,6 +338,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: Some(editable),
+        notices: vec![],
     };
     let target = qurry_core::editable::EditTarget { schema: "public".into(), table: "users".into(), pk: vec!["id".into()], columns: vec!["id".into(), "user_name".into(), "email".into()] };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
@@ -496,6 +499,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.results.ran(10, Some(0), None, String::new(), "payment_check".into(), crate::grid::Grid::new(res));
@@ -569,6 +573,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.results.ran(10, Some(0), None, String::new(), "webhook_event".into(), crate::grid::Grid::new(res));
@@ -688,6 +693,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     };
     let timeout = "The report ran into its time limit (30 s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.\n(error returned from database: canceling statement due to statement timeout)";
     let info = |kind, id| qurry_core::dba::reports(kind).into_iter().find(|r| r.id == id);
@@ -882,7 +888,7 @@ async fn all_scenes() -> Vec<Value> {
         h.key("Esc");
         h.key("Right");
         let target = h.app.tabs[h.app.active].target.clone();
-        h.app.table_cols.insert((target.clone(), "public".into(), "payment".into()), crate::app::TableCols::Loaded(vec![("card_brand".into(), ColumnType { data_type: "character varying(16)".into(), charset: None })]));
+        h.app.table_cols.insert((target.clone(), "public".into(), "payment".into()), crate::app::TableCols::Loaded(vec![("card_brand".into(), ColumnType { data_type: "character varying(16)".into(), charset: None })], vec![]));
         h.app.status_items = h.app.state.store.set_status_bar_item(Item::Size, true).unwrap();
         h.app.status = "4 rows".into();
         scenes.push(app_scene(&mut h, "Status line: Size", "Size turned on, nothing marked: Position is the cursor's cell, Size its bytes and the column's declared limit (from the table's metadata)", 120, 22));
@@ -1021,8 +1027,54 @@ async fn all_scenes() -> Vec<Value> {
     tab_bars(&mut scenes).await;
     reconnect_scenes(&mut scenes).await;
     result_tab_scenes(&mut scenes).await;
+    scenes.push(sequence_behind_scene().await);
     scenes.push(temporary_scene().await);
+    search_scenes(&mut scenes).await;
     scenes
+}
+
+/// #167: a new row's INSERT got a key its sequence had already given out; the notice says so under the server's error, with the
+/// SQL to copy (Qurry doesn't run it)
+async fn sequence_behind_scene() -> Value {
+    fn dup(q: &str) -> Result<qurry_core::db::QueryResult, String> {
+        Err(format!("error returned from database: duplicate key value violates unique constraint \"orders_pkey\"\nKey (id)=(487) already exists.\n→ {q}"))
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(dup);
+    h.table_tab("orders", &["id", "order_no", "memo"], &[&["486", "O-20261101", "gift wrap"], &["487", "O-20261102", ""]], &["id"]);
+    let target = h.app.tabs[h.app.active].target.clone();
+    h.app.table_cols.insert((target, "public".into(), "orders".into()), crate::app::TableCols::Loaded(vec![], vec!["id".into()]));
+    h.app.focus = crate::app::Focus::Grid;
+    h.key("a");
+    h.key("Ctrl+S");
+    h.settle().await;
+    app_scene(&mut h, "Submit failed: key sequence behind", "A new row's id came from a sequence behind the table's highest id: the server's error, what happened, and the setval to copy and run", 120, 26)
+}
+
+/// #169: Go to Database Object in This Workspace (the default) — [PROD] shop and [MySQL] shop are in it, [DEV] shop in Reports — then
+/// ⌃o again: All Places. The sources aren't connected, so the objects come from the search cache (marked cached)
+async fn search_scenes(scenes: &mut Vec<Value>) {
+    let mut h = Harness::new().await;
+    explorer(&mut h).await;
+    let my: ConnectionConfig = serde_json::from_value(json!({ "id": "my", "name": "[MySQL] shop", "kind": "mysql", "host": "db.example.com", "port": 3306, "user": "app", "database": "shop", "color": "#22524f" })).unwrap();
+    h.app.state.save_connection(my, None, None).await.unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    let entry = |schema: &str, name: &str, kind: &str| qurry_core::meta::IndexEntry { schema: schema.into(), name: name.into(), kind: kind.into() };
+    let dir = h.app.state.store.dir();
+    qurry_core::search_cache::save_objects(&dir, "prod::shop", &[entry("public", "payment", "table"), entry("public", "payment_refund", "table"), entry("public", "v_payment_daily", "view")]);
+    qurry_core::search_cache::save_objects(&dir, "my::shop", &[entry("shop", "payment_method", "table"), entry("shop", "repay_order", "procedure")]);
+    qurry_core::search_cache::save_objects(&dir, "dev::shop", &[entry("public", "payment_test", "table")]);
+    h.app.workspaces[0].conns = vec!["prod".into(), "my".into()];
+    h.app.workspaces.push(crate::app::Workspace { id: "w2".into(), name: "Reports".into(), conns: vec!["dev".into()], saved: None });
+    h.app.rebuild_roots();
+    h.app.popup = None;
+    h.key("Ctrl+O");
+    h.type_str("pay");
+    scenes.push(app_scene(&mut h, "Go to Database Object: This Workspace", "⌃o: objects of the data sources in this workspace's explorer, MySQL as well as PostgreSQL (not connected: from the search cache); the title shows the scope, shared with the GUI", 120, 22));
+    h.key("Ctrl+O");
+    scenes.push(app_scene(&mut h, "Go to Database Object: All Places", "⌃o again: the next scope, All Places, with what was typed (then Context Data Sources: the explorer cursor's source); the pick is kept for both apps", 120, 22));
+    scenes.push(app_scene(&mut h, "Go to Database Object: 60×14", "In a small window the title keeps the scope and the key hints stay", 60, 14));
 }
 
 /// #135: a table tab and an explorer node waiting on [PROD] shop while it reconnects through AWS SSM: the status line says so with
@@ -1169,6 +1221,7 @@ fn shop_db(q: &str) -> Result<qurry_core::db::QueryResult, String> {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     })
 }
 

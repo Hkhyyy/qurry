@@ -612,7 +612,7 @@ impl Session {
     }
     pub async fn run(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         match self {
-            Session::Pg(s) => s.run(sql, limit).await,
+            Session::Pg(s) => crate::notice::attach(crate::notice::collect(s.run(sql, limit)).await),
             Session::My(s) => s.run(sql, limit).await,
             Session::Redis(m) => crate::redisdb::run(m, sql, limit).await,
             Session::Plugin(c) => c.query(sql, limit).await,
@@ -624,7 +624,10 @@ impl Session {
     /// deadlocked (audit::stops_change): then the change doesn't run either. → (snapshot, change)
     pub async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
         match self {
-            Session::Pg(s) => s.run_with_snapshot(snap, sql, limit).await,
+            Session::Pg(s) => {
+                let ((shot, r), notices) = crate::notice::collect(s.run_with_snapshot(snap, sql, limit)).await;
+                (shot, crate::notice::attach((r, notices)))
+            }
             Session::My(s) => s.run_with_snapshot(snap, sql, limit).await,
             _ => (Err(AppError::Msg("Undo is kept for PostgreSQL and MySQL only".into())), self.run(sql, limit).await),
         }
@@ -647,7 +650,7 @@ impl Session {
                 None => (None, self.run(st, 1).await),
             };
             // A lost connection keeps its error as it is: app::recover reads it
-            let r = r.map_err(|e| if crate::app::is_conn_lost(&e) { e } else { AppError::Msg(format!("{e}\n→ {st}")) });
+            let r = r.map_err(|e| if crate::app::is_conn_lost(&e) { e } else { crate::error::in_statement(e, st) });
             match r.and_then(|q| check_exact_one(st, q.rows_affected, true).map(|_| q.rows_affected)) {
                 Ok(k) => {
                     n += k;

@@ -558,6 +558,7 @@ impl AppState {
                 in_transaction: false,
                 warning: None,
                 editable: None,
+                notices: vec![],
             }),
             Ok(r) => Ok(r),
             Err(e) => {

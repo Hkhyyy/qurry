@@ -128,6 +128,14 @@ export interface QueryResult {
   editJoin?: JoinEdit;
   /** A console result whose rows can't be edited, and why (instead of `edit`). None of the three: not checked */
   readOnlyReason?: string;
+  /** What the server said while it ran (PostgreSQL NOTICE / WARNING / INFO), in order; level "" is the "… N more" line after the cap */
+  notices?: Notice[];
+}
+
+/** A server notice (qurry_core::notice::Notice) */
+export interface Notice {
+  level: string;
+  message: string;
 }
 
 /** A join result's edits (qurry_shared::result_edit::JoinEdit): tables = the ones that can be edited, each found by its key (result
@@ -204,6 +212,8 @@ export const setUpdateCheckEnabled = (on: boolean) => {
 
 /** stable: releases from a version tag only; beta: also the pre-release built from every merge to main. Kept in the config folder, shared with the TUI */
 export type UpdateChannel = "stable" | "beta";
+/** Search Everywhere's scope (qurry_core::search_cache::SearchScope) */
+export type SearchScope = "workspace" | "all" | "context";
 
 /** An installed font family (Settings › Appearance fonts); mono: every face is monospaced */
 export type FontFamily = { name: string; mono: boolean };
@@ -236,6 +246,9 @@ export const api = {
   /** Result tabs kept per console (settings.json, shared with the TUI) */
   resultTabs: () => invoke<number>("result_tabs"),
   setResultTabs: (n: number) => invoke<void>("set_result_tabs", { n }),
+  /** Search Everywhere's scope, the last one picked (settings.json, shared with the TUI) */
+  searchScope: () => invoke<SearchScope>("search_scope"),
+  setSearchScope: (scope: SearchScope) => invoke<void>("set_search_scope", { scope }),
   /** Theme pick, Sync with OS and custom themes, shared with the TUI (settings.json) */
   themeSettings: () => invoke<ThemeSettings>("theme_settings"),
   setTheme: (id: string) => invoke<void>("set_theme", { id }),
@@ -331,7 +344,7 @@ export interface SchemaInfo { name: string; isSystem: boolean }
 export interface RelationInfo { name: string; kind: "table" | "partitioned" | "view" | "matview" | "foreign" | "sequence" | "key"; comment: string | null; rowEstimate: number | null }
 export interface RoutineInfo { name: string; args: string; returns: string | null; kind: string }
 export interface SchemaObjects { relations: RelationInfo[]; routines: RoutineInfo[] }
-export interface ColumnMeta { name: string; dataType: string; nullable: boolean; defaultValue: string | null; comment: string | null; isPk: boolean; /** MySQL: a text column's character set */ charset?: string }
+export interface ColumnMeta { name: string; dataType: string; nullable: boolean; defaultValue: string | null; comment: string | null; isPk: boolean; /** MySQL: a text column's character set */ charset?: string; /** The database numbers it (a nextval default, identity, AUTO_INCREMENT) */ autoIncrement?: boolean }
 export interface IndexMeta { name: string; definition: string; isUnique: boolean; isPrimary: boolean; columns: string[] }
 export interface ConstraintMeta { name: string; kind: "p" | "f" | "u" | "c"; definition: string }
 export interface TableDetail { columns: ColumnMeta[]; indexes: IndexMeta[]; constraints: ConstraintMeta[] }

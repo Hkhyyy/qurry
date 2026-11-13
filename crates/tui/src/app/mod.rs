@@ -6,6 +6,7 @@ use qurry_core::app::{AppState, ConnectionView, Reconnecting};
 use qurry_core::db::{ColumnInfo, QueryResult};
 use qurry_core::meta::{IndexEntry, SchemaObjects};
 use qurry_core::redisdb::{KeyDetail, KeyRow};
+use qurry_core::search_cache::SearchScope;
 use qurry_core::sql;
 use qurry_core::store::{ConnectionConfig, DbKind, RedisMode, SshAuth, SshConfig, SsmConfig, SslConfig};
 use serde_json::Value;
@@ -35,6 +36,9 @@ pub use actions::{title, ACTIONS};
 #[cfg(test)]
 pub use actions::{OPENER_FAILS, REPO_URL};
 pub use tables::Resize;
+pub(crate) use palette::{is_search, scope_name};
+#[cfg(test)]
+pub(crate) use palette::sort_objects;
 #[cfg(test)]
 pub(crate) use run::explain_analyze_ask_text;
 
@@ -255,6 +259,8 @@ impl Marks {
 const OUTPUT_MAX: usize = 1000;
 /// Output line prefix of a warning (drawn in the warn color, like the GUI): it ran, so not an error to run again
 pub const WARNING: &str = "Warning: ";
+/// Output line prefix of a server WARNING notice (qurry_core::notice::Notice::line), drawn in the warn color too
+pub const SERVER_WARNING: &str = "WARNING: ";
 
 impl Console {
     /// A new console's state around its editor and session
@@ -1007,6 +1013,10 @@ pub struct App {
     pub keyword_case: qurry_core::format::KeywordCase,
     /// Unpinned result tabs kept per console, shared with the GUI's Settings › Appearance › Console › Result tabs (settings.json, read at startup and by ⌃k › Result Tabs…)
     pub result_tabs: usize,
+    /// Search Everywhere's scope, the last one picked, shared with the GUI's (settings.json, read at startup)
+    pub search_scope: SearchScope,
+    /// Counts the search palettes opened: an object list read for an earlier one (another scope) is dropped
+    pub search_gen: u64,
     /// The status line's items for a grid, shared with the GUI's status bar (settings.json, read at startup and by ⌃k › Status Bar Items…)
     pub status_items: Vec<qurry_core::statusbar::Item>,
     /// Tables' column types for the Size item, by (target, schema, table)
@@ -1055,6 +1065,8 @@ impl App {
         let mut a = App {
             keyword_case: state.store.keyword_case(),
             result_tabs: state.store.result_tabs(),
+            search_scope: state.store.search_scope(),
+            search_gen: 0,
             status_items: state.store.status_bar_items(),
             table_cols: HashMap::new(),
             stats_cache: None,

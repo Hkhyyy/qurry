@@ -57,6 +57,10 @@ jobs:
     # Runs when the changes job failed too (no answer): only a docs-only answer skips it
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
+    # Tests find the driver plugins here: since Rust 1.100, cargo puts test executables under target/debug/build/…/out, too deep for
+    # the "next to the executable" lookup that dev builds use
+    env:
+      QURRY_DRIVERS_DIR: ${{ github.workspace }}/target/debug
     services:
       # PostgreSQL is started in a step (Start PostgreSQL): it needs a command line, which a service can't take
       mysql:
@@ -197,6 +201,10 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
+    # Tests find the driver plugins here: since Rust 1.100, cargo puts test executables under target/debug/build/…/out, too deep for
+    # the "next to the executable" lookup that dev builds use
+    env:
+      QURRY_DRIVERS_DIR: ${{ github.workspace }}/target/debug
     services:
       postgres:
         image: postgres:12-alpine

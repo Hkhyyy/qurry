@@ -1,6 +1,6 @@
 //! Screen drawing
 use crate::keys::disp;
-use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind, WARNING};
+use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SERVER_WARNING, SplitDir, TabKind, WARNING};
 use crate::tree::NodeKind;
 use qurry_core::keymap::Scope;
 use qurry_core::statusbar::{self, Segment};
@@ -540,7 +540,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     .rev()
                     .take(res.height as usize)
                     .rev()
-                    .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.starts_with(WARNING) { WARN } else if s.contains("> ") { ACCENT } else { Color::Gray })))
+                    .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.starts_with(WARNING) || s.starts_with(SERVER_WARNING) { WARN } else if s.contains("> ") { ACCENT } else { Color::Gray })))
                     .collect();
                 let block = panel("", focus == Focus::Grid);
                 let inner = block.inner(res);
@@ -1325,6 +1325,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
         app.popup = Some(Popup::Note { title, text, back });
     }
     let area = f.area();
+    let search_scope = if matches!(&app.popup, Some(Popup::Palette(p)) if crate::app::is_search(&p.title)) { crate::app::scope_name(app.shown_scope()) } else { "" };
     match app.popup.as_mut().unwrap() {
         Popup::Help { sel, scroll, record, message } => {
             // Start here (non-selectable line) → Commands → fixed keys
@@ -1496,7 +1497,9 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             clear(f, r);
             let [inp, list] = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(r);
             app.hits.palette = Block::default().borders(Borders::ALL).inner(list);
-            let t = format!(" {}{} ", p.title, if p.loading > 0 { " — loading…" } else { "" });
+            // A search shows its scope (the GUI's scope picker)
+            let scope = if crate::app::is_search(&p.title) { format!(" · {search_scope}") } else { String::new() };
+            let t = format!(" {}{scope}{} ", p.title, if p.loading > 0 { " — loading…" } else { "" });
             p.input.set_block(panel(t, true));
             p.input.set_cursor_line_style(Style::default());
             f.render_widget(&p.input, inp);
@@ -1523,8 +1526,11 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             p.sel = sel;
             let ddl = app.keys.keys(crate::app::Action::Ddl).first().map(|k| disp(k)).unwrap_or_else(|| "—".into());
             let check = p.items.iter().all(|i| matches!(i.action, crate::app::PAction::StatusItem(_)));
-            let hint = if p.title.starts_with("Go to") || p.title == "Search Everywhere" {
-                format!(" Enter open · {ddl} DDL · Esc ")
+            let hint = if crate::app::is_search(&p.title) {
+                // Its open key again: the next scope
+                let again = if p.title == "Search Everywhere" { crate::app::Action::SearchEverywhere } else { crate::app::Action::GoToObject };
+                let again = app.keys.keys(again).first().map(|k| disp(k)).unwrap_or_else(|| "—".into());
+                format!(" Enter open · {ddl} DDL · {again} scope · Esc ")
             } else if check {
                 " ↑↓ move · Space toggle · Esc close ".into()
             } else {

@@ -5,7 +5,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { Cell, Dialect, dialectOf, type JoinEdit, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
-import { editStatements, joinStatements, type NewRow } from "../lib/gridEdit";
+import { editStatements, joinStatements, type NewRow, submitFix } from "../lib/gridEdit";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { copied, DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, pasteCells, raw } from "../lib/extract";
 import { shared, sharedOr, sharedReady, useSharedReady, type GridStatus, type StatusItemId } from "../lib/shared";
@@ -20,7 +20,7 @@ import { draftAt, draftToApply, leftDraft, panelText, registerValuePanel, toggle
 import { ResultChart } from "./ResultChart";
 import { SqlBlock } from "./SqlBlock";
 import { ValuePanel } from "./ValuePanel";
-import { Button, CellEditor, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { Button, CellEditor, cx, FixSql, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
@@ -627,6 +627,8 @@ export function ResultGrid(p: Props) {
       setSubmitErr(String(e));
     }
   };
+  // Under the error: the SQL that fixes a key sequence behind the table (#167), from the table's columns (re-renders when they load)
+  const fix = submitErr && edit && !join ? submitFix(D.quoting, submitErr, edit, () => (p.target ? tableColumns(p.target, edit.schema, edit.table) : undefined)) : undefined;
   const previewPending = () => {
     const sql = buildStatements();
     if (sql) setPreview({ sql, readOnly: true });
@@ -1193,6 +1195,7 @@ export function ResultGrid(p: Props) {
         >
           <SqlBlock className="sql-preview" sql={preview.sql.join("\n")} kind={D.quoting} />
           {submitErr && <Notice tone="danger">{submitErr}</Notice>}
+          {fix && <FixSql {...fix} />}
         </Modal>
       )}
     </div>

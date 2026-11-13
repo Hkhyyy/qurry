@@ -228,3 +228,23 @@ async fn failed_drop_reloads_the_tree() {
     assert!(h.app.status.contains("read-only"), "{}", h.app.status);
     assert!(h.app.tree.children.get("pg|shop|public|g:tables").is_none_or(|c| c.len() != 2), "the tables were not reloaded");
 }
+
+/// Refresh with no node selected (an empty explorer) or from a console (the palette) reloads the data source list, as the GUI's ↻ and Refresh
+#[tokio::test]
+async fn refresh_without_a_node_reloads_the_data_sources() {
+    let mut h = Harness::new().await;
+    h.app.focus = Focus::Tree;
+    let added = |id: &str| serde_json::from_value(serde_json::json!({ "id": id, "name": id, "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "shop" })).unwrap();
+    // Added elsewhere (the GUI): only a reload of the list shows it
+    h.app.state.store.save(&added("first")).unwrap();
+    assert!(h.app.tree.selected().is_none());
+    h.key("r");
+    h.settle().await;
+    assert_eq!(rows(&h), ["first"]);
+    h.console_tab();
+    h.app.focus = Focus::Editor;
+    h.app.state.store.save(&added("second")).unwrap();
+    h.app.run_action(crate::app::Action::Refresh);
+    h.settle().await;
+    assert_eq!(rows(&h), ["first", "second"]);
+}

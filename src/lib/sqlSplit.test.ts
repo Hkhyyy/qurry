@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DbKind } from "./api";
-import { splitScript, splitStatements, statementAt } from "./sqlSplit";
+import { splitScript, splitStatements, statementAt, withoutComments } from "./sqlSplit";
 
 const parts = (sql: string, kind: DbKind = "postgres") => splitStatements(sql, kind).map((s) => sql.slice(s.start, s.end).trim());
 
@@ -79,5 +79,27 @@ describe("splitScript", () => {
       expect(sp(one), one).toHaveLength(1);
     }
     expect(sp("insert into t values (1) on duplicate key\nupdate a = 1", "mysql")).toHaveLength(1);
+  });
+});
+
+describe("withoutComments (what the confirm dialogs show, #171)", () => {
+  it("leaves out the comments the server reads, keeping the SQL around and after them", () => {
+    expect(withoutComments("--\n-- Name: orders; Type: TABLE\n--\n\nCREATE TABLE orders (\n  id int\n)")).toBe("CREATE TABLE orders ( id int )");
+    expect(withoutComments("/* note */ DROP TABLE t")).toBe("DROP TABLE t");
+    expect(withoutComments("DELETE FROM t /* WHERE id = 1 */")).toBe("DELETE FROM t");
+    expect(withoutComments("DROP/**/TABLE t")).toBe("DROP TABLE t");
+  });
+
+  it("not inside strings, quoted names or dollar quotes; by the kind's rules", () => {
+    expect(withoutComments("UPDATE t SET a = '--x' WHERE \"b/*\" = 1")).toBe("UPDATE t SET a = '--x' WHERE \"b/*\" = 1");
+    expect(withoutComments("DO $$ -- body\nDELETE FROM t $$")).toBe("DO $$ -- body DELETE FROM t $$");
+    expect(withoutComments("# note\nDELETE FROM t # all", "mysql")).toBe("DELETE FROM t");
+    expect(withoutComments("select 1 # 2")).toBe("select 1 # 2");
+    expect(withoutComments("/* a /* b */ DELETE FROM t */", "mysql")).toBe("DELETE FROM t */");
+    expect(withoutComments("/*!40101 SET NAMES utf8 */", "mysql")).toBe("/*!40101 SET NAMES utf8 */");
+  });
+
+  it("keeps a comment with a quote in it when a backslash lets the server's settings move where strings end", () => {
+    expect(withoutComments("select 'a\\' -- '; drop table x; --'")).toContain("drop table x");
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { JoinEdit, ResultEditTarget } from "./api";
 import { DEFAULT_TOKEN } from "./extract";
-import { editStatements, joinStatements } from "./gridEdit";
+import { editStatements, joinStatements, submitFix } from "./gridEdit";
 
 // Submit's statements through WASM (qurry_shared::result_edit, the TUI's rules), with the `;` the GUI adds
 const users: ResultEditTarget = { schema: "public", table: "users", pk: ["id"], columns: ["id", "name", "memo"] };
@@ -64,5 +64,25 @@ describe("joinStatements", () => {
       "UPDATE public.users SET role = NULL WHERE idx = '7';",
       "UPDATE crm.voc SET status = 'done' WHERE idx = '11';",
     ]);
+  });
+});
+
+describe("submitFix", () => {
+  const dup = (stmt: string) => `error returned from database: duplicate key value violates unique constraint "users_pkey"\nKey (id)=(1) already exists.\n→ ${stmt}`;
+  const cols = [{ name: "id", dataType: "bigint", nullable: false, defaultValue: null, comment: null, isPk: true, autoIncrement: true }];
+  it("a new row's key the database numbers already exists: the setval to copy (#167)", () => {
+    expect(submitFix("postgres", dup("INSERT INTO public.users (name) VALUES ('a');"), users, () => cols)).toEqual({
+      text: "The key's sequence is behind the table's highest id; new rows get numbers that already exist.",
+      sql: "SELECT setval(pg_get_serial_sequence('public.users', 'id'), (SELECT max(id) FROM public.users));",
+    });
+  });
+  it("reads the table's columns only for that error, and offers nothing when the key isn't numbered", () => {
+    let asked = 0;
+    const columns = () => (asked++, cols);
+    expect(submitFix("postgres", "permission denied for table users\n→ INSERT INTO public.users (name) VALUES ('a');", users, columns)).toBeUndefined();
+    expect(submitFix("postgres", dup("INSERT INTO public.users (id, name) VALUES ('1', 'a');"), users, columns)).toBeUndefined();
+    expect(asked).toBe(0);
+    expect(submitFix("postgres", dup("INSERT INTO public.users DEFAULT VALUES;"), users, () => [{ ...cols[0], autoIncrement: false }])).toBeUndefined();
+    expect(submitFix("postgres", dup("INSERT INTO public.users DEFAULT VALUES;"), users, () => undefined)).toBeUndefined();
   });
 });

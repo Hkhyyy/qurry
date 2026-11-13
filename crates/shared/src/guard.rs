@@ -1022,7 +1022,7 @@ pub fn is_read(sql: &str, kind: DbKind) -> bool {
 
 /// The statements in the text as the server splits them, without the ones that are only comments
 fn statements(sql: &str, kind: DbKind) -> Vec<&str> {
-    crate::sql::split_statements(sql, kind).into_iter().map(|(a, b)| &sql[a..b]).filter(|p| scan(p, kind).toks.iter().any(|t| t.word)).collect()
+    crate::sql::split_statements(sql, kind).into_iter().map(|(a, b)| &sql[a..b]).filter(|p| !crate::sql::is_comment_only(p, kind)).collect()
 }
 
 fn read_one(sc: Scan, kind: DbKind) -> bool {
@@ -1063,7 +1063,7 @@ pub fn locks_rows(sql: &str, kind: DbKind) -> bool {
 
 /// `f` holds for the text under every way the server may read its quotes once there is a backslash (see is_read)
 fn every_reading(sql: &str, kind: DbKind, f: impl Fn(Scan) -> bool) -> bool {
-    let backslash = matches!(kind, DbKind::Mysql | DbKind::Postgres) && sql.contains('\\');
+    let backslash = crate::sql::quotes_vary(sql, kind);
     let ansi = backslash && kind == DbKind::Mysql && sql.contains('"');
     f(scan(sql, kind)) && (!backslash || f(scan_as(sql, kind, Quotes::OtherBackslash))) && (!ansi || f(scan_as(sql, kind, Quotes::Ansi)))
 }
@@ -1752,6 +1752,10 @@ mod tests {
         assert!(read_only_violation("select open, close from prices", DbKind::Mssql, false).is_some());
         assert!(!is_read("select open from prices exec purge", DbKind::Mssql));
         assert!(!is_read("", Postgres) && !is_read(" -- only a note", Postgres));
+        // Only a piece of nothing but comments is dropped (sql::is_comment_only, the run plans' rule): code without a word counts
+        assert!(is_read("select 1; /* a /* nested */ note */ ;", Postgres) && rollback_undoes("delete from t where a = 1; -- done", Postgres));
+        assert!(!is_read("select 1; 'x'", Postgres));
+        assert!(!is_read("select 1; /*!40101 delete from t */", Mysql));
     }
 
     /// Explain Analyse's rollback undoes table writes, not sequences, other servers, files or session locks

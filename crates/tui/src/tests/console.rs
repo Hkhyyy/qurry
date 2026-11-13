@@ -19,6 +19,7 @@ fn fake(q: &str) -> Result<QueryResult, String> {
         in_transaction: false,
         warning: None,
         editable: None,
+        notices: vec![],
     })
 }
 
@@ -119,6 +120,45 @@ async fn f5_keeps_an_earlier_warning_in_the_status() {
     assert_eq!(h.app.status, "Warning: It ran, but the result couldn't be written to the Production log");
 }
 
+/// The server's notices (PostgreSQL RAISE NOTICE / WARNING) in Output under their statement, the GUI's text, warnings in the warn color (#168)
+#[tokio::test]
+async fn notices_are_written_under_the_statement() {
+    fn raises(q: &str) -> Result<QueryResult, String> {
+        let mut r = fake(q)?;
+        r.rows_affected = 0;
+        let n = |level: &str, message: &str| qurry_core::notice::Notice { level: level.into(), message: message.into() };
+        r.notices = vec![n("NOTICE", "role app_owner isn't a member, owner change skipped"), n("WARNING", "table shop.orders has no primary key"), n("", "… 3 more")];
+        Ok(r)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(raises);
+    h.console_with("DO $$ BEGIN RAISE NOTICE 'x'; END $$", 0, 3);
+    h.key("F5");
+    h.settle().await;
+    assert_eq!(
+        h.console_output(),
+        [
+            "> DO $$ BEGIN RAISE NOTICE 'x'; END $$",
+            "NOTICE: role app_owner isn't a member, owner change skipped",
+            "WARNING: table shop.orders has no primary key",
+            "… 3 more",
+            "0 row(s) affected in 7 ms",
+        ]
+    );
+    // Qurry's own warning line, for its color
+    console_mut(&mut h).log(false, format!("{}own warning", crate::app::WARNING));
+    let (w, ht) = (120u16, 40u16);
+    let buf = h.buffer(w, ht);
+    let fg_of = |text: &str| {
+        let row = (0..ht).find(|&y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>().contains(text)).unwrap_or_else(|| panic!("{text} not drawn"));
+        let line: String = (0..w).map(|x| buf[(x, row)].symbol()).collect();
+        buf[(line[..line.find(text).unwrap()].chars().count() as u16, row)].fg
+    };
+    let warn = fg_of("Warning: own warning");
+    assert_eq!(fg_of("WARNING: table shop.orders"), warn);
+    assert_ne!(fg_of("NOTICE: role app_owner"), warn);
+}
+
 /// Production Data Source: the counted rows of each changing statement are shown before anything runs; yes runs them
 #[tokio::test]
 async fn production_confirm_shows_counted_rows() {
@@ -128,7 +168,7 @@ async fn production_confirm_shows_counted_rows() {
             return fake(q);
         }
         let n: serde_json::Value = if q.contains("id = 4") { 1.into() } else { "12408".into() };
-        Ok(QueryResult { columns: vec![ColumnInfo { name: "count".into(), type_name: "int8".into() }], rows: vec![vec![n]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None })
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "count".into(), type_name: "int8".into() }], rows: vec![vec![n]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] })
     }
     let mut h = Harness::new().await;
     let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
@@ -162,6 +202,68 @@ async fn production_confirm_shows_counted_rows() {
         h.console_output(),
         ["PROD> update payment set amount = 0 where id = 4", "PROD> delete from payment where amount < 0", "3 row(s) affected in 7 ms", "3 row(s) affected in 7 ms"]
     );
+}
+
+/// A pg_dump-style script on Production (#171): the confirm lists each statement without the comments above it, the comment-only
+/// pieces (a stray `-- …;` and the dump's trailing block) are not listed, run or counted, and each statement still runs as written,
+/// its result in the tab of its own statement
+#[tokio::test]
+async fn production_confirm_lists_commented_statements_by_their_sql() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn db(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        let select = q.contains("SELECT id");
+        Ok(QueryResult {
+            columns: if select { vec![ColumnInfo { name: "id".into(), type_name: "int4".into() }] } else { vec![] },
+            rows: if select { vec![vec![1.into()]] } else { vec![] },
+            rows_affected: 0,
+            truncated: false,
+            elapsed_ms: 1,
+            has_result_set: select,
+            in_transaction: false,
+            warning: None,
+            editable: None,
+            notices: vec![],
+        })
+    }
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+    }))
+    .unwrap();
+    cfg.options.confirm_changes = true;
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.fake_db = Some(db);
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    let create = "--\n-- Name: orders; Type: TABLE; Schema: public; Owner: -\n--\n\nCREATE TABLE public.orders (\n    id integer NOT NULL\n)";
+    let select = "-- Name: list\nSELECT id FROM public.orders";
+    let insert = "--\n-- Data for Name: orders; Type: TABLE DATA\n--\n\nINSERT INTO public.orders /* one row */ VALUES (1)";
+    let sql = format!("{create};\n\n-- stray note\n;\n\n{select};\n\n{insert};\n\n--\n-- PostgreSQL database dump complete\n--\n");
+    let id = h.app.restore_console("p", "d".into(), "console".into(), &sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    h.key("F5");
+    h.settle().await;
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    assert_eq!(
+        text,
+        "Production data source \"PROD\" — this changes data:\n\n  CREATE TABLE public.orders ( id integer NOT NULL )\n    → schema change\n  INSERT INTO public.orders VALUES (1)\n    → can't count this statement\n\nRun it?"
+    );
+    let Some(Popup::Confirm { opened: Some(t), .. }) = &mut h.app.popup else { panic!("not a quiet confirm") };
+    *t -= crate::app::App::TLS_ASK_GRACE;
+    h.key("y");
+    h.settle().await;
+    // Exactly the three statements, each with its comments, and nothing of the comment-only pieces
+    assert_eq!(*SEEN.lock().unwrap(), [create, select, insert]);
+    let out = h.console_output();
+    assert_eq!(out.iter().filter(|l| l.starts_with("PROD> ")).count(), 3, "{out:?}");
+    assert!(!out.iter().any(|l| l.contains("dump complete") || l.contains("stray")), "{out:?}");
+    // The SELECT's result is in the tab of its own statement (its place in the script, which still counts the stray piece)
+    let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!("not a console") };
+    let place = qurry_core::sql::split_script(&sql, qurry_core::store::DbKind::Postgres).iter().position(|&(s, _)| sql[s..].trim_start().starts_with(select));
+    assert_eq!(c.results.tabs.iter().map(|t| (t.stmt, t.title.as_str())).collect::<Vec<_>>(), [(place, "Name: list")]);
 }
 
 /// Explain Analyze of a changing statement on PostgreSQL: BEGIN, the EXPLAIN and ROLLBACK all go through the same session (the fake here)
@@ -458,7 +560,7 @@ fn users(q: &str) -> Result<QueryResult, String> {
     } else {
         None
     };
-    Ok(QueryResult { columns: vec![col("id"), col("name")], rows: vec![vec!["1".into(), "kim".into()], vec!["2".into(), "lee".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable })
+    Ok(QueryResult { columns: vec![col("id"), col("name")], rows: vec![vec!["1".into(), "kim".into()], vec!["2".into(), "lee".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable, notices: vec![] })
 }
 
 /// #102's join, as the backend reports it: voc (idx, status) left join users (idx, role, and a computed column); voc 2 has no user
@@ -472,7 +574,7 @@ fn voc_join(_: &str) -> Result<QueryResult, String> {
         columns: vec![to(0, "idx"), to(0, "status"), to(1, "idx"), to(1, "role"), ColumnEdit::ReadOnly { read_only: qurry_shared::errors::edit_computed("shout") }],
     };
     let rows = vec![vec!["1".into(), "open".into(), "10".into(), "member".into(), "MEMBER".into()], vec!["2".into(), "new".into(), Value::Null, Value::Null, Value::Null]];
-    Ok(QueryResult { columns: ["idx", "status", "idx", "role", "shout"].map(col).to_vec(), rows, rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: Some(Editable::Join(j)) })
+    Ok(QueryResult { columns: ["idx", "status", "idx", "role", "shout"].map(col).to_vec(), rows, rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: Some(Editable::Join(j)), notices: vec![] })
 }
 
 /// A Production console whose result is shown, with the grid focused

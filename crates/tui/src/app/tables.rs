@@ -88,17 +88,17 @@ impl App {
                 let (cols, r) = tokio::join!(st.table_detail(target.clone(), schema, table), st.run_query(target, sqls, Some(500), Some(session)));
                 let cols = cols.map(|d| d.columns).unwrap_or_default();
                 let pk = cols.iter().filter(|c| c.is_pk).map(|c| c.name.clone()).collect::<Vec<_>>();
-                let types = super::status_items::column_types(cols);
+                let names: Vec<(String, String)> = cols.iter().map(|c| (c.name.clone(), c.data_type.clone())).collect();
+                let loaded = (!cols.is_empty()).then(|| super::status_items::loaded(cols));
                 let r = r.map_err(err);
-                (pk, types, r)
+                (pk, (names, loaded), r)
             },
-            move |a, (pk, types, r), seen| {
-                // The status line's Size reads the column types from here, fresh on each load; when they couldn't be read, Size asks
-                // for them itself (status_items::table_cols)
-                if !types.is_empty() {
-                    a.table_cols.insert((t_target, t_schema, t_table), super::TableCols::Loaded(types.clone()));
+            move |a, (pk, (cols, loaded), r), seen| {
+                // The status line's Size and Submit's hint read the columns from here, fresh on each load; when they couldn't be
+                // read, Size asks for them itself (status_items::table_cols)
+                if let Some(l) = loaded {
+                    a.table_cols.insert((t_target, t_schema, t_table), l);
                 }
-                let cols: Vec<(String, String)> = types.into_iter().map(|(n, t)| (n, t.data_type)).collect();
                 // A table opened from the search cache was just connected: sync the explorer display
                 let conn = a.tab_mut(id).map(|t| t.conn.clone()).unwrap_or_default();
                 let tls_err = r.as_ref().err().cloned();
@@ -139,7 +139,7 @@ impl App {
                                 Some(g) => g.result.columns.clone(),
                                 None => cols.into_iter().map(|(name, type_name)| qurry_core::db::ColumnInfo { name, type_name }).collect(),
                             };
-                            let empty = qurry_core::db::QueryResult { columns, rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None };
+                            let empty = qurry_core::db::QueryResult { columns, rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] };
                             let mut g = Grid::new(empty);
                             g.set_user_widths(widths);
                             tt.grid = Some(g);
@@ -415,10 +415,11 @@ impl App {
             self.status = "No pending changes".into();
             return;
         }
-        let stmts = match self.edit_to() {
-            Ok(EditTo::Table(to)) => table_stmts(kind, &to, g),
-            Ok(EditTo::Join(j)) => Ok(join_stmts(kind, &j, g)),
-            Err(why) => Err(why),
+        // A table's new rows: the table, for the hint when their key's sequence is behind (SeqFix)
+        let (stmts, seq) = match self.edit_to() {
+            Ok(EditTo::Table(to)) => (table_stmts(kind, &to, g), (g.added > 0).then_some(SeqFix { kind, schema: to.schema, table: to.table, pk: to.pk })),
+            Ok(EditTo::Join(j)) => (Ok(join_stmts(kind, &j, g)), None),
+            Err(why) => (Err(why), None),
         };
         let stmts = match stmts {
             _ if ro => return self.status = "Data source is read-only".into(),
@@ -438,33 +439,41 @@ impl App {
                     opened: None,
                     sql: Some(kind),
                     text: format!("Production data source \"{name}\" — {what}\n\n{}", lines.join("\n")),
-                    on_yes: Box::new(move |a| a.submit_stmts(id, gid, target, tab, stmts)),
+                    on_yes: Box::new(move |a| a.submit_stmts(id, gid, target, tab, stmts, seq)),
                 });
             }
-            None => self.submit_stmts(id, gid, target, tab, stmts),
+            None => self.submit_stmts(id, gid, target, tab, stmts, seq),
         }
     }
 
     /// Save the statements Submit built for grid `gid` of tab `id`, then show the saved rows (reload the table, run the console's
     /// statement again). tab = the console's session: in Manual mode or with a transaction open they run in it and stay pending
-    fn submit_stmts(&mut self, id: u64, gid: u64, target: String, tab: Option<String>, stmts: Vec<String>) {
+    fn submit_stmts(&mut self, id: u64, gid: u64, target: String, tab: Option<String>, stmts: Vec<String>, seq: Option<SeqFix>) {
         let n = stmts.len();
         let st = self.state.clone();
         let fake = self.fake_db();
+        let filled = seq.as_ref().and_then(|s| match self.table_cols.get(&(target.clone(), s.schema.clone(), s.table.clone())) {
+            Some(super::TableCols::Loaded(_, f)) => Some(f.clone()),
+            _ => None,
+        });
         self.status = format!("Submitting {n} statement(s)…");
         self.spawn(
             async move {
                 let r = match fake {
                     // Tests: the stand-in database gets the statements, in order
                     Some(f) => stmts.iter().try_fold(0, |n, s| f(s).map(|r| n + r.rows_affected)).map(|rows| qurry_core::app::BatchResult { rows, warning: None }),
-                    None => st.submit_edits(target, tab.clone(), stmts).await.map_err(err),
+                    None => st.submit_edits(target.clone(), tab.clone(), stmts).await.map_err(err),
                 };
                 // Pending now, or ended by the failure (a deadlock, a lost connection)
                 let in_tx = match &tab {
                     Some(t) => st.tx_state(t.clone()).await,
                     None => false,
                 };
-                (r, in_tx)
+                let fix = match (&r, seq) {
+                    (Err(e), Some(s)) => s.fix(&st, target, e, filled).await,
+                    _ => None,
+                };
+                (r.map_err(|e| match fix { Some(f) => format!("{e}\n\n{}\n{}", f.text, f.sql), None => e }), in_tx)
             },
             move |a, (r, in_tx)| {
                 if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
@@ -495,6 +504,29 @@ impl App {
                 }
             },
         );
+    }
+}
+
+/// The table Submit adds rows to, for the hint under its error when their key's sequence is behind the table
+/// (qurry_shared::errors::sequence_behind)
+struct SeqFix {
+    kind: DbKind,
+    schema: String,
+    table: String,
+    pk: Vec<String>,
+}
+
+impl SeqFix {
+    /// filled = the table's numbered columns as already read (TableCols); else they are read now, only when the error is a
+    /// duplicate of a key the INSERT left out
+    async fn fix(self, st: &qurry_core::app::AppState, target: String, e: &str, filled: Option<Vec<String>>) -> Option<qurry_shared::errors::ErrorFix> {
+        let hint = |f: &[String]| qurry_shared::errors::sequence_behind(self.kind, e, &self.schema, &self.table, f);
+        hint(&self.pk)?;
+        let filled = match filled {
+            Some(f) => f,
+            None => st.table_detail(target, self.schema.clone(), self.table.clone()).await.ok()?.columns.into_iter().filter(|c| c.auto_increment).map(|c| c.name).collect(),
+        };
+        hint(&filled)
     }
 }
 

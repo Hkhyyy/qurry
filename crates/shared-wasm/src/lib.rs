@@ -176,6 +176,13 @@ pub fn join_statements(kind: JsValue, edit: JsValue, rows: JsValue, edits: JsVal
     Ok(qurry_shared::result_edit::join_statements(parse_kind(kind)?, &from(edit)?, &from::<Vec<Vec<Option<String>>>>(rows)?, &edits_of(edits)?))
 }
 
+/// Under a failed Submit: { text, sql } when its new row's key sequence is behind the table (qurry_shared::errors::sequence_behind,
+/// the TUI's), else undefined. filled = the table's columns the database numbers (ColumnMeta.autoIncrement)
+#[wasm_bindgen(js_name = sequenceBehind)]
+pub fn sequence_behind(kind: JsValue, error: &str, schema: &str, table: &str, filled: Vec<String>) -> Result<JsValue, JsError> {
+    to(&qurry_shared::errors::sequence_behind(parse_kind(kind)?, error, schema, table, &filled))
+}
+
 /// What a Production console that starts in Manual mode says the first time (the TUI's words)
 #[wasm_bindgen(js_name = productionManual)]
 pub fn production_manual() -> String {
@@ -305,11 +312,17 @@ pub fn plan_execution(text: &str, offset: usize, segs: JsValue, kind: JsValue, s
 /// What to run from a selection (qurry_shared::exec::plan_selection_in) over `segs` (its statements, UTF-16 ranges in the selection)
 /// with the Query Execution settings: [{start, end, sql}, …], ranges in the selection
 #[wasm_bindgen(js_name = planSelection)]
-pub fn plan_selection(sel: &str, segs: JsValue, settings: JsValue) -> Result<JsValue, JsError> {
+pub fn plan_selection(sel: &str, segs: JsValue, kind: JsValue, settings: JsValue) -> Result<JsValue, JsError> {
     let segs: Vec<Segment> = serde_wasm_bindgen::from_value(segs)?;
     let segs = byte_ranges(sel, &segs.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
-    let v = exec::plan_selection_in(sel, &segs, ExecSettings::from_json(&serde_wasm_bindgen::from_value(settings)?));
+    let v = exec::plan_selection_in(sel, &segs, parse_kind(kind)?, ExecSettings::from_json(&serde_wasm_bindgen::from_value(settings)?));
     Ok(serde_wasm_bindgen::to_value(&js_stmts(sel, v))?)
+}
+
+/// A statement as the confirm dialogs show it: comments left out as the server reads them, whitespace collapsed (qurry_shared::sql::without_comments)
+#[wasm_bindgen(js_name = withoutComments)]
+pub fn without_comments(sql: &str, kind: JsValue) -> Result<String, JsError> {
+    Ok(qurry_shared::sql::without_comments(sql, parse_kind(kind)?))
 }
 
 /// A value as a string literal `kind` reads (qurry_shared::sql::literal; null → NULL): the grid's filters and edit SQL, as its copy formats

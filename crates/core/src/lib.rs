@@ -36,6 +36,7 @@ pub mod meta;
 pub mod plugin;
 pub mod migrate;
 pub mod mysql;
+pub mod notice;
 pub mod plan;
 pub mod rag;
 pub mod redisdb;

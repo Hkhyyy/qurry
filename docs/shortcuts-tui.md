@@ -308,6 +308,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | Key | Action |
 |---|---|
 | `Go to DDL key` | DDL of the selected object (in Search Everywhere / Go to Database Object) |
+| `Its open key again` | Next scope of Search Everywhere / Go to Database Object: This Workspace, All Places, Context Data Sources |
 | `type` | Filter (palettes) |
 | `↑ ↓ / PgUp PgDn` | Move / scroll |
 | `Enter` | Run / confirm |
