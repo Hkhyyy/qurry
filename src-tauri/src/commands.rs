@@ -861,6 +861,17 @@ pub fn set_result_tabs(state: State<'_, AppState>, n: usize) -> AppResult<()> {
     state.store.set_result_tabs(n)
 }
 
+/// Search Everywhere's scope (the last one picked; the TUI shares it)
+#[tauri::command]
+pub fn search_scope(state: State<'_, AppState>) -> qurry_core::search_cache::SearchScope {
+    state.store.search_scope()
+}
+
+#[tauri::command]
+pub fn set_search_scope(state: State<'_, AppState>, scope: qurry_core::search_cache::SearchScope) -> AppResult<()> {
+    state.store.set_search_scope(scope)
+}
+
 /// Theme, Sync with OS and custom themes (Settings › Appearance › Theme; settings.json, shared with the TUI)
 #[tauri::command]
 pub fn theme_settings(state: State<'_, AppState>) -> qurry_core::theme::ThemeSettings {

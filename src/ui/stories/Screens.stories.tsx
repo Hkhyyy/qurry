@@ -8,7 +8,7 @@ import App from "../../App";
 import { ResultTabsField, SettingsDialog, type SettingsPage } from "../../features/settings/SettingsDialog";
 import { setFont } from "../../lib/prefs";
 import { saveCustomTheme, setThemeSync } from "../../lib/theme";
-import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
+import { dialectOf, type ConnectionView, type QueryResult, type SearchScope } from "../../lib/api";
 import type { GridStatus, StatusItemId } from "../../lib/shared";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
 import { ConsolePane, SPLITTER_FAILED, type OutputLine } from "../../components/ConsolePane";
@@ -27,7 +27,7 @@ import { RedisBrowser } from "../../components/RedisBrowser";
 import { ResultChart } from "../../components/ResultChart";
 import { ResultGrid } from "../../components/ResultGrid";
 import { SqlBlock } from "../../components/SqlBlock";
-import { SearchEverywhere } from "../../components/SearchEverywhere";
+import { SearchEverywhere, type SeTab } from "../../components/SearchEverywhere";
 import { TableEditor } from "../../components/TableEditor";
 import { TableStructureView } from "../../components/TableStructure";
 import { Switcher } from "../../components/Switcher";
@@ -641,14 +641,19 @@ export const SqlBlockLarge: S = {
 };
 
 export const History: S = { name: "Query History", render: () => <HistoryDialog connId="dev" kind="postgres" title="[DEV] shop_app Query History" onPick={noop} onClose={noop} /> };
-export const Search: S = {
-  name: "Search Everywhere (⇧⇧)",
-  render: () => (
+/** Search Everywhere with its scope picker: this workspace has [DEV] shop_app and [MySQL] shop; All Places adds the others */
+const MYSQL = conn("my", "[MySQL] shop", "mysql", "#22524f", { database: "shop" });
+function SearchDemo({ initialTab, initial }: { initialTab: SeTab; initial: SearchScope }) {
+  const [scope, setScope] = useState<SearchScope>(initial);
+  return (
     <div style={{ height: 520, position: "relative" }}>
       <SearchEverywhere
-        initialTab="all"
-        conns={CONNS}
+        initialTab={initialTab}
+        conns={[...CONNS, MYSQL]}
         contextConnId="dev"
+        wsConnIds={["dev", "my"]}
+        scope={scope}
+        onScopeChange={setScope}
         files={[{ key: "f1", icon: <ConsoleIcon />, title: "console [DEV] shop_app", hint: "[DEV] shop_app", open: true }]}
         actions={[{ name: "Production Log…", group: "Run", run: noop }, { name: "Generate Test Data…", group: "Data", run: noop }]}
         onClose={noop}
@@ -659,8 +664,21 @@ export const Search: S = {
         onOpenFile={noop}
       />
     </div>
-  ),
+  );
+}
+export const Search: S = { name: "Search Everywhere (⇧⇧)", render: () => <SearchDemo initialTab="all" initial="workspace" /> };
+/** Go to Database Object (⌘o) in This Workspace: PostgreSQL and MySQL objects of the workspace's two sources; the ⓘ says what each scope covers */
+export const SearchScopePicker: S = {
+  name: "Search Everywhere — scope picker",
+  render: () => <SearchDemo initialTab="database" initial="workspace" />,
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await waitFor(() => expect(c.getByText("product_reviews")).toBeTruthy());
+    await expect(c.getByRole("combobox", { name: "Search scope" })).toHaveValue("workspace");
+    await userEvent.click(c.getByRole("button", { name: "About Search scope" }));
+  },
 };
+export const SearchAllPlaces: S = { name: "Search Everywhere — All Places", render: () => <SearchDemo initialTab="database" initial="all" /> };
 export const FindInData: S = { name: "Full-text Search", render: () => <FullTextSearchDialog scope={{ connId: "dev", connName: "[DEV] shop_app", db: "shop_app", schemas: ["public"], tables: [] }} onClose={noop} onSearch={noop} /> };
 export const SwitcherStory: S = {
   name: "Switcher (⌃⇥)",

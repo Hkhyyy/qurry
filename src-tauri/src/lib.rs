@@ -214,6 +214,8 @@ pub fn run() {
             commands::set_keyword_case,
             commands::result_tabs,
             commands::set_result_tabs,
+            commands::search_scope,
+            commands::set_search_scope,
             commands::theme_settings,
             commands::set_theme,
             commands::set_theme_sync,

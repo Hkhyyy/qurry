@@ -30,6 +30,20 @@ fn channel_name(c: qurry_core::update::Channel) -> &'static str {
     }
 }
 
+/// The GUI's names (Search Everywhere's scope picker, src/features/search/scope.ts SEARCH_SCOPES)
+pub(crate) fn scope_name(s: SearchScope) -> &'static str {
+    match s {
+        SearchScope::Workspace => "This Workspace",
+        SearchScope::All => "All Places",
+        SearchScope::Context => "Context Data Sources",
+    }
+}
+
+/// The palettes that search database objects (their scope is in the title, and the open key again changes it)
+pub(crate) fn is_search(title: &str) -> bool {
+    title == "Search Everywhere" || title == "Go to Database Object"
+}
+
 fn object_items(conn: &str, name: &str, db: &str, es: Vec<IndexEntry>, tag: &str) -> Vec<PItem> {
     es.into_iter()
         .map(|e| PItem {
@@ -83,17 +97,64 @@ impl App {
         self.palette_objects("Search Everywhere", items);
     }
 
-    /// Go to Database Object: default DB of connected Data Sources + expanded DBs
-    /// Go to Database Object / Search Everywhere: like the GUI, objects of the visible DBs (at most 8) of each connected Data Source.
+    /// The data source in context: the explorer's selected node's, else the active tab's (the GUI's selected node or active tab)
+    fn context_conn(&self) -> Option<String> {
+        self.tree.selected().map(|n| n.conn).filter(|c| !c.is_empty()).or_else(|| self.tabs.get(self.active).map(|t| t.conn.clone()))
+    }
+
+    /// The scope a search shows: a saved Context Data Sources with no context is This Workspace (scope.ts shownScope)
+    pub fn shown_scope(&self) -> SearchScope {
+        match self.search_scope {
+            SearchScope::Context if self.context_conn().is_none() => SearchScope::Workspace,
+            s => s,
+        }
+    }
+
+    /// The data sources a search covers, by id (scope.ts scopeConns): the explorer's list, every one, or the one in context
+    fn scope_conn_ids(&self) -> Vec<String> {
+        match (self.shown_scope(), self.context_conn()) {
+            (SearchScope::All, _) => self.conns.iter().map(|c| c.config.id.clone()).collect(),
+            (SearchScope::Context, Some(c)) => vec![c],
+            _ => self.explorer_conns().map(|c| c.config.id.clone()).collect(),
+        }
+    }
+
+    /// The open key again in a search palette: the next scope (Context Data Sources only when there is one), saved for the GUI too;
+    /// the palette opens again on it with what was typed
+    pub fn next_search_scope(&mut self) {
+        let Some(Popup::Palette(p)) = &self.popup else { return };
+        let (title, typed) = (p.title.clone(), p.input.lines().join(""));
+        let order = [SearchScope::Workspace, SearchScope::All, SearchScope::Context];
+        let order: Vec<SearchScope> = order.into_iter().filter(|s| *s != SearchScope::Context || self.context_conn().is_some()).collect();
+        let at = order.iter().position(|s| *s == self.shown_scope()).unwrap_or(0);
+        self.search_scope = order[(at + 1) % order.len()];
+        if title == "Search Everywhere" {
+            self.palette_everywhere();
+        } else {
+            self.palette_objects(&title, vec![]);
+        }
+        if let Some(Popup::Palette(p)) = &mut self.popup {
+            p.input.insert_str(typed);
+        }
+        if let Err(e) = self.state.store.set_search_scope(self.search_scope) {
+            self.status = format!("Couldn't save the search scope: {e}");
+        }
+    }
+
+    /// Go to Database Object / Search Everywhere: like the GUI, objects of the visible DBs (at most 8) of each connected Data Source
+    /// in the scope (This Workspace, All Places, Context Data Sources), of every kind (PostgreSQL, MySQL / MariaDB, drivers, Redis keys).
     /// Redis and single DB: default DB only
     pub fn palette_objects(&mut self, title: &str, items: Vec<PItem>) {
-        let conns: Vec<ConnectionConfig> = self.conns.iter().filter(|c| c.connected).map(|c| c.config.clone()).collect();
+        self.search_gen += 1;
+        let opened = self.search_gen;
+        let ids = self.scope_conn_ids();
+        let conns: Vec<ConnectionConfig> = self.conns.iter().filter(|c| c.connected && ids.contains(&c.config.id)).map(|c| c.config.clone()).collect();
         // Unconnected Data Sources use the list read last time (connects when picked)
         let mut items = items;
         let columns = title == "Search Everywhere";
         for c in self.state.cached_index().unwrap_or_default() {
             let (conn, db) = qurry_core::app::split_target(&c.target);
-            let Some(cv) = self.conns.iter().find(|x| x.config.id == conn && !x.connected) else { continue };
+            let Some(cv) = self.conns.iter().find(|x| x.config.id == conn && !x.connected && ids.contains(&x.config.id)) else { continue };
             let (name, db) = (cv.config.name.clone(), db.unwrap_or_default().to_string());
             items.extend(object_items(conn, &name, &db, c.objects, " (cached)"));
             if columns {
@@ -103,7 +164,11 @@ impl App {
         let empty = conns.is_empty() && items.iter().all(|i| !matches!(i.action, PAction::Object { .. }));
         self.popup = Some(Popup::Palette(Palette { title: title.into(), input: TextArea::default(), items, sel: 0, loading: conns.len(), cache: Default::default() }));
         if empty {
-            self.status = "No connected data sources — connect one (Enter in the explorer) to search its objects".into();
+            self.status = if ids.is_empty() {
+                "No data sources in this workspace — the key again searches All Places".into()
+            } else {
+                "No connected data sources — connect one (Enter in the explorer) to search its objects".into()
+            };
         }
         for cfg in conns {
             let def = sql::default_db(&cfg);
@@ -114,6 +179,9 @@ impl App {
             let st = self.state.clone();
             let id = cfg.id.clone();
             self.spawn(async move { st.list_databases(id).await.map_err(err) }, move |a, r: Result<Vec<String>, String>| {
+                if a.search_gen != opened {
+                    return;
+                }
                 let mut dbs = r.map(|dbs| qurry_core::app::visible_dbs(&cfg, dbs, &def)).unwrap_or_default();
                 // Default DB first (it's searched even if the DB list can't be read)
                 dbs.retain(|d| d != &def);
@@ -134,6 +202,7 @@ impl App {
             }
             _ => return,
         };
+        let opened = self.search_gen;
         for db in dbs {
             if columns {
                 self.columns_into_palette(cfg, db.clone());
@@ -142,6 +211,9 @@ impl App {
             let target = sql::target_id(&cfg.id, Some(&db));
             let (conn, name) = (cfg.id.clone(), cfg.name.clone());
             self.spawn(async move { st.object_index(target).await.map_err(err) }, move |a, r: Result<Vec<IndexEntry>, String>| {
+                if a.search_gen != opened {
+                    return;
+                }
                 if let Err(e) = &r {
                     a.status = format!("{name}/{db}: {e}");
                 }
@@ -160,7 +232,11 @@ impl App {
         let st = self.state.clone();
         let target = sql::target_id(&cfg.id, Some(&db));
         let (conn, name) = (cfg.id.clone(), cfg.name.clone());
+        let opened = self.search_gen;
         self.spawn(async move { st.completion_meta(target).await.map_err(err) }, move |a, r| {
+            if a.search_gen != opened {
+                return;
+            }
             let (Some(Popup::Palette(p)), Ok(ts)) = (a.popup_under(), r) else { return };
             p.items.extend(column_items(&conn, &name, &db, ts, ""));
         });

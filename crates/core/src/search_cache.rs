@@ -5,6 +5,20 @@ use crate::meta::{CompletionTable, IndexEntry};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Which data sources Search Everywhere and Go to Database Object search (settings.json "searchScope", shared by the GUI and the TUI).
+/// This Workspace unless picked; a value this version doesn't know is This Workspace too
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchScope {
+    /// The data sources in the current workspace's Database Explorer
+    #[default]
+    Workspace,
+    /// Every data source
+    All,
+    /// The data source of the selected explorer node or the active tab
+    Context,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CachedIndex {
