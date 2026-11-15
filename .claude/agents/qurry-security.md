@@ -34,7 +34,7 @@ Read ARCHITECTURE.md before changing code.
 
 - Branch from the branch you were given (or `main`) as `fix/<topic>`; never push, never merge, never comment on GitHub unless asked.
 - Everything in the repo is English (comments, commit messages like `[fix] Short summary`, UI text). Only the Korean user guide `docs/ko` is Korean — update `docs/<x>.md` and `docs/ko/<x>.md` together. Shortcuts are written with ⌘⌥⌃⇧ symbols.
-- Tests for every fix (unit, plus an ignored real-server test when it's about server behavior). Run `cargo test -p qurry-core -p qurry-tui -p qurry-mcp`, `npx tsc --noEmit -p .`, `npx vitest run` as relevant.
+- Tests for every fix (unit, plus an ignored real-server test when it's about server behavior). Run `cargo test -p qurry-core -p qurry-tui -p qurry-mcp`, `npx tsc --noEmit -p .`, `npx vitest run` as relevant, then the CI job locally: `scripts/ci-local.sh rust` (or `compat` for older servers).
 - Stage files explicitly; no screenshots or scratch files in commits (scratch goes to the session scratchpad).
 - Don't automate the GUI app while the user's Qurry.app is running.
 

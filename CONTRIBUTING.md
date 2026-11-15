@@ -20,7 +20,7 @@ Features already in that don't meet these aren't removed silently: open an issue
 
 ## Setup
 
-You need Rust (stable), Node.js 22 or newer, pnpm 10 and, for the tests against real servers, Docker.
+You need Rust through rustup (the first `cargo` command installs the version pinned in `rust-toolchain.toml`), Node.js 22 or newer, pnpm 10 and, for the tests against real servers, Docker.
 
 The GUI runs part of the Rust code as WebAssembly (`crates/shared`), so add the wasm32 target and the `wasm-bindgen` command-line tool at exactly the version in `Cargo.lock` (`crates/shared-wasm/Cargo.toml` pins it):
 
@@ -53,6 +53,8 @@ npx playwright test --project=chromium        # GUI end to end, against the mock
 npx playwright test --project=chromium --workers=2   # same, two tests at a time (one by default)
 npx playwright test --project=webkit --shard=1/2     # one half of the spec files, as a CI shard runs them
 ```
+
+`scripts/ci-local.sh` runs the CI jobs on this computer with the same commands: `rust` and `compat` against Docker containers it starts itself (`qurry-demo-ci-…` on free ports, removed when it ends or is stopped), then `web` and `e2e` on both browsers. `scripts/ci-local.sh rust`, `compat`, `web` or `e2e chromium` (or `e2e webkit`) runs one job. It needs Docker, pnpm and, for e2e, the Playwright browsers (`npx playwright install chromium webkit`); a server image that can't run here (SQL Server 2017 on Apple silicon) is skipped, and the summary at the end says which tests that leaves out.
 
 A shortcut's default keys are checked in two places: `src/lib/shortcuts.test.ts` pins every command's default keys and checks that none collide or can't be pressed, and `e2e/shortcuts.spec.ts` presses every default key in its scope in the running app and checks what the command does (one app start per scope, the checks in a row; a new command needs a check there). Changing a default key means changing it in `crates/shared/src/keymap-table.json` and in the vitest table.
 

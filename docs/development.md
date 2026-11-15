@@ -8,6 +8,8 @@ Building from source, how the code is laid out, and the tests.
 
 Rust, Node.js, pnpm and the WebAssembly tools: [CONTRIBUTING › Setup](../CONTRIBUTING.md#setup).
 
+The Rust version is pinned in `rust-toolchain.toml` (with clippy, rustfmt and the wasm32 target): rustup installs it on the first `cargo` command in the repository (once, a few minutes), also in `drivers/sqlite`. CI and the release builds use the same file. To move to a newer Rust, change `channel` there in a pull request of its own and fix what clippy and the tests report; nothing else names the version. A Rust installed without rustup (a distribution or Homebrew package) ignores the file and builds with its own version, which may differ from the one CI uses.
+
 ## Build & run
 
 ```bash
@@ -57,6 +59,8 @@ How to run the unit tests and the tests against real PostgreSQL, MySQL and Redis
 - `compat`: the core integration tests against older servers (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017)
 - `web`: vitest, the web build and the Storybook build
 - `e2e (chromium)` and `e2e (webkit)`: Playwright against the mock app, each browser in two shards that run side by side; each check passes when both of its shards pass
+
+`scripts/ci-local.sh` runs these jobs locally with the commands from `ci.yml` and its own `qurry-demo-ci-…` containers; `scripts/ci-local.sh rust|compat|web|e2e [chromium|webkit]` runs one ([CONTRIBUTING › Tests](../CONTRIBUTING.md#tests)).
 
 A pull request that only changes files under `docs/` or `.md` files (other than `docs/release-signing.md`, which a Rust test reads) skips `rust`, `compat` and e2e; their checks still pass. A new push to a pull request cancels the run of the previous push; runs on `main` always run everything and never cancel each other.
 

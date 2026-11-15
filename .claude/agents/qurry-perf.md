@@ -40,7 +40,7 @@ Read ARCHITECTURE.md before changing code.
 - Everything in the repo is English (comments, commit messages like `[fix] Short summary` / `[perf] …`, UI text). Only `docs/ko` is Korean — update `docs/<x>.md` and `docs/ko/<x>.md` together.
 - Work on a branch (`fix/<topic>` or the one you were given); never push/merge unless asked. Stage files explicitly; profiles, screenshots and scripts stay in the session scratchpad, never in commits.
 - Keep behavior identical unless the change is the point; add a test that would catch the regression (e.g. a session/cursor count that must return to zero, a cache with a bound).
-- Run `cargo test -p qurry-core -p qurry-tui -p qurry-mcp`, `npx tsc --noEmit -p .`, `npx vitest run` before reporting.
+- Run `cargo test -p qurry-core -p qurry-tui -p qurry-mcp`, `npx tsc --noEmit -p .`, `npx vitest run` before reporting, and `scripts/ci-local.sh <job>` for the CI job the change touches (`rust`, `web`, `e2e chromium`).
 
 ## Report
 
