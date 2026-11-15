@@ -131,10 +131,11 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      # wasm32: the GUI's shared WASM (pnpm build runs pnpm wasm first)
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          targets: ${{ matrix.target }},wasm32-unknown-unknown
+      # rust-toolchain.toml (its targets include wasm32 for the GUI's shared WASM: pnpm build runs pnpm wasm first) and the platform target
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update || { echo "::error::rustup could not install the toolchain in rust-toolchain.toml: check that its channel is a released Rust version (the same command reproduces it locally)"; exit 1; }
+          rustup target add "$T"
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
@@ -233,9 +234,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          targets: ${{ matrix.target }}
+      # rust-toolchain.toml and the platform target
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update || { echo "::error::rustup could not install the toolchain in rust-toolchain.toml: check that its channel is a released Rust version (the same command reproduces it locally)"; exit 1; }
+          rustup target add "$T"
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
@@ -290,9 +293,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          targets: ${{ matrix.target }}
+      # rust-toolchain.toml and the platform target
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update || { echo "::error::rustup could not install the toolchain in rust-toolchain.toml: check that its channel is a released Rust version (the same command reproduces it locally)"; exit 1; }
+          rustup target add "$T"
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
