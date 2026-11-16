@@ -1,14 +1,16 @@
 //! The MCP tools: their list (tools/list), and the dispatch of tools/call to one function per tool, grouped by file.
 use crate::mask::mask_query_text;
-use crate::{erd_json, plan_analysis, report_ids, result_json, unknown_report, Server, ERD_MAX_TABLES};
+use crate::{erd_json, report_ids, unknown_report, Server, ERD_MAX_TABLES};
 use qurry_core::app::ConnectionView;
 use qurry_core::dba;
-use qurry_core::explain::explain_sql;
 use qurry_core::sql;
 use qurry_core::store::{DbKind, McpAccess};
 use serde_json::{json, Value};
 
+mod query;
 mod sources;
+
+use query::result_json;
 
 pub(crate) const MAX_ROWS: usize = 1000;
 
@@ -204,12 +206,7 @@ impl Server {
             "describe_table" => self.describe_table(a).await,
             "get_ddl" => self.get_ddl(a).await,
             "search_objects" => self.search_objects(a).await,
-            "query" => {
-                let (t, ..) = self.target(a).await?;
-                let limit = n("limit", 100).clamp(1, MAX_ROWS);
-                let r = st.run_read_only(t, s("sql").ok_or("sql is required")?, limit).await.map_err(e)?;
-                Ok(result_json(&r))
-            }
+            "query" => self.query(a).await,
             "get_erd" => {
                 let (t, kind, db, _) = self.target(a).await?;
                 if kind == DbKind::Redis {
@@ -279,14 +276,7 @@ impl Server {
                 }
                 Ok(json!(st.redis_key(t, s("key").ok_or("key is required")?, Some(n("limit", 200).clamp(1, 10000))).await.map_err(e)?))
             }
-            "export_csv" => {
-                let (t, ..) = self.target(a).await?;
-                let q = s("sql").ok_or("sql is required")?;
-                // Only in the designated folder, as a new file (never write to a path chosen by someone else)
-                let path = qurry_core::export_path(&s("file_name").ok_or("file_name is required")?).map_err(e)?;
-                let rows = st.export_csv_read_only(t, q, path.clone()).await.map_err(e)?;
-                Ok(json!({ "rows": rows, "path": path.display().to_string() }))
-            }
+            "export_csv" => self.export_csv(a).await,
             "execute" if self.allow_write => {
                 let (t, kind, _, access) = self.target(a).await?;
                 if access != McpAccess::Write {
@@ -354,31 +344,6 @@ impl Server {
             "explain" => self.explain(a).await,
             _ => Ok(vec![self.call(name, a).await?]),
         }
-    }
-
-    /// The plan as before (PostgreSQL: the FORMAT TEXT lines, others: the rows). PostgreSQL also gets {"plan_analysis": …} from a separate
-    /// EXPLAIN (FORMAT JSON) without ANALYZE, so with analyze the statement still runs once; left out if that run or its parse fails
-    async fn explain(&self, a: &Value) -> Result<Vec<Value>, String> {
-        let st = &self.state;
-        let (t, kind, ..) = self.target(a).await?;
-        let q = a.get("sql").and_then(|v| v.as_str()).ok_or("sql is required")?;
-        let q = q.trim();
-        let analyze = a.get("analyze").and_then(|v| v.as_bool()).unwrap_or(false);
-        // The consoles' statement (qurry_shared::explain), as TEXT: a kind without one says so and nothing runs
-        let sqlq = explain_sql(q, kind, analyze, false)?;
-        let r = st.run_read_only(t.clone(), sqlq, MAX_ROWS).await.map_err(|e| e.to_string())?;
-        if kind != DbKind::Postgres {
-            return Ok(vec![result_json(&r)]);
-        }
-        let text = Value::String(r.rows.iter().filter_map(|row| row.first().and_then(|v| v.as_str())).collect::<Vec<_>>().join("\n"));
-        let plan = st.run_read_only(t, explain_sql(q, kind, false, true)?, 1).await.ok().and_then(|r| {
-            let cell = r.rows.first()?.first()?.clone();
-            qurry_core::plan::parse_pg(&cell.as_str().map(String::from).unwrap_or_else(|| cell.to_string())).ok()
-        });
-        Ok(match plan {
-            Some(p) => vec![text, plan_analysis(&p)],
-            None => vec![text],
-        })
     }
 }
 
