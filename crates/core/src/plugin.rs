@@ -495,7 +495,8 @@ mod tests {
         let ins = c.query(r#"POST /entities/insert
 {collectionName: 'q_items', data: [{id: 1, vector: [1, 0, 0], name: 'apple'}, {id: 2, vector: [0, 1, 0], name: 'pear'}, {id: 3, vector: [0.9, 0.1, 0], name: 'apricot'}]}"#, 1).await.unwrap();
         assert_eq!(ins.rows_affected, 3);
-        let r = c.query("POST /entities/search\n{collectionName: 'q_items', data: [[1, 0, 0]], limit: 2, outputFields: ['name']}", 500).await.unwrap();
+        // Strong: the default consistency may search before the insert is visible and return no rows (#159)
+        let r = c.query("POST /entities/search\n{collectionName: 'q_items', data: [[1, 0, 0]], limit: 2, outputFields: ['name'], consistencyLevel: 'Strong'}", 500).await.unwrap();
         let name = r.columns.iter().position(|c| c.name == "name").unwrap();
         assert_eq!(r.rows.iter().map(|x| x[name].clone()).collect::<Vec<_>>(), vec![json!("apple"), json!("apricot")]);
         let objs: crate::meta::SchemaObjects = c.call("objects", json!({ "schema": "default" })).await.unwrap();
