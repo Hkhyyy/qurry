@@ -134,8 +134,8 @@ a { color: var(--c-548af7); cursor: pointer; }
 .reconnect-reason { white-space: pre-wrap; }
 .resize-h { width: 1px; background: var(--border); }
 .resize-v { height: 1px; background: var(--border); }
-.resize-h:hover, .resize-h[data-separator="active"] { background: var(--accent); width: 2px; }
-.resize-v:hover, .resize-v[data-separator="active"] { background: var(--accent); height: 2px; }
+.resize-h:hover, .resize-h[data-separator="active"], .resize-h[data-separator="focus"] { background: var(--accent); width: 2px; }
+.resize-v:hover, .resize-v[data-separator="active"], .resize-v[data-separator="focus"] { background: var(--accent); height: 2px; }
 
 .panel { display: flex; flex-direction: column; height: 100%; background: var(--panel); min-width: 0; }
 .panel-header { height: 30px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 8px 0 12px; font-weight: 600; font-size: 12px; border-bottom: 1px solid var(--border); }
