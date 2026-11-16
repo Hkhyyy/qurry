@@ -85,7 +85,9 @@ test("a click on a field's name focuses the field and opens no ⓘ", async ({ pa
   await expect(d.getByRole("combobox", { name: "Keyword case" })).toBeFocused();
   await expect(page.getByRole("note")).toHaveCount(0);
   expect(await placement(d.getByRole("button", { name: "About Keyword case" }))).toEqual({ width: 18, height: 18, gap: 4 });
-  await page.keyboard.press("Escape");
+  // OK, not Esc: Linux Chromium opens the focused select's picker on the label click, and the first Esc only closes that
+  await d.getByRole("button", { name: "OK", exact: true }).click();
+  await expect(dialog(page)).toHaveCount(0);
 
   await treeNode(page, "[DEV] shop_app").click({ button: "right" });
   await page.getByRole("menuitem", { name: /^Properties/ }).click();
