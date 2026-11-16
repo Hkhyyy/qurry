@@ -93,7 +93,8 @@ pub struct AppState {
     pub mcp: bool,
     /// The app's grids handle cut cells (QueryResult::cut, the whole value read with fetch_values), so its consoles' PostgreSQL
     /// results read long values cut (store::grid_cut_chars): the GUI. Off (the TUI: its grid would edit a cut text as the whole
-    /// value and write it back), they read whole values
+    /// value and write it back), they read whole values. An app turns it on in the same change that makes its grid handle cut
+    /// cells, never before
     pub cut_grids: bool,
     /// Secrets key → password of a temporary data source (Store::temporary): kept in memory only, never in the secrets file
     temporary: std::sync::Mutex<HashMap<String, String>>,
