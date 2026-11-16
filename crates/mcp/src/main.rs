@@ -142,28 +142,6 @@ mod tests {
     use qurry_core::explain::explain_sql;
     use qurry_core::store::DbKind;
 
-    /// "Docs" (on a shared source) and "docs" (on a hidden one): the index that is checked is the one that runs
-    #[tokio::test]
-    async fn semantic_search_checks_the_index_it_runs() {
-        let dir = std::env::temp_dir().join(format!("qurry-mcp-rag-{}-{}", std::process::id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()));
-        let state = qurry_core::open_state(Some(dir.clone())).unwrap();
-        state.store.save(&source("shown", "Shown", Some("read"), false).config).unwrap();
-        state.store.save(&source("hidden", "Hidden", Some("off"), false).config).unwrap();
-        let idx = |id: &str, name: &str, src: &str| json!({ "id": id, "name": name, "source": src, "schema": "public", "table": "t", "idColumn": "id",
-            "textColumns": ["body"], "provider": "ollama", "model": "m", "dest": src, "collection": "c" });
-        std::fs::write(dir.join("rag.json"), json!([idx("i1", "Docs", "shown"), idx("i2", "docs", "hidden")]).to_string()).unwrap();
-        let server = Server { state: Arc::new(state), allow_write: false };
-        let search = |index: &str| json!({ "index": index, "query": "q" });
-        // The visible one gets past the check (and stops at "not built yet"); the hidden one is not found, by name or id
-        let e = server.call("semantic_search", &search("Docs")).await.unwrap_err();
-        assert!(e.contains("Build the index \"Docs\" first"), "{e}");
-        for w in ["docs", "i2"] {
-            let e = server.call("semantic_search", &search(w)).await.unwrap_err();
-            assert!(e.contains("not found"), "{w}: {e}");
-        }
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
     #[tokio::test]
     async fn new_tools_are_listed_read_only() {
         let (server, dir) = server_with(&[]);

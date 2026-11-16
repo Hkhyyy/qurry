@@ -1,4 +1,5 @@
-//! The MCP tools: their list (tools/list), and the dispatch of tools/call to one function per tool, grouped by file.
+//! The MCP tools: their list (tools/list), and the dispatch of tools/call to one function per tool, grouped by file
+//! (execute, only with --allow-write, is still answered here).
 use crate::Server;
 use qurry_core::app::ConnectionView;
 use qurry_core::sql;
@@ -8,6 +9,7 @@ use serde_json::{json, Value};
 mod dba;
 mod query;
 mod redis;
+mod search;
 mod sources;
 
 use dba::report_ids;
@@ -195,8 +197,6 @@ impl Server {
 
     pub(crate) async fn call(&self, name: &str, a: &Value) -> Result<Value, String> {
         let st = &self.state;
-        let s = |k: &str| a.get(k).and_then(|v| v.as_str()).map(String::from);
-        let n = |k: &str, d: usize| a.get(k).and_then(|v| v.as_u64()).map(|x| x as usize).unwrap_or(d);
         let e = |e: qurry_core::error::AppError| e.to_string();
         match name {
             "list_data_sources" => self.list_data_sources().await,
@@ -209,25 +209,7 @@ impl Server {
             "query" => self.query(a).await,
             "get_erd" => self.get_erd(a).await,
             "dba_report" => self.dba_report(a).await,
-            "full_text_search" => {
-                let (t, kind, db, _) = self.target(a).await?;
-                let schemas: Vec<String> = match a.get("schemas").and_then(|v| v.as_array()) {
-                    Some(v) => v.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
-                    None if kind == DbKind::Postgres => st.list_schemas(t.clone()).await.map_err(e)?.into_iter().filter(|s| !s.is_system).map(|s| s.name).collect(),
-                    None => vec![db],
-                };
-                let req = qurry_core::meta::FtsRequest {
-                    text: s("text").ok_or("text is required")?,
-                    mode: s("mode").unwrap_or_else(|| "contains".into()),
-                    match_case: a.get("match_case").and_then(|v| v.as_bool()).unwrap_or(false),
-                    columns: s("columns").unwrap_or_else(|| "text".into()),
-                    schemas,
-                    tables: vec![],
-                    limit: n("limit_per_table", 10).clamp(1, 200),
-                };
-                let hits = st.full_text_search(t, req).await.map_err(e)?;
-                Ok(json!(hits.iter().map(|h| json!({ "schema": h.schema, "table": h.table, "where": h.where_clause, "rows": result_json(&h.result) })).collect::<Vec<_>>()))
-            }
+            "full_text_search" => self.full_text_search(a).await,
             "redis_scan" => self.redis_scan(a).await,
             "redis_get" => self.redis_get(a).await,
             "export_csv" => self.export_csv(a).await,
@@ -261,33 +243,8 @@ impl Server {
                 }
                 Ok(out)
             }
-            "list_rag_indexes" => {
-                let names: std::collections::HashMap<String, String> = self.sources().await?.into_iter().map(|c| (c.config.id, c.config.name)).collect();
-                let shown = |t: &str| names.contains_key(qurry_core::app::split_target(t).0);
-                let name_of = |t: &str| {
-                    let (id, db) = qurry_core::app::split_target(t);
-                    let n = names.get(id).cloned().unwrap_or_else(|| id.to_string());
-                    db.map(|d| format!("{n} / {d}")).unwrap_or(n)
-                };
-                Ok(json!(st.rag_indexes().map_err(e)?.iter().filter(|x| shown(&x.source) && shown(&x.dest)).map(|x| json!({
-                    "name": x.name, "id": x.id, "source": name_of(&x.source), "table": format!("{}.{}", x.schema, x.table),
-                    "text_columns": x.text_columns, "store": name_of(&x.dest), "collection": x.collection,
-                    "embeddings": format!("{} {}", x.provider, x.model), "rows": x.rows, "built_at": x.built_at
-                })).collect::<Vec<_>>()))
-            }
-            "semantic_search" => {
-                let index = s("index").ok_or("index is required")?;
-                let query = s("query").ok_or("query is required")?;
-                // Both the source table and the store must be visible to MCP (the store contains text from source rows)
-                let ids: std::collections::HashSet<String> = self.sources().await?.into_iter().map(|c| c.config.id).collect();
-                let shown = |t: &str| ids.contains(qurry_core::app::split_target(t).0);
-                // Resolve once and search exactly the index that was checked (by id)
-                let x = st.rag_get(&index).map_err(e)?;
-                if !(shown(&x.source) && shown(&x.dest)) {
-                    return Err(format!("RAG index '{index}' not found"));
-                }
-                Ok(result_json(&st.rag_search(x.id, query, n("limit", 10).min(50)).await.map_err(e)?))
-            }
+            "list_rag_indexes" => self.list_rag_indexes().await,
+            "semantic_search" => self.semantic_search(a).await,
             other => Err(format!("Unknown tool: {other}")),
         }
     }
