@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ask, askText } from "../lib/dialogs";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { api, history, QueryResult, redis, RedisDbInfo, RedisKeyDetail, RedisKeyRow, RedisOverview, RedisReply } from "../lib/api";
 import { keyTree, parentPaths, visibleRows } from "../lib/keyTree";
 import { sharedOr, useSharedReady, type RedisAssist, type RedisReplyTable } from "../lib/shared";
@@ -80,6 +80,7 @@ export function formatReply(v: RedisReply, indent = ""): string {
 }
 
 export function RedisBrowser(p: Props) {
+  const layout = useDefaultLayout({ id: "dbtool-redis", panelIds: ["keys", "content"] });
   const [pattern, setPattern] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [keys, setKeys] = useState<RedisKeyRow[]>([]);
@@ -219,8 +220,8 @@ export function RedisBrowser(p: Props) {
           + Key
         </ToolButton>
       </Toolbar>
-      <PanelGroup direction="horizontal" autoSaveId="dbtool-redis">
-        <Panel defaultSize={34} minSize={18}>
+      <Group orientation="horizontal" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
+        <Panel id="keys" defaultSize="34%" minSize="18%">
           <div className="rd-keys">
             <div className="rd-keys-head">
               <span>Key</span>
@@ -307,8 +308,8 @@ export function RedisBrowser(p: Props) {
             </div>
           </div>
         </Panel>
-        <PanelResizeHandle className="resize-h" />
-        <Panel minSize={30}>
+        <Separator className="resize-h" />
+        <Panel id="content" minSize="30%">
           <div className="rd-right">
             <Tabs
               size="sm"
@@ -360,7 +361,7 @@ export function RedisBrowser(p: Props) {
             </div>
           </div>
         </Panel>
-      </PanelGroup>
+      </Group>
       {adding && (
         <NewKeyDialog
           onClose={() => setAdding(false)}
@@ -399,6 +400,7 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
   onRenamed: (to: string) => void;
   onTtl: (ttl: number) => void;
 }) {
+  const layout = useDefaultLayout({ id: "dbtool-redis-content", panelIds: ["items", "value"] });
   const [d, setD] = useState<RedisKeyDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [name, setName] = useState(keyName);
@@ -603,8 +605,8 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
       {d.type === "string" ? (
         <ValueEditor text={text} fmt={fmt} setFmt={setFmt} pretty={pretty} readOnly={readOnly} onSave={saveText} big />
       ) : (
-        <PanelGroup direction="vertical" autoSaveId="dbtool-redis-content">
-          <Panel defaultSize={62} minSize={20}>
+        <Group orientation="vertical" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
+          <Panel id="items" defaultSize="62%" minSize="20%">
             <div className="rd-table-wrap">
               <Table className="rd-table">
                 <thead>
@@ -660,8 +662,8 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
                 ))}
             </div>
           </Panel>
-          <PanelResizeHandle className="resize-v" />
-          <Panel minSize={15}>
+          <Separator className="resize-v" />
+          <Panel id="value" minSize="15%">
             {selRow !== null && rows[selRow] ? (
               <ValueEditor
                 text={text}
@@ -676,7 +678,7 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
               <EmptyState>Select an element to view or edit its value.</EmptyState>
             )}
           </Panel>
-        </PanelGroup>
+        </Group>
       )}
     </div>
   );

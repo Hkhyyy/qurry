@@ -238,3 +238,22 @@ test("toolbar ↻ with nothing selected reloads the data source list", async ({ 
   await refreshButton(page).click();
   await expect(treeItem(page, "[QA] shop_app")).toBeVisible();
 });
+
+test("the explorer splitter shows the accent line when focused from the keyboard, and arrows move it", async ({ page }) => {
+  const sep = page.locator(".resize-h").first();
+  const accent = await page.evaluate(() => {
+    const probe = document.body.appendChild(document.createElement("div"));
+    probe.style.background = "var(--accent)";
+    const c = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return c;
+  });
+  await expect(sep).toHaveCSS("width", "1px");
+  await sep.focus();
+  await expect(sep).toHaveAttribute("data-separator", "focus");
+  await expect(sep).toHaveCSS("width", "2px");
+  await expect(sep).toHaveCSS("background-color", accent);
+  const x = (await sep.boundingBox())!.x;
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(async () => (await sep.boundingBox())!.x).toBeGreaterThan(x);
+});

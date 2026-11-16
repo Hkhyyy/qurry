@@ -22,26 +22,26 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
-    "@tanstack/react-virtual": "^3.14.19",
+    "@tanstack/react-virtual": "^3.14.26",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-dialog": "~2.8.3",
+    "@tauri-apps/plugin-dialog": "~2.8.4",
     "@tauri-apps/plugin-opener": "^2",
     "monaco-editor": "^0.57.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "react-resizable-panels": "^2.1.9",
-    "zustand": "5.0.15"
+    "react-resizable-panels": "^4.21.0",
+    "zustand": "5.1.0"
   },
   "devDependencies": {
-    "@playwright/test": "1.64.1",
-    "@storybook/react-vite": "10.6.2",
+    "@playwright/test": "1.65.0",
+    "@storybook/react-vite": "10.6.6",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^6.0.2",
-    "storybook": "10.6.2",
-    "typescript": "~6.0.3",
-    "vite": "^8.0.16",
-    "vitest": "5.0.3"
+    "@vitejs/plugin-react": "^6.3.0",
+    "storybook": "10.6.6",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "5.1.0"
   }
 }

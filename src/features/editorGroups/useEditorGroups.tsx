@@ -1,5 +1,5 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Group as PanelGroup, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { api, ConnectionView, defaultDbOf, dialectOf, meta, redisDb, targetId } from "../../lib/api";
 import { askText } from "../../lib/dialogs";
 import { leaf, leaves, MAX_PANES, Pane, splitPane } from "../../lib/panes";
@@ -62,6 +62,8 @@ export function useEditorGroups({
   const tabs = useTabsStore((s) => s.tabs);
   const panes = useTabsStore((s) => s.panes);
   const split = panes.t === "split";
+  // The outermost split's ratio, saved per direction (no group reads it while there is no split)
+  const rootLayout = useDefaultLayout({ id: `dbtool-split-${split ? panes.dir : "right"}`, panelIds: ["a", "b"] });
   const focused = useTabsStore((s) => s.focused);
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
@@ -280,10 +282,10 @@ export function useEditorGroups({
     p.t === "leaf" ? (
       renderGroup(p.g)
     ) : (
-      <PanelGroup key={path} direction={p.dir === "right" ? "horizontal" : "vertical"} autoSaveId={path === "" ? `dbtool-split-${p.dir}` : undefined}>
-        <Panel minSize={15}>{renderPanes(p.a, path + "a")}</Panel>
-        <PanelResizeHandle className={p.dir === "right" ? "resize-h" : "resize-v"} />
-        <Panel minSize={15}>{renderPanes(p.b, path + "b")}</Panel>
+      <PanelGroup key={path} orientation={p.dir === "right" ? "horizontal" : "vertical"} {...(path === "" && { defaultLayout: rootLayout.defaultLayout, onLayoutChanged: rootLayout.onLayoutChanged })}>
+        <Panel id="a" minSize="15%">{renderPanes(p.a, path + "a")}</Panel>
+        <Separator className={p.dir === "right" ? "resize-h" : "resize-v"} />
+        <Panel id="b" minSize="15%">{renderPanes(p.b, path + "b")}</Panel>
       </PanelGroup>
     );
   const renderGroup = (g: Group) => {
