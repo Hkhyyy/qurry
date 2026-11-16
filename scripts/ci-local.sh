@@ -117,7 +117,7 @@ free_port() {
 }
 
 # `start <service> <container port> <docker run args...>`: qurry-demo-ci-<service> on a free port, in PORT_<service>.
-# A container that doesn't start is reported and left out (PORT_<service> stays empty)
+# A container that doesn't start is reported, and PORT_<service> stays empty (its use_server then fails)
 start() {
   local svc=$1 cport=$2 port
   shift 2
@@ -148,16 +148,17 @@ ready() {
 health() { [ "$(docker inspect -f '{{.State.Health.Status}}' "qurry-demo-ci-$1")" = healthy ]; }
 http_ok() { curl -sf "$@" >/dev/null 2>&1; }
 
-# `use_server <service> <seconds> <ENV> <value with {port}> <what skips> <check...>`: adds ENV=value to test_env when the server is up,
-# else records the skip (the tests that read ENV return early without it)
+# `use_server <service> <seconds> <ENV> <value with {port}> <check...>`: adds ENV=value to test_env when the server is up, else records
+# the failure (its log is above) and returns 1: in ci.yml a service that doesn't come up fails the job, and with ENV unset some tests
+# fall back to a default port (the Redis ones to 127.0.0.1:16379, where a contributor's own Redis may run, and FLUSHDB it)
 use_server() {
-  local svc=$1 secs=$2 var=$3 val=$4 what=$5 port_var="PORT_$1"
-  shift 5
+  local svc=$1 secs=$2 var=$3 val=$4 port_var="PORT_$1"
+  shift 4
   if ready "$svc" "$secs" "$@"; then
     test_env+=("$var=${val//\{port\}/${!port_var}}")
   else
-    skipped+=("qurry-demo-ci-$svc: didn't come up within ${secs}s, so $what skip ($var unset)")
-    docker rm -f "qurry-demo-ci-$svc" >/dev/null 2>&1 || true
+    failed+=("qurry-demo-ci-$svc: didn't start or come up within ${secs}s")
+    return 1
   fi
 }
 
@@ -188,16 +189,23 @@ job_rust() {
 
   # Tests use USER as the PG user
   test_env=(USER=postgres)
-  use_server pg 120 QURRY_TEST_PG "127.0.0.1:{port}:postgres:postgres" "the PostgreSQL tests" health pg
-  use_server mysql 120 QURRY_TEST_MY "127.0.0.1:{port}:root:dbtool:shop" "the MySQL tests" health mysql
-  use_server redis 60 QURRY_TEST_REDIS "127.0.0.1:{port}" "the Redis tests" health redis
-  use_server clickhouse 120 QURRY_TEST_CH "127.0.0.1:{port}:qurry:pw:default" "the ClickHouse tests" health clickhouse
-  use_server mongo 120 QURRY_TEST_MONGO "127.0.0.1:{port}:qurry:pw:qurrytest" "the MongoDB tests" health mongo
-  use_server qdrant 60 QURRY_TEST_QDRANT "127.0.0.1:{port}:::qdrant" "the Qdrant tests" http_ok "http://127.0.0.1:${PORT_qdrant:-0}/healthz"
-  use_server chroma 60 QURRY_TEST_CHROMA "127.0.0.1:{port}:::default_database" "the Chroma tests" http_ok "http://127.0.0.1:${PORT_chroma:-0}/api/v2/heartbeat"
-  # Same check and wait as ci.yml's Wait for Milvus
+  local down=
+  use_server pg 120 QURRY_TEST_PG "127.0.0.1:{port}:postgres:postgres" health pg || down=1
+  use_server mysql 120 QURRY_TEST_MY "127.0.0.1:{port}:root:dbtool:shop" health mysql || down=1
+  use_server redis 60 QURRY_TEST_REDIS "127.0.0.1:{port}" health redis || down=1
+  use_server clickhouse 120 QURRY_TEST_CH "127.0.0.1:{port}:qurry:pw:default" health clickhouse || down=1
+  use_server mongo 120 QURRY_TEST_MONGO "127.0.0.1:{port}:qurry:pw:qurrytest" health mongo || down=1
+  use_server qdrant 60 QURRY_TEST_QDRANT "127.0.0.1:{port}:::qdrant" http_ok "http://127.0.0.1:${PORT_qdrant:-0}/healthz" || down=1
+  use_server chroma 60 QURRY_TEST_CHROMA "127.0.0.1:{port}:::default_database" http_ok "http://127.0.0.1:${PORT_chroma:-0}/api/v2/heartbeat" || down=1
+  [ -z "$down" ] || return 1
+  # Same check and wait as ci.yml's Wait for Milvus, which doesn't fail the job: past it the Milvus tests (plugin and RAG) skip, as they
+  # return early without QURRY_TEST_MILVUS
   milvus_up() { curl -sf -XPOST "127.0.0.1:${PORT_milvus:-0}/v2/vectordb/collections/list" -d '{}' 2>/dev/null | grep -q '"code":0'; }
-  use_server milvus 180 QURRY_TEST_MILVUS "127.0.0.1:{port}:::default" "the Milvus tests (plugin and RAG)" milvus_up
+  if ready milvus 180 milvus_up; then
+    test_env+=("QURRY_TEST_MILVUS=127.0.0.1:$PORT_milvus:::default")
+  else
+    skipped+=("qurry-demo-ci-milvus: didn't come up within 180s, so the Milvus tests (plugin and RAG) skip (QURRY_TEST_MILVUS unset)")
+  fi
 
   step rust "Unit tests" || return 1
   step rust "Integration tests (PostgreSQL / MySQL / Redis)" "${test_env[@]}" || return 1
@@ -225,15 +233,17 @@ job_compat() {
   step compat "Build drivers" || return 1
 
   test_env=(USER=postgres)
-  use_server pg12 120 QURRY_TEST_PG "127.0.0.1:{port}:postgres:postgres" "the PostgreSQL 12 tests" health pg12
-  use_server mysql57 180 QURRY_TEST_MY "127.0.0.1:{port}:root:dbtool:shop" "the MySQL 5.7 tests" health mysql57
-  use_server clickhouse228 120 QURRY_TEST_CH "127.0.0.1:{port}:qurry:pw:default" "the ClickHouse 22.8 tests" health clickhouse228
-  use_server mongo5 120 QURRY_TEST_MONGO "127.0.0.1:{port}:qurry:pw:qurrytest" "the MongoDB 5 tests" health mongo5
+  local down=
+  use_server pg12 120 QURRY_TEST_PG "127.0.0.1:{port}:postgres:postgres" health pg12 || down=1
+  use_server mysql57 180 QURRY_TEST_MY "127.0.0.1:{port}:root:dbtool:shop" health mysql57 || down=1
+  use_server clickhouse228 120 QURRY_TEST_CH "127.0.0.1:{port}:qurry:pw:default" health clickhouse228 || down=1
+  use_server mongo5 120 QURRY_TEST_MONGO "127.0.0.1:{port}:qurry:pw:qurrytest" health mongo5 || down=1
   if [ -n "$mssql" ]; then
     # As ci.yml's Wait for SQL Server: the port answers, then 10 s more for the server to accept logins
     mssql_up() { nc -z 127.0.0.1 "${PORT_mssql2017:-0}" >/dev/null 2>&1 && sleep 10; }
-    use_server mssql2017 120 QURRY_TEST_MSSQL "127.0.0.1:{port}:sa:Qurry_pw1!:master" "the SQL Server tests of compat" mssql_up
+    use_server mssql2017 120 QURRY_TEST_MSSQL "127.0.0.1:{port}:sa:Qurry_pw1!:master" mssql_up || down=1
   fi
+  [ -z "$down" ] || return 1
 
   step compat "Integration tests on older servers" "${test_env[@]}" || return 1
 }
