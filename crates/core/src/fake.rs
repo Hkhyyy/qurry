@@ -6,7 +6,7 @@ use crate::backend::{Backend, dispatch};
 use crate::db::Pool;
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
-use rand::Rng;
+use rand::{Rng, RngExt};
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -131,11 +131,11 @@ fn seg(name: &str, words: &[&str]) -> bool {
 }
 
 fn words<R: Rng>(r: &mut R, n: usize) -> String {
-    (0..n).map(|_| WORDS[r.gen_range(0..WORDS.len())]).collect::<Vec<_>>().join(" ")
+    (0..n).map(|_| WORDS[r.random_range(0..WORDS.len())]).collect::<Vec<_>>().join(" ")
 }
 
 fn pick<'a, R: Rng>(r: &mut R, xs: &'a [&'a str]) -> &'a str {
-    xs[r.gen_range(0..xs.len())]
+    xs[r.random_range(0..xs.len())]
 }
 
 /// Truncate to the length (by characters)
@@ -197,7 +197,7 @@ fn int_range(c: &Col, n: &str) -> (i64, i64) {
 /// Dates·times: within the last year
 fn when<R: Rng>(r: &mut R) -> chrono::NaiveDateTime {
     let now = chrono::Local::now().naive_local();
-    now - chrono::Duration::seconds(r.gen_range(0..365 * 86_400))
+    now - chrono::Duration::seconds(r.random_range(0..365 * 86_400))
 }
 
 /// unique: include this number so values don't collide (n = row index + start number)
@@ -206,36 +206,36 @@ fn value<R: Rng>(r: &mut R, c: &Col, n: u64, kind: DbKind) -> Cell {
     let b = c.base.as_str();
     let uniq = c.unique || c.pk;
     if !c.choices.is_empty() {
-        return Cell::Text(c.choices[r.gen_range(0..c.choices.len())].clone());
+        return Cell::Text(c.choices[r.random_range(0..c.choices.len())].clone());
     }
     // Booleans (including MySQL tinyint(1))
     if b == "bool" || b == "boolean" || (b == "tinyint" && c.len == Some(1)) || (b == "bit" && c.len.unwrap_or(1) == 1) {
-        return Cell::Bool(r.gen_bool(if has(&name, &["deleted", "removed", "banned"]) { 0.1 } else { 0.7 }));
+        return Cell::Bool(r.random_bool(if has(&name, &["deleted", "removed", "banned"]) { 0.1 } else { 0.7 }));
     }
     if is_int(b) {
         if uniq {
             return Cell::Num(n.to_string());
         }
         let (lo, hi) = int_range(c, &name);
-        return Cell::Num(r.gen_range(lo..=hi).to_string());
+        return Cell::Num(r.random_range(lo..=hi).to_string());
     }
     if is_decimal(b) || is_float(b) {
         let scale = c.scale.unwrap_or(if is_float(b) { 2 } else { 0 }) as i32;
         let whole = c.len.map(|p| p as i32 - scale).unwrap_or(6).clamp(0, 9);
         let (lo, hi) = if seg(&name, &["rate", "ratio", "percent", "pct"]) { (0.0, 1.0) } else { (1.0, 10f64.powi(whole).min(100_000.0) - 1.0) };
-        let v = if hi <= lo { 0.0 } else { r.gen_range(lo..hi) };
+        let v = if hi <= lo { 0.0 } else { r.random_range(lo..hi) };
         return Cell::Num(format!("{v:.prec$}", prec = scale.max(0) as usize));
     }
     match b {
         "uuid" => return Cell::Text(uuid::Uuid::new_v4().to_string()),
         "date" => return Cell::Text(when(r).date().to_string()),
         "timestamp" | "timestamptz" | "datetime" => return Cell::Text(when(r).format("%Y-%m-%d %H:%M:%S").to_string()),
-        "time" | "timetz" => return Cell::Text(format!("{:02}:{:02}:{:02}", r.gen_range(0..24), r.gen_range(0..60), r.gen_range(0..60))),
-        "interval" => return Cell::Text(format!("{} minutes", r.gen_range(1..600))),
-        "json" | "jsonb" => return Cell::Text(format!(r#"{{"key": "{}", "n": {}}}"#, pick(r, WORDS), r.gen_range(0..1000))),
-        "inet" | "cidr" => return Cell::Text(format!("10.{}.{}.{}", r.gen_range(0..256), r.gen_range(0..256), r.gen_range(1..255))),
+        "time" | "timetz" => return Cell::Text(format!("{:02}:{:02}:{:02}", r.random_range(0..24), r.random_range(0..60), r.random_range(0..60))),
+        "interval" => return Cell::Text(format!("{} minutes", r.random_range(1..600))),
+        "json" | "jsonb" => return Cell::Text(format!(r#"{{"key": "{}", "n": {}}}"#, pick(r, WORDS), r.random_range(0..1000))),
+        "inet" | "cidr" => return Cell::Text(format!("10.{}.{}.{}", r.random_range(0..256), r.random_range(0..256), r.random_range(1..255))),
         "bytea" | "blob" | "tinyblob" | "mediumblob" | "longblob" | "binary" | "varbinary" => {
-            let hex: String = (0..8).map(|_| format!("{:02X}", r.r#gen::<u8>())).collect();
+            let hex: String = (0..8).map(|_| format!("{:02X}", r.random::<u8>())).collect();
             return match kind {
                 DbKind::Mysql => Cell::Raw(format!("X'{hex}'"), format!("0x{hex}")),
                 _ => Cell::Raw(format!("'\\x{hex}'::bytea"), format!("0x{hex}")),
@@ -251,7 +251,7 @@ fn value<R: Rng>(r: &mut R, c: &Col, n: u64, kind: DbKind) -> Cell {
     let s = if has(&name, &["email", "mail"]) {
         format!("{}.{}{}@example.com", pick(r, FIRST).to_lowercase(), pick(r, LAST).to_lowercase(), n)
     } else if has(&name, &["phone", "mobile"]) || seg(&name, &["tel", "fax"]) {
-        format!("010-{:04}-{:04}", r.gen_range(0..10_000), if uniq { n % 10_000 } else { r.gen_range(0..10_000) })
+        format!("010-{:04}-{:04}", r.random_range(0..10_000), if uniq { n % 10_000 } else { r.random_range(0..10_000) })
     } else if has(&name, &["first_name", "firstname", "given"]) {
         pick(r, FIRST).to_string()
     } else if has(&name, &["last_name", "lastname", "surname", "family"]) {
@@ -261,17 +261,17 @@ fn value<R: Rng>(r: &mut R, c: &Col, n: u64, kind: DbKind) -> Cell {
     } else if has(&name, &["name"]) && !has(&name, &["file", "host", "table", "column"]) {
         format!("{} {}", pick(r, FIRST), pick(r, LAST))
     } else if has(&name, &["address", "addr", "street"]) {
-        format!("{} {}", r.gen_range(1..999), pick(r, STREET))
+        format!("{} {}", r.random_range(1..999), pick(r, STREET))
     } else if has(&name, &["city"]) {
         pick(r, CITY).to_string()
     } else if has(&name, &["country"]) {
         pick(r, COUNTRY).to_string()
     } else if seg(&name, &["zip"]) || has(&name, &["postal", "postcode"]) {
-        format!("{:05}", r.gen_range(0..100_000))
+        format!("{:05}", r.random_range(0..100_000))
     } else if seg(&name, &["url", "link"]) || has(&name, &["website", "homepage"]) {
         format!("https://example.com/{}", base36(n))
     } else if seg(&name, &["ip"]) || has(&name, &["ip_addr", "ipaddr"]) {
-        format!("10.{}.{}.{}", r.gen_range(0..256), r.gen_range(0..256), r.gen_range(1..255))
+        format!("10.{}.{}.{}", r.random_range(0..256), r.random_range(0..256), r.random_range(1..255))
     } else if has(&name, &["status", "state"]) {
         pick(r, STATUS).to_string()
     } else if seg(&name, &["code", "sku", "token", "key", "slug"]) {
@@ -311,7 +311,7 @@ fn how(c: &Col, fk: Option<&Fk>, kind: DbKind) -> String {
         let shown: Vec<&str> = c.choices.iter().take(5).map(String::as_str).collect();
         return format!("one of: {}{}", shown.join(", "), if c.choices.len() > 5 { ", …" } else { "" });
     }
-    let mut r = rand::thread_rng();
+    let mut r = rand::rng();
     let sample = value(&mut r, c, 1, kind);
     let mut s: String = match sample {
         Cell::Null => if c.nullable { "NULL (type not supported)".into() } else { "can't fill this type".into() },
@@ -345,15 +345,15 @@ fn make_rows<R: Rng>(r: &mut R, shape: &TableShape, fk_rows: &[Vec<Vec<Value>>],
         for _try in 0..100 {
             serial += 1;
             // Each FK group comes from the same parent row
-            let picks: Vec<Option<&Vec<Value>>> = fk_rows.iter().map(|rows| if rows.is_empty() { None } else { Some(&rows[r.gen_range(0..rows.len())]) }).collect();
+            let picks: Vec<Option<&Vec<Value>>> = fk_rows.iter().map(|rows| if rows.is_empty() { None } else { Some(&rows[r.random_range(0..rows.len())]) }).collect();
             let row: Vec<Cell> = cols
                 .iter()
                 .map(|c| match fk_of(&c.name) {
                     Some((i, j)) => match picks[i] {
-                        Some(p) if !(c.nullable && r.gen_bool(0.1)) => Cell::Val(p[j].clone()),
+                        Some(p) if !(c.nullable && r.random_bool(0.1)) => Cell::Val(p[j].clone()),
                         _ => Cell::Null,
                     },
-                    None if c.nullable && !c.pk && !c.unique && r.gen_bool(0.1) => Cell::Null,
+                    None if c.nullable && !c.pk && !c.unique && r.random_bool(0.1) => Cell::Null,
                     None => value(r, c, serial, kind),
                 })
                 .collect();
@@ -423,7 +423,7 @@ async fn fk_values(pool: &Pool, kind: DbKind, f: &Fk) -> AppResult<Vec<Vec<Value
 async fn start_number(pool: &Pool, kind: DbKind, rel: &str, shape: &TableShape) -> u64 {
     let ints: Vec<String> = shape.cols.iter().filter(|c| !c.auto && (c.pk || c.unique) && is_int(&c.base)).map(|c| format!("coalesce(max({}), 0)", crate::sql::quote_ident(kind, &c.name))).collect();
     if ints.is_empty() {
-        return rand::thread_rng().gen_range(1000..1_000_000);
+        return rand::rng().random_range(1000..1_000_000);
     }
     let greatest = if ints.len() == 1 { ints[0].clone() } else { format!("greatest({})", ints.join(", ")) };
     let sql = format!("SELECT CAST({greatest} AS CHAR(30))");
@@ -469,7 +469,7 @@ impl AppState {
         }
         let fk_cols: HashSet<&str> = shape.fks.iter().flat_map(|f| f.cols.iter().map(String::as_str)).collect();
         {
-            let mut probe = rand::thread_rng();
+            let mut probe = rand::rng();
             for c in shape.cols.iter().filter(|c| !c.auto && !fk_cols.contains(c.name.as_str()) && c.choices.is_empty()) {
                 if value(&mut probe, c, 1, kind) == Cell::Null {
                     if c.nullable {
@@ -489,7 +489,7 @@ impl AppState {
         let p = self.fake_prepare(&id, &schema, &table).await?;
         let fk_of = |c: &Col| p.shape.fks.iter().find(|f| f.cols.contains(&c.name));
         let plan = p.shape.cols.iter().map(|c| ColPlan { name: c.name.clone(), data_type: c.data_type.clone(), how: how(c, fk_of(c), p.kind) }).collect();
-        let made = make_rows(&mut rand::thread_rng(), &p.shape, &p.fk_rows, rows.min(50), p.start, p.kind);
+        let made = make_rows(&mut rand::rng(), &p.shape, &p.fk_rows, rows.min(50), p.start, p.kind);
         let cols: Vec<&Col> = p.shape.cols.iter().filter(|c| !c.auto).collect();
         let result = crate::db::QueryResult {
             columns: cols.iter().map(|c| crate::db::ColumnInfo { name: c.name.clone(), type_name: c.data_type.clone() }).collect(),
@@ -513,7 +513,7 @@ impl AppState {
             return Err(AppError::Msg(format!("Choose 1 to {MAX_ROWS} rows")));
         }
         let p = self.fake_prepare(&id, &schema, &table).await?;
-        let made = make_rows(&mut rand::thread_rng(), &p.shape, &p.fk_rows, rows, p.start, p.kind);
+        let made = make_rows(&mut rand::rng(), &p.shape, &p.fk_rows, rows, p.start, p.kind);
         if made.is_empty() {
             return Err(AppError::Msg("Couldn't make rows that don't clash with the keys".into()));
         }
