@@ -367,7 +367,8 @@ impl AppState {
             DbKind::Postgres => format!("SELECT source_id, content, 1 - (embedding <=> '{0}') AS score FROM {1} ORDER BY embedding <=> '{0}' LIMIT {limit}", vec_lit(&v), pg_table(c)),
             DbKind::Qdrant => format!("POST /collections/{c}/points/search\n{}", json!({ "vector": v, "limit": limit, "with_payload": true })),
             DbKind::Chroma => format!("POST /collections/{c}/query\n{}", json!({ "query_embeddings": [v], "n_results": limit, "include": ["documents", "distances"] })),
-            DbKind::Milvus => format!("POST /entities/search\n{}", json!({ "collectionName": c, "data": [v], "annsField": "embedding", "limit": limit, "outputFields": ["source_id", "content"] })),
+            // Strong: the default (Bounded) may not see rows upserted in the last seconds and finds nothing right after a build
+            DbKind::Milvus => format!("POST /entities/search\n{}", json!({ "collectionName": c, "data": [v], "annsField": "embedding", "limit": limit, "outputFields": ["source_id", "content"], "consistencyLevel": "Strong" })),
             _ => unreachable!(),
         };
         let r = self.run_query(idx.dest.clone(), sql, Some(limit), None).await?;
