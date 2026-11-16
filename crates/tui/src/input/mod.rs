@@ -68,6 +68,8 @@ pub fn on_event(app: &mut App, ev: Event) {
         c.marks.follow(c.editor.lines());
         c.follow_statements(kind);
     }
+    // The value panel on a cut value reads it whole, wherever the cursor went (keys, mouse)
+    app.panel_whole();
     // A confirm that waited for the popup the user was in comes up once that one is closed (quiet, so the closing key doesn't answer it)
     if app.popup.is_none() && !app.waiting.is_empty() {
         let p = app.waiting.remove(0);

@@ -30,6 +30,8 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, fo
         },
         _ => vec![],
     };
+    // A cut value in the value panel: that its whole value is loading, or why it can't
+    let cut_note = value_panel.then(|| crate::app::cut_note(&app.tabs[idx])).flatten();
     let tab = &mut app.tabs[idx];
     let db = tab.db.clone();
     let title = tab.title.clone();
@@ -123,7 +125,7 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, fo
                 let g = c.results.grid_mut().unwrap();
                 g.render(f, res, String::new(), focus == Focus::Grid, color, &align);
                 if let Some(side) = side {
-                    g.render_value_panel(f, side, value_keys);
+                    g.render_value_panel(f, side, value_keys, cut_note);
                 }
                 draw_result_strip(f, res, &c.results, tail)
             };
@@ -171,7 +173,7 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, fo
                 let (grid, side) = value_split(grid, value_panel);
                 g.render(f, grid, t, focus == Focus::Grid, color, &align);
                 if let Some(side) = side {
-                    g.render_value_panel(f, side, value_keys);
+                    g.render_value_panel(f, side, value_keys, cut_note);
                 }
             } else {
                 // Nothing while nothing loads: a failed load says why on the status line, a cancelled one how to load again
