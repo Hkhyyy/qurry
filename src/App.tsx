@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Group as PanelGroup, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { api, ConnectionView, defaultDbOf, updateCheckEnabled } from "./lib/api";
 import { ContextMenu, Explorer, MenuItem } from "./components/Explorer";
 import { migrateOldHistory } from "./components/HistoryDialog";
@@ -251,6 +251,11 @@ export default function App() {
   const bumpFont = (d: number) => void setFont("editor", { size: d === 0 ? DEFAULT_FONT : font("editor").size + d });
   const search = useSearch({ ...app, ...groups, setExplorerHidden, toggleExplorer, bumpFont });
   const { findOpen } = search;
+  const showExplorer = !maximized && !explorerHidden;
+  const showFind = findOpen && !maximized;
+  // Saved splitter positions, one per set of shown panels (as before: the Find window keeps its height while closed)
+  const vLayout = useDefaultLayout({ id: "dbtool-v", panelIds: showFind ? ["top", "find"] : ["top"] });
+  const hLayout = useDefaultLayout({ id: "dbtool-h", panelIds: showExplorer ? ["explorer", "editors"] : ["editors"] });
 
   useGlobalShortcuts({ ...app, ...groups, ...search, keymapVer, focused, tabs, split, toggleExplorer, bumpFont });
 
@@ -286,11 +291,11 @@ export default function App() {
           onSettings={() => setSettingsOpen(true)}
         />
       )}
-      <PanelGroup direction="vertical" className="main" autoSaveId="dbtool-v">
-      <Panel id="top" order={1} minSize={20}>
-      <PanelGroup direction="horizontal" autoSaveId="dbtool-h">
-        {!maximized && !explorerHidden && (
-        <Panel id="explorer" order={1} defaultSize={20} minSize={12}>
+      <PanelGroup orientation="vertical" className="main" defaultLayout={vLayout.defaultLayout} onLayoutChanged={vLayout.onLayoutChanged}>
+      <Panel id="top" minSize="20%">
+      <PanelGroup orientation="horizontal" defaultLayout={hLayout.defaultLayout} onLayoutChanged={hLayout.onLayoutChanged}>
+        {showExplorer && (
+        <Panel id="explorer" defaultSize="20%" minSize="12%">
           {workspaces
             .filter((w) => shownWs.includes(w.id))
             .map((w) => {
@@ -319,16 +324,16 @@ export default function App() {
             })}
         </Panel>
         )}
-        {!maximized && !explorerHidden && <PanelResizeHandle className="resize-h" />}
-        <Panel id="editors" order={2}>
+        {showExplorer && <Separator className="resize-h" />}
+        <Panel id="editors">
           {renderPanes(panes, "")}
         </Panel>
       </PanelGroup>
       </Panel>
-      {findOpen && !maximized && (
+      {showFind && (
         <>
-          <PanelResizeHandle className="resize-v" />
-          <Panel id="find" order={2} defaultSize={30} minSize={10}>
+          <Separator className="resize-v" />
+          <Panel id="find" defaultSize="30%" minSize="10%">
             {search.findPanel}
           </Panel>
         </>

@@ -2,7 +2,7 @@ import { setFocusWidgets, setStatusNote, shownColumns, spanOf, tableColumns, use
 import { fracWidth, isTimeType, padFrac } from "../lib/timeFrac";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { Cell, Dialect, dialectOf, type JoinEdit, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { editStatements, joinStatements, type NewRow, submitFix } from "../lib/gridEdit";
@@ -134,6 +134,7 @@ export function ResultGrid(p: Props) {
   const [panelFocus, setPanelFocus] = useState(0);
   const [draft, setDraft] = useState<PanelDraft | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
+  const valueLayout = useDefaultLayout({ id: "dbtool-value-panel", panelIds: panel && !chart ? ["grid", "value"] : ["grid"] });
   const [showQuery, setShowQuery] = useState(false);
   const dragging = useRef(false);
 
@@ -969,8 +970,8 @@ export function ResultGrid(p: Props) {
       )}
 
       {/* The grid and, to its right, the Value Editor panel (DataGrip): the grid narrows, the splitter's place is remembered */}
-      <PanelGroup direction="horizontal" autoSaveId="dbtool-value-panel" className="grid-split">
-        <Panel id="grid" order={1} minSize={25}>
+      <Group orientation="horizontal" className="grid-split" defaultLayout={valueLayout.defaultLayout} onLayoutChanged={valueLayout.onLayoutChanged}>
+        <Panel id="grid" minSize="25%">
           <div className="grid-body">
             {/* Column header above the scroller (not sticky inside it), so it can't drift off the toolbar while rows scroll */}
             {!chart && !transposed && (
@@ -1119,8 +1120,8 @@ export function ResultGrid(p: Props) {
         </Panel>
         {panel && !chart && (
           <>
-            <PanelResizeHandle className="resize-h" />
-            <Panel id="value" order={2} defaultSize={35} minSize={15}>
+            <Separator className="resize-h" />
+            <Panel id="value" defaultSize="35%" minSize="15%">
               <ValuePanel
                 title={panelCell ? `${cols[panelCell.c].name} : ${cols[panelCell.c].typeName.toLowerCase()}` : undefined}
                 text={draftAt(draft, panelCell) ? draft.text : panelShown.text}
@@ -1146,7 +1147,7 @@ export function ResultGrid(p: Props) {
             </Panel>
           </>
         )}
-      </PanelGroup>
+      </Group>
       {/* A failed load-more, below the rows (covering none), in full: why no more rows came (the status bar says it too), and
           running the statement again starts over */}
       {!loadingMore && result.moreError && (
