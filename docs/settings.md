@@ -84,7 +84,7 @@ Before 0.3.4 a run replaced the console's unpinned result tabs. To clear them yo
 | Setting | What it does | Shared with the TUI |
 |---|---|---|
 | Alignment | Where cells sit in result grids, per kind of value (below) | Yes (TUI **⌃k › Grid Alignment…**) |
-| Long values | Text, JSON, XML and array values longer than this many characters (4096 by default, 0 = never) come cut in PostgreSQL console and table results, ending with a dim `…`. The Value Editor (`⇧↩`), copy and edits read the whole value by the result's primary key; a result without one keeps the cut text, so raise the limit (or set 0) and run again to copy it whole. A change applies from the next run or page of rows | Yes (`settings.json`) |
+| Long values | Where long text, JSON and XML values are cut in PostgreSQL results: 4,096 characters by default, 0 = never ([below](#long-values)) | Yes (TUI **⌃k › Grid Long Values…**) |
 | Status bar | Which items the status bar shows for the focused grid: Position, Shown columns, Not null, Sum, Avg, Min, Max, Size ([below](#status-bar-items)) | Yes (TUI **⌃k › Status Bar Items…**) |
 
 ### Alignment in result grids
@@ -117,6 +117,16 @@ A column starts as wide as its name and its first values need (up to a limit), s
 In the TUI, `<` / `>` narrow / widen the current column and `=` fits it (the key bar shows them; change them in the `F1` window, *Data grid keys*); **⌃k › Fit All Columns** and **⌃k › Reset Column Widths** do every column.
 
 A table tab remembers its widths per table (data source · database · schema · table), in `settings.json` under `"columnWidths"`, so the GUI and the TUI show the same widths: in characters, which the GUI draws in its grid font and the TUI as that many cells. A wide character (Hangul, Chinese, Japanese, emoji) counts as 2, as a terminal draws it, so a fitted column shows the whole value in both apps. A table tab reads the saved widths each time it opens, so a change made in the other app shows when you open the table again. A column you never resized keeps its computed width, and **Reset Widths** forgets the table's widths. If the settings file can't be written, the new widths still apply until the tab closes. A console result keeps its widths until it runs again; columns with the same name (a join's two `id` columns) resize on their own. The transposed view (**View as › Transpose**) keeps its own layout.
+
+### Long values
+
+A page of rows with large JSON or text documents can be megabytes, and through an SSH tunnel it takes long to arrive. So in PostgreSQL console results and table data, a text, JSON or XML value longer than **Long values** (4,096 characters by default) comes cut: the grid shows its start, ending with a dim `…`, and hovering it says where it was cut. 0 never cuts. Other types (arrays, numbers, dates …) and other databases always come whole.
+
+The whole value is read when you need it, by the result's primary key: the **Value Editor** (`⇧↩`) shows it, copy copies it, and an edit starts from it (a cut value is never written back). That works when the result comes from one table and includes its whole primary key, as for [editing a result](getting-started.md#gui). Without a key (a join's columns, computed columns, `GROUP BY`, a table without a primary key) a cut value stays cut and read-only: copy copies the cut text and the status bar says so. To see such a value whole, raise the limit (or set 0) and run again.
+
+**Export** and the MCP server's `query` don't use the grid: they always read whole values.
+
+The setting is saved in `settings.json` as `"gridCutChars"`, shared with the TUI (**⌃k › Grid Long Values…**). It is read on each run and each page of rows, so a change in either app applies from the next one.
 
 ### Status bar items
 
