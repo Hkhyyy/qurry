@@ -85,7 +85,7 @@ Each rule: the rule, why, an example in this repo. A pull request that breaks on
 16. **Log with `qurry_core::log!`, nothing else.** Every line goes through `logfile::redact`. No `println!`/`eprintln!` outside tests and CLI usage text (stdout is the MCP protocol, the screen is the TUI's).
 17. **Locks:** `std::sync::Mutex` for short in-memory maps, never held across `.await`; `tokio::sync::Mutex<Session>` per console tab; background work takes sessions with `try_lock` and skips busy ones (`app::housekeeping`).
 18. **Periodic work goes in `app::housekeeping`**, which each app ticks (`src-tauri/src/lib.rs`, `crates/tui/src/main.rs`, `crates/mcp/src/main.rs`). Don't start a timer per app.
-19. **Every network wait has a timeout, named as a const next to its use** (`TUNNEL_GRACE`, `SESSION_PING` in `app.rs`, `CURSOR_IDLE` in `session.rs`, `REPORT_TIMEOUT_S` in `dba.rs`). A bare number in `Duration::from_secs(…)` in non-test code is a review finding.
+19. **Every network wait has a timeout, named as a const next to its use** (`TUNNEL_GRACE` in `app/pools.rs`, `SESSION_PING` in `app/sessions.rs`, `CURSOR_IDLE` in `session.rs`, `REPORT_TIMEOUT_S` in `dba.rs`). A bare number in `Duration::from_secs(…)` in non-test code is a review finding.
 20. **Cancel by dropping the future**, and stop the server side when it keeps running: GUI `cancellable` (`src-tauri/src/commands.rs`), TUI `App::spawn_abortable` (`crates/tui/src/app/mod.rs`), `AppState::cancel_query`. Long jobs report through `transfer::Job` (progress and cancel). Blocking calls go in `spawn_blocking` (`plugin.rs` install, `rag.rs` embeddings).
 
 ### Safety boundaries
@@ -94,9 +94,9 @@ New paths go through these checks; they don't add their own.
 
 | Boundary | The one check | Rule for new code |
 |---|---|---|
-| Read-only data source | `AppState::check_read_only` (`crates/core/src/app.rs`; Redis commands through `check_read_only_redis`) | Every core entry that sends user text calls it first (as `run_query`, `fetch_more`, batches, edits, `redis_exec_line`, `export_csv`, `subset.rs` and `transfer.rs` do) |
+| Read-only data source | `AppState::check_read_only` (`crates/core/src/app/run.rs`; Redis commands through `check_read_only_redis`) | Every core entry that sends user text calls it first (as `run_query`, `fetch_more`, batches, edits, `redis_exec_line`, `export_csv`, `subset.rs` and `transfer.rs` do) |
 | What a statement is | `qurry_shared::guard` (`read_only_violation`, `unsafe_statement`, `mcp_execute_violation`, `is_read`) | The WASM copy is for UI decisions only; enforcement runs in core (the header of `crates/shared-wasm/src/lib.rs`) |
-| MCP exposure | `ConnectionConfig::mcp_access` and `mcp_dba_report_allowed` (`store.rs`), `AppState::run_read_only` (`app.rs`) | A new tool reads only, is listed with `read_only: true` (test `new_tools_are_listed_read_only`), keeps row data and query text off for Production by default, and is in `docs/mcp-security.md` |
+| MCP exposure | `ConnectionConfig::mcp_access` and `mcp_dba_report_allowed` (`store.rs`), `AppState::run_read_only` (`app/run.rs`) | A new tool reads only, is listed with `read_only: true` (test `new_tools_are_listed_read_only`), keeps row data and query text off for Production by default, and is in `docs/mcp-security.md` |
 | Production | The person confirms in each app; core writes the Production log and audit (`audit.rs`) | Ask before any write on a source with `options.confirm_changes`, deciding with `guard::is_read`. Each call site asks in its own words (TUI `app/run.rs`, `app/tables.rs`, `app/redis.rs`, `datatools.rs`; GUI `features/console/useConsole.ts`, `components/DataTools.tsx`, `features/tabs/ops.ts`): a shared "when to ask" function was considered and declined, since the sites share only those two inputs and the wording differs per app on purpose |
 | Config and secrets | `store.rs`, `secrets.rs`, `open_state` (`lib.rs`) | No other writer; `tests/boundaries.rs` fails |
 | Secrets in text | `logfile::redact` (logs), `dsn::redact` (URLs in titles and messages), `history::redact` (query history), `store::without_userinfo` (MCP output) | Anything that leaves the process (log, error, MCP answer) goes through one of these |
@@ -112,7 +112,7 @@ New paths go through these checks; they don't add their own.
 | Driver | Its conformance test on `QURRY_TEST_<X>` |
 | TUI behavior | `testkit::Harness` test (`crates/tui/src/tests/` or next to the key code); screen change: `pnpm tui-snapshots` |
 | GUI behavior | vitest for `lib/` and `features/*/ops.ts`; Playwright against the mock (`e2e/`), with the `mock.ts` handler; shortcut: `shortcuts.test.ts` and `e2e/shortcuts.spec.ts` |
-| Safety boundary | A test that the refused case is refused in core or MCP (like `mcp_hidden_source_secrets_stay_locked` in `app.rs`'s tests, `new_tools_are_listed_read_only` in `crates/mcp`) |
+| Safety boundary | A test that the refused case is refused in core or MCP (like `mcp_hidden_source_secrets_stay_locked` in `app/sources.rs`'s tests, `new_tools_are_listed_read_only` in `crates/mcp`) |
 | Any UI | A Storybook story |
 
 Before the pull request, run the CI job that covers the change locally: `scripts/ci-local.sh rust` (Rust), `compat` (core against servers), `web` (GUI logic, build, Storybook) or `e2e chromium` (GUI behavior).
@@ -129,7 +129,7 @@ Where today's code makes these rules hard to follow, largest first. Sizes are ro
 
 | # | Gap | Where | Suggested fix |
 |---|---|---|---|
-| 1 | `AppState` god file: about 2,600 lines of code plus 1,600 of tests; pool, tunnel and session lifecycle, source CRUD, queries and transactions, Redis and import/export pass-throughs | `crates/core/src/app.rs` | Move-only split into `app/{pools,sessions,sources,run,tx}.rs`, `AppState` in `app/mod.rs`, tests with their code |
+| 1 | Done: `AppState` split move-only into `app/{pools,sessions,sources,run,tx}.rs`, `AppState` in `app/mod.rs`, tests with their code | `crates/core/src/app/` | |
 | 2 | One component of about 1,200 lines; other large screens | `src/components/ResultGrid.tsx`, `ConnectionDialog.tsx` (about 800), `ConsolePane.tsx` (about 650), `RedisBrowser.tsx` (about 1,100) | Hooks into `features/grid/`, pure parts into `lib/` (as `gridSelection.ts`) |
 | 3 | All TUI drawing in one file | `crates/tui/src/ui.rs` (about 2,100 lines; `draw_pane` and `draw_popup` are each over 200) | Split per feature as `app/` and `input/` were |
 | 4 | MCP server in one file; `Server::call` is one long match over the tools | `crates/mcp/src/main.rs` | `tools.rs`, one function per tool, `mask.rs` |
@@ -137,7 +137,7 @@ Where today's code makes these rules hard to follow, largest first. Sizes are ro
 | 6 | Same rule in TS and Rust with no shared code or corpus | `src/lib/panes.ts` / `crates/tui/src/panes.rs`; `src/lib/scopeToggle.ts` / `crates/tui/src/scope.rs` | Move to `qurry-shared` or add corpus cases |
 | 7 | Two import paths for shared modules; partial re-exports | `crates/core/src/lib.rs` (`pub use qurry_shared::…`), TUI `qurry_core::format` vs `qurry_shared::format` | Apps import pure modules from `qurry_shared`; drop re-exports as callers move |
 | 8 | Unsafe-statement check over IPC while the WASM export is unused | `src/lib/api.ts` `unsafeReason`, `src-tauri/src/commands.rs` `unsafe_reason`, `crates/shared-wasm/src/lib.rs` `unsafeStatement` | Use WASM, remove the command |
-| 9 | Redis read check written twice | `AppState::run_read_only` has its own `is_read_command` check next to `check_read_only_redis` (`crates/core/src/app.rs`) | `run_read_only` calls `check_read_only_redis` |
+| 9 | Redis read check written twice | `AppState::run_read_only` has its own `is_read_command` check next to `check_read_only_redis` (`crates/core/src/app/run.rs`) | `run_read_only` calls `check_read_only_redis` |
 | 10 | Other direction breaks | `src/lib/planText.ts`, `src/lib/resultTabs.ts` (types from `components/ConsolePane`), `src/lib/shortcuts.ts` (`invoke`) | Move `PlanNode` and `ResultEntry` to `api.ts` or `lib/`; `api.saveKeymap` |
 | 11 | Large core modules over the limit | `audit.rs`, `backup.rs`, `ssm.rs`, `store.rs` (1,700–2,100 each), `shared/complete.rs` (about 2,300), `shared/guard.rs` (about 1,850) | Split when next changed (rule 9) |
-| 12 | Core drivers sit flat next to features; stale header | `db.rs` (PostgreSQL, "Only PostgreSQL is supported for now"), `mysql.rs`, `redisdb.rs` | Move under `backend/` |
+| 12 | Stale header (drivers are now under `backend/`) | `crates/core/src/backend/db.rs` (PostgreSQL, "Only PostgreSQL is supported for now") | Fix the header |
