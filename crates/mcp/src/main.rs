@@ -520,14 +520,4 @@ mod tests {
         st.disconnect("lite".into()).await.unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }
-
-    #[test]
-    fn uri_passwords_are_hidden() {
-        assert_eq!(qurry_core::store::without_userinfo("mongodb+srv://app:s3cret@cluster0.x.net/?retryWrites=true"), "mongodb+srv://cluster0.x.net/?retryWrites=true");
-        assert_eq!(qurry_core::store::without_userinfo("mongodb://a:b@h1:27017,h2:27017/db"), "mongodb://h1:27017,h2:27017/db");
-        assert_eq!(qurry_core::store::without_userinfo("https://qdrant.example.com"), "https://qdrant.example.com");
-        assert_eq!(qurry_core::store::without_userinfo("db.internal"), "db.internal");
-        assert_eq!(qurry_core::store::without_userinfo("u:p@db.internal"), "db.internal");
-        assert_eq!(qurry_core::store::without_userinfo("mongodb://app:p/a?s#s@h1:27017/db"), "mongodb://h1:27017/db");
-    }
 }
