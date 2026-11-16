@@ -142,6 +142,8 @@ test("saving a custom theme under Sync with OS keeps Sync with OS; Save as new t
     localStorage.setItem("mock-themeSettings", JSON.stringify({ ...s, sync: { dark: "custom-1", light: "light" } }));
   });
   await page.reload();
+  // ⌘, is handled once the app is up: pressed during the reload it goes nowhere
+  await expect(page.locator(".tree-node", { hasText: "[DEV] shop_app" })).toBeVisible();
   await settings(page);
   await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
   await expect(dialog(page).getByRole("combobox", { name: "Based on" })).toHaveValue("custom-1");
