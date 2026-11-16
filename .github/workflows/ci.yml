@@ -6,6 +6,8 @@
 # Web: vitest + tsc/vite build. E2E: Playwright against the mock app, two shards per browser and one summary check per browser.
 # A docs-only pull request (docs/**, *.md) skips the Rust and e2e jobs; their checks still report (see the changes job).
 # Known vulnerabilities in the dependencies: audit.yml. Actions pinned to the same commit SHAs as release.yml.
+# Locally: scripts/ci-local.sh. It runs the named steps of rust and compat and the run steps of web from this file, and copies the
+#   services, the test env and the e2e command: rename a step or change those, and change the script with it.
 name: CI
 
 on:
