@@ -84,20 +84,6 @@ const jsonDemo = {
   ]),
   truncated: false,
 };
-/** `select … from cut_demo` (#183): the whole values fetch_values answers; every 3rd row's payload and note are longer than gridCutChars */
-const cutFull = (i: number) => [
-  i + 1,
-  JSON.stringify({ id: i + 1, items: Array.from({ length: i % 3 ? 2 : 400 }, (_, k) => ({ sku: `A-${k}`, qty: k })) }),
-  i % 3 ? `short note ${i + 1}` : `long note ${i + 1} `.repeat(400),
-];
-/** The result as the core reads it: the long cells cut at gridCutChars and listed in `cut` (an editable result: the table has a key) */
-const cutDemo = () => {
-  const n = gridCutChars || Infinity;
-  const cut: [number, number][] = [];
-  const rows = Array.from({ length: 30 }, (_, i) => cutFull(i).map((v, c) => (typeof v === "string" && [...v].length > n ? (cut.push([i, c]), [...v].slice(0, n).join("")) : v)));
-  const columns = [{ name: "id", typeName: "INT8" }, { name: "payload", typeName: "JSONB" }, { name: "note", typeName: "TEXT" }];
-  return { ...result, columns, rows, truncated: false, ...(cut.length ? { cut } : {}), edit: { schema: "public", table: "cut_demo", pk: ["id"], columns: columns.map((c) => c.name) } };
-};
 /** `select … from payments`: a jsonb column as PostgreSQL sends it (one line, spaces after : and ,), a NULL and a text column holding JSON */
 const payments = {
   ...result,
@@ -116,6 +102,31 @@ const vocJoin = {
     tables: [{ schema: "crm", table: "voc", pk: ["idx"], pkAt: [0] }, { schema: "public", table: "users", pk: ["idx"], pkAt: [3] }],
     columns: [{ table: 0, column: "idx" }, { table: 0, column: "user_idx" }, { table: 0, column: "status" }, { table: 1, column: "idx" }, { table: 1, column: "role" }, { table: 1, column: "status" }, { readOnly: "Read-only: shout is computed, not a column of the table." }],
   },
+};
+/** settings.json "gridCutChars" (Settings › Data grid › Long values; kept across a reload, as the file is) */
+let gridCutChars = Number(localStorage.getItem("mock-gridCutChars") ?? 4096);
+/** `select * from cut_demo` (a key) / `select * from cut_log` (none): rows 1 to 3 hold values past Long values, which come cut as the
+ *  core cuts them (the first gridCutChars characters, listed in `cut`); fetch_values reads cut_demo's whole */
+const cutFull = Array.from({ length: 20 }, (_, i) => [
+  i + 1,
+  i < 3 ? JSON.stringify({ id: i + 1, items: Array.from({ length: 400 }, (_, k) => ({ sku: `A-${k}`, qty: k })), end: "tail" }) : JSON.stringify({ id: i + 1, ok: true }),
+  i === 1 ? "long note ".repeat(600) + "the end" : `note ${i + 1}`,
+]);
+const cutDemo = (sql: string) => {
+  const m = /^\s*select\s+\*\s+from\s+(?:public\.)?(cut_demo|cut_log)\s*;?\s*$/i.exec(sql);
+  if (!m) return null;
+  const cut: [number, number][] = [];
+  const rows = cutFull.map((row, r) => row.map((v, c) => {
+    const chars = [...String(v)];
+    if (typeof v !== "string" || !gridCutChars || chars.length <= gridCutChars) return v;
+    cut.push([r, c]);
+    return chars.slice(0, gridCutChars).join("");
+  }));
+  const columns = [{ name: "id", typeName: "INT8" }, { name: "doc", typeName: "JSONB" }, { name: "note", typeName: "TEXT" }];
+  const to = m[1].toLowerCase() === "cut_demo"
+    ? { edit: { schema: "public", table: "cut_demo", pk: ["id"], columns: columns.map((c) => c.name) } }
+    : { readOnlyReason: "Read-only: public.cut_log has no primary key." };
+  return { ...result, columns, rows, truncated: false, cut, ...to };
 };
 /** A console result's edit target or why it has none, as the backend says (#86): `select * from users` is one table with its key; a
  *  join of voc and users edits per table (vocJoin), other joins lack a key */
@@ -149,8 +160,6 @@ let searchScope = localStorage.getItem("mock-searchScope") ?? "workspace";
 let resultTabs = Number(localStorage.getItem("mock-resultTabs") ?? 10);
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
 let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
-/** settings.json "gridCutChars" (kept across a reload, as the file is) */
-let gridCutChars = Number(localStorage.getItem("mock-gridCutChars") ?? 4096);
 /** settings.json "statusBarItems" (kept across a reload, as the file is; read on each call, so a test can change it as the TUI would).
  *  Absent: the defaults; the order is the items' order (qurry_shared::statusbar::ITEMS) */
 const STATUS_ITEMS = ["notNull", "sum", "avg", "min", "max", "size", "shownColumns", "position"];
@@ -450,10 +459,10 @@ const handlers: Record<string, (a: any) => unknown> = {
           ? { ...wide, inTransaction: (globalThis as any).__mockManual === true }
           : /\bcjk_demo\b/i.test(a.sql)
           ? { ...cjkDemo, inTransaction: (globalThis as any).__mockManual === true }
+          : cutDemo(a.sql)
+          ? { ...cutDemo(a.sql), inTransaction: (globalThis as any).__mockManual === true }
           : /\bjson_demo\b/i.test(a.sql)
           ? { ...jsonDemo, inTransaction: (globalThis as any).__mockManual === true }
-          : /\bcut_demo\b/i.test(a.sql)
-          ? { ...cutDemo(), inTransaction: (globalThis as any).__mockManual === true }
           : /\bpayments\b/i.test(a.sql)
           ? { ...payments, inTransaction: (globalThis as any).__mockManual === true }
           : /\bvoc\b[\s\S]*\bjoin\b/i.test(a.sql)
@@ -558,6 +567,15 @@ const handlers: Record<string, (a: any) => unknown> = {
     return new Promise((ok, fail) => {
       const h = setTimeout(() => ((cancelMore = null), ok(more)), g.__mockFetchMoreDelay);
       cancelMore = () => (clearTimeout(h), fail("ERROR: canceling statement due to user request"));
+    });
+  },
+  // As the core: the rows of public.cut_demo by their key, `columns` whole (null: no such row). window.__mockFetched: every request (e2e)
+  fetch_values: (a: any) => {
+    ((window as any).__mockFetched ??= []).push(a.req);
+    const names = ["id", "doc", "note"];
+    return a.req.rows.map((key: (string | null)[]) => {
+      const row = a.req.table === "cut_demo" && cutFull.find((x) => String(x[0]) === key[0]);
+      return row ? a.req.columns.map((c: string) => row[names.indexOf(c)]) : null;
     });
   },
   cancel_query: () => (cancelMore?.(), (cancelMore = null), true),
@@ -889,6 +907,12 @@ const handlers: Record<string, (a: any) => unknown> = {
     resultTabs = a.n;
     localStorage.setItem("mock-resultTabs", String(a.n));
   },
+  grid_cut_chars: () => gridCutChars,
+  set_grid_cut_chars: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    gridCutChars = a.n;
+    localStorage.setItem("mock-gridCutChars", String(a.n));
+  },
   grid_align: () => gridAlign,
   set_grid_align: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
@@ -900,21 +924,6 @@ const handlers: Record<string, (a: any) => unknown> = {
     localStorage.setItem("mock-gridAlign", JSON.stringify(next));
     return next;
   },
-  grid_cut_chars: () => gridCutChars,
-  set_grid_cut_chars: (a: any) => {
-    gridCutChars = a.n;
-    localStorage.setItem("mock-gridCutChars", String(a.n));
-  },
-  // cut_demo's whole values by key (each row's `id`), in the order asked; null for a key that matches no row
-  fetch_values: (a: any) =>
-    a.req.rows.map((key: (string | null)[]) => {
-      const i = Number(key[0]) - 1;
-      if (key[0] === null) throw "A key value is NULL: the row can't be found by its primary key";
-      if (!(i >= 0 && i < 30)) return null;
-      const full = cutFull(i);
-      const at = ["id", "payload", "note"];
-      return a.req.columns.map((c: string) => full[at.indexOf(c)] ?? null);
-    }),
   status_bar_items: () => statusItems(),
   // As the core: on what is saved now, in the items' order. window.__mockChannelSaveFails: the file can't be written
   set_status_bar_item: (a: any) => {
