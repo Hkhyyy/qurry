@@ -712,8 +712,8 @@ mod tests {
     impl russh::server::Handler for KeySshd {
         type Error = russh::Error;
 
-        async fn auth_publickey(&mut self, user: &str, key: &russh::keys::PublicKey) -> Result<russh::server::Auth, Self::Error> {
-            if *key != self.key {
+        async fn auth_publickey(&mut self, user: &str, key: russh::server::VerifiedPublicKey<'_>) -> Result<russh::server::Auth, Self::Error> {
+            if *key.public_key != self.key {
                 self.logins.lock().unwrap().push(format!("rejected {user}@{}", self.port));
                 return Ok(russh::server::Auth::reject());
             }
