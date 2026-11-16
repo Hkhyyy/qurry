@@ -71,7 +71,10 @@ async fn main() -> std::io::Result<()> {
     // Keep engine logs from breaking the screen
     qurry_core::QUIET.store(true, std::sync::atomic::Ordering::Relaxed);
     qurry_core::logfile::init("tui", dir.as_deref());
-    let state = Arc::new(qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?);
+    let mut state = qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?;
+    // The grid handles cut cells (Grid::cut, App::fetch_full): PostgreSQL results read long values cut
+    state.cut_grids = true;
+    let state = Arc::new(state);
     let start = temporary.map(|t| {
         let notes = t.notes.join(" ");
         (state.open_temporary(t).id, cli.start.as_ref().is_some_and(|s| s.incident), notes)

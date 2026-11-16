@@ -247,7 +247,7 @@ export const api = {
   /** Grid alignment per value class: only the classes the user changed. Kept in the config folder, shared with the TUI */
   gridAlign: () => invoke<Alignments>("grid_align"),
   setGridAlign: (cls: ValueClass, align: Align) => invoke<Alignments>("set_grid_align", { class: cls, align }),
-  /** Characters of a long text / JSON / XML value a PostgreSQL console result reads (QueryResult.cut), 0 = never cut. Only apps whose grids handle cut cells read it (AppState::cut_grids) */
+  /** Characters of a long text / JSON / XML value a PostgreSQL console result reads (QueryResult.cut), 0 = never cut. settings.json "gridCutChars", shared with the TUI */
   gridCutChars: () => invoke<number>("grid_cut_chars"),
   setGridCutChars: (n: number) => invoke<void>("set_grid_cut_chars", { n }),
   /** Status bar items on (settings.json, shared with the TUI); each change returns what is saved */

@@ -869,7 +869,7 @@ impl Store {
     }
 
     /// Characters of a long text / JSON / XML value a console's PostgreSQL cursor result reads (the whole value comes on demand:
-    /// AppState::fetch_values). 0 = never cut. settings.json "gridCutChars", read by the apps whose grids handle cut cells (AppState::cut_grids); 4096 unless set. At most
+    /// AppState::fetch_values). 0 = never cut. settings.json "gridCutChars", the GUI and the TUI (AppState::cut_grids); 4096 unless set. At most
     /// i32::MAX - 1: the cut reads cut + 1 characters with PostgreSQL's left(text, int)
     pub fn grid_cut_chars(&self) -> usize {
         self.settings().get("gridCutChars").and_then(|v| v.as_u64()).map_or(4096, |n| n.min(i32::MAX as u64 - 1) as usize)

@@ -407,7 +407,7 @@ mod tests {
     }
 
     /// Whole values by key over 3 reads, aligned with the rows asked (a key no row has → None), a composite key; the pool path
-    /// (MCP, export) and a console of an app without cut_grids (the TUI) read whole values whatever gridCutChars is. QURRY_TEST_PG=… cargo test -p qurry-core fetch_values -- --ignored
+    /// (MCP, export) and a console of an app without cut_grids read whole values whatever gridCutChars is. QURRY_TEST_PG=… cargo test -p qurry-core fetch_values -- --ignored
     #[tokio::test]
     #[ignore]
     async fn fetch_values_by_key() {

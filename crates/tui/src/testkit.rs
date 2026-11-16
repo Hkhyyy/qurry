@@ -26,7 +26,9 @@ impl Harness {
     pub async fn new() -> Self {
         crate::keys::FORCE_MAC_GLYPHS.set(true);
         let dir = std::env::temp_dir().join(format!("qurry-tui-test-{}", uuid::Uuid::new_v4()));
-        let state = Arc::new(qurry_core::open_state(Some(dir.clone())).unwrap());
+        let mut state = qurry_core::open_state(Some(dir.clone())).unwrap();
+        state.cut_grids = true;
+        let state = Arc::new(state);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(state, tx);
         // Import Data Sources never reads the real DataGrip / DBeaver settings in a test
