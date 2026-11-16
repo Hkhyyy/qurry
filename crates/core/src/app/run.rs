@@ -1,5 +1,16 @@
 use super::*;
 
+/// What a console statement saw of its session's transaction (AppState::run_with_undo)
+#[derive(Default)]
+struct TxSeen {
+    /// A transaction was open before it ran
+    open: bool,
+    /// A change had run in it (Session::tx_changed)
+    changed: bool,
+    /// How the statement ended it by itself (Session::tx_ended)
+    ended: Option<&'static str>,
+}
+
 /// Max size of an MCP CSV export
 const EXPORT_MAX_BYTES: u64 = 512 << 20;
 
