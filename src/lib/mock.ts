@@ -84,6 +84,20 @@ const jsonDemo = {
   ]),
   truncated: false,
 };
+/** `select … from cut_demo` (#183): the whole values fetch_values answers; every 3rd row's payload and note are longer than gridCutChars */
+const cutFull = (i: number) => [
+  i + 1,
+  JSON.stringify({ id: i + 1, items: Array.from({ length: i % 3 ? 2 : 400 }, (_, k) => ({ sku: `A-${k}`, qty: k })) }),
+  i % 3 ? `short note ${i + 1}` : `long note ${i + 1} `.repeat(400),
+];
+/** The result as the core reads it: the long cells cut at gridCutChars and listed in `cut` (an editable result: the table has a key) */
+const cutDemo = () => {
+  const n = gridCutChars || Infinity;
+  const cut: [number, number][] = [];
+  const rows = Array.from({ length: 30 }, (_, i) => cutFull(i).map((v, c) => (typeof v === "string" && [...v].length > n ? (cut.push([i, c]), [...v].slice(0, n).join("")) : v)));
+  const columns = [{ name: "id", typeName: "INT8" }, { name: "payload", typeName: "JSONB" }, { name: "note", typeName: "TEXT" }];
+  return { ...result, columns, rows, truncated: false, ...(cut.length ? { cut } : {}), edit: { schema: "public", table: "cut_demo", pk: ["id"], columns: columns.map((c) => c.name) } };
+};
 /** `select … from payments`: a jsonb column as PostgreSQL sends it (one line, spaces after : and ,), a NULL and a text column holding JSON */
 const payments = {
   ...result,
@@ -135,6 +149,8 @@ let searchScope = localStorage.getItem("mock-searchScope") ?? "workspace";
 let resultTabs = Number(localStorage.getItem("mock-resultTabs") ?? 10);
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
 let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
+/** settings.json "gridCutChars" (kept across a reload, as the file is) */
+let gridCutChars = Number(localStorage.getItem("mock-gridCutChars") ?? 4096);
 /** settings.json "statusBarItems" (kept across a reload, as the file is; read on each call, so a test can change it as the TUI would).
  *  Absent: the defaults; the order is the items' order (qurry_shared::statusbar::ITEMS) */
 const STATUS_ITEMS = ["notNull", "sum", "avg", "min", "max", "size", "shownColumns", "position"];
@@ -436,6 +452,8 @@ const handlers: Record<string, (a: any) => unknown> = {
           ? { ...cjkDemo, inTransaction: (globalThis as any).__mockManual === true }
           : /\bjson_demo\b/i.test(a.sql)
           ? { ...jsonDemo, inTransaction: (globalThis as any).__mockManual === true }
+          : /\bcut_demo\b/i.test(a.sql)
+          ? { ...cutDemo(), inTransaction: (globalThis as any).__mockManual === true }
           : /\bpayments\b/i.test(a.sql)
           ? { ...payments, inTransaction: (globalThis as any).__mockManual === true }
           : /\bvoc\b[\s\S]*\bjoin\b/i.test(a.sql)
@@ -882,6 +900,21 @@ const handlers: Record<string, (a: any) => unknown> = {
     localStorage.setItem("mock-gridAlign", JSON.stringify(next));
     return next;
   },
+  grid_cut_chars: () => gridCutChars,
+  set_grid_cut_chars: (a: any) => {
+    gridCutChars = a.n;
+    localStorage.setItem("mock-gridCutChars", String(a.n));
+  },
+  // cut_demo's whole values by key (each row's `id`), in the order asked; null for a key that matches no row
+  fetch_values: (a: any) =>
+    a.req.rows.map((key: (string | null)[]) => {
+      const i = Number(key[0]) - 1;
+      if (key[0] === null) throw "A key value is NULL: the row can't be found by its primary key";
+      if (!(i >= 0 && i < 30)) return null;
+      const full = cutFull(i);
+      const at = ["id", "payload", "note"];
+      return a.req.columns.map((c: string) => full[at.indexOf(c)] ?? null);
+    }),
   status_bar_items: () => statusItems(),
   // As the core: on what is saved now, in the items' order. window.__mockChannelSaveFails: the file can't be written
   set_status_bar_item: (a: any) => {
