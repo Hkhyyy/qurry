@@ -32,6 +32,19 @@ async function slowFetch(page: Page, ms: number, fail?: string) {
   }, [ms, fail] as const);
 }
 
+/** fetch_values waits from now on until the returned release() is called: no timing race with a slow browser */
+async function heldFetch(page: Page) {
+  await page.evaluate(() => {
+    const w = window as any;
+    const orig = w.__TAURI_INTERNALS__.invoke;
+    let release: () => void;
+    const gate = new Promise<void>((ok) => (release = ok));
+    w.__releaseFetch = () => release();
+    w.__TAURI_INTERNALS__.invoke = (cmd: string, args: unknown) => (cmd !== "fetch_values" ? orig(cmd, args) : gate.then(() => orig(cmd, args)));
+  });
+  return () => page.evaluate(() => (window as any).__releaseFetch());
+}
+
 async function run(page: Page, sql: string) {
   await openApp(page);
   await openConsole(page);
@@ -106,12 +119,14 @@ test("typing on a cut cell while its whole value loads reads it once and keeps e
 
 test("{ } pressed while the whole value loads leaves no draft of the cut text: the panel then shows the whole value", async ({ page }) => {
   await run(page, "select * from cut_demo");
-  await slowFetch(page, 800);
+  const release = await heldFetch(page);
   // Row 1's doc: one-line JSON, cut
   await work(page).locator(".grid-row .cell.cut").first().click();
   await page.keyboard.press("Shift+Enter");
   await expect(panel(page).locator(".ve-note")).toHaveText("Loading the whole value…");
   await panel(page).getByTitle("Toggle Formatting (JSON)").click();
+  await expect(panel(page).locator(".ve-note")).toHaveText("Loading the whole value…");
+  await release();
   await expect(panel(page).locator(".ve-note")).toHaveCount(0);
   await expect(panel(page).locator(".ve-foot")).not.toContainText("Read-only");
   // The whole value, formatted (a draft of the cut text would be its one line, which isn't JSON to format)
