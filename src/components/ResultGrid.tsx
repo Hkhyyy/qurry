@@ -16,7 +16,7 @@ import { jsonCell } from "../lib/jsonSpans";
 import { contains, copyTable, extend, forEachCell, isSingle, type Pos, selCols, selRows as rowsOf, type Selection, single, toggle } from "../lib/gridSelection";
 
 import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/shortcuts";
-import { draftAt, draftToApply, leftDraft, panelText, registerValuePanel, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
+import { draftAt, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
 import { ResultChart } from "./ResultChart";
 import { SqlBlock } from "./SqlBlock";
 import { ValuePanel } from "./ValuePanel";
@@ -24,12 +24,13 @@ import { Button, CellEditor, cx, FixSql, GridCell, GridHead, GridHeaderCell, Gri
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
-import { display, editableValue, type SortKey } from "../features/grid/shared";
+import { display, type SortKey } from "../features/grid/shared";
 import { useGridEdits } from "../features/grid/useGridEdits";
 import { useGridFind } from "../features/grid/useGridFind";
 import { useGridStatus } from "../features/grid/useGridStatus";
 import { useGridWidths } from "../features/grid/useGridWidths";
 import { useSortOrder } from "../features/grid/useSortOrder";
+import { useValuePanel } from "../features/grid/useValuePanel";
 
 const ROW_H = 24;
 const HEADER_H = 26;
@@ -272,25 +273,6 @@ export function ResultGrid(p: Props) {
     result, cols, baseCount, rowCount, join, canEdit, anyEdit, pkIdx, edit, D, tcol, valueAt, cellReason, cellOk,
     active, hasSel, selRows, forSelected, selectCell, virt, scrollRef, p,
   });
-  // ─── Value Editor panel (follows the current cell) ───
-  const panelCell = active && active.r < rowCount ? active : null;
-  const panelReadOnly = (r: number, c: number) => !cellOk(r, c) || (r < baseCount && !editableValue(valueAt(r, c), cols[c].typeName));
-  const panelShown = panelCell ? panelText(cols[panelCell.c].typeName, raw(valueAt(panelCell.r, panelCell.c))) : { json: false, text: "" };
-  /** Write a draft to its cell; the reason when a json / jsonb column refuses it */
-  const writeDraft = (d: PanelDraft): string | null => {
-    const res = draftToApply(d, cols[d.c].typeName, raw(valueAt(d.r, d.c)));
-    if (res && "error" in res) return res.error;
-    if (res) setCell(d.r, d.c, res.text);
-    return null;
-  };
-  // The selection left the drafted cell: apply the edit there (DataGrip applies on leaving); one that can't be applied is dropped, saying why
-  useEffect(() => {
-    const d = leftDraft(draft, panelCell);
-    if (!d) return setPanelError(null);
-    const err = writeDraft(d);
-    setDraft(null);
-    setPanelError(err && `${cols[d.c].name} not changed: ${err}`);
-  }, [panelCell?.r, panelCell?.c]);
   const focusGrid = () => (scrollRef.current ?? wrapRef.current)?.focus();
   // The button goes with the failure: the keys go to the grid again, the new one when the run replaced it (a console's result is
   // drawn anew in the same place after its run)
@@ -300,29 +282,9 @@ export function ResultGrid(p: Props) {
     await p.onReload();
     requestAnimationFrame(() => place?.querySelector<HTMLElement>(":scope > .grid-wrap .grid-scroll")?.focus());
   };
-  const openPanel = () => {
-    setPanel(true);
-    setPanelFocus((n) => n + 1);
-  };
-  const applyPanel = () => {
-    const err = draft ? writeDraft(draft) : null;
-    setPanelError(err);
-    if (err) return;
-    setDraft(null);
-    focusGrid();
-  };
-  /** × / ⌘w / ⇧⎋: apply the edit, close, back to the grid on the same cell. A refused edit keeps the panel open with the reason */
-  const closePanel = () => {
-    const err = draft ? writeDraft(draft) : null;
-    setPanelError(err);
-    if (err) return;
-    setDraft(null);
-    setPanel(false);
-    focusGrid();
-  };
-  const closePanelRef = useRef(closePanel);
-  closePanelRef.current = closePanel;
-  useEffect(() => (panel && wrapRef.current ? registerValuePanel(wrapRef.current, () => closePanelRef.current()) : undefined), [panel]);
+  const { panelCell, panelReadOnly, panelShown, openPanel, applyPanel, closePanel } = useValuePanel({
+    active, rowCount, cols, valueAt, cellOk, baseCount, setCell, draft, setDraft, setPanelError, panel, setPanel, setPanelFocus, focusGrid, wrapRef,
+  });
 
   // A note (why a paste or a copy format couldn't run) is about what was selected then
   useEffect(() => setStatusNote(undefined), [sel, result, changes]);
