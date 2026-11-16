@@ -7,6 +7,7 @@ import { setResultTabs, useResultTabs } from "../../lib/resultTabsSetting";
 import { api, openExternal, secretKey, setUpdateCheckEnabled, UpdateInfo, updateCheckEnabled } from "../../lib/api";
 import type { FontFamily, UpdateChannel } from "../../lib/api";
 import { KeymapEditor } from "../../components/KeymapEditor";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { Button, Checkbox, cx, Field, Modal, Select, Text, TextInput, TreeRow } from "../../ui";
 import { IcGitHub } from "../../ui/icons";
 import { allThemes, currentTheme, setThemePick, setThemeSync, SYSTEM, useThemeState, type ThemeDef } from "../../lib/theme";
@@ -466,59 +467,62 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage }: { 
             />
           ))}
         </div>
-        {page === "keymap" && <KeymapEditor />}
-        {page === "passwords" && <PasswordSettings />}
-        {page === "theme" && <ThemeEditor start={currentTheme().id} onBack={() => go("appearance")} onDirty={(d) => (themeDirty.current = d)} />}
-        {page === "appearance" && (
-          <div className="settings-form">
-            <ThemeField onEdit={() => setPage("theme")} />
-            <FontField target="editor" label="Editor font" info={fontKeys ? [`In the editor, ${fontKeys} change the size too.`] : undefined} installed={fonts} onOpen={loadFonts} />
-            <FontField target="grid" label="Grid font" installed={fonts} onOpen={loadFonts} />
-          </div>
-        )}
-        {page === "console" && (
-          <div className="settings-form">
-            <KeywordCaseField />
-            <ResultTabsField />
-          </div>
-        )}
-        {page === "grid" && (
-          <div className="settings-form">
-            <GridAlignField />
-            <StatusBarField />
-          </div>
-        )}
-        {page === "updates" && (
-          <div className="settings-form">
-            <Field label="Updates" hint={updMsg ?? undefined}>
-              <div className="ui-row">
-                <Checkbox
-                  checked={checkOnStart}
-                  onChange={(v) => {
-                    setCheckOnStart(v);
-                    setUpdateCheckEnabled(v);
-                  }}
-                >
-                  Check for updates automatically
-                </Checkbox>
-                <Button size="sm" onClick={checkNow}>
-                  Check Now
-                </Button>
-                <Button size="sm" className="settings-github" aria-label="Open GitHub" title="Open GitHub" onClick={() => openExternal(REPO_URL)}>
-                  <IcGitHub />
-                </Button>
-              </div>
-            </Field>
-            <Field label="Channel" hint={chMsg ?? undefined} info={["Stable: releases made from a version tag.", "Beta: also the pre-release built from every merge to main.", "Shared with the TUI."]}>
-              <div className="ui-row">
-                <Select aria-label="Channel" value={channel ?? ""} disabled={!channel} onChange={(e) => pickChannel(e.target.value as UpdateChannel)}>
-                  <option value="stable">Stable</option>
-                  <option value="beta">Beta</option>
-                </Select>
-              </div>
-            </Field>
-          </div>
-        )}
+        {/* A page that fails to render leaves the tree and the other pages working (another page starts it again) */}
+        <ErrorBoundary key={page} scope="page">
+          {page === "keymap" && <KeymapEditor />}
+          {page === "passwords" && <PasswordSettings />}
+          {page === "theme" && <ThemeEditor start={currentTheme().id} onBack={() => go("appearance")} onDirty={(d) => (themeDirty.current = d)} />}
+          {page === "appearance" && (
+            <div className="settings-form">
+              <ThemeField onEdit={() => setPage("theme")} />
+              <FontField target="editor" label="Editor font" info={fontKeys ? [`In the editor, ${fontKeys} change the size too.`] : undefined} installed={fonts} onOpen={loadFonts} />
+              <FontField target="grid" label="Grid font" installed={fonts} onOpen={loadFonts} />
+            </div>
+          )}
+          {page === "console" && (
+            <div className="settings-form">
+              <KeywordCaseField />
+              <ResultTabsField />
+            </div>
+          )}
+          {page === "grid" && (
+            <div className="settings-form">
+              <GridAlignField />
+              <StatusBarField />
+            </div>
+          )}
+          {page === "updates" && (
+            <div className="settings-form">
+              <Field label="Updates" hint={updMsg ?? undefined}>
+                <div className="ui-row">
+                  <Checkbox
+                    checked={checkOnStart}
+                    onChange={(v) => {
+                      setCheckOnStart(v);
+                      setUpdateCheckEnabled(v);
+                    }}
+                  >
+                    Check for updates automatically
+                  </Checkbox>
+                  <Button size="sm" onClick={checkNow}>
+                    Check Now
+                  </Button>
+                  <Button size="sm" className="settings-github" aria-label="Open GitHub" title="Open GitHub" onClick={() => openExternal(REPO_URL)}>
+                    <IcGitHub />
+                  </Button>
+                </div>
+              </Field>
+              <Field label="Channel" hint={chMsg ?? undefined} info={["Stable: releases made from a version tag.", "Beta: also the pre-release built from every merge to main.", "Shared with the TUI."]}>
+                <div className="ui-row">
+                  <Select aria-label="Channel" value={channel ?? ""} disabled={!channel} onChange={(e) => pickChannel(e.target.value as UpdateChannel)}>
+                    <option value="stable">Stable</option>
+                    <option value="beta">Beta</option>
+                  </Select>
+                </div>
+              </Field>
+            </div>
+          )}
+        </ErrorBoundary>
       </div>
     </Modal>
   );

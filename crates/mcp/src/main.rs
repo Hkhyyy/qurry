@@ -682,6 +682,7 @@ async fn main() -> std::io::Result<()> {
     state.mcp = true;
     // AWS SSM tunnels run the aws CLI: stop it when the host stops this server or it panics
     qurry_core::ssm::kill_on_panic();
+    qurry_core::logfile::log_panics();
     tokio::spawn(qurry_core::ssm::kill_on_signals());
     let state = Arc::new(state);
     let server = Arc::new(Server { state: state.clone(), allow_write: args.iter().any(|a| a == "--allow-write") });

@@ -268,6 +268,8 @@ export const api = {
   installUpdate: () => invoke<void>("install_update"),
   /** Help › Show Log: reveals the log file in Finder (its folder until the file exists) */
   showLog: () => invoke<void>("show_log"),
+  /** A front-end error into qurry.log (message and stacks only; the backend redacts, cuts and rate limits it) */
+  logFrontendError: (e: { source: "boundary" | "error" | "unhandledrejection"; message: string; stack?: string; componentStack?: string }) => invoke<void>("log_frontend_error", e),
   /** Open tabs·splits (restored on restart) */
   loadWorkspace: () => invoke<unknown>("load_workspace"),
   saveWorkspace: (ws: unknown) => invoke<void>("save_workspace", { ws }),
@@ -306,6 +308,8 @@ export const api = {
   commitTx: (tabId: string) => invoke<string | null>("commit_tx", { tabId }),
   rollbackTx: (tabId: string) => invoke<string | null>("rollback_tx", { tabId }),
   closeSession: (tabId: string) => invoke<void>("close_session", { tabId }),
+  /** At page start: close the console sessions of the page before (a reload), rolling back their transactions */
+  closeAllSessions: () => invoke<{ tabId: string; name: string; rolledBack: boolean }[]>("close_all_sessions"),
   /** A grid's Submit: none is saved unless each UPDATE / DELETE changes exactly 1 row. tabId = the console the result is in: in Manual
    *  mode or with a transaction open, the edits run in it and stay pending until Commit / Roll back */
   submitEdits: (id: string, tabId: string | undefined, statements: string[]) => invoke<BatchResult>("submit_edits", { id, tabId, statements }),

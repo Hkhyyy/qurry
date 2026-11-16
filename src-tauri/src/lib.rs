@@ -71,6 +71,7 @@ pub fn run() {
             });
 
             qurry_core::logfile::init("gui", None);
+            qurry_core::logfile::log_panics();
             app.manage(qurry_core::open_state(Some(app.path().app_config_dir()?))?);
             app.manage(commands::PendingImport::default());
             app.manage(commands::PendingData::default());
@@ -181,6 +182,7 @@ pub fn run() {
             commands::fetch_more,
             commands::cancel_query,
             commands::close_session,
+            commands::close_all_sessions,
             commands::set_tx_mode,
             commands::commit_tx,
             commands::rollback_tx,
@@ -233,6 +235,7 @@ pub fn run() {
             fonts::font_file,
             commands::install_update,
             commands::show_log,
+            commands::log_frontend_error,
         ])
         .build(app_context())
         .expect("error while running tauri application")

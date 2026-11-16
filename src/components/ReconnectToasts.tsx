@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button, Text, Toast, Toasts } from "../ui";
 import { cancelReconnect, dismissReconnect, RECONNECT_SLOW_MS, retryReconnect, useReconnect, type ReconnectToast } from "../lib/reconnect";
 import { elapsedText } from "./RunningBar";
@@ -37,8 +37,8 @@ export function ReconnectToastView({ t, now, onCancel, onRetry, onClose }: { t: 
   );
 }
 
-/** The app's reconnect toasts, bottom right above the status bar */
-export function ReconnectToasts() {
+/** The app's reconnect toasts, bottom right above the status bar; `extra`: other toasts in the same stack (recovered from an error) */
+export function ReconnectToasts({ extra }: { extra?: ReactNode }) {
   const toasts = useReconnect((s) => s.toasts);
   const [now, setNow] = useState(Date.now);
   const ticking = toasts.some((t) => t.phase === "waiting");
@@ -47,9 +47,10 @@ export function ReconnectToasts() {
     const h = setInterval(() => setNow(Date.now()), 100);
     return () => clearInterval(h);
   }, [ticking]);
-  if (!toasts.length) return null;
+  if (!toasts.length && !extra) return null;
   return (
     <Toasts>
+      {extra}
       {toasts.map((t) => (
         <ReconnectToastView key={t.id} t={t} now={now} onCancel={() => cancelReconnect(t.id)} onRetry={() => retryReconnect(t.id)} onClose={() => dismissReconnect(t.id)} />
       ))}
