@@ -53,6 +53,14 @@ pub struct Grid {
     pub shown: Option<(usize, usize, usize)>,
     /// Original position of each row while sorted on screen (restored when sorting is cleared)
     orig: Vec<usize>,
+    /// Cells whose value came cut at gridCutChars (QueryResult::cut, moved with their rows): the row holds only the start of the
+    /// value until App::fetch_full reads it whole by the table's key
+    pub cut: BTreeSet<(usize, usize)>,
+    /// A read of whole values is on its way (App::fetch_full)
+    pub reading: bool,
+    /// The cell under the cursor that a read left cut (its row is gone, or the read failed) and why: the value panel doesn't ask
+    /// for it again while the cursor stays on it (cleared when rows move)
+    pub unread: Option<((usize, usize), String)>,
 }
 
 /// Text placed in a cell `w` columns wide (display width, so wide characters line up too); text wider than the cell is left as is
@@ -64,6 +72,18 @@ fn pad(text: String, w: usize, a: Align) -> String {
         Align::Right => format!("{}{text}", " ".repeat(gap)),
         Align::Center => format!("{}{text}", " ".repeat(gap / 2)),
     }
+}
+
+/// The start of `text` that fits `w` columns (display width)
+fn fit(text: String, w: usize) -> String {
+    if text.width() <= w {
+        return text;
+    }
+    let mut used = 0;
+    text.chars().take_while(|ch| {
+        used += unicode_width::UnicodeWidthChar::width(*ch).unwrap_or(0);
+        used <= w
+    }).collect()
 }
 
 /// A JSON cell in colors (qurry_core::format::json_spans, the GUI's tokenizer): `text` is the cell as drawn, `lead` spaces of
@@ -146,7 +166,8 @@ static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), before_fit: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), shown: None, orig: vec![] };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), before_fit: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), shown: None, orig: vec![], cut: BTreeSet::new(), reading: false, unread: None };
+        g.cut = g.result.cut.iter().map(|&[r, c]| (r, c)).collect();
         g.compute_widths();
         g
     }
@@ -182,7 +203,7 @@ impl Grid {
     /// Fit: the cells column `c` needs for its header (with the sort mark) and its longest value, over the rows loaded so far
     pub fn fit_width(&self, c: usize) -> u16 {
         let name = self.result.columns[c].name.width() + 2;
-        let body = (0..self.rows()).map(|r| self.shown(r, c, usize::MAX).map_or(6, |s| text_width(&s))).max().unwrap_or(0);
+        let body = (0..self.rows()).map(|r| self.shown(r, c, usize::MAX).map_or(6, |s| text_width(&s)) + usize::from(self.is_cut(r, c))).max().unwrap_or(0);
         column_width(name.max(body) as i64, 0)
     }
 
@@ -242,10 +263,14 @@ impl Grid {
         if self.added > 0 {
             let mv = |r: usize| if r >= at { r + k } else { r };
             self.edits = std::mem::take(&mut self.edits).into_iter().map(|((r, c), v)| ((mv(r), c), v)).collect();
+            self.cut = std::mem::take(&mut self.cut).into_iter().map(|(r, c)| (mv(r), c)).collect();
+            self.unread = None;
             self.marked = std::mem::take(&mut self.marked).into_iter().map(mv).collect();
             self.row = mv(self.row);
             self.anchor = self.anchor.map(|(r, c)| (mv(r), c));
         }
+        // The page's cut cells are of its own rows, now after the loaded ones
+        self.cut.extend(more.cut.iter().map(|&[r, c]| (r + at, c)));
         if !self.orig.is_empty() {
             // The loaded rows, in the order they came (orig covers them only: added rows stay last, unsorted)
             self.orig.extend(at..at + k);
@@ -295,6 +320,8 @@ impl Grid {
         }
         let mv = |r: usize| if r < base { to[r] } else { r };
         self.edits = std::mem::take(&mut self.edits).into_iter().map(|((r, c), v)| ((mv(r), c), v)).collect();
+        self.cut = std::mem::take(&mut self.cut).into_iter().map(|(r, c)| (mv(r), c)).collect();
+        self.unread = None;
         self.deleted = std::mem::take(&mut self.deleted).into_iter().map(mv).collect();
         let (orig, sorted): (Vec<usize>, Vec<Vec<Value>>) = rows.into_iter().map(|(o, _, v)| (o, v)).unzip();
         self.orig = orig;
@@ -314,6 +341,34 @@ impl Grid {
             return v.clone();
         }
         self.result.rows.get(r).and_then(|row| row.get(c)).and_then(raw_text)
+    }
+
+    /// Cell (r, c) holds only the start of its value: cut, and not changed (a change is a whole value: typed on the whole value,
+    /// pasted, NULL)
+    pub fn is_cut(&self, r: usize, c: usize) -> bool {
+        self.cut.contains(&(r, c)) && !self.edits.contains_key(&(r, c))
+    }
+
+    /// The cut cells `y` copies: the selection's, else the current cell's
+    pub fn cut_in_copy(&self) -> Vec<(usize, usize)> {
+        match self.selection() {
+            None => vec![(self.row, self.col)],
+            Some((rows, cols)) => rows.iter().flat_map(|&r| cols.iter().map(move |&c| (r, c))).filter(|&(r, c)| self.selected(r, c)).collect(),
+        }
+        .into_iter()
+        .filter(|&(r, c)| self.is_cut(r, c))
+        .collect()
+    }
+
+    /// The cut cells `in_list` lists
+    pub fn cut_in_list(&self) -> Vec<(usize, usize)> {
+        let cells: Vec<(usize, usize)> = if !self.marked.is_empty() {
+            self.marked.iter().map(|&r| (r, self.col)).collect()
+        } else {
+            let (r0, c0, r1, c1) = self.sel_rect().unwrap_or((0, self.col, self.rows().saturating_sub(1), self.col));
+            (r0..=r1).flat_map(|r| (c0..=c1).map(move |c| (r, c))).collect()
+        };
+        cells.into_iter().filter(|&(r, c)| self.is_cut(r, c)).collect()
     }
 
     /// One cell with edits applied, as the shared IN list reads it (an edit is text; NULL is Null)
@@ -429,8 +484,11 @@ impl Grid {
         for &r in new.iter().rev() {
             self.result.rows.remove(r);
             self.added -= 1;
-            // Edits of the added rows below move up with them
-            self.edits = std::mem::take(&mut self.edits).into_iter().filter(|((er, _), _)| *er != r).map(|((er, c), v)| ((if er > r { er - 1 } else { er }, c), v)).collect();
+            // Edits (and cut cells) of the added rows below move up with them
+            let up = |er: usize| if er > r { er - 1 } else { er };
+            self.edits = std::mem::take(&mut self.edits).into_iter().filter(|((er, _), _)| *er != r).map(|((er, c), v)| ((up(er), c), v)).collect();
+            self.cut = std::mem::take(&mut self.cut).into_iter().filter(|(er, _)| *er != r).map(|(er, c)| (up(er), c)).collect();
+            self.unread = None;
         }
         if !new.is_empty() {
             self.marked.retain(|&r| r < base);
@@ -711,14 +769,21 @@ impl Grid {
                         Some(s) => s.clone(),
                     };
                     let class = self.class(r, c, tc);
+                    // A cut value ends with a dim … (the GUI's mark) right after what fits of its text
+                    let cut = self.is_cut(r, c);
+                    let w = w as usize - usize::from(cut);
+                    let text = if cut { fit(text, w) } else { text };
                     let shown_len = text.len();
-                    let text = pad(text, w as usize, cell_align(nc, class, aligns));
+                    let text = pad(text, w, cell_align(nc, class, aligns));
                     // JSON in colors unless the row's changes color the cell (edited · deleted · added)
                     let raw = self.result.rows.get(r).and_then(|row| row.get(c)).and_then(Value::as_str).filter(|_| json && class == ValueClass::JsonBinary && !edited && !deleted && !added);
-                    let line = match raw {
+                    let mut line = match raw {
                         Some(raw) => json_line(raw, &text, text.len() - shown_len),
                         None => Line::from(text),
                     };
+                    if cut {
+                        line.push_span(Span::styled("…", Style::default().fg(crate::kit::DIM)));
+                    }
                     let mut st = match class {
                         ValueClass::Null => Style::default().fg(crate::kit::NULL_TEXT).add_modifier(Modifier::ITALIC),
                         ValueClass::Number => Style::default().fg(crate::kit::NUMBER),
@@ -801,19 +866,31 @@ impl Grid {
     }
 
     /// The value panel (v) in `area` beside the grid: the current cell's whole value, follows the cursor. JSON (a json / jsonb column, or
-    /// a JSON object or array) pretty-printed and coloured as the GUI's Value Editor shows it (qurry_shared::value). `close` = its keys
-    pub fn render_value_panel(&self, f: &mut Frame, area: Rect, close: String) {
+    /// a JSON object or array) pretty-printed and coloured as the GUI's Value Editor shows it (qurry_shared::value). `close` = its keys.
+    /// `note`: a cut value's line above its start (App::cut_note: loading the whole value, or why it can't be read)
+    pub fn render_value_panel(&self, f: &mut Frame, area: Rect, close: String, note: Option<String>) {
         let col = self.result.columns.get(self.col);
         let title = col.map(|c| format!(" {} : {} ", c.name, c.type_name.to_lowercase())).unwrap_or_else(|| " Value ".into());
         let block = Block::default().borders(Borders::ALL).title(title).title_bottom(Line::styled(close, Style::default().fg(crate::kit::DIM))).border_style(Style::default().fg(Color::DarkGray));
-        let lines: Vec<Line> = match (col, self.value(self.row, self.col)) {
+        let mut lines: Vec<Line> = match (col, self.value(self.row, self.col)) {
             (None, _) => vec![],
             (Some(_), None) => vec![Line::styled("<null>", Style::default().fg(crate::kit::NULL_TEXT).add_modifier(Modifier::ITALIC))],
+            // Only the start of the value: as it came (no JSON to pretty-print), ending with the grid's …
+            (Some(_), Some(v)) if self.is_cut(self.row, self.col) => {
+                let mut l: Vec<Line> = v.lines().map(|l| Line::raw(l.to_string())).collect();
+                if let Some(last) = l.last_mut() {
+                    last.push_span(Span::styled("…", Style::default().fg(crate::kit::DIM)));
+                }
+                l
+            }
             (Some(c), Some(v)) => {
                 let p = qurry_shared::value::panel_text(&c.type_name, &v);
                 if p.json { json_lines(&p.text) } else { p.text.lines().map(|l| Line::raw(l.to_string())).collect() }
             }
         };
+        if let Some(n) = note {
+            lines.splice(0..0, [Line::styled(n, Style::default().fg(crate::kit::WARN)), Line::raw("")]);
+        }
         f.render_widget(ratatui::widgets::Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }).block(block), area);
     }
 }
@@ -1255,5 +1332,75 @@ mod tests {
         let sum = cells(&mut g, &none, 1);
         assert!(sum.iter().all(|(lead, t)| lead + t.len() == w(&g, 1)), "{sum:?}");
         assert_eq!(cells(&mut g, &none, 0).iter().map(|x| x.0).collect::<Vec<_>>(), [0, 0, 0]);
+    }
+
+    /// A page of (id, body) rows whose bodies are cut at `cut`
+    fn cut_page(ids: &[i64], cut: &[usize], more: bool) -> QueryResult {
+        let col = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
+        let rows = ids.iter().map(|i| vec![json!(i), json!(format!("body{i}"))]).collect();
+        QueryResult { columns: vec![col("id", "INT4"), col("body", "TEXT")], rows, rows_affected: 0, truncated: more, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![], cut: cut.iter().map(|&r| [r, 1]).collect() }
+    }
+
+    fn cut_rows(g: &Grid) -> Vec<String> {
+        g.cut.iter().map(|&(r, _)| raw_text(&g.result.rows[r][1]).unwrap()).collect()
+    }
+
+    /// #183: a cut cell ends with a dim … right after its text; value() is the cut text; an edit (a whole value) has no mark
+    #[test]
+    fn cut_cell_has_a_dim_mark() {
+        use crate::theme::ColorMode;
+        let mut g = Grid::new(cut_page(&[1, 2], &[0], false));
+        let (lines, buf) = draw_in(&mut g, ColorMode::TrueColor);
+        let row = |id: &str| lines.iter().find(|l| l.contains(id)).unwrap().clone();
+        assert!(row("body1").contains("body1…"), "{lines:?}");
+        assert!(!row("body2").contains('…'), "{lines:?}");
+        assert_eq!(cell_of(&lines, &buf, "…").fg, crate::kit::DIM);
+        assert_eq!(g.value(0, 1).as_deref(), Some("body1"));
+        assert!(g.is_cut(0, 1) && g.fit_width(1) >= 6);
+        g.set_value(0, 1, "whole".into());
+        assert!(!g.is_cut(0, 1));
+        let (lines, _) = draw_in(&mut g, ColorMode::TrueColor);
+        assert!(!lines.iter().any(|l| l.contains('…')), "{lines:?}");
+    }
+
+    /// The cut set follows its rows: a load-more's cells after the loaded rows (and before added ones), a local sort, and an
+    /// added row deleted above nothing cut
+    #[test]
+    fn cut_cells_move_with_rows() {
+        let mut g = Grid::new(cut_page(&[3, 1], &[1], true));
+        g.add_row();
+        g.append(cut_page(&[2, 4], &[0], false));
+        assert_eq!(g.rows(), 5);
+        assert_eq!(cut_rows(&g), ["body1", "body2"]);
+        assert!(g.is_added(4));
+        g.col = 0;
+        g.toggle_local_sort();
+        assert_eq!(g.result.rows.iter().take(4).map(|r| r[0].clone()).collect::<Vec<_>>(), [json!(1), json!(2), json!(3), json!(4)]);
+        assert_eq!(g.cut, BTreeSet::from([(0, 1), (1, 1)]));
+        assert_eq!(cut_rows(&g), ["body1", "body2"]);
+        // Sorted back: the order they came in
+        g.toggle_local_sort();
+        g.toggle_local_sort();
+        assert_eq!(cut_rows(&g), ["body1", "body2"]);
+        assert_eq!(g.cut, BTreeSet::from([(1, 1), (2, 1)]));
+        // Deleting the added row (the last) keeps them; deleting a loaded row only marks it
+        g.row = 4;
+        g.delete_rows();
+        g.row = 1;
+        g.delete_rows();
+        assert_eq!((g.rows(), g.cut.clone()), (4, BTreeSet::from([(1, 1), (2, 1)])));
+    }
+
+    /// The value panel on a cut cell: the note over the cut text, which ends with …
+    #[test]
+    fn value_panel_shows_a_cut_note() {
+        let mut g = Grid::new(cut_page(&[1], &[0], false));
+        g.col = 1;
+        let mut term = Terminal::new(ratatui::backend::TestBackend::new(100, 8)).unwrap();
+        let note ="Cut at 5 characters; the whole value needs a primary key (public.t has none)";
+        term.draw(|f| g.render_value_panel(f, f.area(), String::new(), Some(note.into()))).unwrap();
+        let buf = term.backend().buffer().clone();
+        let text: String = (0..8).map(|y| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>() + "\n").collect();
+        assert!(text.contains("Cut at 5 characters; the whole value needs a primary key") && text.contains("body1…"), "{text}");
     }
 }

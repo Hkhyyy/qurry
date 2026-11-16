@@ -43,6 +43,7 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("r", "Reload (table data)"),
         ("y  ⌘C", "Copy cell value (a selected range or marked rows: as TSV, pastes into spreadsheets as cells)"),
         ("⌘V", "Paste into cells from the selected one (TSV or CSV fills several, an empty field is NULL; extra lines add rows; table data)"),
+        ("…  (dim, at a value's end)", "Cut at ⌃k › Grid Long Values… (PostgreSQL): v, Enter and y read the whole value by the primary key"),
         ("Esc", "Back (query results: to the editor)"),
     ]),
     ("DDL / routine view", &[

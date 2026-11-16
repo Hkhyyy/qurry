@@ -222,6 +222,7 @@
   {"tui": "KeywordCase", "title": "Keyword Case… (UPPER or lower SQL keywords as you type and in Reformat Code; shared with the GUI)"},
   {"tui": "ResultTabs", "title": "Result Tabs…"},
   {"tui": "GridAlign", "title": "Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI)"},
+  {"tui": "GridLongValues", "title": "Grid Long Values… (where long text, JSON and XML values are cut in PostgreSQL results, 0 = never; shared with the GUI)"},
   {"tui": "StatusBarItems", "title": "Status Bar Items… (what the status line shows for a grid: position, shown columns, Sum, Size …; shared with the GUI)"},
   {"tui": "Theme", "title": "Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background)"},
   {"tui": "CheckUpdate", "title": "Check for Updates"},

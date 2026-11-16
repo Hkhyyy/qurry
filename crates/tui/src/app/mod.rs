@@ -36,6 +36,7 @@ pub use actions::{title, ACTIONS};
 #[cfg(test)]
 pub use actions::{OPENER_FAILS, REPO_URL};
 pub use tables::Resize;
+pub(crate) use tables::cut_note;
 pub(crate) use palette::{is_search, scope_name};
 #[cfg(test)]
 pub(crate) use palette::sort_objects;
@@ -845,6 +846,7 @@ pub enum Action {
     PinResult,
     CloseResult,
     GridAlign,
+    GridLongValues,
     StatusBarItems,
     Theme,
     CheckUpdate,
