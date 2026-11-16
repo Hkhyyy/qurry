@@ -105,7 +105,8 @@ jobs:
 
       # rust-toolchain.toml: its channel, components and targets (rustup is preinstalled on the runners)
       - name: Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install --no-self-update || { echo "::error::rustup could not install the toolchain in rust-toolchain.toml: check that its channel is a released Rust version (the same command reproduces it locally)"; exit 1; }
+        run: |
+          rustup toolchain install --no-self-update || { echo "::error::rustup could not install the toolchain in rust-toolchain.toml: check that its channel is a released Rust version (the same command reproduces it locally)"; exit 1; }
 
       # Caches the root workspace only. drivers/sqlite (its own workspace) builds into the same target directory, and listing it
       # here too would make the save step keep only one workspace's dependencies; its few crates rebuild each run instead
@@ -249,7 +250,8 @@ jobs:
 
       # rust-toolchain.toml: its channel, components and targets (rustup is preinstalled on the runners)
       - name: Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install --no-self-update || { echo "::error::rustup could not install the toolchain in rust-toolchain.toml: check that its channel is a released Rust version (the same command reproduces it locally)"; exit 1; }
+        run: |
+          rustup toolchain install --no-self-update || { echo "::error::rustup could not install the toolchain in rust-toolchain.toml: check that its channel is a released Rust version (the same command reproduces it locally)"; exit 1; }
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
