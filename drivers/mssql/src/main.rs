@@ -99,6 +99,8 @@ impl Driver for Ms {
                     cfg.database(c.database.trim());
                 }
                 cfg.application_name("qurry");
+                // tiberius 0.13 bounds each round trip to 30 s, then poisons the connection while the server keeps running the statement
+                cfg.command_timeout(None);
                 // Verify certificates only with SSL "verify" (self-signed is common for in-house servers)
                 match c.options.get("ssl").and_then(Value::as_str) {
                     Some(m) if m.starts_with("verify") => cfg.encryption(EncryptionLevel::Required),
