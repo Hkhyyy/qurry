@@ -8,7 +8,9 @@ description = "Qurry shared engine: data sources, drivers (PostgreSQL, MySQL, Re
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "mysql", "chrono", "uuid", "json"] }
+# Not 0.9.0 yet: a non-persistent query (how Qurry runs SQL) uses the unnamed statement, and looking up an unknown column type
+# (enum, domain, extension type such as vector) with a simple query destroys it before Bind ("unnamed prepared statement does not exist")
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "mysql", "chrono", "uuid", "json"] }
 uuid = { version = "1.28.0", features = ["v4", "v5", "serde"] }
 chrono = "0.4.45"
 # timestamptz in the session's time zone: reads a zone's rules from the system tz database (/usr/share/zoneinfo) instead of building one in (crate::zone)
