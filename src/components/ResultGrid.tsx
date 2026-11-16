@@ -1,4 +1,4 @@
-import { setFocusWidgets, setStatusNote, shownColumns, spanOf, tableColumns, useStatusItems, useTableColumnsLoaded } from "../lib/statusbar";
+import { setStatusNote } from "../lib/statusbar";
 import { fracWidth, isTimeType, padFrac } from "../lib/timeFrac";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -7,8 +7,8 @@ import { Cell, Dialect, dialectOf, type JoinEdit, QueryResult } from "../lib/api
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { type NewRow } from "../lib/gridEdit";
 import { ContextMenu, MenuItem } from "./Explorer";
-import { copied, DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, pasteCells, raw } from "../lib/extract";
-import { shared, sharedOr, sharedReady, useSharedReady, type GridStatus, type StatusItemId } from "../lib/shared";
+import { copied, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, pasteCells, raw } from "../lib/extract";
+import { sharedOr, sharedReady, useSharedReady } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
 import { type WidthsOf } from "../lib/columnWidths";
@@ -26,6 +26,7 @@ import {
 } from "../ui/icons";
 import { display, editableValue, type SortKey } from "../features/grid/shared";
 import { useGridEdits } from "../features/grid/useGridEdits";
+import { useGridStatus } from "../features/grid/useGridStatus";
 import { useGridWidths } from "../features/grid/useGridWidths";
 import { useSortOrder } from "../features/grid/useSortOrder";
 
@@ -87,9 +88,6 @@ interface Props {
   /** The data source (target id) the grid's table is in: the status bar's Size reads its columns' declared types from it */
   target?: string;
 }
-
-/** The status bar items that are over the selected cells */
-const SELECTION_ITEMS: StatusItemId[] = ["notNull", "sum", "avg", "min", "max"];
 
 /** pgvector columns (vector · halfvec · sparsevec) */
 const isVectorType = (t: string) => /^(vector|halfvec|sparsevec)$/i.test(t);
@@ -259,60 +257,10 @@ export function ResultGrid(p: Props) {
   /** A mouse click: ⇧ extends the last range to b, ⌘ adds a..b (a cell, a row, a column) or takes it out, a plain click starts over (DataGrip) */
   const clickSel = (e: React.MouseEvent, a: Pos, b: Pos = a) => setSel((s) => (e.shiftKey ? extend(s, b) : (isMac ? e.metaKey : e.ctrlKey) ? toggle(s, a, b) : single(a, b)));
 
-  // ─── Status bar (lib/statusbar, qurry_shared::statusbar words it): the selection or the current cell (Position), the selected cells'
-  // Not null / Sum / Avg / Min / Max, the current cell's Size, the shown columns, while focus is in this grid. The shown range follows
-  // sideways scrolling (the column virtualizer renders again on scroll); Chart and Transpose have neither ───
-  const statusItems = useStatusItems();
-  const offset = colVirt.scrollOffset ?? 0;
-  const range = scrollRef.current && !chart && !transposed ? shownColumns(colVirt.measurementsCache, offset + rownumW, offset + scrollRef.current.clientWidth) : null;
-  const multi = hasSel && !isSingle(sel);
-  const posSpans = useMemo<GridStatus["pos"]>(() => (chart || transposed || !cur ? undefined : multi ? [spanOf(rowsOf(sel)), spanOf(selCols(sel))] : [spanOf([cur.r]), spanOf([cur.c])]), [sel, chart, transposed]);
-  // Only while one of them is on: every selected cell's value goes to the module (at most qurry_shared::statusbar::MAX_CELLS)
-  const wantStats = multi && wasmReady && statusItems.some((i) => SELECTION_ITEMS.includes(i));
-  const stats = useMemo(() => {
-    if (!wantStats) return undefined;
-    const max = shared().statusBarInfo().maxCells;
-    const vals: Cell[] = [];
-    // A not-yet-written DEFAULT has no value to count
-    forSelected((r, c) => {
-      if (vals.length >= max) return false;
-      const v = valueAt(r, c);
-      if (v !== DEFAULT_TOKEN) vals.push(v);
-    });
-    return shared().selectionStats(vals);
-  }, [wantStats, sel, result, changes, added]);
-  // Size: the current cell alone, and its table column's declared type when the grid's columns map to a table (a table tab, a console
-  // result of one table or a join's columns of a table)
-  // (not a not-yet-written DEFAULT: it has no value yet)
-  const sizeCell = !multi && cur && !chart && !transposed && statusItems.includes("size") ? { r: dataIndex(cur.r), c: cur.c } : null;
-  const sizeAt = sizeCell && valueAt(sizeCell.r, sizeCell.c) !== DEFAULT_TOKEN ? sizeCell : null;
-  const sizeValue = sizeAt ? valueAt(sizeAt.r, sizeAt.c) : null;
-  const joinCol = sizeAt ? p.editJoin?.columns[sizeAt.c] : undefined;
-  const colRef = !sizeAt ? undefined : edit ? { schema: edit.schema, table: edit.table, column: tcol(sizeAt.c) } : joinCol && "table" in joinCol ? { ...p.editJoin!.tables[joinCol.table], column: joinCol.column } : undefined;
-  useTableColumnsLoaded();
-  const colMeta = colRef && p.target ? tableColumns(p.target, colRef.schema, colRef.table)?.find((m) => m.name === colRef.column) : undefined;
-  const kind = p.dialect?.quoting;
-  const gridStatus = useMemo<GridStatus>(
-    () => ({
-      kind,
-      pos: posSpans,
-      stats,
-      shown: range ? [range[0] + 1, range[1] + 1, cols.length] : undefined,
-      cell: sizeAt ? { typeName: cols[sizeAt.c].typeName, value: sizeValue, column: colMeta && { dataType: colMeta.dataType, charset: colMeta.charset } } : undefined,
-    }),
-    [kind, posSpans, stats, range?.[0], range?.[1], cols, sizeAt?.r, sizeAt?.c, sizeValue, colMeta],
-  );
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    setFocusWidgets(el, { grid: gridStatus });
-  }, [gridStatus]);
-  useEffect(() => {
-    const el = wrapRef.current;
-    return () => {
-      if (el) setFocusWidgets(el, undefined);
-    };
-  }, []);
+  useGridStatus({
+    colVirt, scrollRef, wrapRef, chart, transposed, rownumW, hasSel, sel, cur, wasmReady, forSelected, valueAt,
+    result, changes, added, dataIndex, edit, tcol, cols, p,
+  });
 
   // ─── Find (Find on Current Page) ───
   const findLower = findText.toLowerCase();
