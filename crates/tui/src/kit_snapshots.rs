@@ -534,7 +534,22 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Left).unwrap();
     }
     h.app.close_tab_now(h.app.active);
-    // Column widths (#109): < > = on the current column, saved per table in settings.json "columnWidths" (shared with the GUI)
+    // Cut values (#183): long values come cut at gridCutChars and end with a dim …; the value panel says why a keyless one stays cut
+    let payload = "{\"order\": {\"id\": 486, \"items\": [{\"sku\": \"A-1\", \"qty\": 2}, {\"sku\": \"B-7\", \"qty\": 1}], \"note\": \"call first\"";
+    h.table_tab("webhook_log", &["received_at", "payload"], &[&["2026-11-01 09:12", payload], &["2026-11-01 09:14", "{\"ping\": true}"]], &[]);
+    h.app.focus = crate::app::Focus::Grid;
+    if let Some(g) = h.app.grid_mut() {
+        g.cut.insert((0, 1));
+        g.col = 1;
+    }
+    h.app.value_panel = true;
+    scenes.push(app_scene(h, "Grid cut values", "A value cut at ⌃k › Grid Long Values… ends with a dim …; a table without a primary key keeps the cut text, and the value panel says why", 120, 16));
+    h.app.value_panel = false;
+    h.app.run_action(crate::app::Action::GridLongValues);
+    scenes.push(app_scene(h, "Grid Long Values", "⌃k › Grid Long Values…: where long values are cut (0 = never), shared with the GUI's Settings › Appearance › Data grid › Long values", 120, 16));
+    h.app.popup = None;
+    h.app.close_tab_now(h.app.active);
+    // Column widths (#109):< > = on the current column, saved per table in settings.json "columnWidths" (shared with the GUI)
     // The Hangul memo is the widest (2 cells a character), though the English one has more characters
     let memo = "first order after the promotion; call before delivery";
     let wide = "배송 전에 꼭 전화 주세요. 부재 시 경비실에 맡겨 주세요";
