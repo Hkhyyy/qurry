@@ -9,7 +9,7 @@ Read ARCHITECTURE.md before changing code.
 
 ## The product
 
-- `crates/core`: tokio runtime, sqlx pools per data source, console sessions with server-side cursors (`session.rs`, idle cursors closed after 60 s), `app.rs` (`AppState`, housekeeping/keep-alive loop, `fetch_more`), transfer jobs (import/export streaming), RAG/embeddings, Redis, plugin drivers over processes.
+- `crates/core`: tokio runtime, sqlx pools per data source, console sessions with server-side cursors (`session.rs`, idle cursors closed after 60 s), `app/` (`AppState`, housekeeping/keep-alive loop, `fetch_more`), transfer jobs (import/export streaming), RAG/embeddings, Redis, plugin drivers over processes.
 - GUI: React in `src/` (big screens: `App.tsx`, `ResultGrid.tsx` with @tanstack/react-virtual, `ConsolePane.tsx`, Monaco editor models per console tab, intervals for polling/auto refresh), Tauri IPC in `src-tauri/`.
 - TUI: ratatui event loop in `crates/tui/src/main.rs` (redraws on events, a 0.5 s tick while something runs, a 5 s housekeeping message), grids in `grid.rs`.
 - MCP server `crates/mcp`, run as a long-lived process by AI tools.

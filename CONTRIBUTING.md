@@ -68,7 +68,7 @@ docker run -d --name qurry-demo-mysql -e MYSQL_ROOT_PASSWORD=dbtool -e MYSQL_DAT
 docker run -d --name qurry-demo-redis -p 127.0.0.1:16379:6379 redis:7-alpine
 ```
 
-Then run the ignored tests the way CI does (the SSL, TLS, Sentinel, Cluster and SSH tunnel tests need their own servers; see the comments in `crates/core/src/redisdb.rs` and `crates/core/src/db.rs`):
+Then run the ignored tests the way CI does (the SSL, TLS, Sentinel, Cluster and SSH tunnel tests need their own servers; see the comments in `crates/core/src/backend/redisdb.rs` and `crates/core/src/backend/db.rs`):
 
 ```bash
 export QURRY_TEST_PG=127.0.0.1:55432:postgres:postgres     # host:port:user:db
