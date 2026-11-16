@@ -941,6 +941,13 @@ pub fn show_log() -> AppResult<()> {
     opened.map_err(|e| crate::error::AppError::Msg(format!("Couldn't open the log ({e}). Open it from Finder: {}", file.display())))
 }
 
+/// A front-end error (an error boundary's, window error, unhandledrejection) into qurry.log: message and stacks only, redacted,
+/// cut short and rate limited (qurry_core::logfile::frontend_error)
+#[tauri::command]
+pub fn log_frontend_error(source: String, message: String, stack: Option<String>, component_stack: Option<String>) {
+    qurry_core::logfile::frontend_error(&source, &message, stack.as_deref(), component_stack.as_deref());
+}
+
 /// Saves the channel, then answers what it offers from the saved check only (no request): None if nothing was checked yet or checks are off
 #[tauri::command]
 pub fn set_update_channel(state: State<'_, AppState>, channel: qurry_core::update::Channel) -> AppResult<Option<UpdateInfo>> {

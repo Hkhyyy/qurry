@@ -92,6 +92,8 @@ async fn main() -> std::io::Result<()> {
     }));
     // AWS SSM tunnels run the aws CLI in its own process group: stop it on a panic, a closed terminal (SIGHUP) or SIGTERM too
     qurry_core::ssm::kill_on_panic();
+    // First, into the log (the screen hid stderr until the hooks above restore it)
+    qurry_core::logfile::log_panics();
     tokio::spawn(qurry_core::ssm::kill_on_signals());
     let mut term = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let res = run(&mut term, state, check_update.then_some(cfg_dir), start).await;

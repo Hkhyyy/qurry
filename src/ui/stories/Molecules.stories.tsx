@@ -5,6 +5,7 @@ import { shared } from "../../lib/shared";
 import { connTabVars } from "../../lib/theme";
 import { ConsoleIcon, DatabaseIcon, FolderIcon, PgIcon, ReportIcon, SchemaIcon, TabIcon, TableIcon } from "../icons";
 import { ReconnectToastView } from "../../components/ReconnectToasts";
+import { ErrorFallback, type Scope } from "../../components/ErrorBoundary";
 import type { ReconnectToast } from "../../lib/reconnect";
 
 /** Molecules: a row · cell made of a few atoms */
@@ -428,3 +429,17 @@ export const ToastFailed = toastStory("failed, reason and Retry", failedToast, 0
 export const ToastFailedLight = toastStory("failed, reason and Retry", failedToast, 0, true);
 export const ToastCancelled = toastStory("cancelled", cancelledToast, 0);
 export const ToastCancelledLight = toastStory("cancelled", cancelledToast, 0, true);
+
+/** An error boundary's fallback (#181): a tab's keeps the rest of the window, the window's replaces it */
+const boom = Object.assign(new TypeError("Cannot read properties of undefined (reading 'map')"), { stack: "TypeError: Cannot read properties of undefined (reading 'map')\n    at ResultGrid (index.js:1:2)" });
+const fallbackStory = (scope: Scope): S => ({
+  name: `ErrorFallback · ${scope}`,
+  render: () => (
+    // transform: the window's fallback (position: fixed) stays in the frame
+    <div style={{ width: 640, height: 360, position: "relative", transform: "translateZ(0)", border: "1px solid var(--ui-border)", background: "var(--bg)" }}>
+      <ErrorFallback scope={scope} error={boom} componentStack={"\n    at ResultGrid\n    at ConsolePane"} onReload={() => {}} />
+    </div>
+  ),
+});
+export const ErrorFallbackTab = fallbackStory("tab");
+export const ErrorFallbackWindow = fallbackStory("window");

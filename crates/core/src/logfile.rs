@@ -157,6 +157,73 @@ pub fn log(msg: &str) {
     }
 }
 
+/// Panics go to the log too (what and where), then to the hook set before (the TUI's restores the terminal): release builds
+/// abort, and the TUI's screen hides stderr
+pub fn log_panics() {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |p| {
+        log(&p.to_string());
+        hook(p);
+    }));
+}
+
+/// The GUI's front-end errors the log takes per minute; past them one line says the rest of the minute's are left out (a render
+/// loop can't flood the file)
+pub const FRONTEND_PER_MINUTE: u32 = 10;
+
+/// How many front-end errors went to the log in the current minute
+struct FrontendLimit {
+    since: Option<std::time::Instant>,
+    n: u32,
+}
+
+impl FrontendLimit {
+    /// Counts an error at `now`: its number in the current minute (from 1)
+    fn admit(&mut self, now: std::time::Instant) -> u32 {
+        if self.since.is_none_or(|s| now.duration_since(s) >= std::time::Duration::from_secs(60)) {
+            *self = FrontendLimit { since: Some(now), n: 0 };
+        }
+        self.n += 1;
+        self.n
+    }
+}
+
+static FRONTEND: Mutex<FrontendLimit> = Mutex::new(FrontendLimit { since: None, n: 0 });
+
+/// Cut to `max` characters, `…` when cut
+fn cut(s: &str, max: usize) -> Cow<'_, str> {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => Cow::Owned(format!("{}…", &s[..i])),
+        None => Cow::Borrowed(s),
+    }
+}
+
+/// The log line of a front-end error (`source`: boundary, error, unhandledrejection): its message and stacks only, cut short. The
+/// GUI never sends query text or cell values; `log` redacts the line like any other
+fn frontend_line(source: &str, message: &str, stack: Option<&str>, component_stack: Option<&str>) -> String {
+    let mut line = format!("front-end {} error: {}", cut(source, 32), cut(message.trim(), 1000));
+    if let Some(s) = stack.map(str::trim).filter(|s| !s.is_empty()) {
+        line += &format!(" | stack: {}", cut(s, 4000));
+    }
+    if let Some(s) = component_stack.map(str::trim).filter(|s| !s.is_empty()) {
+        line += &format!(" | components: {}", cut(s, 2000));
+    }
+    line
+}
+
+/// A GUI front-end error into the log (the log_frontend_error command), at most FRONTEND_PER_MINUTE a minute
+pub fn frontend_error(source: &str, message: &str, stack: Option<&str>, component_stack: Option<&str>) {
+    frontend_error_with(&mut FRONTEND.lock().unwrap_or_else(|e| e.into_inner()), std::time::Instant::now(), source, message, stack, component_stack);
+}
+
+fn frontend_error_with(limit: &mut FrontendLimit, now: std::time::Instant, source: &str, message: &str, stack: Option<&str>, component_stack: Option<&str>) {
+    match limit.admit(now) {
+        n if n <= FRONTEND_PER_MINUTE => log(&frontend_line(source, message, stack, component_stack)),
+        n if n == FRONTEND_PER_MINUTE + 1 => log(&format!("front-end errors: more than {FRONTEND_PER_MINUTE} this minute, the rest of this minute's are suppressed")),
+        _ => {}
+    }
+}
+
 /// An error for the log: a server error by its SQLSTATE only, since its message can quote the statement or the values it was
 /// given (a duplicate key's DETAIL, MySQL's "near '…'"); other errors (network, tunnel, files) in full
 pub fn error_kind(e: &crate::error::AppError) -> String {
@@ -573,6 +640,61 @@ mod tests {
 
     /// The tests that set the process's log file, one at a time (other tests' lines may land in it meanwhile)
     static SET: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// A GUI front-end error (log_frontend_error): message and stacks redacted and cut, at most FRONTEND_PER_MINUTE a minute, then
+    /// one line, then again once the minute is over
+    #[test]
+    fn frontend_errors_are_masked_and_limited() {
+        let _one = SET.blocking_lock();
+        let t = tempfile::tempdir().unwrap();
+        init_at(t.path(), "gui");
+        let mut limit = FrontendLimit { since: None, n: 0 };
+        let t0 = std::time::Instant::now();
+        let long = "x".repeat(10_000);
+        frontend_error_with(
+            &mut limit,
+            t0,
+            "boundary",
+            "Failed near postgres://app:Pw-s3cret-1@db.local/x where name = 's3cret-literal'",
+            Some(&format!("Error: boom\n    at render (index.js:1:2)\n{long}")),
+            Some("\n    at ConsolePane\n    at ErrorBoundary"),
+        );
+        for _ in 0..FRONTEND_PER_MINUTE + 5 {
+            frontend_error_with(&mut limit, t0 + std::time::Duration::from_secs(30), "error", "loop", None, None);
+        }
+        frontend_error_with(&mut limit, t0 + std::time::Duration::from_secs(61), "unhandledrejection", "after the minute", None, Some(""));
+        *SINK.lock().unwrap() = None;
+        let l = lines(t.path(), "qurry.log");
+        let text = l.join("\n");
+        assert!(!text.contains("s3cret") && !text.contains("Pw-"), "{text}");
+        assert!(l[0].contains("] front-end boundary error: Failed near postgres://app:***@db.local/x where name = '…' | stack: Error: boom\\n    at render (index.js:1:2)"), "{}", l[0]);
+        assert!(l[0].ends_with("x… | components: at ConsolePane\\n    at ErrorBoundary"), "{}", l[0]);
+        assert!(l[0].len() < 5_000, "cut: {}", l[0].len());
+        // The first and FRONTEND_PER_MINUTE - 1 of the loop, the one line, nothing more until the minute is over
+        assert_eq!(l.iter().filter(|x| x.ends_with("] front-end error error: loop")).count() as u32, FRONTEND_PER_MINUTE - 1, "{text}");
+        assert_eq!(l.iter().filter(|x| x.ends_with(&format!("] front-end errors: more than {FRONTEND_PER_MINUTE} this minute, the rest of this minute's are suppressed"))).count(), 1, "{text}");
+        assert!(l.last().unwrap().ends_with("] front-end unhandledrejection error: after the minute"), "{text}");
+        assert_eq!(l.len() as u32, FRONTEND_PER_MINUTE + 2, "{text}");
+    }
+
+    /// log_panics: a panic's message and place reach the file (redacted), and the hook set before still runs
+    #[test]
+    fn panics_are_logged() {
+        let _one = SET.blocking_lock();
+        let t = tempfile::tempdir().unwrap();
+        init_at(t.path(), "tui");
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let r = ran.clone();
+        std::panic::set_hook(Box::new(move |_| r.store(true, std::sync::atomic::Ordering::SeqCst)));
+        log_panics();
+        let _ = std::panic::catch_unwind(|| panic!("boom password=s3cret"));
+        // Back to the default hook for the other tests
+        let _ = std::panic::take_hook();
+        *SINK.lock().unwrap() = None;
+        assert!(ran.load(std::sync::atomic::Ordering::SeqCst));
+        let text = std::fs::read_to_string(t.path().join("qurry.log")).unwrap();
+        assert!(text.contains("] panicked at crates/core/src/logfile.rs:") && text.contains(":\\nboom password=***\n"), "{text}");
+    }
 
     /// Through log! itself, as the apps write it
     #[test]

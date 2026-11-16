@@ -767,6 +767,8 @@ const handlers: Record<string, (a: any) => unknown> = {
   },
   save_keymap: () => null,
   show_log: () => null,
+  // The specs read what reached the log
+  log_frontend_error: (a: any) => (((window as any).__mockLogged ??= []).push(a), null),
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
   update_channel: () => updateChannel,
   // Fonts that ship with macOS (the specs run as on macOS), one of them proportional
