@@ -66,7 +66,7 @@ drivers/*     드라이버 프로그램 (SQLite, DuckDB, SQL Server, ClickHouse,
 
 Audit 워크플로 (`.github/workflows/audit.yml`) 는 lockfile 의 알려진 취약점을 검사합니다 (`cargo deny check advisories`, `pnpm audit --prod`). lockfile 을 바꾼 풀 리퀘스트와 매주 `main` 에서 돌고, 필수 검사는 아닙니다. 실패했을 때 할 일: [CONTRIBUTING › Dependencies](../../CONTRIBUTING.md#dependencies) (영어). Dependabot 이 매주 Cargo · npm · GitHub Actions 업데이트 풀 리퀘스트를 엽니다.
 
-Redis TLS (16391), Sentinel (26392 → 16392), Cluster (17001-17003) 서버는 `crates/core/src/redisdb.rs` 의 테스트 주석에 있습니다 (TLS 인증서 폴더: `QURRY_TEST_TLS_DIR`, 기본 `/tmp/dbtool-tls`).
+Redis TLS (16391), Sentinel (26392 → 16392), Cluster (17001-17003) 서버는 `crates/core/src/backend/redisdb.rs` 의 테스트 주석에 있습니다 (TLS 인증서 폴더: `QURRY_TEST_TLS_DIR`, 기본 `/tmp/dbtool-tls`).
 
 드라이버 · 벡터 DB 테스트는 서버를 `host:port:user:password:database` 로 주면 (그리고 드라이버를 빌드했으면 — `cargo build -p qurry-driver-<name>`) 돕니다: `QURRY_TEST_CH`, `QURRY_TEST_MSSQL`, `QURRY_TEST_MONGO`, `QURRY_TEST_ORACLE`, `QURRY_TEST_QDRANT`, `QURRY_TEST_CHROMA`, `QURRY_TEST_MILVUS` (예: `QURRY_TEST_QDRANT=127.0.0.1:6333:::qdrant`). pgvector 와 RAG 테스트는 서버에 `vector` 확장이 있으면 (`pgvector/pgvector:pg16`) `QURRY_TEST_PG` 를 씁니다. RAG 테스트는 가짜 임베딩 서버를 써서 모델이 필요 없습니다.
 

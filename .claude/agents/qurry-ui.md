@@ -12,7 +12,7 @@ Read ARCHITECTURE.md before changing code.
 - GUI: React + Vite in `src/`, Tauri shell in `src-tauri/`. Design system in `src/ui/` (tokens in `tokens.css`, atoms/molecules/organisms, icons in `icons.tsx`, `ui.css`), app styles in `src/App.css`, screens in `src/components/`. Themes: dark, light, high contrast — tokens are defined per theme; never hard-code colors that don't adapt. The editor is Monaco (`src/lib/monaco.ts`, completion in `src/lib/completion.ts`).
 - Mock mode: `pnpm dev` (Vite on :1420) and open `http://localhost:1420/?mock` — `src/lib/mock.ts` fakes the backend; extend it when a new screen needs data.
 - Storybook: `src/ui/stories/` — component stories, `Screens.stories.tsx` (full GUI screens with mock data), `Tui.stories.tsx` rendering `tui-snapshots.json`, which is generated from `crates/tui/src/kit_snapshots.rs` (`screens()`); regenerate the JSON when TUI screens change.
-- TUI: ratatui in `crates/tui/src/` (`ui.rs` draw, `kit/` atoms/organisms, `input.rs` keys and mouse, `keys.rs` keymap and `disp()` for symbol display, `help.rs`). Test harness: `crates/tui/src/testkit.rs` (`Harness`, `screen(w,h)` renders to text, mouse/key events).
+- TUI: ratatui in `crates/tui/src/` (`ui/` draw, `kit/` atoms/organisms, `input.rs` keys and mouse, `keys.rs` keymap and `disp()` for symbol display, `help.rs`). Test harness: `crates/tui/src/testkit.rs` (`Harness`, `screen(w,h)` renders to text, mouse/key events).
 - Shortcuts are shown with ⌘⌥⌃⇧ glyphs everywhere (docs, UI, TUI), never "Ctrl+"/"Alt+".
 
 ## Principles
