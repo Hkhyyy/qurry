@@ -1,13 +1,14 @@
-import { type Dispatch, type RefObject, type SetStateAction, useEffect, useRef } from "react";
+import { type Dispatch, type RefObject, type SetStateAction, useEffect, useRef, useState } from "react";
 import type { Cell, QueryResult } from "../../lib/api";
 import { raw } from "../../lib/extract";
 import type { Pos } from "../../lib/gridSelection";
 import { draftToApply, leftDraft, panelText, registerValuePanel, type PanelDraft } from "../../lib/valuePanel";
-import { editableValue } from "./shared";
+import { cellKey, editableValue } from "./shared";
 
 /** The result grid's Value Editor side panel: the cell it shows, its draft applied on leaving, open / apply / close */
 export function useValuePanel({
   active, rowCount, cols, valueAt, cellOk, baseCount, setCell, draft, setDraft, setPanelError, panel, setPanel, setPanelFocus, focusGrid, wrapRef,
+  cutAt, canFetch, cutReason, fetchCells,
 }: {
   active: Pos | null;
   rowCount: number;
@@ -24,10 +25,35 @@ export function useValuePanel({
   setPanelFocus: Dispatch<SetStateAction<number>>;
   focusGrid: () => void;
   wrapRef: RefObject<HTMLDivElement | null>;
+  /** Cut data cell (r, c), whether row r's can be read whole and why not, and the read (useGridEdits) */
+  cutAt: (r: number, c: number) => boolean;
+  canFetch: (r: number) => boolean;
+  cutReason: (r: number, c: number) => string;
+  fetchCells: (cells: [number, number][]) => Promise<QueryResult | undefined>;
 }) {
   // ─── Value Editor panel (follows the current cell) ───
   const panelCell = active && active.r < rowCount ? active : null;
-  const panelReadOnly = (r: number, c: number) => !cellOk(r, c) || (r < baseCount && !editableValue(valueAt(r, c), cols[c].typeName));
+  // A cut cell shows its cut text read-only while its whole value is read (then the whole value, editable as any), or for good with
+  // why when its row has no key. A read that failed (said in the status bar) isn't tried again for that cell in this grid
+  const [failed, setFailed] = useState<Set<string>>(new Set());
+  useEffect(() => setFailed(new Set()), [cols]);
+  const panelCut = !!panelCell && cutAt(panelCell.r, panelCell.c);
+  const panelNote = !panelCell || !panelCut
+    ? undefined
+    : !canFetch(panelCell.r)
+      ? cutReason(panelCell.r, panelCell.c)
+      : failed.has(cellKey(panelCell.r, panelCell.c))
+        ? "The whole value couldn't be read (see the status bar): this is its start"
+        : "Loading the whole value…";
+  const fetchable = panel && panelCut && canFetch(panelCell!.r) && !failed.has(cellKey(panelCell!.r, panelCell!.c));
+  useEffect(() => {
+    if (!fetchable || !panelCell) return;
+    const { r, c } = panelCell;
+    fetchCells([[r, c]]).then((res) => {
+      if (!res || res.cut?.some(([x, y]) => x === r && y === c)) setFailed((f) => new Set(f).add(cellKey(r, c)));
+    });
+  }, [fetchable, panelCell?.r, panelCell?.c]);
+  const panelReadOnly = (r: number, c: number) => !cellOk(r, c) || cutAt(r, c) || (r < baseCount && !editableValue(valueAt(r, c), cols[c].typeName));
   const panelShown = panelCell ? panelText(cols[panelCell.c].typeName, raw(valueAt(panelCell.r, panelCell.c))) : { json: false, text: "" };
   /** Write a draft to its cell; the reason when a json / jsonb column refuses it */
   const writeDraft = (d: PanelDraft): string | null => {
@@ -67,5 +93,5 @@ export function useValuePanel({
   const closePanelRef = useRef(closePanel);
   closePanelRef.current = closePanel;
   useEffect(() => (panel && wrapRef.current ? registerValuePanel(wrapRef.current, () => closePanelRef.current()) : undefined), [panel]);
-  return { panelCell, panelReadOnly, panelShown, openPanel, applyPanel, closePanel };
+  return { panelCell, panelReadOnly, panelShown, panelNote, openPanel, applyPanel, closePanel };
 }

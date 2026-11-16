@@ -124,6 +124,8 @@ interface Props {
   onPin: (id: string, pinned: boolean) => void;
   onCloseResult: (id: string) => void;
   onFetchMore: (entryId: string) => void;
+  /** The whole values of a result tab's cut cells (useConsole fetchFull) */
+  onFetchFull?: (entryId: string, cells: [number, number][]) => Promise<QueryResult | undefined>;
   /** Save a result's grid edits (the table tab's path), then run its statement again */
   onSubmit: (entryId: string, statements: string[]) => Promise<void>;
   onExport: (sql: string) => void;
@@ -543,6 +545,7 @@ export function ConsolePane(p: Props) {
                   loadingMore={p.loadingMore}
                   query={active.sql}
                   onFetchMore={() => p.onFetchMore(active.id)}
+                  onFetchFull={p.onFetchFull && ((cells) => p.onFetchFull!(active.id, cells))}
                   onSubmit={(st) => p.onSubmit(active.id, st)}
                   onReload={() => execute([{ sql: active.sql, stmt: active.stmt, into: active.id }])}
                   onCancel={p.onCancel}

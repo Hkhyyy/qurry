@@ -20,11 +20,11 @@ import { draftAt, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
 import { ResultChart } from "./ResultChart";
 import { SqlBlock } from "./SqlBlock";
 import { ValuePanel } from "./ValuePanel";
-import { Button, CellEditor, cx, FixSql, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { Button, CellEditor, CutMark, cx, FixSql, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
-import { display, type SortKey } from "../features/grid/shared";
+import { cellKey, cutLength, cutSet, cutTitle, display, keyColumns, keyed, type SortKey } from "../features/grid/shared";
 import { useGridClipboard } from "../features/grid/useGridClipboard";
 import { useGridEdits } from "../features/grid/useGridEdits";
 import { useGridFind } from "../features/grid/useGridFind";
@@ -69,6 +69,9 @@ interface Props {
   loadingMore: boolean;
   query: string | null;
   onFetchMore: () => void;
+  /** Read cut cells ([data row, col], QueryResult.cut) whole into the result by its key (useConsole fetchFull); → the result then.
+   *  Absent: cut cells stay cut */
+  onFetchFull?: (cells: [number, number][]) => Promise<QueryResult | undefined>;
   onSubmit: (statements: string[]) => Promise<void>;
   /** A console's run again resolves when it ends (Run again then gives the keys to its new grid) */
   onReload: () => void | Promise<void>;
@@ -139,7 +142,7 @@ export function ResultGrid(p: Props) {
 
   /** The table column of result column i: what the generated SQL names */
   const tcol = (i: number) => edit?.columns?.[i] ?? cols[i].name;
-  const pkIdx = useMemo(() => (edit ? edit.pk.map((k) => (edit.columns ? edit.columns.indexOf(k) : cols.findIndex((c) => c.name === k))) : []), [edit, cols]);
+  const pkIdx = useMemo(() => keyColumns(edit, cols), [edit, cols]);
   const canEdit = !p.readOnly && !!edit && edit.pk.length > 0 && pkIdx.every((i) => i >= 0);
   /** A join result: its cells are edited per table, by that table's key; rows can't be added, cloned or deleted */
   const join = p.readOnly ? undefined : p.editJoin;
@@ -168,6 +171,20 @@ export function ResultGrid(p: Props) {
     return t.pkAt.some((i) => result.rows[r]?.[i] === null) ? sharedOr(`Read-only: no ${name} row matches this row (outer join).`, (s) => s.editNoRow(name)) : undefined;
   };
   const cellOk = (r: number, c: number) => !deleted.has(r) && cellReason(r, c) === undefined;
+
+  // ─── Cut values (Settings › Long values): read whole by the key when needed, never written back as cut ───
+  const cut = useMemo(() => cutSet(result.cut), [result.cut]);
+  /** Data cell (r, c) holds only the start of its value (a changed cell holds the change) */
+  const cutAt = (r: number, c: number) => r < baseCount && cut.has(cellKey(r, c)) && !(changes[r] && c in changes[r]);
+  const canFetch = (r: number) => !!p.onFetchFull && keyed(pkIdx, cut, r);
+  /** Why cut cell (r, c) can't be read whole */
+  const cutReason = (r: number, c: number) => {
+    const at = `Cut at ${cutLength(result.rows[r]?.[c] ?? null)} characters`;
+    if (edit && !edit.pk.length) return `${at}; the whole value needs a primary key (${edit.schema}.${edit.table} has none)`;
+    if (edit && pkIdx.some((k) => cut.has(cellKey(r, k)))) return `${at}; the whole value is read by the row's key, which is cut too`;
+    return `${at}; the whole value needs a primary key. ${result.readOnlyReason ?? CONSOLE_READ_ONLY}`;
+  };
+  const fetchCells = (cells: [number, number][]) => (p.onFetchFull ? p.onFetchFull(cells) : Promise.resolve(undefined));
   /** A join's column that can't be edited in any row: why, for its header */
   const colReason = (c: number) => {
     const col = join?.columns[c];
@@ -272,7 +289,7 @@ export function ResultGrid(p: Props) {
   const { commitEdit, setCell, startEdit, setNull, setDefault, genUuid, addRow, cloneRow, deleteRows, revertSelected, submit, fix, previewPending, doSubmitPreview } = useGridEdits({
     editing, setEditing, changes, setChanges, deleted, setDeleted, added, setAdded, preview, setPreview, submitErr, setSubmitErr,
     result, cols, baseCount, rowCount, join, canEdit, anyEdit, pkIdx, edit, D, tcol, valueAt, cellReason, cellOk,
-    active, hasSel, selRows, forSelected, selectCell, virt, scrollRef, p,
+    active, hasSel, selRows, forSelected, selectCell, virt, scrollRef, cut, cutAt, canFetch, cutReason, fetchCells, p,
   });
   const focusGrid = () => (scrollRef.current ?? wrapRef.current)?.focus();
   // The button goes with the failure: the keys go to the grid again, the new one when the run replaced it (a console's result is
@@ -283,16 +300,18 @@ export function ResultGrid(p: Props) {
     await p.onReload();
     requestAnimationFrame(() => place?.querySelector<HTMLElement>(":scope > .grid-wrap .grid-scroll")?.focus());
   };
-  const { panelCell, panelReadOnly, panelShown, openPanel, applyPanel, closePanel } = useValuePanel({
+  const { panelCell, panelReadOnly, panelShown, panelNote, openPanel, applyPanel, closePanel } = useValuePanel({
     active, rowCount, cols, valueAt, cellOk, baseCount, setCell, draft, setDraft, setPanelError, panel, setPanel, setPanelFocus, focusGrid, wrapRef,
+    cutAt, canFetch, cutReason, fetchCells,
   });
 
-  // A note (why a paste or a copy format couldn't run) is about what was selected then
-  useEffect(() => setStatusNote(undefined), [sel, result, changes]);
+  // A note (why a paste or a copy format couldn't run) is about what was selected then (whole values read into the rows keep it)
+  useEffect(() => setStatusNote(undefined), [sel, cols, baseCount, changes]);
   useEffect(() => () => setStatusNote(undefined), []);
 
   const { copySelection, copyInList, paste } = useGridClipboard({
     edit, quoteIdent, sel, hasSel, extractor, valueAt, dataIndex, pkIdx, cols, D, rowCount, anyEdit, cur, join, cellOk, joinRows, cellReason, setAdded, setCell,
+    cutAt, canFetch, fetchCells,
   });
 
   // ─── Keyboard (DataGrip grid keymap) ───
@@ -337,8 +356,7 @@ export function ResultGrid(p: Props) {
     }
     // Typing directly in a cell starts editing (DataGrip)
     if (anyEdit && active && e.key.length === 1 && !mod && !e.altKey) {
-      startEdit(active.r, active.c);
-      setEditing((ed) => (ed ? { ...ed, value: e.key } : ed));
+      startEdit(active.r, active.c, e.key);
       return stop();
     }
   };
@@ -606,7 +624,11 @@ export function ResultGrid(p: Props) {
             {chart ? (
               <ResultChart result={result} />
             ) : transposed ? (
-              <TransposedView cols={cols} rows={Array.from({ length: Math.min(rowCount, 300) }, (_, d) => cols.map((_, c) => valueAt(dataIndex(d), c)))} />
+              <TransposedView
+                cols={cols}
+                rows={Array.from({ length: Math.min(rowCount, 300) }, (_, d) => cols.map((_, c) => valueAt(dataIndex(d), c)))}
+                cutAt={(d, c) => cutAt(dataIndex(d), c)}
+              />
             ) : (
               <div
                 className="grid-scroll"
@@ -666,6 +688,7 @@ export function ResultGrid(p: Props) {
                             );
                           }
                           const cls = classOf[ci](val);
+                          const isCut = cutAt(r, ci);
                           return (
                             <GridCell
                               key={ci}
@@ -678,6 +701,7 @@ export function ResultGrid(p: Props) {
                               match={isMatch(d, ci)}
                               // A join's cell that can't be edited: why, on hover (whole columns say it on their header too)
                               title={join && !isNew ? cellReason(r, ci) || undefined : undefined}
+                              cut={isCut ? cutTitle(cutLength(val)) : undefined}
                               onMouseDown={(e) => {
                                 if (e.button !== 0) return;
                                 dragging.current = true;
@@ -712,6 +736,7 @@ export function ResultGrid(p: Props) {
                 json={panelShown.json}
                 isNull={!!panelCell && valueAt(panelCell.r, panelCell.c) === null}
                 readOnly={!panelCell || panelReadOnly(panelCell.r, panelCell.c)}
+                note={panelNote}
                 error={panelError}
                 focusSeq={panelFocus}
                 onChange={(text) => {
@@ -788,7 +813,7 @@ export function ResultGrid(p: Props) {
 }
 
 /** View as | Transpose: swap rows and columns */
-function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Cell[][] }) {
+function TransposedView({ cols, rows, cutAt }: { cols: QueryResult["columns"]; rows: Cell[][]; cutAt: (d: number, c: number) => boolean }) {
   useSharedReady(); // time fractions and value classes come from the WASM module: render again once it has loaded
   const fracW = cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(rows.map((r) => r[ci])) : 0));
   const overrides = useGridAlign();
@@ -806,9 +831,11 @@ function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Ce
                 </th>
                 {rows.map((r, ri) => {
                   const cls = classOf(r[ci]);
+                  const isCut = cutAt(ri, ci);
                   return (
-                    <td key={ri} className={cx(CELL_KIND[cls], aligns[cls] && `al-${aligns[cls]}`)}>
+                    <td key={ri} className={cx(CELL_KIND[cls], aligns[cls] && `al-${aligns[cls]}`)} title={isCut ? cutTitle(cutLength(r[ci])) : undefined}>
                       {fracW[ci] && typeof r[ci] === "string" ? padFrac(r[ci] as string, fracW[ci]) : display(r[ci])}
+                      {isCut && <CutMark />}
                     </td>
                   );
                 })}
