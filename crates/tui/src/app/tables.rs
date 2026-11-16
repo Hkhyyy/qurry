@@ -626,8 +626,10 @@ pub(crate) fn cut_note(t: &Tab) -> Option<String> {
     }
     Some(match cut_reason(t, g, g.row, g.col) {
         Some(why) => why,
-        None if g.read_failed => "The whole value couldn't be read (see the status line): this is its start".into(),
-        None => LOADING.into(),
+        None => match &g.unread {
+            Some((at, why)) if *at == (g.row, g.col) => why.clone(),
+            _ => LOADING.into(),
+        },
     })
 }
 
@@ -635,7 +637,8 @@ impl App {
     /// Read the active grid's cut `cells` whole (AppState::fetch_values by the table's key, in the tab's session, so a Manual
     /// console's own changes too): the values go into the grid's rows and the cells leave its cut set, wherever their rows are by
     /// then (found by their key). `then` runs once the answer is in, while that grid is still the active one; a row no longer
-    /// in the table is said on the status line after it. Cells of rows without a key (cut_reason) are left as they are
+    /// in the table is said on the status line after it, and the cell under the cursor left cut keeps why (Grid::unread). Then
+    /// the value panel reads the cell the cursor went to meanwhile. Cells of rows without a key (cut_reason) are left as they are
     pub(crate) fn fetch_full(&mut self, cells: Vec<(usize, usize)>, then: impl FnOnce(&mut App) + Send + 'static) {
         let Some(t) = self.tabs.get(self.active) else { return };
         let Some(g) = grid_of(t) else { return };
@@ -685,13 +688,9 @@ impl App {
                 // A run (or a reload) replaced the grid meanwhile: the answer is for the one it replaced
                 let Some(g) = grid.filter(|g| g.id == gid) else { return };
                 g.reading = false;
-                let got = match r {
-                    Ok(got) => got,
-                    Err(e) => {
-                        g.read_failed = true;
-                        a.status = format!("Couldn't read the whole value: {e}");
-                        return;
-                    }
+                let (got, err) = match r {
+                    Ok(got) => (got, None),
+                    Err(e) => (vec![None; rows.len()], Some(e)),
                 };
                 let mut missing = 0;
                 for (i, sent) in rows.iter().enumerate() {
@@ -709,14 +708,37 @@ impl App {
                         }
                     }
                 }
-                if active && a.grid_mut().is_some_and(|g| g.id == gid) {
-                    then(a);
+                // The cell under the cursor that this read left cut keeps why: the value panel says it and doesn't ask again
+                let at = (g.row, g.col);
+                if cells.contains(&at) && g.is_cut(at.0, at.1) {
+                    let why = match err {
+                        Some(_) => "The whole value couldn't be read (see the status line): this is its start".into(),
+                        None => format!("This row isn't in {table} any more: this is its start"),
+                    };
+                    g.unread = Some((at, why));
                 }
-                if missing > 0 {
-                    let (s, its) = if missing == 1 { (" isn't", "its") } else { ("s aren't", "their") };
-                    let note = format!("{missing} row{s} in {table} any more: {its} values stay cut. Run the query again to see the rows as they are now.");
-                    a.status = if a.status.is_empty() || a.status == LOADING { note } else { format!("{} · {note}", a.status) };
+                if let Some(e) = err {
+                    a.status = format!("Couldn't read the whole value: {e}");
+                } else {
+                    if active && a.grid_mut().is_some_and(|g| g.id == gid) {
+                        then(a);
+                    } else if a.status == LOADING {
+                        a.status = "Not done: the result changed before the whole value came".into();
+                    }
+                    if missing > 0 {
+                        let (s, its) = if missing == 1 { (" isn't", "its") } else { ("s aren't", "their") };
+                        let note = format!("{missing} row{s} in {table} any more: {its} values stay cut. Run the query again to see the rows as they are now.");
+                        if !a.status.ends_with(&note) {
+                            a.status = if a.status.is_empty() || a.status == LOADING { note } else { format!("{} · {note}", a.status) };
+                        }
+                    }
+                    // Nothing came of it here (the cursor moved on, or ↩ waited on the value panel's read): the loading note goes
+                    if a.status == LOADING {
+                        a.status = "Ready".into();
+                    }
                 }
+                // The cursor may have gone to another cut cell while this one loaded
+                a.panel_whole();
             },
         );
     }
@@ -731,6 +753,10 @@ impl App {
             return false;
         }
         self.status = LOADING.into();
+        // One read at a time: a second ↩ while it loads would open the editor again over what was typed
+        if g.reading {
+            return false;
+        }
         self.fetch_full(vec![(r, c)], move |a| {
             if a.grid_mut().is_some_and(|g| !g.is_cut(r, c) && (g.row, g.col) == (r, c)) {
                 a.status = "Ready".into();
@@ -765,13 +791,16 @@ impl App {
         self.fetch_full(keyed, then);
     }
 
-    /// The value panel on a cut cell: its whole value is read by itself (not again in a grid where a read failed)
+    /// The value panel on a cut cell: its whole value is read by itself, once while the cursor stays on it (Grid::unread)
     pub(crate) fn panel_whole(&mut self) {
+        if let Some(g) = self.grid_mut().filter(|g| g.unread.as_ref().is_some_and(|(at, _)| *at != (g.row, g.col))) {
+            g.unread = None;
+        }
         if !self.value_panel {
             return;
         }
         let Some(t) = self.tabs.get(self.active) else { return };
-        let Some(g) = grid_of(t).filter(|g| !g.reading && !g.read_failed && g.is_cut(g.row, g.col)) else { return };
+        let Some(g) = grid_of(t).filter(|g| !g.reading && g.unread.is_none() && g.is_cut(g.row, g.col)) else { return };
         if cut_reason(t, g, g.row, g.col).is_none() {
             let cell = (g.row, g.col);
             self.fetch_full(vec![cell], |_| {});

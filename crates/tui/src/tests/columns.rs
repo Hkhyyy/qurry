@@ -314,3 +314,121 @@ async fn grid_long_values_setting() {
     assert_eq!(h.app.status, "Not saved: \"0x\" isn't a number. Enter 0 or more");
     assert_eq!(h.app.state.store.grid_cut_chars(), 0);
 }
+
+/// docs_db, counting the `-- fetch_values` asks in `$n`
+macro_rules! counting_docs_db {
+    ($n:ident) => {{
+        static $n: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn db(q: &str) -> Result<qurry_core::db::QueryResult, String> {
+            if q.starts_with("-- fetch_values") {
+                $n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            docs_db(q)
+        }
+        (db as fn(&str) -> Result<qurry_core::db::QueryResult, String>, &$n)
+    }};
+}
+
+/// The value panel on a cut cell whose row is gone asks once while the cursor stays on it (not per key or mouse move) and says so
+/// over the cut text; the status line doesn't grow. Back on it later, it asks again
+#[tokio::test]
+async fn value_panel_asks_once_for_a_row_that_is_gone() {
+    let (db, n) = counting_docs_db!(N);
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(db);
+    cut_docs(&mut h, &["id"], &[0, 1]);
+    h.key("Down");
+    h.key("v");
+    h.settle().await;
+    assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let status = h.app.status.clone();
+    for _ in 0..5 {
+        h.key("Right");
+        h.settle().await;
+    }
+    assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 1, "no ask per key");
+    assert_eq!(h.app.status, status, "the note is said once");
+    let s = h.screen(160, 16);
+    assert!(s.contains("│This row isn't in public.docs any more: this"), "{s}");
+    // Row 1 is read whole; back on row 2 it asks once more
+    h.key("Up");
+    h.settle().await;
+    h.key("Down");
+    h.settle().await;
+    assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 3);
+}
+
+/// The cursor moved to another cut cell while the panel read one: that one is read once the first answer is in
+#[tokio::test]
+async fn value_panel_reads_where_the_cursor_went_meanwhile() {
+    let (db, n) = counting_docs_db!(N);
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(db);
+    cut_docs(&mut h, &["id"], &[0, 1]);
+    h.key("v");
+    h.key("Down");
+    h.settle().await;
+    assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert!(!grid(&h).reading && !grid(&h).is_cut(0, 1));
+    let s = h.screen(160, 16);
+    assert!(!s.contains("Loading the whole value") && s.contains("This row isn't in public.docs any more"), "{s}");
+}
+
+/// A second ↩ while the whole value loads asks nothing more and doesn't reopen the editor over what was typed
+#[tokio::test]
+async fn second_enter_while_loading_keeps_the_editor() {
+    let (db, n) = counting_docs_db!(N);
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(db);
+    cut_docs(&mut h, &["id"], &[0]);
+    h.key("Enter");
+    h.key("Enter");
+    assert!(h.app.popup.is_none());
+    h.step().await;
+    h.type_str("XYZ");
+    h.settle().await;
+    assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(matches!(&h.app.popup, Some(crate::app::Popup::Input { input, .. }) if input.lines().join("") == "{\"a\": \"the whole value\"}XYZ"));
+}
+
+/// A failed read is said over that cell only: the panel asks again once the cursor comes back
+#[tokio::test]
+async fn value_panel_retries_after_a_failed_read() {
+    static FAIL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+    fn db(q: &str) -> Result<qurry_core::db::QueryResult, String> {
+        if FAIL.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err("timeout".into());
+        }
+        docs_db(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(db);
+    cut_docs(&mut h, &["id"], &[0, 1]);
+    h.key("v");
+    h.settle().await;
+    assert!(h.app.status.starts_with("Couldn't read the whole value") && h.app.status.contains("timeout"), "{}", h.app.status);
+    assert!(h.screen(160, 16).contains("│The whole value couldn't be read"));
+    h.key("Right");
+    h.settle().await;
+    assert!(grid(&h).is_cut(0, 1), "not asked again while the cursor stays");
+    h.key("Down");
+    h.settle().await;
+    h.key("Up");
+    h.settle().await;
+    assert!(!grid(&h).is_cut(0, 1), "asked again on the way back");
+}
+
+/// A copy whose whole values come after another tab was shown says it wasn't done (the status line doesn't stay on loading)
+#[tokio::test]
+async fn copy_after_the_tab_changed_says_not_done() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(docs_db);
+    h.table_tab("other", &["id"], &[&["1"]], &["id"]);
+    let other = h.app.active;
+    cut_docs(&mut h, &["id"], &[0]);
+    h.key("y");
+    assert_eq!(h.app.status, "Loading the whole value…");
+    h.app.active = other;
+    h.settle().await;
+    assert_eq!(h.app.status, "Not done: the result changed before the whole value came");
+}

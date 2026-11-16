@@ -56,9 +56,11 @@ pub struct Grid {
     /// Cells whose value came cut at gridCutChars (QueryResult::cut, moved with their rows): the row holds only the start of the
     /// value until App::fetch_full reads it whole by the table's key
     pub cut: BTreeSet<(usize, usize)>,
-    /// A read of whole values is on its way (App::fetch_full), and whether one failed: the value panel then stops asking by itself
+    /// A read of whole values is on its way (App::fetch_full)
     pub reading: bool,
-    pub read_failed: bool,
+    /// The cell under the cursor that a read left cut (its row is gone, or the read failed) and why: the value panel doesn't ask
+    /// for it again while the cursor stays on it (cleared when rows move)
+    pub unread: Option<((usize, usize), String)>,
 }
 
 /// Text placed in a cell `w` columns wide (display width, so wide characters line up too); text wider than the cell is left as is
@@ -164,7 +166,7 @@ static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), before_fit: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), shown: None, orig: vec![], cut: BTreeSet::new(), reading: false, read_failed: false };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), before_fit: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), shown: None, orig: vec![], cut: BTreeSet::new(), reading: false, unread: None };
         g.cut = g.result.cut.iter().map(|&[r, c]| (r, c)).collect();
         g.compute_widths();
         g
@@ -262,6 +264,7 @@ impl Grid {
             let mv = |r: usize| if r >= at { r + k } else { r };
             self.edits = std::mem::take(&mut self.edits).into_iter().map(|((r, c), v)| ((mv(r), c), v)).collect();
             self.cut = std::mem::take(&mut self.cut).into_iter().map(|(r, c)| (mv(r), c)).collect();
+            self.unread = None;
             self.marked = std::mem::take(&mut self.marked).into_iter().map(mv).collect();
             self.row = mv(self.row);
             self.anchor = self.anchor.map(|(r, c)| (mv(r), c));
@@ -318,6 +321,7 @@ impl Grid {
         let mv = |r: usize| if r < base { to[r] } else { r };
         self.edits = std::mem::take(&mut self.edits).into_iter().map(|((r, c), v)| ((mv(r), c), v)).collect();
         self.cut = std::mem::take(&mut self.cut).into_iter().map(|(r, c)| (mv(r), c)).collect();
+        self.unread = None;
         self.deleted = std::mem::take(&mut self.deleted).into_iter().map(mv).collect();
         let (orig, sorted): (Vec<usize>, Vec<Vec<Value>>) = rows.into_iter().map(|(o, _, v)| (o, v)).unzip();
         self.orig = orig;
@@ -484,6 +488,7 @@ impl Grid {
             let up = |er: usize| if er > r { er - 1 } else { er };
             self.edits = std::mem::take(&mut self.edits).into_iter().filter(|((er, _), _)| *er != r).map(|((er, c), v)| ((up(er), c), v)).collect();
             self.cut = std::mem::take(&mut self.cut).into_iter().filter(|(er, _)| *er != r).map(|(er, c)| (up(er), c)).collect();
+            self.unread = None;
         }
         if !new.is_empty() {
             self.marked.retain(|&r| r < base);
