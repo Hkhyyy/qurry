@@ -5,6 +5,7 @@ import type { Cell } from "../../lib/api";
 import { alignTable, CELL_KIND, cellClasses } from "../../lib/gridAlign";
 import { jsonCell } from "../../lib/jsonSpans";
 import type { Alignments } from "../../lib/shared";
+import { ValuePanel } from "../../components/ValuePanel";
 
 /** Result grid cells (pieces used by ResultGrid): header strip · header row · header cell · row · row number · data cell · edit cell */
 const meta: Meta = { title: "GUI/4 Grid" };
@@ -228,5 +229,64 @@ export const JsonColumn: StoryObj = {
         </GridRow>
       ))}
     </Frame>
+  ),
+};
+
+/** Long values (Settings › Appearance › Data grid): a value past the limit comes cut and ends with a dim …, which stays in view however
+ *  narrow the column (hover says where it was cut). The Value Editor shows a cut cell's text read-only while it reads the whole value
+ *  by the row's key, then the whole value, editable; a result without a key keeps the cut text, saying why */
+const CUT_JSON = JSON.stringify({ id: 1, items: Array.from({ length: 400 }, (_, k) => ({ sku: `A-${k}`, qty: k })) }).slice(0, 4096);
+const CUT_TEXT = "long note ".repeat(600).slice(0, 4096);
+const [DOC_W, NOTE_W] = [260, 200];
+const CUT_W = W[0] + W[1] + DOC_W + NOTE_W;
+const cutHover = "Cut at 4096 characters — the Value Editor (⇧↩) shows the whole value";
+function CutPanel({ note, text, readOnly }: { note?: string; text: string; readOnly: boolean }) {
+  return (
+    <div style={{ width: 300, height: 220, border: "1px solid var(--ui-border)" }}>
+      <ValuePanel title="note : text" text={text} json={false} isNull={false} readOnly={readOnly} note={note} error={null} focusSeq={0}
+        onChange={() => {}} onToggleLayout={() => {}} onApply={() => {}} onBack={() => {}} onClose={() => {}} />
+    </div>
+  );
+}
+export const CutValues: StoryObj = {
+  name: "Cut values (Long values)",
+  render: () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <Frame
+        width={CUT_W}
+        height={ROW * 3}
+        header={
+          <GridHeaderRow width={CUT_W - W[0]} height={26}>
+            <GridHeaderCell name="id" type="int8" pk width={W[1]} />
+            <GridHeaderCell name="doc" type="jsonb" width={DOC_W} />
+            <GridHeaderCell name="note" type="text" width={NOTE_W} />
+          </GridHeaderRow>
+        }
+      >
+        <GridRow top={0} height={ROW} width={CUT_W}>
+          <RowNumberCell width={W[0]}>1</RowNumberCell>
+          <GridCell width={W[1]} kind="num" align="right">1</GridCell>
+          <GridCell width={DOC_W} cut={cutHover}><JsonText {...jsonCell(CUT_JSON)} /></GridCell>
+          <GridCell width={NOTE_W}>note 1</GridCell>
+        </GridRow>
+        <GridRow top={ROW} height={ROW} width={CUT_W} odd>
+          <RowNumberCell width={W[0]}>2</RowNumberCell>
+          <GridCell width={W[1]} kind="num" align="right">2</GridCell>
+          <GridCell width={DOC_W}><JsonText {...jsonCell('{"id":2,"ok":true}')} /></GridCell>
+          <GridCell width={NOTE_W} cut={cutHover} selected active>{CUT_TEXT}</GridCell>
+        </GridRow>
+        <GridRow top={ROW * 2} height={ROW} width={CUT_W}>
+          <RowNumberCell width={W[0]}>3</RowNumberCell>
+          <GridCell width={W[1]} kind="num" align="right">3</GridCell>
+          <GridCell width={DOC_W} cut={cutHover}><JsonText {...jsonCell(CUT_JSON)} /></GridCell>
+          <GridCell width={NOTE_W} cut={cutHover} align="right">short cut text</GridCell>
+        </GridRow>
+      </Frame>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <CutPanel text={CUT_TEXT} readOnly note="Loading the whole value…" />
+        <CutPanel text={CUT_TEXT + "long note the end"} readOnly={false} />
+        <CutPanel text={CUT_TEXT} readOnly note="Cut at 4096 characters; the whole value needs a primary key (public.cut_log has none)" />
+      </div>
+    </div>
   ),
 };

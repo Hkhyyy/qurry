@@ -3,13 +3,19 @@ import type { EditTarget } from "../../components/ResultGrid";
 import type { Cell, Dialect, JoinEdit, QueryResult } from "../../lib/api";
 import { copied, type Extractor, extractRows, HOLE_TOKEN, pasteCells, raw } from "../../lib/extract";
 import type { NewRow } from "../../lib/gridEdit";
-import { copyTable, isSingle, type Pos, type Selection, single } from "../../lib/gridSelection";
+import { copyTable, forEachCell, isSingle, type Pos, type Selection, single } from "../../lib/gridSelection";
 import { sharedReady } from "../../lib/shared";
 import { setStatusNote } from "../../lib/statusbar";
+import { cellKey, cutSet } from "./shared";
+
+/** Copy of cut values that couldn't be read whole: what was copied, and how to get the whole values */
+export const cutCopied = (n: number) =>
+  `${n} value${n === 1 ? " is" : "s are"} cut (no key to fetch ${n === 1 ? "it" : "them"} whole); raise Settings › Appearance › Data grid › Long values`;
 
 /** The result grid's clipboard: Copy in the chosen Data Extractor, Copy as IN List, Paste */
 export function useGridClipboard({
   edit, quoteIdent, sel, hasSel, extractor, valueAt, dataIndex, pkIdx, cols, D, rowCount, anyEdit, cur, join, cellOk, joinRows, cellReason, setAdded, setCell,
+  cutAt, canFetch, fetchCells,
 }: {
   edit: EditTarget | undefined;
   quoteIdent: (name: string) => string;
@@ -29,7 +35,11 @@ export function useGridClipboard({
   joinRows: string;
   cellReason: (r: number, c: number) => string | undefined;
   setAdded: Dispatch<SetStateAction<NewRow[]>>;
-  setCell: (r: number, c: number, next: Cell) => void;
+  setCell: (r: number, c: number, next: Cell, whole?: boolean) => void;
+  /** Cut data cell (r, c), whether row r's can be read whole, and the read (useGridEdits) */
+  cutAt: (r: number, c: number) => boolean;
+  canFetch: (r: number) => boolean;
+  fetchCells: (cells: [number, number][]) => Promise<QueryResult | undefined>;
 }) {
   const tableRef = edit ? `${quoteIdent(edit.schema)}.${quoteIdent(edit.table)}` : "MY_TABLE";
 
@@ -48,25 +58,43 @@ export function useGridClipboard({
     if (sharedReady()) return make();
     setStatusNote("Copy formats need WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
   };
+  /** The copy of `s`: its cut cells are read whole first (the result's rows take them, so `make` reads them); those of rows without a
+   *  key are copied as cut, and the status bar says so (a read that failed says so itself: fetchFull). Without cut cells the text is written right away, else once read (a
+   *  ClipboardItem that waits for it: WebKit refuses a write after the click's moment) */
+  const copyOf = (s: Selection, make: () => string | undefined, as: Parameters<typeof copied>[1]) => {
+    const cells: [number, number][] = [];
+    forEachCell(s, (d, c) => void (cutAt(dataIndex(d), c) && cells.push([dataIndex(d), c])));
+    const done = (text: string | undefined) => (text !== undefined && copied(text, as), text);
+    if (!cells.length) {
+      const text = done(make());
+      if (text !== undefined) navigator.clipboard.writeText(text);
+      return;
+    }
+    const read = cells.filter(([r]) => canFetch(r));
+    const text = (read.length ? fetchCells(read) : Promise.resolve(undefined)).then((res) => {
+      const still = cutSet(res?.cut);
+      const left = cells.filter(([r, c]) => !canFetch(r) || still.has(cellKey(r, c))).length;
+      const t = done(make());
+      if (t !== undefined && left) setStatusNote(cutCopied(left));
+      if (t === undefined) throw new Error("nothing to copy");
+      return new Blob([t], { type: "text/plain" });
+    });
+    navigator.clipboard.write([new ClipboardItem({ "text/plain": text })]).catch(() => {});
+  };
   const copySelection = (header = false) => {
     if (!sel || !hasSel) return;
     // The one selected cell (not sel.cur: a ⌘-click that took a cell out leaves the cursor outside the selection)
     const one = sel.ranges[0];
     const rawOne = isSingle(sel) && !header && (extractor === "CSV" || extractor === "TSV");
-    const text = rawOne ? raw(valueAt(dataIndex(one.r0), one.c0)) : formatted(() => extract(sel, extractor, header));
-    if (text === undefined) return;
     // Paste reads this text back as its format (one copied row splits into cells); one raw value stays one value
-    copied(text, rawOne ? "other" : extractor);
-    navigator.clipboard.writeText(text);
+    copyOf(sel, () => (rawOne ? raw(valueAt(dataIndex(one.r0), one.c0)) : formatted(() => extract(sel, extractor, header))), rawOne ? "other" : extractor);
   };
   /** Selected cells as ('a', 'b') (paste straight into WHERE x IN). If only one cell is selected, its whole column */
   const copyInList = () => {
     if (!sel || !hasSel) return;
     const c = sel.ranges[0].c0;
-    const text = formatted(() => extract(isSingle(sel) ? single({ r: 0, c }, { r: rowCount - 1, c }) : sel, "SQL IN List"));
-    if (text === undefined) return;
-    copied(text, "other");
-    navigator.clipboard.writeText(text);
+    const s = isSingle(sel) ? single({ r: 0, c }, { r: rowCount - 1, c }) : sel;
+    copyOf(s, () => formatted(() => extract(s, "SQL IN List")), "other");
   };
   /** Paste: TSV/CSV into cells (pasteCells: an empty field is NULL), adding new rows if there are not enough (DataGrip) */
   const paste = async () => {
@@ -90,7 +118,7 @@ export function useGridClipboard({
           if (cur.c + j < cols.length) row[cur.c + j] = v;
         });
         setAdded((a) => [...a, row]);
-      } else cells.forEach((v, j) => cur.c + j < cols.length && setCell(r, cur.c + j, v));
+      } else cells.forEach((v, j) => cur.c + j < cols.length && setCell(r, cur.c + j, v, true));
     });
   };
   return { copySelection, copyInList, paste };

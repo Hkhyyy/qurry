@@ -177,6 +177,48 @@ export function KeywordCaseField() {
   );
 }
 
+/** Settings › Appearance › Data grid › Long values: values longer than this many characters come cut (0 = never; settings.json, shared
+ *  with the TUI). Read when the page opens, saved as typed; it applies to the next run or page of rows */
+export function LongValuesField() {
+  const [text, setText] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    api.gridCutChars().then((n) => setText(String(n)), (x) => setErr(`Couldn't read the setting (${x}).`));
+  }, []);
+  return (
+    <Field
+      label="Long values"
+      group
+      error={err ?? undefined}
+      info={[
+        "Text, JSON, XML and array values longer than this come cut in PostgreSQL console and table results, so a wide row loads fast.",
+        "The Value Editor, copy and edits read the whole value by the result's primary key; a result without one keeps the cut text.",
+      ]}
+    >
+      <div className="ui-row">
+        <label htmlFor="long-values">Cut values longer than</label>
+        <TextInput
+          id="long-values"
+          className="w-port"
+          type="number"
+          min={0}
+          value={text}
+          aria-invalid={!!err}
+          onChange={(e) => {
+            const v = e.target.value;
+            setText(v);
+            const k = Number(v);
+            if (v.trim() === "" || !Number.isInteger(k) || k < 0) return setErr("Enter 0 or more.");
+            setErr(null);
+            api.setGridCutChars(k).catch((x) => setErr(`Couldn't save the setting (${x}).`));
+          }}
+        />
+        <span>characters (0 = never)</span>
+      </div>
+    </Field>
+  );
+}
+
 /** Settings › Appearance › Console › Result tabs: unpinned result tabs kept per console (lib/resultTabs; shared with the TUI). Saved as typed; a value
  *  that isn't a whole number of 1 or more says so and isn't saved */
 export function ResultTabsField() {
@@ -488,6 +530,7 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage }: { 
           {page === "grid" && (
             <div className="settings-form">
               <GridAlignField />
+              <LongValuesField />
               <StatusBarField />
             </div>
           )}

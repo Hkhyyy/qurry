@@ -353,7 +353,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .value-panel { height: 100%; display: flex; flex-direction: column; background: var(--panel); }
 .ve-monaco { flex: 1; min-height: 0; }
 .ve-empty { flex: 1; padding: 10px 12px; font-size: 12px; }
-.ve-error { margin: 4px 8px; }
+.ve-error, .ve-note { margin: 4px 8px; }
 .ve-head { height: 32px; display: flex; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--border); }
 .ve-title { font-weight: 600; font-size: 12px; }
 .ve-text { flex: 1; resize: none; border: none; border-radius: 0; background: var(--bg); padding: 10px 12px; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; line-height: 1.5; }

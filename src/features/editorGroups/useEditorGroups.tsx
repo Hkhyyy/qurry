@@ -58,7 +58,7 @@ type Deps = {
 
 /** The editor groups (split panes): their tab strips, what each tab shows, the tab menu, splitting and tab drag and drop */
 export function useEditorGroups({
-  conns, setStatus, groupActive, labelOf, setTabMenu, setMaximized, activate, addTab, openConsole, openTable, openTableTab, openDdl, ragInit, runJob, exportCsv, moveToWs, dbCache, schemaCache, executeConsole, cancel, fetchMoreEntry, setTxMode, txEnd, loadDbList, loadSchemaList, switchDatabase, switchSchema, log, reconnectAfterTls, setPendingRuns, applyTableFilter, fetchMore, submitEdits, focusTableGrid,
+  conns, setStatus, groupActive, labelOf, setTabMenu, setMaximized, activate, addTab, openConsole, openTable, openTableTab, openDdl, ragInit, runJob, exportCsv, moveToWs, dbCache, schemaCache, executeConsole, cancel, fetchMoreEntry, setTxMode, txEnd, loadDbList, loadSchemaList, switchDatabase, switchSchema, log, reconnectAfterTls, setPendingRuns, applyTableFilter, fetchMore, fetchFull, submitEdits, focusTableGrid,
 }: Deps) {
   const tabs = useTabsStore((s) => s.tabs);
   const panes = useTabsStore((s) => s.panes);
@@ -441,6 +441,7 @@ export function useEditorGroups({
                         setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.filter((r) => r.id !== id), activeResult: x.activeResult === id ? "output" : x.activeResult } : x)))
                       }
                       onFetchMore={(entryId) => fetchMoreEntry(t.id, entryId)}
+                      onFetchFull={(entryId, cells) => fetchFull(t.id, entryId, cells)}
                       readOnly={!!c?.readOnly}
                       onSubmit={(entryId, st) => submitEdits(t, st, () => {
                         const e = t.results.find((r) => r.id === entryId);
@@ -592,6 +593,7 @@ export function useEditorGroups({
                     onApply={(w, o) => applyTableFilter(t, w, o)}
                     onCancel={() => cancel(t)}
                     onFetchMore={() => fetchMore(t)}
+                    onFetchFull={(cells) => fetchFull(t.id, undefined, cells)}
                     onSubmit={(st) => submitEdits(t, st)}
                     onExportCsv={() => exportCsv(t)}
                     onDdl={() => {

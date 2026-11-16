@@ -18,6 +18,7 @@ import { noticeLines } from "./notices";
 import { patch, updTab } from "../tabs/ops";
 import { editorApis, setTabs, useTabsStore } from "../tabs/store";
 import type { Tab } from "../tabs/types";
+import { appendRows, applyFull, fullRequest, ofRun, sameRun } from "../grid/shared";
 
 /** Max rows kept in the result grid (same as the TUI). Beyond that, export to CSV */
 const MAX_ROWS = 100_000;
@@ -320,7 +321,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     if (tab?.running) return;
     if (!tab || tab.cursorEntry !== entryId) {
       // The server cursor is open only on the last result
-      updTab(tabId, (t) => ({ ...t, results: t.results.map((r) => (r.id === entryId && r.result ? { ...r, result: { ...r.result, truncated: false } } : r)) }));
+      updTab(tabId, (t) => ({ ...t, results: t.results.map((r) => (r.id === entryId && r.result ? { ...r, result: ofRun({ ...r.result, truncated: false }, r.result) } : r)) }));
       return;
     }
     const sent = tab.results.find((x) => x.id === entryId)?.result;
@@ -329,20 +330,20 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     updTab(tabId, (t) => ({ ...t, loadingMore: true }));
     // A run in the tab meanwhile has a result of its own (its cursorEntry), or put a new one in this tab (a rerun keeps the entry's
     // id): this answer is for the old one, so it is dropped
-    const asked = (t?: Tab) => t?.cursorEntry === entryId && t.results.find((x) => x.id === entryId)?.result === sent;
+    const asked = (t?: Tab) => t?.cursorEntry === entryId && sameRun(t.results.find((x) => x.id === entryId)?.result, sent);
     const answer = (f: (t: Tab) => Tab) => updTab(tabId, (t) => (asked(t) ? f({ ...t, loadingMore: false }) : { ...t, loadingMore: false }));
     try {
       const r = await api.fetchMore(tabId);
       answer((t) => ({
         ...t,
         cursorEntry: r.truncated ? entryId : undefined,
-        results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: { ...x.result, rows: [...x.result.rows, ...r.rows], truncated: r.truncated } } : x)),
+        results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: appendRows(x.result, r) } : x)),
       }));
     } catch (e) {
       // The result isn't complete: keep its "+" and say in the grid why no more rows came
       const moreError = moreRowsFailed(e);
       const current = asked(useTabsStore.getState().tabs.find((t) => t.id === tabId));
-      answer((t) => ({ ...t, cursorEntry: undefined, results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: { ...x.result, moreError } } : x)) }));
+      answer((t) => ({ ...t, cursorEntry: undefined, results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: ofRun({ ...x.result, moreError }, x.result) } : x)) }));
       if (current) setStatus(moreError);
     }
   };
@@ -425,18 +426,44 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     // The result asked for: a run meanwhile (reload, filter) replaced it, and the answer for the old one is dropped
     const sent = useTabsStore.getState().tabs.find((t) => t.id === tab.id)?.result;
     const answer = (f: (r: QueryResult) => QueryResult, status: string) => {
-      const current = useTabsStore.getState().tabs.find((t) => t.id === tab.id)?.result === sent;
-      setTabs((ts) => ts.map((t) => (t.id !== tab.id ? t : t.result && t.result === sent ? { ...t, loadingMore: false, result: f(t.result) } : { ...t, loadingMore: false })));
+      const current = sameRun(useTabsStore.getState().tabs.find((t) => t.id === tab.id)?.result, sent);
+      setTabs((ts) => ts.map((t) => (t.id !== tab.id ? t : t.result && sameRun(t.result, sent) ? { ...t, loadingMore: false, result: f(t.result) } : { ...t, loadingMore: false })));
       if (current) setStatus(status);
     };
     patch(tab.id, { loadingMore: true });
     try {
       const r = await api.fetchMore(tab.id);
-      answer((x) => ({ ...x, rows: [...x.rows, ...r.rows], truncated: r.truncated }), `${(sent?.rows.length ?? 0) + r.rows.length}${r.truncated ? "+" : ""} rows retrieved`);
+      answer((x) => appendRows(x, r), `${(sent?.rows.length ?? 0) + r.rows.length}${r.truncated ? "+" : ""} rows retrieved`);
     } catch (e) {
       const moreError = moreRowsFailed(e);
-      answer((x) => ({ ...x, moreError }), moreError);
+      answer((x) => ofRun({ ...x, moreError }, x), moreError);
     }
+  };
+
+  /** The whole values of cut cells ([data row, col]) of a table tab's result, or of a console's result entry: read by the result's key
+   *  on the tab's session and written into its rows (one store patch). → the result as it is then; undefined when a run replaced it
+   *  or the read failed (said in the status bar) */
+  const fetchFull = async (tabId: string, entryId: string | undefined, cells: [number, number][]): Promise<QueryResult | undefined> => {
+    const find = (t?: Tab) => (entryId ? t?.results.find((x) => x.id === entryId)?.result : t?.result) ?? undefined;
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId);
+    const sent = find(tab);
+    const edit = entryId ? sent?.edit : tab?.edit;
+    if (!tab || !sent || !edit || !cells.length) return sent;
+    const { rows, cols, req } = fullRequest(sent, edit, cells);
+    let got: (unknown[] | null)[];
+    try {
+      got = await api.fetchValues(tab.target, tab.id, req);
+    } catch (e) {
+      setStatus(`Couldn't read the whole value: ${String(e)}`);
+      return undefined;
+    }
+    // A load-more meanwhile is the same run (its rows come after these); a run that replaced the result gets nothing
+    const now = find(useTabsStore.getState().tabs.find((t) => t.id === tabId));
+    if (!now || !sameRun(now, sent)) return undefined;
+    const { result, missing } = applyFull(now, cells, rows, cols, got);
+    updTab(tabId, (t) => (entryId ? { ...t, results: t.results.map((x) => (x.id === entryId ? { ...x, result } : x)) } : { ...t, result }));
+    if (missing) setStatus(`${missing} row${missing === 1 ? " isn't" : "s aren't"} in ${edit.schema}.${edit.table} any more: ${missing === 1 ? "its" : "their"} values stay cut. Run the query again to see the rows as they are now.`);
+    return result;
   };
 
   const cancel = async (tab: Tab) => {
@@ -501,5 +528,5 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     // The reload replaces the status line right away, and a table tab has no Output: tell them in a dialog (as the TUI does)
     if (r.warning) void notice(r.warning, "Submitted, with a warning");
   };
-  return { dbCache, schemaCache, loadDbList, loadSchemaList, switchDatabase, switchSchema, run, log, reconnectAfterTls, focusTableGrid, executeConsole, fetchMoreEntry, setTxMode, txEnd, applyTableFilter, fetchMore, cancel, setPendingRuns, canCancel, busyLabel, cancelRun, submitEdits, loadStale };
+  return { dbCache, schemaCache, loadDbList, loadSchemaList, switchDatabase, switchSchema, run, log, reconnectAfterTls, focusTableGrid, executeConsole, fetchMoreEntry, setTxMode, txEnd, applyTableFilter, fetchMore, fetchFull, cancel, setPendingRuns, canCancel, busyLabel, cancelRun, submitEdits, loadStale };
 }

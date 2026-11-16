@@ -33,6 +33,7 @@ interface Props {
   onApply: (where: string, orderBy: string) => void;
   onCancel: () => void;
   onFetchMore: () => void;
+  onFetchFull?: (cells: [number, number][]) => Promise<QueryResult | undefined>;
   onSubmit: (statements: string[]) => Promise<void>;
   onExportCsv: () => void;
   onDdl: () => void;
@@ -84,6 +85,7 @@ export function TableEditor(p: Props) {
           loadingMore={p.loadingMore}
           query={p.query}
           onFetchMore={p.onFetchMore}
+          onFetchFull={p.onFetchFull}
           onSubmit={p.onSubmit}
           onReload={() => apply()}
           onCancel={p.onCancel}

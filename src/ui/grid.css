@@ -31,6 +31,10 @@
 .grid-row.deleted .cell:not(.rownum) { text-decoration: line-through; color: var(--danger); background: var(--grid-deleted); }
 .grid-row.deleted .cell span { color: inherit; }
 .cell.changed { background: var(--grid-changed); }
+.cell.cut { display: flex; }
+.cell.cut .cell-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: clip; }
+.cell-cut { flex: none; padding-left: 2px; color: var(--muted); font-style: normal; }
+.cell.sel .cell-cut { color: inherit; }
 .cell-input { flex: none; height: 24px; border-radius: 0; border: 1px solid var(--accent); padding: 0 7px; font: inherit; background: var(--c-1b2840); }
 .pk-mark { font-size: 10px; }
 /* A join's column that can't be edited (its table's key isn't in the result, computed …): the name dimmed, the reason on hover */

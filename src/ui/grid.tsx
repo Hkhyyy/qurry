@@ -137,6 +137,7 @@ export function GridCell({
   changed,
   match,
   title,
+  cut,
   onMouseDown,
   onMouseEnter,
   onDoubleClick,
@@ -155,6 +156,8 @@ export function GridCell({
   changed?: boolean;
   /** Find match */
   match?: boolean;
+  /** The value is cut (Settings › Long values): its hover text. The cell ends with a dim … that stays in view however narrow */
+  cut?: string;
   onMouseDown?: Mouse;
   onMouseEnter?: () => void;
   onDoubleClick?: Mouse;
@@ -162,9 +165,9 @@ export function GridCell({
 }) {
   return (
     <div
-      className={cx("cell", kind, align && `al-${align}`, selected && "sel", active && "active", changed && "changed", match && "match")}
+      className={cx("cell", kind, align && `al-${align}`, selected && "sel", active && "active", changed && "changed", match && "match", cut && "cut")}
       style={{ width }}
-      title={title}
+      title={cut ?? title}
       role="gridcell"
       aria-selected={selected}
       onMouseDown={onMouseDown}
@@ -172,10 +175,20 @@ export function GridCell({
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
     >
-      {children}
+      {cut ? (
+        <>
+          <span className="cell-text">{children}</span>
+          <CutMark />
+        </>
+      ) : (
+        children
+      )}
     </div>
   );
 }
+
+/** The dim … after a cut value's text (GridCell, the transposed view) */
+export const CutMark = () => <span className="cell-cut" aria-hidden>…</span>;
 
 /** A JSON cell's text in colors (inside GridCell, still one line): `spans` are [start, end, kind] UTF-16 ranges in order, kind
  *  key · string · number · keyword · punct. Punctuation is the color of the span around the colored part (half the elements
