@@ -11,7 +11,8 @@ runs:
     # rust-toolchain.toml lists the wasm32 target
     - name: Rust toolchain (rust-toolchain.toml)
       shell: bash
-      run: rustup toolchain install --no-self-update || { echo "::error::rustup could not install the toolchain in rust-toolchain.toml: check that its channel is a released Rust version (the same command reproduces it locally)"; exit 1; }
+      run: |
+        rustup toolchain install --no-self-update || { echo "::error::rustup could not install the toolchain in rust-toolchain.toml: check that its channel is a released Rust version (the same command reproduces it locally)"; exit 1; }
 
     - name: wasm-bindgen version
       id: wb
