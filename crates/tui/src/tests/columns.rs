@@ -374,6 +374,48 @@ async fn value_panel_reads_where_the_cursor_went_meanwhile() {
     assert!(!s.contains("Loading the whole value") && s.contains("This row isn't in public.docs any more"), "{s}");
 }
 
+/// Rows sorted while the panel's read is out: the answer goes to the row asked for, and the row now under the cursor (which the
+/// table has) isn't said to be gone but is read in turn
+#[tokio::test]
+async fn value_panel_read_follows_its_row_through_a_sort() {
+    fn both_db(q: &str) -> Result<qurry_core::db::QueryResult, String> {
+        let keys = q.strip_prefix("-- fetch_values public.docs [\"body\"] by [\"id\"]: [").ok_or("not a read")?;
+        let rows = keys.split("], [").enumerate().map(|(i, k)| vec![serde_json::json!(i), serde_json::json!(format!("whole {}", if k.contains("Some(\"1\")") { 1 } else { 2 }))]);
+        Ok(answer(rows.collect()))
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(both_db);
+    cut_docs(&mut h, &["id"], &[0, 1]);
+    h.key("v");
+    // id ↓ before the answer comes: id 2 is on row 0 now, under the cursor
+    let g = h.app.grid_mut().unwrap();
+    g.col = 0;
+    g.toggle_local_sort();
+    g.toggle_local_sort();
+    g.col = 1;
+    h.settle().await;
+    let g = grid(&h);
+    assert_eq!(g.unread, None);
+    assert_eq!(g.result.rows[0], vec![serde_json::json!("2"), serde_json::json!("whole 2")]);
+    assert_eq!(g.result.rows[1], vec![serde_json::json!("1"), serde_json::json!("whole 1")]);
+    assert!(g.cut.is_empty() && !h.app.status.contains("any more"), "{}", h.app.status);
+}
+
+/// ↩ while the value panel reads the cell says it is still loading (not a silent Ready); once it's in, ↩ edits the whole value
+#[tokio::test]
+async fn enter_while_the_panel_reads_says_so() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(docs_db);
+    cut_docs(&mut h, &["id"], &[0]);
+    h.key("v");
+    h.key("Enter");
+    h.settle().await;
+    assert!(h.app.popup.is_none());
+    assert!(h.app.status.starts_with("Still loading the whole value"), "{}", h.app.status);
+    h.key("Enter");
+    assert!(matches!(&h.app.popup, Some(crate::app::Popup::Input { input, .. }) if input.lines().join("") == "{\"a\": \"the whole value\"}"));
+}
+
 /// A second ↩ while the whole value loads asks nothing more and doesn't reopen the editor over what was typed
 #[tokio::test]
 async fn second_enter_while_loading_keeps_the_editor() {

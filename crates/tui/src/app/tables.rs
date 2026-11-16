@@ -693,24 +693,27 @@ impl App {
                     Err(e) => (vec![None; rows.len()], Some(e)),
                 };
                 let mut missing = 0;
+                // The asked cells this read left cut, where their rows are now
+                let mut left = Vec::new();
                 for (i, sent) in rows.iter().enumerate() {
-                    let Some(vals) = &got[i] else {
+                    if got[i].is_none() {
                         missing += 1;
-                        continue;
-                    };
+                    }
                     // The row asked for, wherever a sort or a delete moved it since
                     let key_of = |r: usize| key_at.iter().map(|&k| g.result.rows[r].get(k).and_then(raw_text)).collect::<Vec<_>>();
                     let base = g.rows() - g.added;
                     let Some(r) = std::iter::once(*sent).chain(0..base).find(|&r| r < base && key_of(r) == keys[i]) else { continue };
-                    for (j, &c) in cols.iter().enumerate() {
-                        if cells.contains(&(*sent, c)) && g.cut.remove(&(r, c)) {
-                            g.result.rows[r][c] = vals[j].clone();
+                    for (j, &c) in cols.iter().enumerate().filter(|&(_, c)| cells.contains(&(*sent, *c))) {
+                        match &got[i] {
+                            Some(vals) if g.cut.remove(&(r, c)) => g.result.rows[r][c] = vals[j].clone(),
+                            _ if g.is_cut(r, c) => left.push((r, c)),
+                            _ => {}
                         }
                     }
                 }
-                // The cell under the cursor that this read left cut keeps why: the value panel says it and doesn't ask again
+                // The asked cell under the cursor that this read left cut keeps why: the value panel says it and doesn't ask again
                 let at = (g.row, g.col);
-                if cells.contains(&at) && g.is_cut(at.0, at.1) {
+                if left.contains(&at) {
                     let why = match err {
                         Some(_) => "The whole value couldn't be read (see the status line): this is its start".into(),
                         None => format!("This row isn't in {table} any more: this is its start"),
@@ -752,11 +755,13 @@ impl App {
             self.status = why;
             return false;
         }
-        self.status = LOADING.into();
-        // One read at a time: a second ↩ while it loads would open the editor again over what was typed
+        // One read at a time: a second ↩ while it loads would open the editor again over what was typed. Said apart from
+        // LOADING, which the value panel's read (its `then` opens nothing) turns to Ready
         if g.reading {
+            self.status = "Still loading the whole value: edit it once it's in".into();
             return false;
         }
+        self.status = LOADING.into();
         self.fetch_full(vec![(r, c)], move |a| {
             if a.grid_mut().is_some_and(|g| !g.is_cut(r, c) && (g.row, g.col) == (r, c)) {
                 a.status = "Ready".into();
