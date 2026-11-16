@@ -182,6 +182,7 @@ export function ResultGrid(p: Props) {
     const at = `Cut at ${cutLength(result.rows[r]?.[c] ?? null)} characters`;
     if (edit && !edit.pk.length) return `${at}; the whole value needs a primary key (${edit.schema}.${edit.table} has none)`;
     if (edit && pkIdx.some((k) => cut.has(cellKey(r, k)))) return `${at}; the whole value is read by the row's key, which is cut too`;
+    if (join) return `${at}; whole values are read only in a result from one table. Open the table to edit it`;
     return `${at}; the whole value needs a primary key. ${result.readOnlyReason ?? CONSOLE_READ_ONLY}`;
   };
   const fetchCells = (cells: [number, number][]) => (p.onFetchFull ? p.onFetchFull(cells) : Promise.resolve(undefined));
@@ -745,7 +746,8 @@ export function ResultGrid(p: Props) {
                   setDraft({ ...panelCell, text, base: panelShown.text, editable: !panelReadOnly(panelCell.r, panelCell.c) });
                 }}
                 onToggleLayout={() => {
-                  if (!panelCell) return;
+                  // A cut value's start isn't JSON to format, and a draft of it would outlive the whole value's arrival
+                  if (!panelCell || cutAt(panelCell.r, panelCell.c)) return;
                   const text = toggleJsonLayout(draftAt(draft, panelCell) ? draft.text : panelShown.text);
                   setDraft({ ...panelCell, text, base: panelShown.text, editable: !panelReadOnly(panelCell.r, panelCell.c) });
                 }}

@@ -37,6 +37,9 @@ export function useValuePanel({
   // why when its row has no key. A read that failed (said in the status bar) isn't tried again for that cell in this grid
   const [failed, setFailed] = useState<Set<string>>(new Set());
   useEffect(() => setFailed(new Set()), [cols]);
+  // The run on screen (a run gives new columns): an answer for one that was replaced marks nothing
+  const colsNow = useRef(cols);
+  colsNow.current = cols;
   const panelCut = !!panelCell && cutAt(panelCell.r, panelCell.c);
   const panelNote = !panelCell || !panelCut
     ? undefined
@@ -49,8 +52,12 @@ export function useValuePanel({
   useEffect(() => {
     if (!fetchable || !panelCell) return;
     const { r, c } = panelCell;
+    const asked = cols;
     fetchCells([[r, c]]).then((res) => {
+      if (colsNow.current !== asked) return;
       if (!res || res.cut?.some(([x, y]) => x === r && y === c)) setFailed((f) => new Set(f).add(cellKey(r, c)));
+      // The whole value is shown now: no draft made from the cut text may stay over it
+      else setDraft((d) => (d && d.r === r && d.c === c ? null : d));
     });
   }, [fetchable, panelCell?.r, panelCell?.c]);
   const panelReadOnly = (r: number, c: number) => !cellOk(r, c) || cutAt(r, c) || (r < baseCount && !editableValue(valueAt(r, c), cols[c].typeName));

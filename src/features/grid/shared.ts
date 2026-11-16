@@ -27,7 +27,7 @@ export const cutTitle = (n: number) => `Cut at ${n} characters — the Value Edi
 /** The run each result object came from: a load-more and fetched values make new objects of the same run, so an answer is dropped
  *  only when a run replaced the result it was asked for */
 const runs = new WeakMap<QueryResult, QueryResult>();
-const ofRun = (next: QueryResult, prev: QueryResult) => (runs.set(next, runs.get(prev) ?? prev), next);
+export const ofRun = (next: QueryResult, prev: QueryResult) => (runs.set(next, runs.get(prev) ?? prev), next);
 export const sameRun = (a?: QueryResult | null, b?: QueryResult | null) => !!a && !!b && (runs.get(a) ?? a) === (runs.get(b) ?? b);
 
 /** The result with a load-more's rows after its own: their cut cells move down by the rows already loaded */

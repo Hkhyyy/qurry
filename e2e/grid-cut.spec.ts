@@ -22,6 +22,16 @@ async function spy(page: Page) {
   return (cmd: string) => page.evaluate((cmd) => ((window as any).__calls as [string, any][]).filter(([c]) => c === cmd).map(([, a]) => a), cmd);
 }
 
+/** fetch_values answers after `ms` from now on, or fails then with `fail` */
+async function slowFetch(page: Page, ms: number, fail?: string) {
+  await page.evaluate(([ms, fail]) => {
+    const w = window as any;
+    const orig = w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_INTERNALS__.invoke = (cmd: string, args: unknown) =>
+      cmd !== "fetch_values" ? orig(cmd, args) : new Promise((ok, no) => setTimeout(() => (fail ? no(fail) : ok(orig(cmd, args))), ms as number));
+  }, [ms, fail] as const);
+}
+
 async function run(page: Page, sql: string) {
   await openApp(page);
   await openConsole(page);
@@ -82,6 +92,40 @@ test("Copy as SQL Updates has the whole value in SET", async ({ page }) => {
   await cutNote(page).click();
   await page.keyboard.press("Meta+C");
   await expect.poll(() => clipboard(page)).toBe(`UPDATE public.cut_demo SET note = '${WHOLE}' WHERE id = '2';`);
+});
+
+test("typing on a cut cell while its whole value loads reads it once and keeps every key", async ({ page }) => {
+  await run(page, "select * from cut_demo");
+  await slowFetch(page, 500);
+  const calls = await spy(page);
+  await cutNote(page).click();
+  await page.keyboard.type("abc");
+  await expect(work(page).locator(".cell-input")).toHaveValue("abc");
+  expect(await calls("fetch_values")).toHaveLength(1);
+});
+
+test("{ } pressed while the whole value loads leaves no draft of the cut text: the panel then shows the whole value", async ({ page }) => {
+  await run(page, "select * from cut_demo");
+  await slowFetch(page, 800);
+  // Row 1's doc: one-line JSON, cut
+  await work(page).locator(".grid-row .cell.cut").first().click();
+  await page.keyboard.press("Shift+Enter");
+  await expect(panel(page).locator(".ve-note")).toHaveText("Loading the whole value…");
+  await panel(page).getByTitle("Toggle Formatting (JSON)").click();
+  await expect(panel(page).locator(".ve-note")).toHaveCount(0);
+  await expect(panel(page).locator(".ve-foot")).not.toContainText("Read-only");
+  // The whole value, formatted (a draft of the cut text would be its one line, which isn't JSON to format)
+  await expect(panel(page).locator(".ve-monaco .view-line").first()).toHaveText("{");
+});
+
+test("Copy of a cut cell whose read failed says the read failed, not that there is no key", async ({ page }) => {
+  await run(page, "select * from cut_demo");
+  await slowFetch(page, 0, "connection reset by peer");
+  await cutNote(page).click();
+  await page.keyboard.press("Meta+C");
+  await expect(page.locator(".statusbar")).toContainText("Couldn't read the whole value: connection reset by peer");
+  await expect.poll(() => clipboard(page)).toBe(CUT);
+  await expect(page.locator(".statusbar")).not.toContainText("no key");
 });
 
 test("a result without a key keeps the cut text, read-only, and says why", async ({ page }) => {

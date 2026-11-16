@@ -59,7 +59,7 @@ export function useGridClipboard({
     setStatusNote("Copy formats need WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
   };
   /** The copy of `s`: its cut cells are read whole first (the result's rows take them, so `make` reads them); those of rows without a
-   *  key are copied as cut, and the status bar says so. Without cut cells the text is written right away, else once read (a
+   *  key are copied as cut, and the status bar says so (a read that failed says so itself: fetchFull). Without cut cells the text is written right away, else once read (a
    *  ClipboardItem that waits for it: WebKit refuses a write after the click's moment) */
   const copyOf = (s: Selection, make: () => string | undefined, as: Parameters<typeof copied>[1]) => {
     const cells: [number, number][] = [];
@@ -72,8 +72,8 @@ export function useGridClipboard({
     }
     const read = cells.filter(([r]) => canFetch(r));
     const text = (read.length ? fetchCells(read) : Promise.resolve(undefined)).then((res) => {
-      const still = read.length ? cutSet(res?.cut) : new Set<string>();
-      const left = cells.filter(([r, c]) => !canFetch(r) || !res || still.has(cellKey(r, c))).length;
+      const still = cutSet(res?.cut);
+      const left = cells.filter(([r, c]) => !canFetch(r) || still.has(cellKey(r, c))).length;
       const t = done(make());
       if (t !== undefined && left) setStatusNote(cutCopied(left));
       if (t === undefined) throw new Error("nothing to copy");

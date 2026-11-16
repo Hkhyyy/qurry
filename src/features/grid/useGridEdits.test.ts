@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Cell, QueryResult, ResultEditTarget } from "../../lib/api";
 import { editStatements, type Changes } from "../../lib/gridEdit";
-import { appendRows, applyFull, cutSet, fullRequest, keyColumns, keyed, sameRun } from "./shared";
+import { appendRows, applyFull, cutSet, fullRequest, keyColumns, keyed, ofRun, sameRun } from "./shared";
 import { changeCell, refusesCut } from "./useGridEdits";
 
 // Cut values (Settings › Long values): a cell holding only the start of its value is never written back as it is
@@ -47,6 +47,12 @@ describe("cut cells and their rows", () => {
     expect(y.rows).toHaveLength(5);
     expect(sameRun(y, x)).toBe(true);
     expect(sameRun(res(), x)).toBe(false);
+  });
+
+  it("a patch of a result through ofRun (a failed load-more's error) stays the same run, so a read in flight still lands", () => {
+    const x = appendRows(res(), { ...res(), rows: [] });
+    expect(sameRun(ofRun({ ...x, moreError: "boom" }, x), res())).toBe(false);
+    expect(sameRun(ofRun({ ...x, moreError: "boom" }, x), x)).toBe(true);
   });
 
   it("keyed is false without a key, or when one of the row's key cells is cut", () => {

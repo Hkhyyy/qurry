@@ -18,7 +18,7 @@ import { noticeLines } from "./notices";
 import { patch, updTab } from "../tabs/ops";
 import { editorApis, setTabs, useTabsStore } from "../tabs/store";
 import type { Tab } from "../tabs/types";
-import { appendRows, applyFull, fullRequest, sameRun } from "../grid/shared";
+import { appendRows, applyFull, fullRequest, ofRun, sameRun } from "../grid/shared";
 
 /** Max rows kept in the result grid (same as the TUI). Beyond that, export to CSV */
 const MAX_ROWS = 100_000;
@@ -321,7 +321,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     if (tab?.running) return;
     if (!tab || tab.cursorEntry !== entryId) {
       // The server cursor is open only on the last result
-      updTab(tabId, (t) => ({ ...t, results: t.results.map((r) => (r.id === entryId && r.result ? { ...r, result: { ...r.result, truncated: false } } : r)) }));
+      updTab(tabId, (t) => ({ ...t, results: t.results.map((r) => (r.id === entryId && r.result ? { ...r, result: ofRun({ ...r.result, truncated: false }, r.result) } : r)) }));
       return;
     }
     const sent = tab.results.find((x) => x.id === entryId)?.result;
@@ -343,7 +343,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
       // The result isn't complete: keep its "+" and say in the grid why no more rows came
       const moreError = moreRowsFailed(e);
       const current = asked(useTabsStore.getState().tabs.find((t) => t.id === tabId));
-      answer((t) => ({ ...t, cursorEntry: undefined, results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: { ...x.result, moreError } } : x)) }));
+      answer((t) => ({ ...t, cursorEntry: undefined, results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: ofRun({ ...x.result, moreError }, x.result) } : x)) }));
       if (current) setStatus(moreError);
     }
   };
@@ -436,7 +436,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
       answer((x) => appendRows(x, r), `${(sent?.rows.length ?? 0) + r.rows.length}${r.truncated ? "+" : ""} rows retrieved`);
     } catch (e) {
       const moreError = moreRowsFailed(e);
-      answer((x) => ({ ...x, moreError }), moreError);
+      answer((x) => ofRun({ ...x, moreError }, x), moreError);
     }
   };
 

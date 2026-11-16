@@ -1,5 +1,5 @@
 import type { Virtualizer } from "@tanstack/react-virtual";
-import type { Dispatch, RefObject, SetStateAction } from "react";
+import { type Dispatch, type RefObject, type SetStateAction, useRef } from "react";
 import type { EditTarget } from "../../components/ResultGrid";
 import { type Cell, type Dialect, type JoinEdit, type QueryResult } from "../../lib/api";
 import { DEFAULT_TOKEN } from "../../lib/extract";
@@ -102,6 +102,8 @@ export function useGridEdits({
     const still = cutSet(res?.cut);
     return !!res && cs.every((c) => !still.has(cellKey(r, c)));
   };
+  /** The cut cell being read for an edit, and the keys typed meanwhile (one read; the editor starts with all of them) */
+  const reading = useRef<{ r: number; c: number; typed?: string } | null>(null);
   /** ↩, a double-click, typing (`typed`: the editor starts with it): a cut cell opens with its whole value, read first */
   const startEdit = async (r: number, c: number, typed?: string) => {
     if (deleted.has(r)) return;
@@ -109,7 +111,15 @@ export function useGridEdits({
     // A join's read-only cell says why (one table's whole grid says it on its buttons)
     if (why !== undefined) return void (join && why && setStatusNote(why));
     if (r < baseCount && !editableValue(valueAt(r, c), cols[c].typeName)) return;
-    if (cutAt(r, c) && !(await wholeFirst(r, [c]))) return;
+    if (cutAt(r, c)) {
+      const was = reading.current;
+      if (was && was.r === r && was.c === c) return void (typed !== undefined && (was.typed = (was.typed ?? "") + typed));
+      const me = (reading.current = { r, c, typed });
+      const ok = await wholeFirst(r, [c]);
+      if (reading.current === me) reading.current = null;
+      if (!ok) return;
+      typed = me.typed;
+    }
     const v = valueAt(r, c);
     setEditing({ r, c, value: typed ?? (v === null || v === DEFAULT_TOKEN ? "" : String(v)) });
   };
