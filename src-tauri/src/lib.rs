@@ -72,7 +72,9 @@ pub fn run() {
 
             qurry_core::logfile::init("gui", None);
             qurry_core::logfile::log_panics();
-            app.manage(qurry_core::open_state(Some(app.path().app_config_dir()?))?);
+            let mut state = qurry_core::open_state(Some(app.path().app_config_dir()?))?;
+            state.cut_grids = true;
+            app.manage(state);
             app.manage(commands::PendingImport::default());
             app.manage(commands::PendingData::default());
             app.manage(commands::PickedDirs::default());
@@ -180,6 +182,7 @@ pub fn run() {
             commands::column_hints,
             commands::object_ddl,
             commands::fetch_more,
+            commands::fetch_values,
             commands::cancel_query,
             commands::close_session,
             commands::close_all_sessions,
@@ -209,6 +212,8 @@ pub fn run() {
             commands::set_update_channel,
             commands::grid_align,
             commands::set_grid_align,
+            commands::grid_cut_chars,
+            commands::set_grid_cut_chars,
             commands::status_bar_items,
             commands::set_status_bar_item,
             commands::reset_status_bar_items,

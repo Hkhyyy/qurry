@@ -142,7 +142,7 @@ fn result_of(e: &Value) -> QueryResult {
         in_transaction: false,
         warning: None,
         editable: None,
-        notices: vec![],
+        notices: vec![], cut: vec![],
     }
 }
 

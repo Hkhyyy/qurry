@@ -141,6 +141,12 @@ pub async fn fetch_more(state: State<'_, AppState>, tab_id: String, limit: Optio
     state.fetch_more(tab_id, limit).await
 }
 
+/// The whole values of a console result's cut cells, by the table's key, in the tab's session
+#[tauri::command]
+pub async fn fetch_values(state: State<'_, AppState>, id: String, tab_id: String, req: qurry_core::app::FullValues) -> AppResult<Vec<Option<Vec<serde_json::Value>>>> {
+    state.fetch_values(id, tab_id, req).await
+}
+
 #[tauri::command]
 pub async fn cancel_query(state: State<'_, AppState>, tab_id: String) -> AppResult<bool> {
     state.cancel_query(tab_id).await
@@ -825,6 +831,17 @@ pub fn grid_align(state: State<'_, AppState>) -> qurry_core::format::Alignments 
 #[tauri::command]
 pub fn set_grid_align(state: State<'_, AppState>, class: qurry_core::format::ValueClass, align: qurry_core::format::Align) -> AppResult<qurry_core::format::Alignments> {
     state.store.set_grid_align(class, align)
+}
+
+/// Characters of a long value a console's PostgreSQL result reads, 0 = never cut (settings.json "gridCutChars", shared with the TUI)
+#[tauri::command]
+pub fn grid_cut_chars(state: State<'_, AppState>) -> usize {
+    state.store.grid_cut_chars()
+}
+
+#[tauri::command]
+pub fn set_grid_cut_chars(state: State<'_, AppState>, n: usize) -> AppResult<()> {
+    state.store.set_grid_cut_chars(n)
 }
 
 /// Status bar items on (shared with the TUI)

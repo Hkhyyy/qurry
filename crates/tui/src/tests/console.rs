@@ -19,7 +19,7 @@ fn fake(q: &str) -> Result<QueryResult, String> {
         in_transaction: false,
         warning: None,
         editable: None,
-        notices: vec![],
+        notices: vec![], cut: vec![],
     })
 }
 
@@ -168,7 +168,7 @@ async fn production_confirm_shows_counted_rows() {
             return fake(q);
         }
         let n: serde_json::Value = if q.contains("id = 4") { 1.into() } else { "12408".into() };
-        Ok(QueryResult { columns: vec![ColumnInfo { name: "count".into(), type_name: "int8".into() }], rows: vec![vec![n]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] })
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "count".into(), type_name: "int8".into() }], rows: vec![vec![n]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![], cut: vec![] })
     }
     let mut h = Harness::new().await;
     let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
@@ -223,7 +223,7 @@ async fn production_confirm_lists_commented_statements_by_their_sql() {
             in_transaction: false,
             warning: None,
             editable: None,
-            notices: vec![],
+            notices: vec![], cut: vec![],
         })
     }
     let mut h = Harness::new().await;
@@ -560,7 +560,7 @@ fn users(q: &str) -> Result<QueryResult, String> {
     } else {
         None
     };
-    Ok(QueryResult { columns: vec![col("id"), col("name")], rows: vec![vec!["1".into(), "kim".into()], vec!["2".into(), "lee".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable, notices: vec![] })
+    Ok(QueryResult { columns: vec![col("id"), col("name")], rows: vec![vec!["1".into(), "kim".into()], vec!["2".into(), "lee".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable, notices: vec![], cut: vec![] })
 }
 
 /// #102's join, as the backend reports it: voc (idx, status) left join users (idx, role, and a computed column); voc 2 has no user
@@ -574,7 +574,7 @@ fn voc_join(_: &str) -> Result<QueryResult, String> {
         columns: vec![to(0, "idx"), to(0, "status"), to(1, "idx"), to(1, "role"), ColumnEdit::ReadOnly { read_only: qurry_shared::errors::edit_computed("shout") }],
     };
     let rows = vec![vec!["1".into(), "open".into(), "10".into(), "member".into(), "MEMBER".into()], vec!["2".into(), "new".into(), Value::Null, Value::Null, Value::Null]];
-    Ok(QueryResult { columns: ["idx", "status", "idx", "role", "shout"].map(col).to_vec(), rows, rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: Some(Editable::Join(j)), notices: vec![] })
+    Ok(QueryResult { columns: ["idx", "status", "idx", "role", "shout"].map(col).to_vec(), rows, rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: Some(Editable::Join(j)), notices: vec![], cut: vec![] })
 }
 
 /// A Production console whose result is shown, with the grid focused

@@ -147,12 +147,15 @@ impl AppState {
             false => None,
         };
         let (mut guard, mut temp);
+        let cut = self.console_cut();
         let s: &mut Session = match &sess {
             Some(s) => {
                 guard = s.lock().await;
                 if guard.abandoned() {
                     return (Err(AppError::Msg(SESSION_ABANDONED.into())), None, TxSeen::default());
                 }
+                // A console's grid: long values cut (the pool, MCP and export read them whole)
+                guard.set_cut(cut);
                 &mut guard
             }
             // On the pool: a connection of its own for the snapshot's transaction
@@ -239,6 +242,7 @@ impl AppState {
             }
         };
         touch(self, &conn_id);
+        let cut = self.console_cut();
         let (r, in_tx) = {
             let mut s = sess.lock().await;
             if s.abandoned() {
@@ -260,6 +264,8 @@ impl AppState {
                 None => None,
             };
             let in_tx = s.in_tx();
+            // For a cursor this opens (reopened, or after the idle close): an open one reads at the cut it was declared with
+            s.set_cut(cut);
             let r = match reopen {
                 Some(k) => s.reopen(&k.more, limit).await,
                 None => s.fetch(limit).await,
@@ -289,15 +295,7 @@ impl AppState {
             (r, in_tx)
         };
         match r {
-            Err(e) => {
-                let tx = (in_tx && is_conn_lost(&e)).then_some(crate::audit::BY_SERVER);
-                if let Some(w) = tx
-                    && let Err(le) = self.audit_tx_end(&tab_id, w).await
-                {
-                    crate::log!("[qurry] {le}");
-                }
-                Err(recover(self, &conn_id, Some(&tab_id), tx, e).await)
-            }
+            Err(e) => Err(session_failed(self, &conn_id, &tab_id, in_tx, e).await),
             ok => ok,
         }
     }
