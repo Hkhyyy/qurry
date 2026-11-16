@@ -26,6 +26,7 @@ import {
 } from "../ui/icons";
 import { display, editableValue, type SortKey } from "../features/grid/shared";
 import { useGridEdits } from "../features/grid/useGridEdits";
+import { useGridFind } from "../features/grid/useGridFind";
 import { useGridStatus } from "../features/grid/useGridStatus";
 import { useGridWidths } from "../features/grid/useGridWidths";
 import { useSortOrder } from "../features/grid/useSortOrder";
@@ -262,26 +263,9 @@ export function ResultGrid(p: Props) {
     result, changes, added, dataIndex, edit, tcol, cols, p,
   });
 
-  // ─── Find (Find on Current Page) ───
-  const findLower = findText.toLowerCase();
-  const matches = useMemo(() => {
-    if (!findOpen || !findLower) return [] as Pos[];
-    const out: Pos[] = [];
-    for (let d = 0; d < rowCount && out.length < 5000; d++) {
-      const r = dataIndex(d);
-      for (let c = 0; c < cols.length; c++) if (display(valueAt(r, c)).toLowerCase().includes(findLower)) out.push({ r: d, c });
-    }
-    return out;
-  }, [findOpen, findLower, result.rows, changes, added, order]);
-  const isMatch = (d: number, c: number) => findOpen && !!findLower && display(valueAt(dataIndex(d), c)).toLowerCase().includes(findLower);
-  const gotoMatch = (dir: 1 | -1) => {
-    if (!matches.length) return;
-    const at = cur ? matches.findIndex((m) => m.r === cur.r && m.c === cur.c) : -1;
-    const m = matches[(at + dir + matches.length) % matches.length];
-    selectCell(m, false);
-    virt.scrollToIndex(m.r);
-    colVirt.scrollToIndex(m.c);
-  };
+  const { matches, isMatch, gotoMatch, openFind } = useGridFind({
+    findOpen, setFindOpen, findText, rowCount, dataIndex, cols, valueAt, result, changes, added, order, cur, selectCell, virt, colVirt, wrapRef,
+  });
 
   const { commitEdit, setCell, startEdit, setNull, setDefault, genUuid, addRow, cloneRow, deleteRows, revertSelected, submit, fix, previewPending, doSubmitPreview } = useGridEdits({
     editing, setEditing, changes, setChanges, deleted, setDeleted, added, setAdded, preview, setPreview, submitErr, setSubmitErr,
@@ -534,11 +518,6 @@ export function ResultGrid(p: Props) {
     e.stopPropagation();
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     setMenu({ x: r.left, y: r.bottom + 2, items });
-  };
-  /** The find bar, opened and focused (its key, DataGrip); the toolbar button toggles it */
-  const openFind = () => {
-    setFindOpen(true);
-    setTimeout(() => wrapRef.current?.querySelector<HTMLInputElement>(".grid-find input")?.focus());
   };
   const viewItems = (): MenuItem[] => [
     { label: (!transposed && !chart ? "✓ " : "　") + "Table", ...cmd("grid.viewTable"), action: () => (setTransposed(false), setChart(false)) },
