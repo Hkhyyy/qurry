@@ -28,6 +28,11 @@ jobs:
         with:
           persist-credentials: false
 
+      # cargo deny runs cargo metadata through rustup, which takes rust-toolchain.toml's toolchain: installed here, as in ci.yml,
+      # rather than auto-installed by the first cargo call
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install --no-self-update || { echo "::error::rustup could not install the toolchain in rust-toolchain.toml: check that its channel is a released Rust version (the same command reproduces it locally)"; exit 1; }
+
       # The release binary at a pinned version, checked against the SHA-256 published with it (cargo install would take minutes)
       - name: Install cargo-deny
         env:
