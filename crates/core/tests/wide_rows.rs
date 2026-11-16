@@ -1,7 +1,7 @@
 //! Wide rows through a slow link (#183): a console's first page and its load-mores of a table whose rows hold a ~30 KB JSON
 //! document and a ~2 KB note, read whole (gridCutChars = 0) and cut (4096), through a 300 KB/s proxy in front of the server.
 //! Prints, per cut: time to the first page, time per load-more (3 pages), bytes the server sent per page, ru_maxrss.
-//! #[ignore]d, on a scratch server (the table takes minutes to fill and about 1 GB; dropped at the end):
+//! #[ignore]d, on a scratch server (the table, about 160 MB, fills in under a minute and is dropped at the end):
 //! QURRY_TEST_PG=host:port:user:db[:password] cargo test --release -p qurry-core --test wide_rows -- --ignored --nocapture
 use qurry_core::app::AppState;
 use qurry_core::store::ConnectionConfig;
