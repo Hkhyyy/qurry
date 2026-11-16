@@ -5,7 +5,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { Cell, Dialect, dialectOf, type JoinEdit, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
-import { editStatements, joinStatements, type NewRow, submitFix } from "../lib/gridEdit";
+import { type NewRow } from "../lib/gridEdit";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { copied, DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, pasteCells, raw } from "../lib/extract";
 import { shared, sharedOr, sharedReady, useSharedReady, type GridStatus, type StatusItemId } from "../lib/shared";
@@ -24,7 +24,8 @@ import { Button, CellEditor, cx, FixSql, GridCell, GridHead, GridHeaderCell, Gri
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
-import type { SortKey } from "../features/grid/shared";
+import { display, editableValue, type SortKey } from "../features/grid/shared";
+import { useGridEdits } from "../features/grid/useGridEdits";
 import { useSortOrder } from "../features/grid/useSortOrder";
 
 const ROW_H = 24;
@@ -91,15 +92,6 @@ const SELECTION_ITEMS: StatusItemId[] = ["notNull", "sum", "avg", "min", "max"];
 
 /** pgvector columns (vector · halfvec · sparsevec) */
 const isVectorType = (t: string) => /^(vector|halfvec|sparsevec)$/i.test(t);
-
-function display(c: Cell): string {
-  if (c === null) return "<null>";
-  if (c === DEFAULT_TOKEN) return "<default>";
-  return String(c);
-}
-
-/** Cells whose original value is not shown as is (arrays, bytea, etc.) are not editable. */
-const editableValue = (v: Cell, typeName: string) => typeName !== "BYTEA" && !(typeof v === "string" && /^<[A-Z0-9_ \[\]]+>$/.test(v));
 
 export function ResultGrid(p: Props) {
   const { result, edit, loadingMore } = p;
@@ -416,43 +408,11 @@ export function ResultGrid(p: Props) {
     colVirt.scrollToIndex(m.c);
   };
 
-  // ─── Editing ───
-  const commitEdit = () => {
-    if (!editing) return;
-    const { r, c, value } = editing;
-    setCell(r, c, value);
-    setEditing(null);
-    scrollRef.current?.focus();
-  };
-  const setCell = (r: number, c: number, next: Cell) => {
-    if (r >= baseCount) {
-      setAdded((a) => a.map((row, i) => (i === r - baseCount ? row.map((v, j) => (j === c ? next : v)) : row)));
-      return;
-    }
-    const orig = result.rows[r][c];
-    if (next === orig || (orig !== null && next !== null && next !== DEFAULT_TOKEN && display(orig) === String(next))) {
-      setChanges((ch) => {
-        if (!ch[r] || !(c in ch[r])) return ch;
-        const row = { ...ch[r] };
-        delete row[c];
-        const n = { ...ch };
-        if (Object.keys(row).length) n[r] = row;
-        else delete n[r];
-        return n;
-      });
-      return;
-    }
-    setChanges((ch) => ({ ...ch, [r]: { ...ch[r], [c]: next } }));
-  };
-  const startEdit = (r: number, c: number) => {
-    if (deleted.has(r)) return;
-    const why = cellReason(r, c);
-    // A join's read-only cell says why (one table's whole grid says it on its buttons)
-    if (why !== undefined) return void (join && why && setStatusNote(why));
-    const v = valueAt(r, c);
-    if (r < baseCount && !editableValue(v, cols[c].typeName)) return;
-    setEditing({ r, c, value: v === null || v === DEFAULT_TOKEN ? "" : String(v) });
-  };
+  const { commitEdit, setCell, startEdit, setNull, setDefault, genUuid, addRow, cloneRow, deleteRows, revertSelected, submit, fix, previewPending, doSubmitPreview } = useGridEdits({
+    editing, setEditing, changes, setChanges, deleted, setDeleted, added, setAdded, preview, setPreview, submitErr, setSubmitErr,
+    result, cols, baseCount, rowCount, join, canEdit, anyEdit, pkIdx, edit, D, tcol, valueAt, cellReason, cellOk,
+    active, hasSel, selRows, forSelected, selectCell, virt, scrollRef, p,
+  });
   // ─── Value Editor panel (follows the current cell) ───
   const panelCell = active && active.r < rowCount ? active : null;
   const panelReadOnly = (r: number, c: number) => !cellOk(r, c) || (r < baseCount && !editableValue(valueAt(r, c), cols[c].typeName));
@@ -509,102 +469,7 @@ export function ResultGrid(p: Props) {
   useEffect(() => setStatusNote(undefined), [sel, result, changes]);
   useEffect(() => () => setStatusNote(undefined), []);
 
-  /** Every selected cell that can be edited gets `v()` (a join's read-only cells keep theirs) */
-  const setSelected = (v: () => Cell) => anyEdit && forSelected((r, c) => void (cellOk(r, c) && setCell(r, c, v())));
-  const setNull = () => setSelected(() => null);
-  const setDefault = () => setSelected(() => DEFAULT_TOKEN);
-  const genUuid = () => setSelected(() => crypto.randomUUID());
-
-  const addRow = () => {
-    if (!canEdit) return;
-    setAdded((a) => [...a, cols.map(() => undefined)]);
-    setTimeout(() => {
-      virt.scrollToIndex(rowCount);
-      selectCell({ r: rowCount, c: 0 }, false);
-    });
-  };
-  const cloneRow = () => {
-    if (!canEdit || !active) return;
-    // Key cells are left untouched; the others keep the source's value, NULL included (a new row's untouched cell stays untouched)
-    const src = cols.map((_, c) => (pkIdx.includes(c) ? undefined : active.r < baseCount ? valueAt(active.r, c) : added[active.r - baseCount][c]));
-    setAdded((a) => [...a, src]);
-    setTimeout(() => virt.scrollToIndex(rowCount));
-  };
-  const deleteRows = () => {
-    if (!canEdit || !hasSel) return;
-    const rows = selRows();
-    const newOnes = rows.filter((r) => r >= baseCount).map((r) => r - baseCount);
-    if (newOnes.length) setAdded((a) => a.filter((_, i) => !newOnes.includes(i)));
-    setDeleted((d) => {
-      const n = new Set(d);
-      rows.filter((r) => r < baseCount).forEach((r) => n.add(r));
-      return n;
-    });
-  };
-  /** Revert Selected: revert only the selection, or everything if nothing is selected */
-  const revertSelected = () => {
-    if (!hasSel) {
-      setChanges({});
-      setDeleted(new Set());
-      setAdded([]);
-      return;
-    }
-    const rows = selRows();
-    setChanges((ch) => {
-      const n = { ...ch };
-      forSelected((r, c) => {
-        if (!n[r] || !(c in n[r])) return;
-        const row = { ...n[r] };
-        delete row[c];
-        if (Object.keys(row).length) n[r] = row;
-        else delete n[r];
-      });
-      return n;
-    });
-    setDeleted((d) => {
-      const n = new Set(d);
-      rows.forEach((r) => n.delete(r));
-      return n;
-    });
-    const newOnes = rows.filter((r) => r >= baseCount).map((r) => r - baseCount);
-    if (newOnes.length) setAdded((a) => a.filter((_, i) => !newOnes.includes(i)));
-  };
-
   const tableRef = edit ? `${quoteIdent(edit.schema)}.${quoteIdent(edit.table)}` : "MY_TABLE";
-  /** Submit's statements (lib/gridEdit: the TUI's rules), each ending with `;` */
-  const buildStatements = (): string[] | undefined => {
-    if (!sharedReady()) return void setStatusNote("Submit needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
-    if (join) return joinStatements(D.quoting, join, result.rows, changes);
-    if (!edit) return [];
-    return editStatements(D.quoting, { ...edit, columns: cols.map((_, i) => tcol(i)) }, result.rows, changes, deleted, added);
-  };
-  const submit = async () => {
-    const sql = buildStatements();
-    if (!sql?.length) return;
-    setSubmitErr(null);
-    try {
-      await p.onSubmit(sql);
-    } catch (e) {
-      setPreview({ sql });
-      setSubmitErr(String(e));
-    }
-  };
-  // Under the error: the SQL that fixes a key sequence behind the table (#167), from the table's columns (re-renders when they load)
-  const fix = submitErr && edit && !join ? submitFix(D.quoting, submitErr, edit, () => (p.target ? tableColumns(p.target, edit.schema, edit.table) : undefined)) : undefined;
-  const previewPending = () => {
-    const sql = buildStatements();
-    if (sql) setPreview({ sql, readOnly: true });
-  };
-  const doSubmitPreview = async () => {
-    if (!preview) return;
-    setSubmitErr(null);
-    try {
-      await p.onSubmit(preview.sql);
-      setPreview(null);
-    } catch (e) {
-      setSubmitErr(String(e));
-    }
-  };
 
   // ─── Copy (Data Extractor) ───
   /** header = a column-name line at the top of CSV · TSV (Copy is values only — DataGrip; Copy with Headers includes it) */
