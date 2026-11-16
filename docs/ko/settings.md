@@ -84,6 +84,7 @@ TUI 의 `keymap.json` 이 이미 `⌥⇧F` 를 다른 명령에 주었다면 그
 | 설정 | 하는 일 | TUI 와 공유 |
 |---|---|---|
 | Alignment | 결과 표에서 칸 안의 값을 어디에 둘지, 값 종류마다 (아래) | 예 (TUI **⌃k › Grid Alignment…**) |
+| Long values | 이 글자 수보다 긴 텍스트, JSON, XML, 배열 값은 PostgreSQL 콘솔과 테이블 결과에서 잘려 오고, 끝에 흐린 `…` 가 붙습니다 (기본 4096, 0 = 자르지 않음). Value Editor (`⇧↩`), 복사, 편집은 결과의 기본 키로 값 전체를 읽습니다. 기본 키가 없는 결과는 잘린 글자를 그대로 쓰므로, 전체를 복사하려면 한도를 올리거나 (또는 0) 다시 실행하세요. 바꾼 값은 다음 실행이나 다음 행 묶음부터 적용됩니다 | 예 (`settings.json`) |
 | Status bar | 포커스가 있는 그리드에 대해 상태 표시줄이 보여 줄 항목: Position, Shown columns, Not null, Sum, Avg, Min, Max, Size ([아래](#상태-표시줄-항목)) | 예 (TUI **⌃k › Status Bar Items…**) |
 
 ### 결과 표의 정렬 (Alignment)

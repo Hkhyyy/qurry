@@ -84,6 +84,7 @@ Before 0.3.4 a run replaced the console's unpinned result tabs. To clear them yo
 | Setting | What it does | Shared with the TUI |
 |---|---|---|
 | Alignment | Where cells sit in result grids, per kind of value (below) | Yes (TUI **⌃k › Grid Alignment…**) |
+| Long values | Text, JSON, XML and array values longer than this many characters (4096 by default, 0 = never) come cut in PostgreSQL console and table results, ending with a dim `…`. The Value Editor (`⇧↩`), copy and edits read the whole value by the result's primary key; a result without one keeps the cut text, so raise the limit (or set 0) and run again to copy it whole. A change applies from the next run or page of rows | Yes (`settings.json`) |
 | Status bar | Which items the status bar shows for the focused grid: Position, Shown columns, Not null, Sum, Avg, Min, Max, Size ([below](#status-bar-items)) | Yes (TUI **⌃k › Status Bar Items…**) |
 
 ### Alignment in result grids
