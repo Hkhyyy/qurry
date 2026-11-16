@@ -1,11 +1,14 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Button, Checkbox, ColorPicker, EmptyState, FormGrid, FormSection, Hint, Modal, Named, Notice, Select, Spacer, Tabs, Text, TextArea, TextInput, TlsOptIn } from "../ui";
+import { Button, ColorPicker, Hint, Modal, Named, Notice, Spacer, Tabs, Text, TextInput, TlsOptIn } from "../ui";
 import { needsTlsOptIn } from "./TlsFix";
-import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, defaultDbOf, DRIVER_MISSING, isFileKind, isSystemDb, KIND_LABEL, meta, SCOPE_ALL, SchemaInfo, SshConfig, SsmConfig, targetId } from "../lib/api";
-import { scopeChecked, toggleScoped } from "../lib/scopeToggle";
+import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, defaultDbOf, DRIVER_MISSING, isFileKind, KIND_LABEL, SshConfig, SsmConfig } from "../lib/api";
 import { elapsedText } from "./RunningBar";
 import { sharedOr, useSharedReady } from "../lib/shared";
+import { GeneralTab } from "../features/conns/GeneralTab";
+import { OptionsTab } from "../features/conns/OptionsTab";
+import { SchemasTab } from "../features/conns/SchemasTab";
+import { SshSslTab } from "../features/conns/SshSslTab";
 
 interface Props {
   edit?: ConnectionView;
@@ -17,7 +20,7 @@ const EMPTY_SSH: SshConfig = { enabled: false, host: "", port: 22, user: "", aut
 const EMPTY_SSM: SsmConfig = { enabled: false, profile: "", region: "", target: "" };
 
 /** "Testing… 12.3 s" while a Test Connection runs (an AWS SSM session can take up to 30 s) */
-function TestElapsed({ label = "Testing…" }: { label?: string }) {
+export function TestElapsed({ label = "Testing…" }: { label?: string }) {
   const [start] = useState(Date.now);
   const [now, setNow] = useState(start);
   useEffect(() => {
@@ -240,199 +243,18 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
       />
 
       {tab === "general" && (
-        <FormGrid>
-          <label>Name</label>
-          <TextInput value={cfg.name} placeholder={`${cfg.user || "user"}@${cfg.host}`} onChange={(e) => set("name", e.target.value)} />
-          <label>Driver</label>
-          <Select
-            value={cfg.kind}
-            onChange={(e) => {
-              const k = e.target.value as DbKind;
-              setCfg((c) => ({ ...c, kind: k, port: DEFAULT_PORT[k] }));
-            }}
-          >
-            {(Object.keys(KIND_LABEL) as DbKind[]).map((k) => (
-              <option key={k} value={k}>
-                {KIND_LABEL[k]}
-              </option>
-            ))}
-          </Select>
-          {driver !== null && (
-            <>
-              <label>Plugin</label>
-              <div className="ui-row">
-                {driver ? (
-                  <Text tone="muted">✓ {KIND_LABEL[cfg.kind]} driver installed</Text>
-                ) : (
-                  <>
-                    <Text tone="muted">
-                      <Named about="the driver plugin" info={["Install downloads it from this version's GitHub release and checks its signature."]}>
-                        Not installed
-                      </Named>
-                    </Text>
-                    <Button size="sm" variant="primary" disabled={installing} onClick={installDriver}>
-                      {installing ? "Installing…" : "Install"}
-                    </Button>
-                  </>
-                )}
-              </div>
-            </>
-          )}
-          {!fileDb && (
-            <>
-              <label>Host</label>
-              <div className="ui-row">
-                <TextInput grow value={cfg.host} placeholder={cfg.kind === "mongodb" ? "host, or a mongodb:// / mongodb+srv:// URI" : ""} onChange={(e) => set("host", e.target.value)} />
-                <Text tone="muted">Port</Text>
-                {port(cfg.port, (n) => set("port", n), 0)}
-              </div>
-              {ssmLocalHost && (
-                <>
-                  <span />
-                  <Text tone="warn">{ssmLocalHost}</Text>
-                </>
-              )}
-              <label>User</label>
-              <TextInput aria-label="User" value={cfg.user} placeholder={cfg.kind === "redis" ? "(optional, ACL user)" : cfg.kind === "milvus" ? "(optional — empty: the password is an API key)" : ""} onChange={(e) => set("user", e.target.value)} />
-              {/* htmlFor and aria-label: a click on the name focuses the field, and the field's name leaves out the ⓘ */}
-              <label htmlFor={`${ids}-pw`}>
-                <Named info={["Saved passwords are encrypted in secrets.json; its key is in the config folder or in the system keychain (Settings › Passwords)."]}>{pwLabel}</Named>
-              </label>
-              <TextInput id={`${ids}-pw`} aria-label={pwLabel} type="password" value={password ?? ""} placeholder={edit?.hasPassword ? "<saved — leave empty to keep>" : ""} onChange={(e) => setPassword(e.target.value)} />
-            </>
-          )}
-          {cfg.kind === "redis" && (
-            <>
-              <label>Connection</label>
-              <Select value={rmode.mode} onChange={(e) => setRedis("mode", e.target.value as RedisMode["mode"])}>
-                <option value="standalone">Standalone</option>
-                <option value="sentinel">Sentinel</option>
-                <option value="cluster">Cluster</option>
-              </Select>
-              {rmode.mode === "sentinel" && (
-                <>
-                  <label>Master name</label>
-                  <TextInput value={rmode.sentinelMaster} placeholder="mymaster" onChange={(e) => setRedis("sentinelMaster", e.target.value)} />
-                  <label>Sentinels</label>
-                  <TextInput value={rmode.nodes} placeholder="host1:26379, host2:26379 (empty = Host/Port above)" onChange={(e) => setRedis("nodes", e.target.value)} />
-                </>
-              )}
-              {rmode.mode === "cluster" && (
-                <>
-                  <label>Seed nodes</label>
-                  <TextInput value={rmode.nodes} placeholder="extra nodes: host2:6379, host3:6379 (optional)" onChange={(e) => setRedis("nodes", e.target.value)} />
-                </>
-              )}
-            </>
-          )}
-          <label>{fileDb ? "File" : cfg.kind === "oracle" ? "Service name" : "Database"}</label>
-          {fileDb ? (
-            <div className="ui-row">
-              <TextInput grow value={cfg.database} placeholder={cfg.kind === "duckdb" ? "/path/to/data.duckdb (empty = in memory)" : "/path/to/app.db (created if missing)"} onChange={(e) => set("database", e.target.value)} />
-              <Button size="sm" onClick={pickDbFile}>
-                Browse…
-              </Button>
-            </div>
-          ) : (
-            <TextInput
-              value={cfg.database}
-              placeholder={cfg.kind === "postgres" ? "postgres" : cfg.kind === "redis" ? "0 (database index)" : cfg.kind === "oracle" ? "FREEPDB1, ORCLPDB1 …" : cfg.kind === "mssql" ? "master" : cfg.kind === "clickhouse" ? "default" : cfg.kind === "chroma" ? "default_database" : cfg.kind === "milvus" ? "default" : ""}
-              onChange={(e) => set("database", e.target.value)}
-            />
-          )}
-          {cfg.kind === "oracle" && (
-            <>
-              <label>Oracle client</label>
-              <div className="ui-row">
-                <TextInput grow value={opt.oracleClient ?? ""} placeholder="Instant Client folder (empty = ORACLE_CLIENT_LIB_DIR / system default)" onChange={(e) => setOpt("oracleClient", e.target.value || null)} />
-                <Button
-                  size="sm"
-                  onClick={async () => {
-                    const p = await open({ directory: true });
-                    if (typeof p === "string") setOpt("oracleClient", p);
-                  }}
-                >
-                  Browse…
-                </Button>
-              </div>
-            </>
-          )}
-          <label>Color</label>
-          <ColorSwatches custom value={cfg.color ?? null} onChange={(v) => set("color", v)} />
-        </FormGrid>
+        <GeneralTab
+          cfg={cfg} setCfg={setCfg} set={set} setOpt={setOpt} opt={opt} edit={edit} ids={ids}
+          driver={driver} installing={installing} installDriver={installDriver} fileDb={fileDb} pickDbFile={pickDbFile} ssmLocalHost={ssmLocalHost}
+          port={port} pwLabel={pwLabel} password={password} setPassword={setPassword} rmode={rmode} setRedis={setRedis}
+        />
       )}
 
       {tab === "ssh" && (
-        <FormGrid>
-          <FormSection>Tunnel</FormSection>
-          <label>Tunnel</label>
-          <Select className="w-auto" aria-label="Tunnel" value={tunnel} onChange={(e) => setTunnel(e.target.value as typeof tunnel)}>
-            <option value="none">None</option>
-            <option value="ssh">SSH</option>
-            <option value="ssm">AWS SSM (Session Manager)</option>
-          </Select>
-          {tunnel === "ssm" ? (
-            <>
-              <label>AWS profile</label>
-              <TextInput aria-label="AWS profile" value={ssm.profile} placeholder="(default profile)" onChange={(e) => setSsm("profile", e.target.value)} />
-              <label>Region</label>
-              <TextInput aria-label="Region" value={ssm.region} placeholder="(the profile's region)" onChange={(e) => setSsm("region", e.target.value)} />
-              <label>Instance id</label>
-              <TextInput aria-label="Instance id" value={ssm.target} placeholder="i-0123456789abcdef0" onChange={(e) => setSsm("target", e.target.value)} />
-            </>
-          ) : (
-            <>
-              <label>Host</label>
-              <div className="ui-row">
-                <TextInput grow disabled={!ssh.enabled} value={ssh.host} placeholder="bastion.example.com" onChange={(e) => setSsh("host", e.target.value)} />
-                <Text tone="muted">Port</Text>
-                {port(ssh.port, (n) => setSsh("port", n), 22, !ssh.enabled)}
-              </div>
-              <label>User</label>
-              <TextInput disabled={!ssh.enabled} value={ssh.user} onChange={(e) => setSsh("user", e.target.value)} />
-              <label>Auth type</label>
-              <Select disabled={!ssh.enabled} value={ssh.auth} onChange={(e) => setSsh("auth", e.target.value as SshConfig["auth"])}>
-                <option value="key">Key pair</option>
-                <option value="password">Password</option>
-              </Select>
-              {ssh.auth === "key" && (
-                <>
-                  <label>Private key</label>
-                  <div className="ui-row">
-                    <TextInput grow aria-label="Private key" disabled={!ssh.enabled} value={ssh.keyPath} placeholder="empty: ssh-agent, then ~/.ssh/config IdentityFile" onChange={(e) => setSsh("keyPath", e.target.value)} />
-                    <Button size="sm" disabled={!ssh.enabled} onClick={browseKey}>
-                      Browse…
-                    </Button>
-                  </div>
-                </>
-              )}
-              <label>{ssh.auth === "key" ? "Passphrase" : "Password"}</label>
-              <TextInput type="password" disabled={!ssh.enabled} value={sshSecret ?? ""} placeholder={edit?.ssh?.enabled ? "<saved — leave empty to keep>" : ssh.auth === "key" ? "(none)" : "(empty: ssh-agent)"} onChange={(e) => setSshSecret(e.target.value)} />
-            </>
-          )}
-          <FormSection>SSL / TLS</FormSection>
-          <span />
-          <Checkbox checked={ssl.enabled} onChange={(v) => setSsl("enabled", v)}>
-            Use SSL{cfg.kind === "redis" ? " (rediss://)" : ""}
-          </Checkbox>
-          <label>Mode</label>
-          <Select disabled={!ssl.enabled} value={ssl.mode || "require"} onChange={(e) => setSsl("mode", e.target.value)}>
-            <option value="require">Require — encrypt, no certificate check</option>
-            <option value="verify-ca">Verify CA</option>
-            <option value="verify-full">Full Verification (CA + host name)</option>
-          </Select>
-          {(["caFile", "certFile", "keyFile"] as const).map((k) => (
-            <span key={k} style={{ display: "contents" }}>
-              <label>{k === "caFile" ? "CA file" : k === "certFile" ? "Client cert" : "Client key"}</label>
-              <div className="ui-row">
-                <TextInput grow disabled={!ssl.enabled} value={ssl[k]} placeholder={k !== "caFile" ? "(none)" : cfg.kind === "redis" ? "(system trust store)" : "(built-in public CA list)"} onChange={(e) => setSsl(k, e.target.value)} />
-                <Button size="sm" disabled={!ssl.enabled} onClick={() => pickFile(k)}>
-                  Browse…
-                </Button>
-              </div>
-            </span>
-          ))}
-        </FormGrid>
+        <SshSslTab
+          cfg={cfg} edit={edit} tunnel={tunnel} setTunnel={setTunnel} ssh={ssh} setSsh={setSsh} ssm={ssm} setSsm={setSsm}
+          sshSecret={sshSecret} setSshSecret={setSshSecret} browseKey={browseKey} ssl={ssl} setSsl={setSsl} pickFile={pickFile} port={port}
+        />
       )}
 
       {tab === "schemas" && (
@@ -449,125 +271,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
       )}
 
       {tab === "options" && (
-        <FormGrid labelWidth={140}>
-          <FormSection>Connection</FormSection>
-          <span />
-          <Checkbox checked={!!cfg.readOnly} onChange={(v) => set("readOnly", v)}>
-            Read-only
-          </Checkbox>
-          <span />
-          <Named about="Production: confirm changes" info={["Before UPDATE, DELETE or INSERT runs, shows how many rows will change and asks."]}>
-            <Checkbox checked={!!opt.confirmChanges} onChange={(v) => setOpt("confirmChanges", v)}>
-              Production: show affected rows and confirm changes
-            </Checkbox>
-          </Named>
-          {/* #106: on by default for Production (unset = on); off, consoles start in the Transaction control mode below */}
-          <span />
-          <Named
-            about="Production: Manual transaction mode"
-            info={["New consoles start in Tx: Manual: a change stays pending until you Commit or Roll back. Closing the tab, switching the database or quitting asks first.", "Off: they start in the Transaction control mode below."]}
-          >
-            <Checkbox checked={!!opt.confirmChanges && opt.productionManual !== false} disabled={!opt.confirmChanges} onChange={(v) => setOpt("productionManual", v ? null : false)}>
-              Production: start consoles in Manual transaction mode
-            </Checkbox>
-          </Named>
-          {(cfg.kind === "mysql" || cfg.kind === "postgres") && (
-            <>
-              <span />
-              <div>
-                <Named
-                  about="Allow unencrypted connection"
-                  info={["Without SSL settings Qurry requires TLS from remote servers.", "Tick this only for a server without TLS (or an old MySQL 5.7 without TLS 1.2) on a network you trust."]}
-                >
-                  <Checkbox checked={!!opt.allowPlaintext} onChange={(v) => setOpt("allowPlaintext", v)}>
-                    Allow unencrypted connection (servers without TLS)
-                  </Checkbox>
-                </Named>
-                {/* What the choice does, while it is on */}
-                {opt.allowPlaintext && (
-                  <Text as="div" size="sm" tone="warn" className="ui-check-note">
-                    Passwords and data can travel unencrypted to this server.
-                  </Text>
-                )}
-              </div>
-            </>
-          )}
-          <label htmlFor={`${ids}-mcp`}>
-            <Named info={["What qurry-mcp (Claude Code and other AI tools) may do with this data source.", "For Read, connect with a read-only database user."]}>MCP (AI tools)</Named>
-          </label>
-          <div className="ui-row">
-            <Select id={`${ids}-mcp`} aria-label="MCP (AI tools)" value={mcpValue} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])}>
-              <option value="off">Off — not listed, no connection</option>
-              <option value="read">Read</option>
-              <option value="write" disabled={noMcpWrite} title={noMcpWrite ? `Not for a ${cfg.readOnly ? "Read-only" : "Production"} data source` : undefined}>
-                Read &amp; write (when qurry-mcp runs with --allow-write)
-              </option>
-            </Select>
-          </div>
-          <span />
-          <div>
-            <Named
-              about="Admin reports for AI tools"
-              info={["Slow queries, sessions, locks. Query values are masked.", ...(reportsWhy ? [reportsWhy] : [])]}
-            >
-              {/* Not Production: shown checked, as AI tools read its reports anyway */}
-              <Checkbox checked={reportsWhy ? mcpValue !== "off" : !!opt.mcpDbaReports} disabled={!!reportsWhy} onChange={(v) => setOpt("mcpDbaReports", v)}>
-                AI tools can read admin reports
-              </Checkbox>
-            </Named>
-          </div>
-          <label>Transaction control</label>
-          <div className="ui-row">
-            <Select value={opt.txManual ? "manual" : "auto"} onChange={(e) => setOpt("txManual", e.target.value === "manual")}>
-              <option value="auto">Auto</option>
-              <option value="manual">Manual</option>
-            </Select>
-            <Select value={opt.isolation ?? ""} onChange={(e) => setOpt("isolation", e.target.value || null)} title="Isolation level">
-              <option value="">Database Default</option>
-              <option value="read uncommitted">Read Uncommitted</option>
-              <option value="read committed">Read Committed</option>
-              <option value="repeatable read">Repeatable Read</option>
-              <option value="serializable">Serializable</option>
-            </Select>
-          </div>
-          <label>Switch schema</label>
-          <Select className="w-auto" value={opt.switchSchema ?? "auto"} onChange={(e) => setOpt("switchSchema", e.target.value as ConnOptions["switchSchema"])}>
-            <option value="auto">Automatic</option>
-            <option value="manual">Manual</option>
-            <option value="disable">Disable</option>
-          </Select>
-          <label>Time zone</label>
-          <TextInput value={opt.timeZone ?? ""} placeholder="UTC (e.g. Asia/Seoul, +09:00)" onChange={(e) => setOpt("timeZone", e.target.value || null)} />
-          <span />
-          <div className="ui-row">
-            <Checkbox checked={!!opt.keepAliveSecs} onChange={(v) => setOpt("keepAliveSecs", v ? 60 : null)}>
-              Run keep-alive query each
-            </Checkbox>
-            <TextInput className="w-port" type="number" min={1} disabled={!opt.keepAliveSecs} value={opt.keepAliveSecs ?? 60} onChange={(e) => setOpt("keepAliveSecs", Math.max(1, Number(e.target.value) || 1))} />
-            <Text tone="muted">sec.</Text>
-          </div>
-          <span />
-          <div className="ui-row">
-            <Checkbox checked={!!opt.autoDisconnectSecs} onChange={(v) => setOpt("autoDisconnectSecs", v ? 300 : null)}>
-              Auto-disconnect after
-            </Checkbox>
-            <TextInput className="w-port" type="number" min={1} disabled={!opt.autoDisconnectSecs} value={opt.autoDisconnectSecs ?? 300} onChange={(e) => setOpt("autoDisconnectSecs", Math.max(1, Number(e.target.value) || 1))} />
-            <Text tone="muted">sec.</Text>
-          </div>
-          <span />
-          <Checkbox checked={!!opt.singleDb} onChange={(v) => setOpt("singleDb", v)}>
-            Single database mode
-          </Checkbox>
-          <label className="top">Startup script</label>
-          <TextArea
-            className="ui-textarea"
-            spellCheck={false}
-            rows={4}
-            placeholder="SQL executed on every new connection, e.g. SET search_path TO app, public;"
-            value={opt.startupScript ?? ""}
-            onChange={(e) => setOpt("startupScript", e.target.value)}
-          />
-        </FormGrid>
+        <OptionsTab cfg={cfg} set={set} opt={opt} setOpt={setOpt} ids={ids} mcpValue={mcpValue} noMcpWrite={noMcpWrite} reportsWhy={reportsWhy} />
       )}
 
       {tabHint && (
@@ -625,9 +329,6 @@ export function ColorSwatches({ value, onChange, custom }: { value: string | nul
   return <ColorPicker value={value} options={COLOR_PRESETS} onChange={onChange} custom={custom} />;
 }
 
-type Scope = NonNullable<ConnectionConfig["scope"]>;
-
-/** The form's settings, for listing a data source that isn't saved yet */
 /**
  * What a new source's form still lacks before its databases can be listed (tab · field), in order. A half-filled form isn't
  * connected: the server would only answer with an error for the empty field
@@ -646,168 +347,4 @@ export function missingForListing(c: ConnectionConfig): [string, string][] {
   }
   if (c.ssm?.enabled && !c.ssm.target.trim()) out.push(["SSH/SSL", "Instance"]);
   return out;
-}
-
-interface FormSettings {
-  config: ConnectionConfig;
-  password?: string;
-  sshSecret?: string;
-}
-
-/**
- * Schemas tab of DataGrip Data Source properties: choose which DBs and schemas show in the tree. A saved source lists through its
- * saved settings; a new one connects with the form's settings, as Test Connection does, and keeps nothing (DataGrip does the same)
- */
-function SchemasTab({ connId, form, cancelRef, onAllowPlaintext, kind, defaultDb, scope, onChange }: { connId?: string; form: FormSettings; cancelRef: { current: (() => void) | null }; onAllowPlaintext: () => void; kind: DbKind; defaultDb: string; scope: Scope; onChange: (s: Scope) => void }) {
-  const [dbs, setDbs] = useState<string[] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [schemas, setSchemas] = useState<Record<string, SchemaInfo[] | "loading" | { error: string }>>({});
-  const [openDb, setOpenDb] = useState<string | null>(null);
-  // The dialog's settings now: Try Again and expanding a database use them as they are then (Allow unencrypted, a fix made after an error)
-  const formNow = useRef(form);
-  formNow.current = form;
-  const [attempt, setAttempt] = useState(0);
-  const retry = () => (setErr(null), setAttempt((n) => n + 1));
-  const wrap = useRef<HTMLDivElement>(null);
-  // Schemas being listed for an expanded database (a new source: each connects on its own), stopped when the tab or the dialog closes
-  const expanding = useRef(new Set<string>());
-  useEffect(() => () => expanding.current.forEach((id) => void api.cancelCall(id)), []);
-
-  const missing = connId ? [] : missingForListing(form.config);
-  const ready = missing.length === 0;
-  useEffect(() => {
-    if (connId) {
-      meta.databases(connId).then(setDbs, (e) => setErr(String(e)));
-      return;
-    }
-    if (!ready) return;
-    // Cancel, Esc, leaving the tab and closing the dialog stop the connect, and with it its SSH / AWS SSM tunnel
-    const id = crypto.randomUUID();
-    let running = true;
-    const done = () => {
-      running = false;
-      cancelRef.current = null;
-    };
-    const stop = () => (done(), void api.cancelCall(id));
-    cancelRef.current = () => (stop(), setErr("Cancelled."));
-    const f = formNow.current;
-    api.formDatabases(f.config, f.password, f.sshSecret, id).then(
-      (v) => running && (done(), setDbs(v)),
-      (e) => running && (done(), setErr(String(e))),
-    );
-    return () => void (running && stop());
-  }, [connId, attempt, cancelRef, ready]);
-
-  // Try Again, Cancel and the list replace the button that had focus: keep focus in the dialog, so Esc still stops or closes
-  useEffect(() => {
-    if (document.activeElement === document.body) wrap.current?.querySelector<HTMLElement>("button, input")?.focus();
-  }, [dbs, err]);
-
-  return (
-    <div ref={wrap} style={{ display: "contents" }}>
-      {body()}
-    </div>
-  );
-
-  function body() {
-    if (!ready) {
-      // Not an error: a new source isn't filled in yet. Say what's left, by tab
-      const tabs = [...new Set(missing.map(([t]) => t))];
-      const list = tabs.map((t) => `${missing.filter(([x]) => x === t).map(([, f]) => f).join(" and ")} on the ${t} tab`).join(", ");
-      return <EmptyState>Fill in {list} to list the databases here.</EmptyState>;
-    }
-    if (err && !connId) {
-      // Fixed where Test Connection fixes them: say so (the TLS opt-in is offered right here, as under a failed test)
-      const fixedByTest = err.includes("Unknown SSH host key") ? "trust the SSH host key" : err.includes(DRIVER_MISSING) ? "install the driver" : null;
-      const cfg = formNow.current.config;
-      return (
-        <>
-          <Notice tone="danger">{"✕ " + err}</Notice>
-          {fixedByTest && <Text as="div" tone="muted">Test Connection offers to {fixedByTest}; then Try Again.</Text>}
-          {needsTlsOptIn(err) && <TlsOptIn host={cfg.host} production={!!cfg.options?.confirmChanges} inDialog onAllow={async () => (onAllowPlaintext(), retry())} />}
-          <div className="ui-row conn-test-actions">
-            <Button onClick={retry}>Try Again</Button>
-          </div>
-        </>
-      );
-    }
-    if (err) return <Notice tone="danger">{err}</Notice>;
-    if (!dbs && !connId)
-      return (
-        <EmptyState action={<Button onClick={() => cancelRef.current?.()}>Cancel Listing</Button>}>
-          <TestElapsed label="Connecting with this dialog's settings…" />
-        </EmptyState>
-      );
-    if (!dbs) return <EmptyState>Loading databases…</EmptyState>;
-
-    // Same rules as Manage Shown Schemas (ScopePopup): no filter = All, stored as no filter
-    const isAll = (v: string[]) => !v.length || (v.length === 1 && v[0] === SCOPE_ALL);
-    const selDbs = scope.databases?.length ? scope.databases : [SCOPE_ALL];
-    const allDbs = selDbs.includes(SCOPE_ALL);
-    const toggleDb = (db: string) => {
-      // System databases stay out of the list that replaces All, as in Manage Shown Schemas
-      const next = toggleScoped(selDbs, db, dbs.filter((d) => d === defaultDb || !isSystemDb(kind, d)), defaultDb);
-      onChange({ ...scope, databases: isAll(next) ? null : next });
-    };
-    const loadSchemas = (db: string) => {
-      setOpenDb(openDb === db ? null : db);
-      // Listed or listing: kept. Failed: expanding again tries again
-      const cur = schemas[db];
-      if (cur === "loading" || Array.isArray(cur)) return;
-      setSchemas((s) => ({ ...s, [db]: "loading" }));
-      const id = crypto.randomUUID();
-      const f = formNow.current;
-      if (!connId) expanding.current.add(id);
-      (connId ? meta.schemas(targetId(connId, db)) : api.formSchemas(f.config, db, f.password, f.sshSecret, id))
-        .then(
-          (list) => setSchemas((s) => ({ ...s, [db]: list.filter((x) => !x.isSystem) })),
-          (e) => setSchemas((s) => ({ ...s, [db]: { error: String(e) } })),
-        )
-        .finally(() => expanding.current.delete(id));
-    };
-    const schList = (db: string) => (scope.schemas?.[db]?.length ? scope.schemas[db] : [SCOPE_ALL]);
-    const toggleSchema = (db: string, name: string) => {
-      const sch = schemas[db];
-      const next = toggleScoped(schList(db), name, Array.isArray(sch) ? sch.map((x) => x.name) : [], "public");
-      const all = { ...(scope.schemas ?? {}) };
-      if (isAll(next)) delete all[db];
-      else all[db] = next;
-      onChange({ ...scope, schemas: all });
-    };
-
-    return (
-      <div className="scope-list">
-        <label className="scope-row all">
-          <input type="checkbox" checked={allDbs} onChange={() => toggleDb(SCOPE_ALL)} /> All databases
-        </label>
-        {dbs.map((db) => {
-          const sch = schemas[db];
-          const selSch = schList(db);
-          return (
-            <div key={db}>
-              <div className="scope-row">
-                <span className="twisty" onClick={() => loadSchemas(db)}>{openDb === db ? "▾" : "▸"}</span>
-                <label>
-                  <input type="checkbox" checked={scopeChecked(selDbs, db, defaultDb)} onChange={() => toggleDb(db)} /> {db}
-                </label>
-                <Text tone="muted">{selSch.includes(SCOPE_ALL) ? "all schemas" : `${selSch.length} schemas`}</Text>
-              </div>
-              {openDb === db && (
-                <div className="scope-children">
-                  {sch === "loading" && <Text as="div" tone="muted">Loading…</Text>}
-                  {sch && typeof sch === "object" && "error" in sch && <Text as="div" tone="danger">{sch.error}</Text>}
-                  {Array.isArray(sch) &&
-                    sch.map((x) => (
-                      <label key={x.name} className="scope-row">
-                        <input type="checkbox" checked={scopeChecked(selSch, x.name, "public")} onChange={() => toggleSchema(db, x.name)} /> {x.name}
-                      </label>
-                    ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
 }

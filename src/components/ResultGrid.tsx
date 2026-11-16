@@ -1,22 +1,22 @@
-import { setFocusWidgets, setStatusNote, shownColumns, spanOf, tableColumns, useStatusItems, useTableColumnsLoaded } from "../lib/statusbar";
+import { setStatusNote } from "../lib/statusbar";
 import { fracWidth, isTimeType, padFrac } from "../lib/timeFrac";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { Cell, Dialect, dialectOf, type JoinEdit, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
-import { editStatements, joinStatements, type NewRow, submitFix } from "../lib/gridEdit";
+import { type NewRow } from "../lib/gridEdit";
 import { ContextMenu, MenuItem } from "./Explorer";
-import { copied, DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, pasteCells, raw } from "../lib/extract";
-import { shared, sharedOr, sharedReady, useSharedReady, type GridStatus, type StatusItemId } from "../lib/shared";
+import { EXTRACTORS, type Extractor, raw } from "../lib/extract";
+import { sharedOr, useSharedReady } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
-import { CELL_PAD, CHAR_PX, fitChars, stepWidth, toChars, toPx, useColumnWidths, widthKeys, type WidthsOf } from "../lib/columnWidths";
-import { isJsonType, jsonCell } from "../lib/jsonSpans";
-import { contains, copyTable, extend, forEachCell, isSingle, type Pos, selCols, selRows as rowsOf, type Selection, single, toggle } from "../lib/gridSelection";
+import { type WidthsOf } from "../lib/columnWidths";
+import { jsonCell } from "../lib/jsonSpans";
+import { contains, extend, forEachCell, type Pos, selCols, selRows as rowsOf, type Selection, single, toggle } from "../lib/gridSelection";
 
 import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/shortcuts";
-import { draftAt, draftToApply, leftDraft, panelText, registerValuePanel, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
+import { draftAt, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
 import { ResultChart } from "./ResultChart";
 import { SqlBlock } from "./SqlBlock";
 import { ValuePanel } from "./ValuePanel";
@@ -24,6 +24,14 @@ import { Button, CellEditor, cx, FixSql, GridCell, GridHead, GridHeaderCell, Gri
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
+import { display, type SortKey } from "../features/grid/shared";
+import { useGridClipboard } from "../features/grid/useGridClipboard";
+import { useGridEdits } from "../features/grid/useGridEdits";
+import { useGridFind } from "../features/grid/useGridFind";
+import { useGridStatus } from "../features/grid/useGridStatus";
+import { useGridWidths } from "../features/grid/useGridWidths";
+import { useSortOrder } from "../features/grid/useSortOrder";
+import { useValuePanel } from "../features/grid/useValuePanel";
 
 const ROW_H = 24;
 const HEADER_H = 26;
@@ -84,22 +92,8 @@ interface Props {
   target?: string;
 }
 
-/** The status bar items that are over the selected cells */
-const SELECTION_ITEMS: StatusItemId[] = ["notNull", "sum", "avg", "min", "max"];
-
 /** pgvector columns (vector · halfvec · sparsevec) */
 const isVectorType = (t: string) => /^(vector|halfvec|sparsevec)$/i.test(t);
-
-type SortKey = { col: number; dir: "asc" | "desc" };
-
-function display(c: Cell): string {
-  if (c === null) return "<null>";
-  if (c === DEFAULT_TOKEN) return "<default>";
-  return String(c);
-}
-
-/** Cells whose original value is not shown as is (arrays, bytea, etc.) are not editable. */
-const editableValue = (v: Cell, typeName: string) => typeName !== "BYTEA" && !(typeof v === "string" && /^<[A-Z0-9_ \[\]]+>$/.test(v));
 
 export function ResultGrid(p: Props) {
   const { result, edit, loadingMore } = p;
@@ -157,46 +151,7 @@ export function ResultGrid(p: Props) {
   const rowCount = baseCount + added.length;
   const serverSort = !!p.onServerSort && sortViaOrderBy;
 
-  // Reset sorting when the column set changes
-  const colKey = cols.map((c) => c.name).join("\u0001");
-  useEffect(() => setSorts([]), [colKey]);
-
-  /** Header sort: click = ↑ → ↓ → off, ⌥+click = add a sort key (DataGrip) */
-  const clickSort = (col: number, additive: boolean) => {
-    setSorts((cur) => {
-      const ex = cur.find((k) => k.col === col);
-      const nextDir = !ex ? "asc" : ex.dir === "asc" ? "desc" : null;
-      let next: SortKey[];
-      if (additive) next = nextDir ? (ex ? cur.map((k) => (k.col === col ? { col, dir: nextDir } : k)) : [...cur, { col, dir: nextDir }]) : cur.filter((k) => k.col !== col);
-      else next = nextDir ? [{ col, dir: nextDir }] : [];
-      if (serverSort) p.onServerSort!(next.map((k) => `${quoteIdent(cols[k.col].name)} ${k.dir.toUpperCase()}`).join(", "));
-      return next;
-    });
-  };
-
-  // Client-side sort (when not sorting on the server)
-  const order = useMemo(() => {
-    if (serverSort || sorts.length === 0) return null;
-    const idx = result.rows.map((_, i) => i);
-    const cmp = (a: Cell, b: Cell) => {
-      if (a === b) return 0;
-      if (a === null) return 1;
-      if (b === null) return -1;
-      if (typeof a === "number" && typeof b === "number") return a - b;
-      const na = Number(a), nb = Number(b);
-      if (a !== "" && b !== "" && !isNaN(na) && !isNaN(nb)) return na - nb;
-      return String(a).localeCompare(String(b));
-    };
-    idx.sort((x, y) => {
-      for (const k of sorts) {
-        const d = cmp(result.rows[x][k.col], result.rows[y][k.col]);
-        if (d) return k.dir === "asc" ? d : -d;
-      }
-      return x - y;
-    });
-    return idx;
-  }, [sorts, result.rows, serverSort]);
-  const dataIndex = (d: number) => (order && d < order.length ? order[d] : d);
+  const { clickSort, order, dataIndex } = useSortOrder({ cols, result, sorts, setSorts, serverSort, quoteIdent, p });
 
   const rowAt = (r: number) => (r < baseCount ? result.rows[r] : added[r - baseCount]);
   const valueAt = (r: number, c: number): Cell => (r < baseCount && changes[r] && c in changes[r] ? changes[r][c] : rowAt(r)?.[c] ?? null);
@@ -262,83 +217,9 @@ export function ResultGrid(p: Props) {
   // Character widths below are for the default grid font size (12px)
   const em = useFonts().grid.size / DEFAULTS.grid.size;
   const rownumW = Math.max(ROWNUM_W, Math.round(ROWNUM_W * em));
-  const headPx = useMemo(() => cols.map((col, ci) => col.name.length * 7.6 * em + col.typeName.length * 6.2 + 48 + (keyCols.includes(ci) ? 16 : 0)), [cols, pkIdx, join, em]);
-  const computed = useMemo(
-    () =>
-      cols.map((_, ci) => {
-        let len = 0;
-        for (const row of result.rows.slice(0, 200)) len = Math.max(len, display(row[ci]).length);
-        return Math.min(Math.max(headPx[ci], len * CHAR_PX * em + CELL_PAD, 64), 420 * em);
-      }),
-    [cols, firstRow, headPx, em],
-  );
-  const wasmReady = useSharedReady();
-  // Widths a user set (drag, fit, the header menu, ⌃⌥← / ⌃⌥→) by column name (`id#2` for a repeated one), in characters (lib/columnWidths.ts)
-  const ownWidths = useId();
-  const userWidths = useColumnWidths(p.widthsOf ?? ownWidths, (msg) => setStatusNote(msg));
-  const setW = userWidths.widths;
-  const wkey = useMemo(() => widthKeys(cols.map((c) => c.name)), [cols, wasmReady]);
-  /** Column i's set width (characters), or undefined while it has none */
-  const setOf = (i: number): number | undefined => (Object.prototype.hasOwnProperty.call(setW, wkey[i]) ? setW[wkey[i]] : undefined);
-  /** The one place a column's width comes from (layout, virtualization, scrolling): the user's, else the computed one */
-  const widths = useMemo(() => computed.map((w, i) => { const s = setOf(i); return s === undefined ? w : toPx(s, em); }), [computed, setW, wkey, em]);
-  const total = rownumW + widths.reduce((a, b) => a + b, 0);
-  // Time columns: align fractional-second digits within the column (values unchanged)
-  const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows, wasmReady]);
-  const shown = (v: Cell, ci: number) => (fracW[ci] && typeof v === "string" ? padFrac(v, fracW[ci]) : display(v));
-  // Value class of each cell and where it sits (Settings › Appearance › Data grid › Alignment; the TUI grid's rule)
-  const classOf = useMemo(() => cols.map((c) => cellClasses(c.typeName)), [cols, wasmReady]);
-  const alignOverrides = useGridAlign();
-  const aligns = useMemo(() => cols.map((c, ci) => alignTable(alignOverrides, c.typeName, result.rows, ci)), [cols, result.rows, alignOverrides, wasmReady]);
-  // JSON columns color their text cells (lib/jsonSpans.ts, the TUI grid's tokenizer)
-  const jsonCol = useMemo(() => cols.map((c) => isJsonType(c.typeName)), [cols, wasmReady]);
-
-  // ─── Column widths ───
-  /** Characters column i needs for its header and its longest cell as shown, over the rows loaded so far (DataGrip: Fit Column) */
-  const fitOf = (i: number) => fitChars(headPx[i], Array.from({ length: rowCount }, (_, r) => shown(valueAt(r, i), i)), em);
-  const fitColumn = (i: number) => userWidths.set({ [wkey[i]]: fitOf(i) });
-  /** A column's set width before a double-click fitted it (0: none, the computed one), so the next double-click puts it back (TUI: =) */
-  const beforeFit = useRef(new Map<string, number>());
-  // A new result (or Reset Widths) starts without it, as the TUI's grid does
-  useEffect(() => beforeFit.current.clear(), [result]);
-  const resetWidths = () => {
-    beforeFit.current.clear();
-    userWidths.reset();
-  };
-  const toggleFit = (i: number) => {
-    const [k, fit] = [wkey[i], fitOf(i)];
-    // Back exactly: a width the column had, or none (its computed pixels; rounding them to characters could land on the fit again)
-    if (setOf(i) === fit) {
-      userWidths.set({ [k]: beforeFit.current.get(k) ?? 0 });
-      beforeFit.current.delete(k);
-    } else {
-      beforeFit.current.set(k, setOf(i) ?? 0);
-      userWidths.set({ [k]: fit });
-    }
-  };
-  const fitAll = () => userWidths.set(Object.fromEntries(wkey.map((k, i) => [k, fitOf(i)])));
-  /** Narrow (-1) / widen (+1) column i by one step of the shared rule (the TUI's < >), from the width it has now */
-  const stepColumn = (i: number, steps: number) => userWidths.set({ [wkey[i]]: stepWidth(setOf(i) ?? toChars(widths[i], em), steps) });
-  /** Dragging a header's right edge: the width follows the pointer (in whole characters), saved once on release */
-  const startResize = (e: React.MouseEvent, i: number) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    const [x0, w0, name] = [e.clientX, widths[i], wkey[i]];
-    let last: number | null = null;
-    const move = (ev: MouseEvent) => {
-      const w = toChars(w0 + ev.clientX - x0, em);
-      if (w !== last) userWidths.set({ [name]: (last = w) }, false);
-    };
-    const up = () => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-      document.body.classList.remove("col-resizing");
-      if (last !== null) userWidths.set({ [name]: last });
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-    document.body.classList.add("col-resizing");
-  };
+  const { wasmReady, setW, widths, total, shown, classOf, aligns, jsonCol, fitColumn, resetWidths, toggleFit, fitAll, stepColumn, startResize } = useGridWidths({
+    cols, em, rownumW, keyCols, pkIdx, join, result, firstRow, rowCount, valueAt, p,
+  });
   /** The column header's menu: widths of this column or all of them */
   const headerItems = (i: number): MenuItem[] => [
     { label: "Fit Column", ...cmd("grid.colFit"), shortcut: cmd("grid.colFit").shortcut ?? "double-click the edge", action: () => fitColumn(i) },
@@ -379,138 +260,20 @@ export function ResultGrid(p: Props) {
   /** A mouse click: ⇧ extends the last range to b, ⌘ adds a..b (a cell, a row, a column) or takes it out, a plain click starts over (DataGrip) */
   const clickSel = (e: React.MouseEvent, a: Pos, b: Pos = a) => setSel((s) => (e.shiftKey ? extend(s, b) : (isMac ? e.metaKey : e.ctrlKey) ? toggle(s, a, b) : single(a, b)));
 
-  // ─── Status bar (lib/statusbar, qurry_shared::statusbar words it): the selection or the current cell (Position), the selected cells'
-  // Not null / Sum / Avg / Min / Max, the current cell's Size, the shown columns, while focus is in this grid. The shown range follows
-  // sideways scrolling (the column virtualizer renders again on scroll); Chart and Transpose have neither ───
-  const statusItems = useStatusItems();
-  const offset = colVirt.scrollOffset ?? 0;
-  const range = scrollRef.current && !chart && !transposed ? shownColumns(colVirt.measurementsCache, offset + rownumW, offset + scrollRef.current.clientWidth) : null;
-  const multi = hasSel && !isSingle(sel);
-  const posSpans = useMemo<GridStatus["pos"]>(() => (chart || transposed || !cur ? undefined : multi ? [spanOf(rowsOf(sel)), spanOf(selCols(sel))] : [spanOf([cur.r]), spanOf([cur.c])]), [sel, chart, transposed]);
-  // Only while one of them is on: every selected cell's value goes to the module (at most qurry_shared::statusbar::MAX_CELLS)
-  const wantStats = multi && wasmReady && statusItems.some((i) => SELECTION_ITEMS.includes(i));
-  const stats = useMemo(() => {
-    if (!wantStats) return undefined;
-    const max = shared().statusBarInfo().maxCells;
-    const vals: Cell[] = [];
-    // A not-yet-written DEFAULT has no value to count
-    forSelected((r, c) => {
-      if (vals.length >= max) return false;
-      const v = valueAt(r, c);
-      if (v !== DEFAULT_TOKEN) vals.push(v);
-    });
-    return shared().selectionStats(vals);
-  }, [wantStats, sel, result, changes, added]);
-  // Size: the current cell alone, and its table column's declared type when the grid's columns map to a table (a table tab, a console
-  // result of one table or a join's columns of a table)
-  // (not a not-yet-written DEFAULT: it has no value yet)
-  const sizeCell = !multi && cur && !chart && !transposed && statusItems.includes("size") ? { r: dataIndex(cur.r), c: cur.c } : null;
-  const sizeAt = sizeCell && valueAt(sizeCell.r, sizeCell.c) !== DEFAULT_TOKEN ? sizeCell : null;
-  const sizeValue = sizeAt ? valueAt(sizeAt.r, sizeAt.c) : null;
-  const joinCol = sizeAt ? p.editJoin?.columns[sizeAt.c] : undefined;
-  const colRef = !sizeAt ? undefined : edit ? { schema: edit.schema, table: edit.table, column: tcol(sizeAt.c) } : joinCol && "table" in joinCol ? { ...p.editJoin!.tables[joinCol.table], column: joinCol.column } : undefined;
-  useTableColumnsLoaded();
-  const colMeta = colRef && p.target ? tableColumns(p.target, colRef.schema, colRef.table)?.find((m) => m.name === colRef.column) : undefined;
-  const kind = p.dialect?.quoting;
-  const gridStatus = useMemo<GridStatus>(
-    () => ({
-      kind,
-      pos: posSpans,
-      stats,
-      shown: range ? [range[0] + 1, range[1] + 1, cols.length] : undefined,
-      cell: sizeAt ? { typeName: cols[sizeAt.c].typeName, value: sizeValue, column: colMeta && { dataType: colMeta.dataType, charset: colMeta.charset } } : undefined,
-    }),
-    [kind, posSpans, stats, range?.[0], range?.[1], cols, sizeAt?.r, sizeAt?.c, sizeValue, colMeta],
-  );
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    setFocusWidgets(el, { grid: gridStatus });
-  }, [gridStatus]);
-  useEffect(() => {
-    const el = wrapRef.current;
-    return () => {
-      if (el) setFocusWidgets(el, undefined);
-    };
-  }, []);
+  useGridStatus({
+    colVirt, scrollRef, wrapRef, chart, transposed, rownumW, hasSel, sel, cur, wasmReady, forSelected, valueAt,
+    result, changes, added, dataIndex, edit, tcol, cols, p,
+  });
 
-  // ─── Find (Find on Current Page) ───
-  const findLower = findText.toLowerCase();
-  const matches = useMemo(() => {
-    if (!findOpen || !findLower) return [] as Pos[];
-    const out: Pos[] = [];
-    for (let d = 0; d < rowCount && out.length < 5000; d++) {
-      const r = dataIndex(d);
-      for (let c = 0; c < cols.length; c++) if (display(valueAt(r, c)).toLowerCase().includes(findLower)) out.push({ r: d, c });
-    }
-    return out;
-  }, [findOpen, findLower, result.rows, changes, added, order]);
-  const isMatch = (d: number, c: number) => findOpen && !!findLower && display(valueAt(dataIndex(d), c)).toLowerCase().includes(findLower);
-  const gotoMatch = (dir: 1 | -1) => {
-    if (!matches.length) return;
-    const at = cur ? matches.findIndex((m) => m.r === cur.r && m.c === cur.c) : -1;
-    const m = matches[(at + dir + matches.length) % matches.length];
-    selectCell(m, false);
-    virt.scrollToIndex(m.r);
-    colVirt.scrollToIndex(m.c);
-  };
+  const { matches, isMatch, gotoMatch, openFind } = useGridFind({
+    findOpen, setFindOpen, findText, rowCount, dataIndex, cols, valueAt, result, changes, added, order, cur, selectCell, virt, colVirt, wrapRef,
+  });
 
-  // ─── Editing ───
-  const commitEdit = () => {
-    if (!editing) return;
-    const { r, c, value } = editing;
-    setCell(r, c, value);
-    setEditing(null);
-    scrollRef.current?.focus();
-  };
-  const setCell = (r: number, c: number, next: Cell) => {
-    if (r >= baseCount) {
-      setAdded((a) => a.map((row, i) => (i === r - baseCount ? row.map((v, j) => (j === c ? next : v)) : row)));
-      return;
-    }
-    const orig = result.rows[r][c];
-    if (next === orig || (orig !== null && next !== null && next !== DEFAULT_TOKEN && display(orig) === String(next))) {
-      setChanges((ch) => {
-        if (!ch[r] || !(c in ch[r])) return ch;
-        const row = { ...ch[r] };
-        delete row[c];
-        const n = { ...ch };
-        if (Object.keys(row).length) n[r] = row;
-        else delete n[r];
-        return n;
-      });
-      return;
-    }
-    setChanges((ch) => ({ ...ch, [r]: { ...ch[r], [c]: next } }));
-  };
-  const startEdit = (r: number, c: number) => {
-    if (deleted.has(r)) return;
-    const why = cellReason(r, c);
-    // A join's read-only cell says why (one table's whole grid says it on its buttons)
-    if (why !== undefined) return void (join && why && setStatusNote(why));
-    const v = valueAt(r, c);
-    if (r < baseCount && !editableValue(v, cols[c].typeName)) return;
-    setEditing({ r, c, value: v === null || v === DEFAULT_TOKEN ? "" : String(v) });
-  };
-  // ─── Value Editor panel (follows the current cell) ───
-  const panelCell = active && active.r < rowCount ? active : null;
-  const panelReadOnly = (r: number, c: number) => !cellOk(r, c) || (r < baseCount && !editableValue(valueAt(r, c), cols[c].typeName));
-  const panelShown = panelCell ? panelText(cols[panelCell.c].typeName, raw(valueAt(panelCell.r, panelCell.c))) : { json: false, text: "" };
-  /** Write a draft to its cell; the reason when a json / jsonb column refuses it */
-  const writeDraft = (d: PanelDraft): string | null => {
-    const res = draftToApply(d, cols[d.c].typeName, raw(valueAt(d.r, d.c)));
-    if (res && "error" in res) return res.error;
-    if (res) setCell(d.r, d.c, res.text);
-    return null;
-  };
-  // The selection left the drafted cell: apply the edit there (DataGrip applies on leaving); one that can't be applied is dropped, saying why
-  useEffect(() => {
-    const d = leftDraft(draft, panelCell);
-    if (!d) return setPanelError(null);
-    const err = writeDraft(d);
-    setDraft(null);
-    setPanelError(err && `${cols[d.c].name} not changed: ${err}`);
-  }, [panelCell?.r, panelCell?.c]);
+  const { commitEdit, setCell, startEdit, setNull, setDefault, genUuid, addRow, cloneRow, deleteRows, revertSelected, submit, fix, previewPending, doSubmitPreview } = useGridEdits({
+    editing, setEditing, changes, setChanges, deleted, setDeleted, added, setAdded, preview, setPreview, submitErr, setSubmitErr,
+    result, cols, baseCount, rowCount, join, canEdit, anyEdit, pkIdx, edit, D, tcol, valueAt, cellReason, cellOk,
+    active, hasSel, selRows, forSelected, selectCell, virt, scrollRef, p,
+  });
   const focusGrid = () => (scrollRef.current ?? wrapRef.current)?.focus();
   // The button goes with the failure: the keys go to the grid again, the new one when the run replaced it (a console's result is
   // drawn anew in the same place after its run)
@@ -520,191 +283,17 @@ export function ResultGrid(p: Props) {
     await p.onReload();
     requestAnimationFrame(() => place?.querySelector<HTMLElement>(":scope > .grid-wrap .grid-scroll")?.focus());
   };
-  const openPanel = () => {
-    setPanel(true);
-    setPanelFocus((n) => n + 1);
-  };
-  const applyPanel = () => {
-    const err = draft ? writeDraft(draft) : null;
-    setPanelError(err);
-    if (err) return;
-    setDraft(null);
-    focusGrid();
-  };
-  /** × / ⌘w / ⇧⎋: apply the edit, close, back to the grid on the same cell. A refused edit keeps the panel open with the reason */
-  const closePanel = () => {
-    const err = draft ? writeDraft(draft) : null;
-    setPanelError(err);
-    if (err) return;
-    setDraft(null);
-    setPanel(false);
-    focusGrid();
-  };
-  const closePanelRef = useRef(closePanel);
-  closePanelRef.current = closePanel;
-  useEffect(() => (panel && wrapRef.current ? registerValuePanel(wrapRef.current, () => closePanelRef.current()) : undefined), [panel]);
+  const { panelCell, panelReadOnly, panelShown, openPanel, applyPanel, closePanel } = useValuePanel({
+    active, rowCount, cols, valueAt, cellOk, baseCount, setCell, draft, setDraft, setPanelError, panel, setPanel, setPanelFocus, focusGrid, wrapRef,
+  });
 
   // A note (why a paste or a copy format couldn't run) is about what was selected then
   useEffect(() => setStatusNote(undefined), [sel, result, changes]);
   useEffect(() => () => setStatusNote(undefined), []);
 
-  /** Every selected cell that can be edited gets `v()` (a join's read-only cells keep theirs) */
-  const setSelected = (v: () => Cell) => anyEdit && forSelected((r, c) => void (cellOk(r, c) && setCell(r, c, v())));
-  const setNull = () => setSelected(() => null);
-  const setDefault = () => setSelected(() => DEFAULT_TOKEN);
-  const genUuid = () => setSelected(() => crypto.randomUUID());
-
-  const addRow = () => {
-    if (!canEdit) return;
-    setAdded((a) => [...a, cols.map(() => undefined)]);
-    setTimeout(() => {
-      virt.scrollToIndex(rowCount);
-      selectCell({ r: rowCount, c: 0 }, false);
-    });
-  };
-  const cloneRow = () => {
-    if (!canEdit || !active) return;
-    // Key cells are left untouched; the others keep the source's value, NULL included (a new row's untouched cell stays untouched)
-    const src = cols.map((_, c) => (pkIdx.includes(c) ? undefined : active.r < baseCount ? valueAt(active.r, c) : added[active.r - baseCount][c]));
-    setAdded((a) => [...a, src]);
-    setTimeout(() => virt.scrollToIndex(rowCount));
-  };
-  const deleteRows = () => {
-    if (!canEdit || !hasSel) return;
-    const rows = selRows();
-    const newOnes = rows.filter((r) => r >= baseCount).map((r) => r - baseCount);
-    if (newOnes.length) setAdded((a) => a.filter((_, i) => !newOnes.includes(i)));
-    setDeleted((d) => {
-      const n = new Set(d);
-      rows.filter((r) => r < baseCount).forEach((r) => n.add(r));
-      return n;
-    });
-  };
-  /** Revert Selected: revert only the selection, or everything if nothing is selected */
-  const revertSelected = () => {
-    if (!hasSel) {
-      setChanges({});
-      setDeleted(new Set());
-      setAdded([]);
-      return;
-    }
-    const rows = selRows();
-    setChanges((ch) => {
-      const n = { ...ch };
-      forSelected((r, c) => {
-        if (!n[r] || !(c in n[r])) return;
-        const row = { ...n[r] };
-        delete row[c];
-        if (Object.keys(row).length) n[r] = row;
-        else delete n[r];
-      });
-      return n;
-    });
-    setDeleted((d) => {
-      const n = new Set(d);
-      rows.forEach((r) => n.delete(r));
-      return n;
-    });
-    const newOnes = rows.filter((r) => r >= baseCount).map((r) => r - baseCount);
-    if (newOnes.length) setAdded((a) => a.filter((_, i) => !newOnes.includes(i)));
-  };
-
-  const tableRef = edit ? `${quoteIdent(edit.schema)}.${quoteIdent(edit.table)}` : "MY_TABLE";
-  /** Submit's statements (lib/gridEdit: the TUI's rules), each ending with `;` */
-  const buildStatements = (): string[] | undefined => {
-    if (!sharedReady()) return void setStatusNote("Submit needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
-    if (join) return joinStatements(D.quoting, join, result.rows, changes);
-    if (!edit) return [];
-    return editStatements(D.quoting, { ...edit, columns: cols.map((_, i) => tcol(i)) }, result.rows, changes, deleted, added);
-  };
-  const submit = async () => {
-    const sql = buildStatements();
-    if (!sql?.length) return;
-    setSubmitErr(null);
-    try {
-      await p.onSubmit(sql);
-    } catch (e) {
-      setPreview({ sql });
-      setSubmitErr(String(e));
-    }
-  };
-  // Under the error: the SQL that fixes a key sequence behind the table (#167), from the table's columns (re-renders when they load)
-  const fix = submitErr && edit && !join ? submitFix(D.quoting, submitErr, edit, () => (p.target ? tableColumns(p.target, edit.schema, edit.table) : undefined)) : undefined;
-  const previewPending = () => {
-    const sql = buildStatements();
-    if (sql) setPreview({ sql, readOnly: true });
-  };
-  const doSubmitPreview = async () => {
-    if (!preview) return;
-    setSubmitErr(null);
-    try {
-      await p.onSubmit(preview.sql);
-      setPreview(null);
-    } catch (e) {
-      setSubmitErr(String(e));
-    }
-  };
-
-  // ─── Copy (Data Extractor) ───
-  /** header = a column-name line at the top of CSV · TSV (Copy is values only — DataGrip; Copy with Headers includes it) */
-  /** The cells of `s` in a format: rows and columns in grid order, the union of the ranges' columns (gridSelection.copyTable) */
-  const extract = (s: Selection, fmt: Extractor, header = true): string => {
-    const t = copyTable<Cell>(s, (d, c) => valueAt(dataIndex(d), c), HOLE_TOKEN);
-    const rows = t.rows.map(dataIndex);
-    // Key values are read only for SQL Updates (as before: other formats never touch the key columns)
-    const keys = fmt === "SQL Updates" ? rows.map((r) => pkIdx.map((k): [string, Cell] => [cols[k].name, valueAt(r, k)])) : [];
-    return extractRows(fmt, { names: t.cols.map((c) => cols[c].name), types: t.cols.map((c) => cols[c].typeName), vals: t.vals, keys, tableRef, dialect: D, header });
-  };
-  /** The shared WASM writes the formats: without it (a WebView that refused WebAssembly) say why nothing is copied */
-  const formatted = (make: () => string): string | undefined => {
-    if (sharedReady()) return make();
-    setStatusNote("Copy formats need WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
-  };
-  const copySelection = (header = false) => {
-    if (!sel || !hasSel) return;
-    // The one selected cell (not sel.cur: a ⌘-click that took a cell out leaves the cursor outside the selection)
-    const one = sel.ranges[0];
-    const rawOne = isSingle(sel) && !header && (extractor === "CSV" || extractor === "TSV");
-    const text = rawOne ? raw(valueAt(dataIndex(one.r0), one.c0)) : formatted(() => extract(sel, extractor, header));
-    if (text === undefined) return;
-    // Paste reads this text back as its format (one copied row splits into cells); one raw value stays one value
-    copied(text, rawOne ? "other" : extractor);
-    navigator.clipboard.writeText(text);
-  };
-  /** Selected cells as ('a', 'b') (paste straight into WHERE x IN). If only one cell is selected, its whole column */
-  const copyInList = () => {
-    if (!sel || !hasSel) return;
-    const c = sel.ranges[0].c0;
-    const text = formatted(() => extract(isSingle(sel) ? single({ r: 0, c }, { r: rowCount - 1, c }) : sel, "SQL IN List"));
-    if (text === undefined) return;
-    copied(text, "other");
-    navigator.clipboard.writeText(text);
-  };
-  /** Paste: TSV/CSV into cells (pasteCells: an empty field is NULL), adding new rows if there are not enough (DataGrip) */
-  const paste = async () => {
-    if (!anyEdit || !cur) return;
-    // Paste goes into one place (DataGrip); a ⌘-click meant as a plain click is the usual way to get several ranges here
-    if ((sel?.ranges.length ?? 0) > 1) return setStatusNote("Paste needs one selected range: click a cell to select just it (⌘-click adds cells to the selection)");
-    if (!sharedReady()) return setStatusNote("Paste needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
-    const grid = pasteCells(await navigator.clipboard.readText());
-    // A join: only into cells that can be edited, and no rows added
-    if (join) {
-      const spots = grid.flatMap((cells, i) => cells.map((_, j) => [cur.r + i, cur.c + j]).filter(([, c]) => c < cols.length));
-      const bad = spots.find(([d, c]) => d >= rowCount || !cellOk(dataIndex(d), c));
-      if (bad) return setStatusNote(bad[0] >= rowCount ? joinRows : cellReason(dataIndex(bad[0]), bad[1]) || "Paste reaches a cell that can't be edited");
-    }
-    grid.forEach((cells, i) => {
-      const d = cur.r + i;
-      const r = d < rowCount ? dataIndex(d) : -1;
-      if (r < 0) {
-        const row: NewRow = cols.map(() => undefined);
-        cells.forEach((v, j) => {
-          if (cur.c + j < cols.length) row[cur.c + j] = v;
-        });
-        setAdded((a) => [...a, row]);
-      } else cells.forEach((v, j) => cur.c + j < cols.length && setCell(r, cur.c + j, v));
-    });
-  };
+  const { copySelection, copyInList, paste } = useGridClipboard({
+    edit, quoteIdent, sel, hasSel, extractor, valueAt, dataIndex, pkIdx, cols, D, rowCount, anyEdit, cur, join, cellOk, joinRows, cellReason, setAdded, setCell,
+  });
 
   // ─── Keyboard (DataGrip grid keymap) ───
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -833,11 +422,6 @@ export function ResultGrid(p: Props) {
     e.stopPropagation();
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     setMenu({ x: r.left, y: r.bottom + 2, items });
-  };
-  /** The find bar, opened and focused (its key, DataGrip); the toolbar button toggles it */
-  const openFind = () => {
-    setFindOpen(true);
-    setTimeout(() => wrapRef.current?.querySelector<HTMLInputElement>(".grid-find input")?.focus());
   };
   const viewItems = (): MenuItem[] => [
     { label: (!transposed && !chart ? "✓ " : "　") + "Table", ...cmd("grid.viewTable"), action: () => (setTransposed(false), setChart(false)) },
