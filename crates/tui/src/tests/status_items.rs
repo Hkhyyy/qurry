@@ -187,7 +187,7 @@ async fn size_in_a_console_result() {
         in_transaction: false,
         warning: None,
         editable,
-        notices: vec![],
+        notices: vec![], cut: vec![],
     };
     let set = |h: &mut Harness, r: QueryResult| {
         let i = h.app.tab_index(id).unwrap();

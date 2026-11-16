@@ -214,6 +214,61 @@ pub(super) async fn new_session(state: &AppState, id: &str, tab_id: &str, stale:
     Ok(arc)
 }
 
+/// A load-more or a read on the tab's session failed: on a lost connection its open transaction ended with it (audited), and the
+/// session is dropped (recover)
+pub(super) async fn session_failed(state: &AppState, conn_id: &str, tab: &str, in_tx: bool, e: AppError) -> AppError {
+    let tx = (in_tx && is_conn_lost(&e)).then_some(crate::audit::BY_SERVER);
+    if let Some(w) = tx
+        && let Err(le) = state.audit_tx_end(tab, w).await
+    {
+        crate::log!("[qurry] {le}");
+    }
+    recover(state, conn_id, Some(tab), tx, e).await
+}
+
+/// The whole values of a result's cut cells (QueryResult::cut), read by the table's key: rows = each row's key values as the
+/// grid holds them (`key` in order)
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct FullValues {
+    pub schema: String,
+    pub table: String,
+    pub key: Vec<String>,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Option<String>>>,
+}
+
+/// Rows per read of whole values (full_values_sql)
+const VALUES_CHUNK: usize = 100;
+
+/// One read per VALUES_CHUNK rows: `SELECT 0 AS qurry_i, "col"… FROM "schema"."table" WHERE "k" = '…' UNION ALL SELECT 1, … ORDER BY 1`,
+/// qurry_i = the row's place in req.rows. Each key is matched as Submit's UPDATE … WHERE matches it (result_edit::edit_statements),
+/// so the index is used and the row read is the row an edit writes
+pub(crate) fn full_values_sql(kind: store::DbKind, req: &FullValues) -> AppResult<Vec<String>> {
+    let q = |s: &str| crate::sql::quote_ident(kind, s);
+    if req.key.is_empty() {
+        return Err(AppError::Msg(qurry_shared::result_edit::EDIT_NO_KEY.into()));
+    }
+    let table = format!("{}.{}", q(&req.schema), q(&req.table));
+    let cols: String = req.columns.iter().map(|c| format!(", {}", q(c))).collect();
+    let mut reads = Vec::new();
+    for (n, chunk) in req.rows.chunks(VALUES_CHUNK).enumerate() {
+        let mut parts = Vec::new();
+        for (j, values) in chunk.iter().enumerate() {
+            if values.len() != req.key.len() {
+                return Err(AppError::Msg(format!("A row has {} key values, the key has {} columns", values.len(), req.key.len())));
+            }
+            let w = req.key.iter().zip(values).map(|(k, v)| match v {
+                Some(v) => Ok(format!("{} = {}", q(k), crate::sql::literal(kind, Some(v)))),
+                None => Err(AppError::Msg(format!("The row's {k} is NULL: a primary key can't be, so the row can't be found to read its whole values"))),
+            });
+            let w = w.collect::<AppResult<Vec<_>>>()?.join(" AND ");
+            parts.push(format!("SELECT {}{}{cols} FROM {table} WHERE {w}", n * VALUES_CHUNK + j, if j == 0 { " AS qurry_i" } else { "" }));
+        }
+        reads.push(format!("{}\nORDER BY 1", parts.join("\nUNION ALL ")));
+    }
+    Ok(reads)
+}
+
 /// A console session AppState::close_all_sessions closed: its tab, its data source's name, whether a transaction was rolled back
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -268,12 +323,53 @@ impl AppState {
         }
         out
     }
+
+    /// The whole values of `req.columns` for each row of `req.rows` (#183), in that order; None for a key no row has (any more). Read in
+    /// the tab's session, so in Manual mode its uncommitted changes are what it reads (PgSession::read_values keeps its transaction
+    /// and open cursor whatever the read does)
+    pub async fn fetch_values(&self, id: String, tab_id: String, req: FullValues) -> AppResult<Vec<Option<Vec<serde_json::Value>>>> {
+        let reads = full_values_sql(self.kind_of(&id)?, &req)?;
+        let sess = ensure_session(self, &id, &tab_id).await?;
+        touch(self, &id);
+        let (r, in_tx) = {
+            let mut s = sess.lock().await;
+            if s.abandoned() {
+                return Err(AppError::Msg(SESSION_ABANDONED.into()));
+            }
+            let in_tx = s.in_tx();
+            let mut out = vec![None; req.rows.len()];
+            let mut r = Ok(());
+            for sql in &reads {
+                match s.read_values(sql).await {
+                    Ok(q) => {
+                        for row in q.rows {
+                            if let Some(at) = row.first().and_then(|i| i.as_u64()).and_then(|i| out.get_mut(i as usize)) {
+                                at.get_or_insert_with(|| row[1..].to_vec());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        r = Err(e);
+                        break;
+                    }
+                }
+            }
+            settle_lost(self, &tab_id, s.in_tx());
+            used_now(self, &tab_id).await;
+            (r.map(|_| out), in_tx)
+        };
+        match r {
+            Err(e) => Err(session_failed(self, &id, &tab_id, in_tx, e).await),
+            ok => ok,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app::tests::*;
+    use serde_json::Value;
 
     /// A console set to Manual while its source can't be reached (a Production console opened then, #106): the session its next
     /// run opens starts in Manual, never in Auto committing at once
@@ -284,6 +380,110 @@ mod tests {
         st.store.save(&silent_source("x", 1, None)).unwrap();
         assert!(st.set_tx_mode("x".into(), "t".into(), true).await.is_err());
         assert_eq!(st.tab_manual.lock().unwrap().get("t"), Some(&true));
+    }
+
+    fn values_req(table: &str, key: &[&str], columns: &[&str], rows: Vec<Vec<Option<&str>>>) -> FullValues {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect();
+        FullValues { schema: "public".into(), table: table.into(), key: s(key), columns: s(columns), rows: rows.into_iter().map(|r| r.into_iter().map(|v| v.map(String::from)).collect()).collect() }
+    }
+
+    /// One read per 100 rows, each row numbered by its place in req.rows, its key matched as Submit's WHERE matches it; a NULL key
+    /// value and a table without a key are refused
+    #[test]
+    fn full_values_reads() {
+        use crate::store::DbKind::Postgres;
+        let rows = (0..205).map(|i| vec![Some(if i == 1 { "it's" } else { "7" }), Some("x")]).collect();
+        let reads = full_values_sql(Postgres, &values_req("Order", &["id", "k"], &["body", "select"], rows)).unwrap();
+        assert_eq!(reads.len(), 3);
+        assert!(reads[0].starts_with(
+            "SELECT 0 AS qurry_i, body, \"select\" FROM public.\"Order\" WHERE id = '7' AND k = 'x'\nUNION ALL SELECT 1, body, \"select\" FROM public.\"Order\" WHERE id = 'it''s' AND k = 'x'\nUNION ALL SELECT 2,"
+        ), "{}", reads[0]);
+        assert!(reads[0].ends_with("WHERE id = '7' AND k = 'x'\nORDER BY 1") && reads[0].matches("UNION ALL").count() == 99);
+        assert!(reads[2].starts_with("SELECT 200 AS qurry_i, ") && reads[2].matches("UNION ALL").count() == 4);
+        let e = full_values_sql(Postgres, &values_req("t", &["id"], &["body"], vec![vec![Some("1")], vec![None]])).unwrap_err().to_string();
+        assert!(e.contains("id is NULL"), "{e}");
+        assert!(full_values_sql(Postgres, &values_req("t", &[], &["body"], vec![vec![]])).is_err());
+    }
+
+    /// Whole values by key over 3 reads, aligned with the rows asked (a key no row has → None), a composite key; the pool path
+    /// (MCP, export) reads whole values whatever gridCutChars is. QURRY_TEST_PG=… cargo test -p qurry-core fetch_values -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn fetch_values_by_key() {
+        let Some(crate::testenv::Server { cfg, password }) = crate::testenv::pg() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        st.save_connection(ConnectionConfig { id: "d".into(), name: "dev".into(), ..cfg }, password, None).await.unwrap();
+        st.store.set_grid_cut_chars(64).unwrap();
+        let q = |sql: &str, tab: Option<&str>| st.run_query("d".into(), sql.into(), None, tab.map(String::from));
+        for sql in ["drop table if exists qurry_fv", "create table qurry_fv (id int primary key, body text)", "insert into qurry_fv select g, repeat('b' || g || ' ', 40) from generate_series(1, 260) g"] {
+            q(sql, None).await.unwrap();
+        }
+        let body = |i: usize| format!("b{i} ").repeat(40);
+        // The pool (MCP's query, export): whole values, nothing flagged
+        let pool = q("select body from qurry_fv where id = 1", None).await.unwrap();
+        assert_eq!((pool.rows[0][0].clone(), pool.cut.is_empty()), (Value::from(body(1)), true));
+        let r = q("select * from qurry_fv order by id", Some("t")).await.unwrap();
+        assert_eq!((r.cut.len(), r.rows[0][1].as_str().unwrap().chars().count()), (260, 64));
+        let keys: Vec<String> = (1..=250).map(|i| if i == 100 { "999".into() } else { i.to_string() }).collect();
+        let req = values_req("qurry_fv", &["id"], &["body", "id"], keys.iter().map(|k| vec![Some(k.as_str())]).collect());
+        let got = st.fetch_values("d".into(), "t".into(), req).await.unwrap();
+        assert_eq!(got.len(), 250);
+        for (i, v) in got.iter().enumerate() {
+            match i + 1 {
+                100 => assert_eq!(v, &None),
+                n => assert_eq!(v, &Some(vec![Value::from(body(n)), Value::from(n)]), "{n}"),
+            }
+        }
+        // Composite key
+        for sql in ["drop table if exists qurry_fv2", "create table qurry_fv2 (a int, b text, v text, primary key (a, b))", "insert into qurry_fv2 values (1, 'x', 'one'), (1, 'y', 'two')"] {
+            q(sql, None).await.unwrap();
+        }
+        let req = values_req("qurry_fv2", &["a", "b"], &["v"], vec![vec![Some("1"), Some("y")], vec![Some("2"), Some("x")], vec![Some("1"), Some("x")]]);
+        let got = st.fetch_values("d".into(), "t".into(), req).await.unwrap();
+        assert_eq!(got, [Some(vec![Value::from("two")]), None, Some(vec![Value::from("one")])]);
+        q("drop table qurry_fv, qurry_fv2", None).await.unwrap();
+        st.close_session("t".into()).await.unwrap();
+    }
+
+    /// In Manual mode the tab's uncommitted change is what it reads; a read that fails (a column dropped since) leaves the user's
+    /// transaction open and the open cursor loading more, in Manual and in Auto (the cursor's own transaction)
+    #[tokio::test]
+    #[ignore]
+    async fn fetch_values_in_the_tabs_transaction() {
+        let Some(crate::testenv::Server { cfg, password }) = crate::testenv::pg() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        st.save_connection(ConnectionConfig { id: "d".into(), name: "dev".into(), ..cfg }, password, None).await.unwrap();
+        st.store.set_grid_cut_chars(64).unwrap();
+        let q = |sql: &str, tab: &str| st.run_query("d".into(), sql.into(), Some(10), Some(tab.into()));
+        for sql in ["drop table if exists qurry_fvtx", "create table qurry_fvtx (id int primary key, body text)", "insert into qurry_fvtx select g, repeat('x', 100) from generate_series(1, 30) g"] {
+            q(sql, "setup").await.unwrap();
+        }
+        st.close_session("setup".into()).await.unwrap();
+        let read = |tab: &str, col: &str| st.fetch_values("d".into(), tab.into(), values_req("qurry_fvtx", &["id"], &[col], vec![vec![Some("5")]]));
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        q("update qurry_fvtx set body = repeat('changed ', 20) where id = 5", "m").await.unwrap();
+        assert_eq!(read("m", "body").await.unwrap(), [Some(vec![Value::from("changed ".repeat(20))])]);
+        assert_eq!(read("other", "body").await.unwrap(), [Some(vec![Value::from("x".repeat(100))])], "not committed");
+        for tab in ["m", "auto"] {
+            let first = q("select * from qurry_fvtx order by id", tab).await.unwrap();
+            assert!(first.truncated && first.cut.len() == 10, "{tab}");
+            assert!(read(tab, "no_such_column").await.is_err());
+            let more = st.fetch_more(tab.into(), Some(10)).await.unwrap();
+            assert_eq!(more.rows[0][0], Value::from(11), "{tab}: the cursor goes on");
+            assert_eq!(more.cut.len(), 10);
+        }
+        // The user's transaction is still open, with its change
+        let mine = q("select body from qurry_fvtx where id = 5", "m").await.unwrap();
+        assert_eq!((mine.in_transaction, mine.rows[0][0].as_str().unwrap().starts_with("changed")), (true, true));
+        st.rollback_tx("m".into()).await.unwrap();
+        // Auto's cursor holds the table until its session closes
+        for t in ["m", "other", "auto"] {
+            st.close_session(t.into()).await.unwrap();
+        }
+        q("drop table qurry_fvtx", "setup").await.unwrap();
+        st.close_session("setup".into()).await.unwrap();
     }
 
     /// Auto-disconnect: close pools and sessions after the idle time. keep-alive keeps the session alive.

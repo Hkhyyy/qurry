@@ -21,7 +21,7 @@ fn fake(q: &str) -> Result<QueryResult, String> {
         in_transaction: false,
         warning: None,
         editable: None,
-        notices: vec![],
+        notices: vec![], cut: vec![],
     })
 }
 

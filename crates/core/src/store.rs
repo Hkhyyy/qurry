@@ -868,6 +868,16 @@ impl Store {
         Ok(next)
     }
 
+    /// Characters of a long text / JSON / XML value a console's PostgreSQL cursor result reads (the whole value comes on demand:
+    /// AppState::fetch_values). 0 = never cut. settings.json "gridCutChars", the GUI and the TUI; 4096 unless set
+    pub fn grid_cut_chars(&self) -> usize {
+        self.settings().get("gridCutChars").and_then(|v| v.as_u64()).map_or(4096, |n| n as usize)
+    }
+
+    pub fn set_grid_cut_chars(&self, n: usize) -> AppResult<()> {
+        self.set_setting("gridCutChars", n.into())
+    }
+
     /// The status bar items on (GUI status bar and Settings › Appearance › Data grid, TUI ⌃k › Status Bar Items…): the defaults until changed
     pub fn status_bar_items(&self) -> Vec<crate::statusbar::Item> {
         crate::statusbar::items(self.settings().get("statusBarItems"))
@@ -1187,6 +1197,19 @@ mod tests {
             fs::write(dir.path().join("cfg/settings.json"), bad).unwrap();
             assert_eq!(store.result_tabs(), 10, "{bad}");
         }
+    }
+
+    /// Long values cut: 4096 until set, 0 kept (never cut), other settings kept
+    #[test]
+    fn grid_cut_chars_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        assert_eq!(store.grid_cut_chars(), 4096);
+        store.set_update_channel(crate::update::Channel::Beta).unwrap();
+        store.set_grid_cut_chars(0).unwrap();
+        assert_eq!(store.grid_cut_chars(), 0);
+        store.set_grid_cut_chars(64).unwrap();
+        assert_eq!((store.grid_cut_chars(), store.update_channel()), (64, crate::update::Channel::Beta));
     }
 
     /// Grid alignment: defaults until a class is changed, other settings kept, a value this version doesn't know skipped; a change

@@ -128,7 +128,7 @@ impl PluginConn {
             in_transaction: false,
             warning: None,
             editable: None,
-            notices: vec![],
+            notices: vec![], cut: vec![],
         })
     }
 }

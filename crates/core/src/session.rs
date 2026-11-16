@@ -7,7 +7,8 @@ use crate::error::{AppError, AppResult};
 use futures::TryStreamExt;
 use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgConnection, PgPool, PgRow};
-use sqlx::{Column, Either, Executor, Postgres, Row, TypeInfo};
+use sqlx::{Column, Either, Executor, Postgres, Row, Statement, TypeInfo};
+use serde_json::Value;
 use std::time::Instant;
 
 const CURSOR: &str = "dbtool_cur";
@@ -19,6 +20,8 @@ pub const EXPLAIN_BEGIN: [&str; 2] = ["BEGIN", "ROLLBACK"];
 pub const EXPLAIN_SAVEPOINT: [&str; 2] = ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"];
 /// A result grid's edits in the console's transaction (Session::submit): set, undo when one fails, release
 const SUBMIT_SAVEPOINT: [&str; 3] = ["SAVEPOINT qurry_submit", "ROLLBACK TO SAVEPOINT qurry_submit", "RELEASE SAVEPOINT qurry_submit"];
+/// A read of whole values in the open transaction (PgSession::read_values): set, undo when it fails, release
+const VALUES_SAVEPOINT: [&str; 3] = ["SAVEPOINT qurry_values", "ROLLBACK TO SAVEPOINT qurry_values", "RELEASE SAVEPOINT qurry_values"];
 /// A COMMIT of a PostgreSQL transaction an earlier error aborted: the server rolled it back
 const ABORTED_COMMIT: &str =
     "Not committed: an earlier statement in this transaction failed, so PostgreSQL rolled back the whole transaction and none of its changes were saved. Run the changes again (without the failing statement).";
@@ -51,6 +54,81 @@ pub struct PgSession {
     zone_set: bool,
     /// Session::abandoned
     abandoned: bool,
+    /// Characters of a long value a cursor reads from now (store::grid_cut_chars, Session::set_cut), 0 = whole values
+    cut: usize,
+    /// How the open cursor reads each column (cut_projection), empty when it reads whole values; cut_at = the cut it was declared with
+    cut_cols: Vec<CutAs>,
+    cut_at: usize,
+}
+
+/// How a cursor wrapped by cut_projection reads a column
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CutAs {
+    /// As it is
+    Whole,
+    /// Its first cut + 1 characters: more than cut means it was cut
+    Text,
+    /// Its text form's first cut + 1 characters; one not cut decodes as the whole value does (db::pg_value's compact form)
+    Json,
+    /// Its first 65 bytes: db::pg_value shows 64 and … after them, so nothing changes and nothing is flagged
+    Bytes,
+}
+
+/// The cursor's statement that reads long values cut (#183): `SELECT <proj> FROM (<query>) AS qurry_page(c1, c2, …)`, each column
+/// named as in the query again. The positional names take duplicate and empty ones. columns = the query's (described). None when
+/// cut is 0 or no column needs it
+pub(crate) fn cut_projection(query: &str, columns: &[ColumnInfo], cut: usize) -> Option<(String, Vec<CutAs>)> {
+    if cut == 0 {
+        return None;
+    }
+    let k = cut + 1;
+    let (exprs, how): (Vec<String>, Vec<CutAs>) = columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let n = format!("c{}", i + 1);
+            let (e, how) = match c.type_name.to_uppercase().as_str() {
+                "TEXT" | "VARCHAR" | "NAME" | "CITEXT" | "XML" => (format!("left({n}::text, {k})"), CutAs::Text),
+                // char(n), which sqlx names CHAR (the one-byte "char" is "CHAR" in quotes, read as it is): its cast to text drops the
+                // padding db::pg_value shows, its output function keeps it
+                "CHAR" | "BPCHAR" => (format!("left(textin(bpcharout({n})), {k})"), CutAs::Text),
+                "JSON" | "JSONB" => (format!("left({n}::text, {k})"), CutAs::Json),
+                "BYTEA" => (format!("substring({n} from 1 for 65)"), CutAs::Bytes),
+                // Arrays too: db::pg_value doesn't show them as PostgreSQL's text form, which the cut would read
+                _ => (n, CutAs::Whole),
+            };
+            let named = match c.name.is_empty() {
+                true => e,
+                false => format!("{e} AS {}", crate::sql::quote_ident(crate::store::DbKind::Postgres, &c.name)),
+            };
+            (named, how)
+        })
+        .unzip();
+    if how.iter().all(|h| *h == CutAs::Whole) {
+        return None;
+    }
+    let names = (1..=columns.len()).map(|i| format!("c{i}")).collect::<Vec<_>>().join(", ");
+    Some((format!("SELECT {} FROM (\n{query}\n) AS qurry_page({names})", exprs.join(", ")), how))
+}
+
+/// Cut the cells longer than `at` characters (left() counts characters, not bytes) and say which: [row, column]. A JSON cell
+/// that isn't cut decodes as the whole value does
+pub(crate) fn cut_cells(rows: &mut [Vec<Value>], how: &[CutAs], at: usize) -> Vec<[usize; 2]> {
+    let mut cut = Vec::new();
+    for (r, row) in rows.iter_mut().enumerate() {
+        for (c, v) in row.iter_mut().enumerate() {
+            let (Some(h @ (CutAs::Text | CutAs::Json)), Value::String(s)) = (how.get(c), &mut *v) else { continue };
+            if let Some((end, _)) = s.char_indices().nth(at) {
+                s.truncate(end);
+                cut.push([r, c]);
+            } else if *h == CutAs::Json
+                && let Ok(j) = serde_json::from_str::<Value>(s)
+            {
+                *s = j.to_string();
+            }
+        }
+    }
+    cut
 }
 
 /// Why loading more needs a new session: saving the source's settings, Disconnect and the idle drop close the tab sessions (app::drop_pool)
@@ -189,7 +267,7 @@ impl PgSession {
     pub async fn open(pool: &PgPool) -> AppResult<Self> {
         let mut conn = pool.acquire().await?;
         let pid: i32 = sqlx::query_scalar("select pg_backend_pid()").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), origins: Vec::new(), manual: false, in_tx: false, changed: false, reads_outside_tx: false, cursor_used: std::time::SystemTime::now(), idle_closed: false, fetched: 0, zone: None, zone_set: false, abandoned: false })
+        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), origins: Vec::new(), manual: false, in_tx: false, changed: false, reads_outside_tx: false, cursor_used: std::time::SystemTime::now(), idle_closed: false, fetched: 0, zone: None, zone_set: false, abandoned: false, cut: 0, cut_cols: Vec::new(), cut_at: 0 })
     }
 
     /// keep-alive: so idle session connections are not dropped
@@ -361,10 +439,10 @@ impl PgSession {
             self.refuse_aborted_commit().await?;
         }
         if is_select_like(sql) {
+            self.columns.clear();
             match self.declare(strip_trailing_semicolon(sql)).await {
                 Ok(_) => {
                     self.cursor_sql = sql.to_string();
-                    self.columns.clear();
                     self.fetched = 0;
                     let mut r = self.fetch(limit).await?;
                     r.elapsed_ms = start.elapsed().as_millis() as u64;
@@ -372,7 +450,6 @@ impl PgSession {
                 }
                 Err(e) => {
                     // The session is gone (the server ended it, idle in the transaction): its error says why, the retry below wouldn't
-                    let e = AppError::Db(e);
                     if crate::app::is_conn_lost(&e) {
                         return Err(e);
                     }
@@ -394,14 +471,64 @@ impl PgSession {
     }
 
     /// Short transaction for the cursor. Inside a user transaction (Manual, or BEGIN run directly in Auto), protected by a savepoint;
-    /// a read before Manual mode's transaction opens (reading_first) can't write
-    async fn declare(&mut self, query: &str) -> Result<(), sqlx::Error> {
-        let declare = if self.user_tx() {
-            format!("SAVEPOINT dbtool_sp; DECLARE {CURSOR} NO SCROLL CURSOR FOR {query}")
+    /// a read before Manual mode's transaction opens (reading_first) can't write. With a cut (Session::set_cut) long values are read
+    /// cut (declare_cut); a statement that can't be wrapped so is declared as it is
+    async fn declare(&mut self, query: &str) -> AppResult<()> {
+        self.cut_cols.clear();
+        if self.cut > 0 {
+            match self.declare_cut(query).await {
+                Ok(()) => return Ok(()),
+                Err(e) if crate::app::is_conn_lost(&e) => return Err(e),
+                Err(_) => {
+                    self.rollback().await;
+                    (self.columns, self.origins) = (Vec::new(), Vec::new());
+                }
+            }
+        }
+        Ok(self.declare_as(query, false).await?)
+    }
+
+    /// The statement that opens the cursor's transaction, or its savepoint in the user's
+    fn cursor_tx(&self) -> &'static str {
+        if self.user_tx() {
+            "SAVEPOINT dbtool_sp"
         } else if self.reading_first() {
-            format!("BEGIN READ ONLY; DECLARE {CURSOR} NO SCROLL CURSOR FOR {query}")
+            "BEGIN READ ONLY"
         } else {
-            format!("BEGIN; DECLARE {CURSOR} NO SCROLL CURSOR FOR {query}")
+            "BEGIN"
+        }
+    }
+
+    /// Read the statement's columns first (their types and where they come from: the wrap returns text), then declare it wrapped by
+    /// cut_projection. In the user's transaction under the savepoint first: a statement that fails to parse would abort it
+    async fn declare_cut(&mut self, query: &str) -> AppResult<()> {
+        let opened = self.user_tx();
+        if opened {
+            let open = self.cursor_tx();
+            self.conn.execute(open).await?;
+        }
+        let st = (&mut *self.conn).prepare(query).await;
+        // Not kept prepared: the next run of the same text would take its columns from the connection's cache, from before an ALTER TABLE
+        let cleared = sqlx::Connection::clear_cached_statements(&mut *self.conn).await;
+        let st = st?;
+        cleared?;
+        self.columns = st.columns().iter().map(|c| ColumnInfo { name: c.name().to_string(), type_name: c.type_info().name().to_string() }).collect();
+        self.origins = pg_origins(st.columns());
+        match cut_projection(query, &self.columns, self.cut) {
+            Some((wrapped, how)) => {
+                self.declare_as(&wrapped, opened).await?;
+                (self.cut_cols, self.cut_at) = (how, self.cut);
+            }
+            None => self.declare_as(query, opened).await?,
+        }
+        Ok(())
+    }
+
+    /// DECLARE the cursor, in its transaction (cursor_tx) unless that is open already
+    async fn declare_as(&mut self, query: &str, opened: bool) -> Result<(), sqlx::Error> {
+        let declare = match opened {
+            true => format!("DECLARE {CURSOR} NO SCROLL CURSOR FOR {query}"),
+            false => format!("{}; DECLARE {CURSOR} NO SCROLL CURSOR FOR {query}", self.cursor_tx()),
         };
         self.conn.execute(declare.as_str()).await?;
         self.cursor_open = true;
@@ -477,7 +604,7 @@ impl PgSession {
         self.columns.clear();
         if let Err(e) = self.declare(&self.after_fetched()).await {
             self.rollback().await;
-            return Err(e.into());
+            return Err(e);
         }
         self.fetch(limit).await
     }
@@ -491,6 +618,10 @@ impl PgSession {
         {
             self.rollback().await;
             self.idle_closed = false;
+            let e = match e {
+                AppError::Db(d) => d.to_string(),
+                e => e.to_string(),
+            };
             return Err(AppError::Msg(format!("The result was closed after {} s without use, and reopening it failed ({e}). Run the query again to load more rows.", CURSOR_IDLE.as_secs())));
         }
         if !self.cursor_open {
@@ -519,11 +650,26 @@ impl PgSession {
         }
         let done = rows.len() < limit;
         self.fetched += rows.len();
-        let data = pg_values(&mut self.conn, &self.columns, &rows, &mut self.zone).await;
+        let mut data = pg_values(&mut self.conn, &self.columns, &rows, &mut self.zone).await;
+        let cut = cut_cells(&mut data, &self.cut_cols, self.cut_at);
         if done {
             self.close_cursor().await;
         }
-        Ok(query_result(self.columns.clone(), data, 0, !done, start, true))
+        Ok(QueryResult { cut, ..query_result(self.columns.clone(), data, 0, !done, start, true) })
+    }
+
+    /// A read of whole values (AppState::fetch_values): under a savepoint while a transaction is open in the session (the user's, or
+    /// the cursor's own), so a read that fails never aborts it nor closes the open cursor
+    async fn read_values(&mut self, sql: &str) -> AppResult<QueryResult> {
+        let tx = self.in_tx || self.cursor_open;
+        if tx {
+            self.conn.execute(VALUES_SAVEPOINT[0]).await?;
+        }
+        let r = run_direct_on(&mut self.conn, sql, usize::MAX, Instant::now(), &mut self.zone).await;
+        if tx {
+            end_savepoint(&mut self.conn, &VALUES_SAVEPOINT[1..], r.is_ok()).await?;
+        }
+        r
     }
 }
 
@@ -570,20 +716,23 @@ pub(crate) async fn pg_snapshot(conn: &mut PgConnection, sql: &str) -> AppResult
         && e.code().as_deref() == Some("42501")
         && let Some(plain) = crate::audit::pg_unlocked(sql)
     {
-        conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await?;
+        conn.execute(SNAP_SAVEPOINT[0]).await?;
         r = run_direct_on(conn, &plain, crate::audit::UNDO_MAX_ROWS + 1, Instant::now(), &mut None).await;
     }
-    end_snapshot(conn, r.is_ok()).await?;
+    end_savepoint(conn, &SNAP_SAVEPOINT, r.is_ok()).await?;
     r
 }
 
-/// Close the snapshot's savepoint: keep what it read (ok) or undo it. A RELEASE that fails (a cancel landing on it) leaves the
-/// transaction aborted: roll back to the savepoint, so the user's transaction goes on as it was
-async fn end_snapshot(conn: &mut PgConnection, ok: bool) -> AppResult<()> {
+/// The undo snapshot's savepoint (pg_snapshot): undo, release
+const SNAP_SAVEPOINT: [&str; 2] = ["ROLLBACK TO SAVEPOINT qurry_snap", "RELEASE SAVEPOINT qurry_snap"];
+
+/// Close a savepoint (sp = [roll back to it, release it]): keep what ran in it (ok) or undo it. A RELEASE that fails (a cancel
+/// landing on it) leaves the transaction aborted: roll back to the savepoint, so the user's transaction goes on as it was
+async fn end_savepoint(conn: &mut PgConnection, sp: &[&str], ok: bool) -> AppResult<()> {
     if !ok {
-        conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await?;
-    } else if let Err(e) = conn.execute("RELEASE SAVEPOINT qurry_snap").await {
-        let _ = conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await;
+        conn.execute(sp[0]).await?;
+    } else if let Err(e) = conn.execute(sp[1]).await {
+        let _ = conn.execute(sp[0]).await;
         return Err(e.into());
     }
     Ok(())
@@ -670,6 +819,20 @@ impl Session {
         match self.run(SUBMIT_SAVEPOINT[2], 1).await {
             Ok(_) => (Ok(n), shots),
             Err(e) => (Err(e), vec![]),
+        }
+    }
+    /// Characters of a long value a PostgreSQL cursor reads from now (store::grid_cut_chars), 0 = whole values. The others read
+    /// whole values
+    pub fn set_cut(&mut self, chars: usize) {
+        if let Session::Pg(s) = self {
+            s.cut = chars;
+        }
+    }
+    /// A read of whole values in the session (AppState::fetch_values): its transaction's uncommitted changes too
+    pub async fn read_values(&mut self, sql: &str) -> AppResult<QueryResult> {
+        match self {
+            Session::Pg(s) => s.read_values(sql).await,
+            _ => Err(AppError::Msg("Only PostgreSQL results have cut values".into())),
         }
     }
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
@@ -941,6 +1104,61 @@ mod tests {
         }
     }
 
+    fn cols(v: &[(&str, &str)]) -> Vec<ColumnInfo> {
+        v.iter().map(|(n, t)| ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect()
+    }
+
+    /// The wrap per described type (#183): text types and JSON / XML read their first cut + 1 characters, bytea its first 65 bytes,
+    /// arrays and every other type as they are; each column named as in the query again
+    #[test]
+    fn cut_projection_per_type() {
+        let c = cols(&[
+            ("t", "TEXT"), ("v", "VARCHAR"), ("b", "BPCHAR"), ("j", "JSON"), ("jb", "JSONB"), ("x", "XML"), ("by", "BYTEA"),
+            ("arr", "TEXT[]"), ("i", "INT4"), ("ts", "TIMESTAMPTZ"), ("u", "UUID"), ("ci", "citext"), ("c", "CHAR"), ("q", "\"CHAR\""),
+        ]);
+        let (sql, how) = cut_projection("select * from t -- tail", &c, 64).unwrap();
+        assert_eq!(
+            sql,
+            "SELECT left(c1::text, 65) AS t, left(c2::text, 65) AS v, left(textin(bpcharout(c3)), 65) AS b, left(c4::text, 65) AS j, \
+             left(c5::text, 65) AS jb, left(c6::text, 65) AS x, substring(c7 from 1 for 65) AS \"by\", c8 AS arr, c9 AS i, c10 AS ts, c11 AS u, \
+             left(c12::text, 65) AS ci, left(textin(bpcharout(c13)), 65) AS c, c14 AS q FROM (\nselect * from t -- tail\n) AS \
+             qurry_page(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14)"
+        );
+        use CutAs::*;
+        assert_eq!(how, [Text, Text, Text, Json, Json, Text, Bytes, Whole, Whole, Whole, Whole, Text, Text, Whole]);
+        // Nothing to cut: no wrap. Cut 0: nothing built
+        assert_eq!(cut_projection("select 1", &cols(&[("i", "INT4"), ("u", "UUID")]), 64), None);
+        assert_eq!(cut_projection("select * from t", &c, 0), None);
+    }
+
+    /// Duplicate names (a join's two ids) and an empty one go through the positional names; quoted names stay quoted
+    #[test]
+    fn cut_projection_names() {
+        let c = cols(&[("id", "INT4"), ("id", "TEXT"), ("", "TEXT"), ("Note \"x\"", "TEXT"), ("select", "INT4")]);
+        let (sql, _) = cut_projection("q", &c, 10).unwrap();
+        assert_eq!(sql, "SELECT c1 AS id, left(c2::text, 11) AS id, left(c3::text, 11), left(c4::text, 11) AS \"Note \"\"x\"\"\", c5 AS \"select\" FROM (\nq\n) AS qurry_page(c1, c2, c3, c4, c5)");
+    }
+
+    /// Cut by characters, not bytes: 4096 characters are not cut, 4097 are cut to 4096 and flagged; JSON not cut decodes as the
+    /// whole value does (compact), cut JSON keeps its text; bytea and other columns are never flagged
+    #[test]
+    fn cut_cells_by_characters() {
+        use CutAs::*;
+        let s = |n: usize| "한".repeat(n);
+        let mut rows = vec![
+            vec![Value::from(s(4096)), Value::from(r#"{"b": [1, 2], "a": "x"}"#), Value::from("0xAB…"), Value::from(1)],
+            vec![Value::from(s(4097)), Value::from(format!(r#"{{"a": "{}"}}"#, s(5000))), Value::from(s(5000)), Value::Null],
+        ];
+        let cut = cut_cells(&mut rows, &[Text, Json, Bytes, Whole], 4096);
+        assert_eq!(cut, [[1, 0], [1, 1]]);
+        assert_eq!(rows[0][0], Value::from(s(4096)));
+        assert_eq!(rows[1][0], Value::from(s(4096)));
+        assert_eq!(rows[0][1], Value::from(serde_json::json!({"b": [1, 2], "a": "x"}).to_string()));
+        let Value::String(j) = &rows[1][1] else { panic!() };
+        assert!(j.starts_with(r#"{"a": "한"#) && j.chars().count() == 4096, "the cut text as it came");
+        assert_eq!(rows[1][2], Value::from(s(5000)), "bytea is never cut here");
+    }
+
     #[test]
     fn select_like() {
         assert!(is_select_like("  -- c\n /* x */ SELECT 1"));
@@ -1114,6 +1332,113 @@ mod tests {
         failed_snapshot_keeps_the_change(Pool::Pg(p), "create schema if not exists audit_hardening_s", "drop schema audit_hardening_s cascade").await;
     }
 
+    /// A table with every type the cut reads (#183): row 2 holds long values, row 3 NULLs, row 4 exactly 64 characters
+    async fn cut_table(p: &PgPool, name: &str) {
+        let sql = r#"drop table if exists qurry_cut_t;
+            create table qurry_cut_t (id int primary key, t text, v varchar(200), b char(5), j json, jb jsonb, x xml, by bytea, arr text[],
+                i int, ts timestamptz, u uuid, nm name, ch "char", n numeric, d date, jarr jsonb[]);
+            insert into qurry_cut_t values
+              (1, 'short', 'v', 'ab', '{"b": 1, "a": [1, 2.50]}', '{"b": 1, "a": [1, 2.50]}', '<a>x</a>', '\x0102', '{x,"y z"}', 7,
+               '2026-01-02 03:04:05+00', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'nm', 'c', 1.50, '2026-01-02', array['{"k": 1}'::jsonb]),
+              (2, repeat('한', 100), repeat('v', 100), 'abcde', json_build_object('a', repeat('x', 100)), jsonb_build_object('a', repeat('x', 100)),
+               ('<a>' || repeat('y', 100) || '</a>')::xml, decode(repeat('ab', 100), 'hex'), array[repeat('z', 100)], 8,
+               'infinity', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12', repeat('n', 63), 'd', 2, 'infinity', array[jsonb_build_object('a', repeat('x', 100))]),
+              (3, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
+              (4, repeat('é', 64), repeat('v', 64), 'a', '{}', '[]', '<a/>', '', '{}', 0, '2000-01-01 00:00:00+00', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a14', '', 'e', 0, '2000-01-01', '{}')"#
+            .replace("qurry_cut_t", name);
+        sqlx::raw_sql(&sql).execute(p).await.unwrap();
+    }
+
+    fn origins_of(s: &Session) -> Vec<Option<(u32, i16)>> {
+        match s {
+            Session::Pg(p) => p.origins.clone(),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Cut at 64: the long text / JSON / XML cells come back cut to 64 characters and flagged; every other cell, every type, and the
+    /// columns, origins and editability are what the cursor reads without the cut. QURRY_TEST_PG=… cargo test -p qurry-core pg_cut_ -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn pg_cut_reads_long_values_cut() {
+        let Some(p) = pool().await else { return };
+        cut_table(&p, "qurry_cut_t").await;
+        let pool = Pool::Pg(p.clone());
+        let sql = "select * from qurry_cut_t order by id";
+        let mut s = Session::open(&pool).await.unwrap();
+        let whole = s.run(sql, 500).await.unwrap();
+        let (o0, e0) = (origins_of(&s), crate::editable::check(&pool, &mut s, sql, &whole.columns).await);
+        s.set_cut(64);
+        let cut = s.run(sql, 500).await.unwrap();
+        let (o64, e64) = (origins_of(&s), crate::editable::check(&pool, &mut s, sql, &cut.columns).await);
+        let cols = |r: &QueryResult| r.columns.iter().map(|c| (c.name.clone(), c.type_name.clone())).collect::<Vec<_>>();
+        assert_eq!(cols(&cut), cols(&whole), "the described names and types, not the wrap's TEXT");
+        assert_eq!(cut.columns[5].type_name, "JSONB");
+        assert_eq!((o64, &e64), (o0, &e0));
+        assert!(matches!(e64, Some(crate::editable::Editable::Table(_))), "{e64:?}");
+        assert!(whole.cut.is_empty());
+        // Row 2: t, v, j, jb, x (bytea shows its 64 bytes and … either way; arrays are read whole)
+        assert_eq!(cut.cut, [[1, 1], [1, 2], [1, 4], [1, 5], [1, 6]]);
+        for (r, row) in whole.rows.iter().enumerate() {
+            for (c, v) in row.iter().enumerate() {
+                if cut.cut.contains(&[r, c]) {
+                    let Value::String(got) = &cut.rows[r][c] else { panic!("{r} {c}") };
+                    assert_eq!(got.chars().count(), 64, "{r} {c}");
+                    if ![4, 5].contains(&c) {
+                        assert_eq!(got, &v.as_str().unwrap().chars().take(64).collect::<String>(), "{r} {c}");
+                    }
+                } else {
+                    assert_eq!(&cut.rows[r][c], v, "row {r} column {} as without the cut", whole.columns[c].name);
+                }
+            }
+        }
+        assert_eq!(cut.rows[0][3], Value::from("ab   "), "char(5) keeps its padding");
+        sqlx::query("drop table qurry_cut_t").execute(&p).await.unwrap();
+    }
+
+    /// A join's duplicate names; a reopen after the idle close stays cut; in a Manual transaction a statement the wrap can't take
+    /// (a data-modifying WITH) and one that doesn't parse fall back, and the transaction goes on; a lost connection isn't tried again
+    #[tokio::test]
+    #[ignore]
+    async fn pg_cut_joins_reopen_and_fallback() {
+        let Some(p) = pool().await else { return };
+        cut_table(&p, "qurry_cut_j").await;
+        let pool = Pool::Pg(p.clone());
+        let mut s = Session::open(&pool).await.unwrap();
+        s.set_cut(64);
+        let j = s.run("select a.id, b.id, a.t from qurry_cut_j a join qurry_cut_j b on a.id = b.id order by 1", 500).await.unwrap();
+        assert_eq!(j.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "id", "t"]);
+        assert_eq!((j.rows[1][1].clone(), j.cut.clone()), (Value::from(2), vec![[1, 2]]));
+        // After the idle close: reopened (after_fetched), still cut
+        let r1 = s.run("select g, repeat('x', 100) as t from generate_series(1, 1200) g order by g", 500).await.unwrap();
+        assert_eq!((r1.rows.len(), r1.cut.len()), (500, 500));
+        assert_eq!(s.close_idle_cursor(std::time::Duration::ZERO).await, Some(true));
+        let r2 = s.fetch(500).await.unwrap();
+        assert_eq!((r2.rows[0][0].clone(), r2.cut.len(), r2.columns[1].type_name.as_str()), (Value::from(501), 500, "TEXT"));
+        assert_eq!(r2.rows[0][1], Value::from("x".repeat(64)));
+        // Manual: the transaction survives what the wrap can't take
+        s.set_manual(true).await.unwrap();
+        s.run("insert into qurry_cut_j (id, t) values (10, 'tx')", 500).await.unwrap();
+        let w = s.run("with x as (delete from qurry_cut_j where id = 10 returning t) select t from x", 500).await.unwrap();
+        assert_eq!((w.rows.clone(), w.in_transaction), (vec![vec![Value::from("tx")]], true));
+        assert!(s.run("select * from qurry_no_such_table", 500).await.is_err());
+        let n = s.run("select count(*) from qurry_cut_j", 500).await.unwrap();
+        assert_eq!((n.rows[0][0].clone(), n.in_transaction), (Value::from(4), true), "the delete is in the open transaction");
+        s.rollback_tx().await.unwrap();
+        s.set_manual(false).await.unwrap();
+        // A column added since the same text ran: read (its columns aren't taken from before)
+        let before = s.run("select * from qurry_cut_j where id = 1", 500).await.unwrap().columns.len();
+        s.run("alter table qurry_cut_j add column extra text default 'e'", 500).await.unwrap();
+        let after = s.run("select * from qurry_cut_j where id = 1", 500).await.unwrap();
+        assert_eq!((after.columns.len(), after.rows[0].last().cloned()), (before + 1, Some(Value::from("e"))));
+        // A lost connection: its error, the statement not tried again in a new way
+        let pid = s.backend_id();
+        sqlx::query("select pg_terminate_backend($1::int)").bind(pid).execute(&p).await.unwrap();
+        let e = s.run("select * from qurry_cut_j", 500).await.unwrap_err();
+        assert!(crate::app::is_conn_lost(&e), "{e}");
+        sqlx::query("drop table qurry_cut_j").execute(&p).await.unwrap();
+    }
+
     /// A RELEASE of the snapshot's savepoint that fails (a cancel landing on it) rolls back to the savepoint, so the user's
     /// transaction isn't left aborted: it goes on with what it changed before
     #[tokio::test]
@@ -1124,7 +1449,7 @@ mod tests {
         c.execute("BEGIN; CREATE TEMP TABLE qurry_release (v int); INSERT INTO qurry_release VALUES (1); SAVEPOINT qurry_snap").await.unwrap();
         // The transaction is aborted, as a cancel landing on RELEASE leaves it
         assert!(c.execute("SELECT 1 / 0").await.is_err());
-        assert!(end_snapshot(&mut c, true).await.is_err());
+        assert!(end_savepoint(&mut c, &SNAP_SAVEPOINT, true).await.is_err());
         let v: i32 = sqlx::query_scalar("SELECT v FROM qurry_release").fetch_one(&mut *c).await.unwrap();
         assert_eq!(v, 1);
         c.execute("ROLLBACK").await.unwrap();
