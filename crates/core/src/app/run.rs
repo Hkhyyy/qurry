@@ -147,6 +147,7 @@ impl AppState {
             false => None,
         };
         let (mut guard, mut temp);
+        let cut = self.console_cut();
         let s: &mut Session = match &sess {
             Some(s) => {
                 guard = s.lock().await;
@@ -154,7 +155,7 @@ impl AppState {
                     return (Err(AppError::Msg(SESSION_ABANDONED.into())), None, TxSeen::default());
                 }
                 // A console's grid: long values cut (the pool, MCP and export read them whole)
-                guard.set_cut(self.store.grid_cut_chars());
+                guard.set_cut(cut);
                 &mut guard
             }
             // On the pool: a connection of its own for the snapshot's transaction
@@ -241,6 +242,7 @@ impl AppState {
             }
         };
         touch(self, &conn_id);
+        let cut = self.console_cut();
         let (r, in_tx) = {
             let mut s = sess.lock().await;
             if s.abandoned() {
@@ -263,7 +265,7 @@ impl AppState {
             };
             let in_tx = s.in_tx();
             // For a cursor this opens (reopened, or after the idle close): an open one reads at the cut it was declared with
-            s.set_cut(self.store.grid_cut_chars());
+            s.set_cut(cut);
             let r = match reopen {
                 Some(k) => s.reopen(&k.more, limit).await,
                 None => s.fetch(limit).await,

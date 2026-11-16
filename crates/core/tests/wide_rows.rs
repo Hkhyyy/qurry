@@ -1,7 +1,7 @@
 //! Wide rows through a slow link (#183): a console's first page and its load-mores of a table whose rows hold a ~30 KB JSON
 //! document and a ~2 KB note, read whole (gridCutChars = 0) and cut (4096), through a 300 KB/s proxy in front of the server.
 //! Prints, per cut: time to the first page, time per load-more (3 pages), bytes the server sent per page, ru_maxrss.
-//! #[ignore]d, on a scratch server (the table takes about a minute to fill, and is kept for the next run):
+//! #[ignore]d, on a scratch server (the table takes minutes to fill and about 1 GB; dropped at the end):
 //! QURRY_TEST_PG=host:port:user:db[:password] cargo test --release -p qurry-core --test wide_rows -- --ignored --nocapture
 use qurry_core::app::AppState;
 use qurry_core::store::ConnectionConfig;
@@ -20,7 +20,6 @@ const RATE: f64 = 300.0 * 1024.0;
 /// keys are), and a note of about 2 KB
 const FILL: &str = r#"
 create table qurry_demo_wide (id serial primary key, created_at timestamptz not null default now(), payload jsonb, note text);
-alter table qurry_demo_wide alter column payload set compression lz4;
 insert into qurry_demo_wide (created_at, payload, note)
 select now() - make_interval(secs => g),
        ('{"order": ' || g || ', "kind": "order.created", "items": [' ||
@@ -109,7 +108,9 @@ async fn wide_rows_through_a_slow_link() {
     let wire = Arc::new(Wire::default());
     let via = proxy(format!("{host}:{port}"), wire.clone()).await;
     let dir = tempfile::tempdir().unwrap();
-    let st: AppState = qurry_core::open_state(Some(dir.path().to_path_buf())).unwrap();
+    let mut st: AppState = qurry_core::open_state(Some(dir.path().to_path_buf())).unwrap();
+    // As the GUI (the TUI's grid reads whole values)
+    st.cut_grids = true;
     let cfg: ConnectionConfig = serde_json::from_value(json!({ "id": "w", "name": "wide", "kind": "postgres", "host": "127.0.0.1", "port": via, "user": user, "database": db })).unwrap();
     st.save_connection(cfg, password, None).await.unwrap();
     println!("cut | first page s | load-more s (3) | bytes/page (first, 3 more) | ru_maxrss MB");
@@ -141,4 +142,6 @@ async fn wide_rows_through_a_slow_link() {
         println!("{cut} | {first:.2} | {} | {bytes:?} | {:.0}", p.join(", "), max_rss_mb());
     }
     println!("client sent {} bytes in all", wire.up.load(Relaxed));
+    let direct = sqlx::PgPool::connect(&url).await.unwrap();
+    sqlx::raw_sql("drop table qurry_demo_wide").execute(&direct).await.unwrap();
 }

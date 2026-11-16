@@ -72,7 +72,9 @@ pub fn run() {
 
             qurry_core::logfile::init("gui", None);
             qurry_core::logfile::log_panics();
-            app.manage(qurry_core::open_state(Some(app.path().app_config_dir()?))?);
+            let mut state = qurry_core::open_state(Some(app.path().app_config_dir()?))?;
+            state.cut_grids = true;
+            app.manage(state);
             app.manage(commands::PendingImport::default());
             app.manage(commands::PendingData::default());
             app.manage(commands::PickedDirs::default());

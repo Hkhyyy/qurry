@@ -869,9 +869,10 @@ impl Store {
     }
 
     /// Characters of a long text / JSON / XML value a console's PostgreSQL cursor result reads (the whole value comes on demand:
-    /// AppState::fetch_values). 0 = never cut. settings.json "gridCutChars", the GUI and the TUI; 4096 unless set
+    /// AppState::fetch_values). 0 = never cut. settings.json "gridCutChars", the GUI and the TUI; 4096 unless set. At most
+    /// i32::MAX - 1: the cut reads cut + 1 characters with PostgreSQL's left(text, int)
     pub fn grid_cut_chars(&self) -> usize {
-        self.settings().get("gridCutChars").and_then(|v| v.as_u64()).map_or(4096, |n| n as usize)
+        self.settings().get("gridCutChars").and_then(|v| v.as_u64()).map_or(4096, |n| n.min(i32::MAX as u64 - 1) as usize)
     }
 
     pub fn set_grid_cut_chars(&self, n: usize) -> AppResult<()> {
@@ -1199,7 +1200,7 @@ mod tests {
         }
     }
 
-    /// Long values cut: 4096 until set, 0 kept (never cut), other settings kept
+    /// Long values cut: 4096 until set, 0 kept (never cut), other settings kept, at most what left() takes
     #[test]
     fn grid_cut_chars_setting() {
         let dir = tempfile::tempdir().unwrap();
@@ -1210,6 +1211,9 @@ mod tests {
         assert_eq!(store.grid_cut_chars(), 0);
         store.set_grid_cut_chars(64).unwrap();
         assert_eq!((store.grid_cut_chars(), store.update_channel()), (64, crate::update::Channel::Beta));
+        // left() takes an int: a larger value reads as the largest that fits
+        store.set_grid_cut_chars(5_000_000_000).unwrap();
+        assert_eq!(store.grid_cut_chars(), i32::MAX as usize - 1);
     }
 
     /// Grid alignment: defaults until a class is changed, other settings kept, a value this version doesn't know skipped; a change

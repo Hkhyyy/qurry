@@ -227,7 +227,8 @@ pub(super) async fn session_failed(state: &AppState, conn_id: &str, tab: &str, i
 }
 
 /// The whole values of a result's cut cells (QueryResult::cut), read by the table's key: rows = each row's key values as the
-/// grid holds them (`key` in order)
+/// grid holds them (`key` in order). A key cell that is cut itself (a text key longer than gridCutChars) matches no row and
+/// reads as None, as a deleted row does: the grid doesn't send one
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct FullValues {
     pub schema: String,
@@ -406,15 +407,16 @@ mod tests {
     }
 
     /// Whole values by key over 3 reads, aligned with the rows asked (a key no row has → None), a composite key; the pool path
-    /// (MCP, export) reads whole values whatever gridCutChars is. QURRY_TEST_PG=… cargo test -p qurry-core fetch_values -- --ignored
+    /// (MCP, export) and a console of an app without cut_grids (the TUI) read whole values whatever gridCutChars is. QURRY_TEST_PG=… cargo test -p qurry-core fetch_values -- --ignored
     #[tokio::test]
     #[ignore]
     async fn fetch_values_by_key() {
         let Some(crate::testenv::Server { cfg, password }) = crate::testenv::pg() else { return };
         let dir = tempfile::tempdir().unwrap();
-        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
         st.save_connection(ConnectionConfig { id: "d".into(), name: "dev".into(), ..cfg }, password, None).await.unwrap();
         st.store.set_grid_cut_chars(64).unwrap();
+        st.cut_grids = true;
         let q = |sql: &str, tab: Option<&str>| st.run_query("d".into(), sql.into(), None, tab.map(String::from));
         for sql in ["drop table if exists qurry_fv", "create table qurry_fv (id int primary key, body text)", "insert into qurry_fv select g, repeat('b' || g || ' ', 40) from generate_series(1, 260) g"] {
             q(sql, None).await.unwrap();
@@ -442,8 +444,13 @@ mod tests {
         let req = values_req("qurry_fv2", &["a", "b"], &["v"], vec![vec![Some("1"), Some("y")], vec![Some("2"), Some("x")], vec![Some("1"), Some("x")]]);
         let got = st.fetch_values("d".into(), "t".into(), req).await.unwrap();
         assert_eq!(got, [Some(vec![Value::from("two")]), None, Some(vec![Value::from("one")])]);
-        q("drop table qurry_fv, qurry_fv2", None).await.unwrap();
         st.close_session("t".into()).await.unwrap();
+        // An app whose grids don't handle cut cells (the TUI): its console reads whole values too
+        st.cut_grids = false;
+        let tui = st.run_query("d".into(), "select body from qurry_fv where id = 1".into(), None, Some("tui".into())).await.unwrap();
+        assert_eq!((tui.rows[0][0].clone(), tui.cut.is_empty()), (Value::from(body(1)), true));
+        st.close_session("tui".into()).await.unwrap();
+        st.run_query("d".into(), "drop table qurry_fv, qurry_fv2".into(), None, None).await.unwrap();
     }
 
     /// In Manual mode the tab's uncommitted change is what it reads; a read that fails (a column dropped since) leaves the user's
@@ -453,9 +460,10 @@ mod tests {
     async fn fetch_values_in_the_tabs_transaction() {
         let Some(crate::testenv::Server { cfg, password }) = crate::testenv::pg() else { return };
         let dir = tempfile::tempdir().unwrap();
-        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
         st.save_connection(ConnectionConfig { id: "d".into(), name: "dev".into(), ..cfg }, password, None).await.unwrap();
         st.store.set_grid_cut_chars(64).unwrap();
+        st.cut_grids = true;
         let q = |sql: &str, tab: &str| st.run_query("d".into(), sql.into(), Some(10), Some(tab.into()));
         for sql in ["drop table if exists qurry_fvtx", "create table qurry_fvtx (id int primary key, body text)", "insert into qurry_fvtx select g, repeat('x', 100) from generate_series(1, 30) g"] {
             q(sql, "setup").await.unwrap();

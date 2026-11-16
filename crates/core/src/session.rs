@@ -88,12 +88,12 @@ pub(crate) fn cut_projection(query: &str, columns: &[ColumnInfo], cut: usize) ->
         .map(|(i, c)| {
             let n = format!("c{}", i + 1);
             let (e, how) = match c.type_name.to_uppercase().as_str() {
-                "TEXT" | "VARCHAR" | "NAME" | "CITEXT" | "XML" => (format!("left({n}::text, {k})"), CutAs::Text),
+                "TEXT" | "VARCHAR" | "NAME" | "CITEXT" | "XML" => (format!("pg_catalog.left({n}::text, {k})"), CutAs::Text),
                 // char(n), which sqlx names CHAR (the one-byte "char" is "CHAR" in quotes, read as it is): its cast to text drops the
                 // padding db::pg_value shows, its output function keeps it
-                "CHAR" | "BPCHAR" => (format!("left(textin(bpcharout({n})), {k})"), CutAs::Text),
-                "JSON" | "JSONB" => (format!("left({n}::text, {k})"), CutAs::Json),
-                "BYTEA" => (format!("substring({n} from 1 for 65)"), CutAs::Bytes),
+                "CHAR" | "BPCHAR" => (format!("pg_catalog.left(pg_catalog.textin(pg_catalog.bpcharout({n})), {k})"), CutAs::Text),
+                "JSON" | "JSONB" => (format!("pg_catalog.left({n}::text, {k})"), CutAs::Json),
+                "BYTEA" => (format!("pg_catalog.substring({n}, 1, 65)"), CutAs::Bytes),
                 // Arrays too: db::pg_value doesn't show them as PostgreSQL's text form, which the cut would read
                 _ => (n, CutAs::Whole),
             };
@@ -472,18 +472,11 @@ impl PgSession {
 
     /// Short transaction for the cursor. Inside a user transaction (Manual, or BEGIN run directly in Auto), protected by a savepoint;
     /// a read before Manual mode's transaction opens (reading_first) can't write. With a cut (Session::set_cut) long values are read
-    /// cut (declare_cut); a statement that can't be wrapped so is declared as it is
+    /// cut (declare_cut). An error leaves the cursor's transaction or savepoint open, for the caller to roll back
     async fn declare(&mut self, query: &str) -> AppResult<()> {
         self.cut_cols.clear();
         if self.cut > 0 {
-            match self.declare_cut(query).await {
-                Ok(()) => return Ok(()),
-                Err(e) if crate::app::is_conn_lost(&e) => return Err(e),
-                Err(_) => {
-                    self.rollback().await;
-                    (self.columns, self.origins) = (Vec::new(), Vec::new());
-                }
-            }
+            return self.declare_cut(query).await;
         }
         Ok(self.declare_as(query, false).await?)
     }
@@ -500,28 +493,59 @@ impl PgSession {
     }
 
     /// Read the statement's columns first (their types and where they come from: the wrap returns text), then declare it wrapped by
-    /// cut_projection. In the user's transaction under the savepoint first: a statement that fails to parse would abort it
+    /// cut_projection; one that can't be described or wrapped (several statements, a data-modifying WITH, …) is declared as it is.
+    /// In the user's transaction under the savepoint first: a statement that fails to parse would abort it.
+    /// Round trips before the first FETCH: the describe, sqlx's Close of it, the DECLARE (and the SAVEPOINT first in the user's
+    /// transaction), against one DECLARE without the cut
     async fn declare_cut(&mut self, query: &str) -> AppResult<()> {
         let opened = self.user_tx();
         if opened {
             let open = self.cursor_tx();
             self.conn.execute(open).await?;
         }
+        let st = match self.describe_fresh(query).await {
+            Ok(st) => st,
+            Err(e) if crate::app::is_conn_lost(&e) => return Err(e),
+            Err(_) => {
+                // Only the savepoint: in Auto nothing is open yet, and a bare ROLLBACK would warn "there is no transaction in progress"
+                if opened {
+                    self.rollback().await;
+                }
+                return Ok(self.declare_as(query, opened).await?);
+            }
+        };
+        self.columns = st.columns().iter().map(|c| ColumnInfo { name: c.name().to_string(), type_name: c.type_info().name().to_string() }).collect();
+        self.origins = pg_origins(st.columns());
+        // Nothing to cut: the plain DECLARE's error is the statement's (not tried again)
+        let Some((wrapped, how)) = cut_projection(query, &self.columns, self.cut) else {
+            return Ok(self.declare_as(query, opened).await?);
+        };
+        match self.declare_as(&wrapped, opened).await.map_err(AppError::from) {
+            Ok(()) => {
+                (self.cut_cols, self.cut_at) = (how, self.cut);
+                Ok(())
+            }
+            Err(e) if crate::app::is_conn_lost(&e) => Err(e),
+            // The wrap's BEGIN or SAVEPOINT ran: undone (a savepoint stays to declare under), then the statement as it is
+            Err(_) => {
+                self.rollback().await;
+                (self.columns, self.origins) = (Vec::new(), Vec::new());
+                Ok(self.declare_as(query, opened).await?)
+            }
+        }
+    }
+
+    /// The statement's columns as the server describes it now. sqlx's prepare keeps a named statement in the connection's cache and
+    /// answers a text it holds from there: the cache is emptied before (a text described on a 0-row result before an ALTER TABLE
+    /// would come back with its old columns) and after (so it holds nothing between runs, and the clear before costs no round
+    /// trip). sqlx has no public way to close one statement: the clear drops every statement cached on this session's connection
+    async fn describe_fresh<'q>(&mut self, query: &'q str) -> AppResult<sqlx::postgres::PgStatement<'q>> {
+        sqlx::Connection::clear_cached_statements(&mut *self.conn).await?;
         let st = (&mut *self.conn).prepare(query).await;
-        // Not kept prepared: the next run of the same text would take its columns from the connection's cache, from before an ALTER TABLE
         let cleared = sqlx::Connection::clear_cached_statements(&mut *self.conn).await;
         let st = st?;
         cleared?;
-        self.columns = st.columns().iter().map(|c| ColumnInfo { name: c.name().to_string(), type_name: c.type_info().name().to_string() }).collect();
-        self.origins = pg_origins(st.columns());
-        match cut_projection(query, &self.columns, self.cut) {
-            Some((wrapped, how)) => {
-                self.declare_as(&wrapped, opened).await?;
-                (self.cut_cols, self.cut_at) = (how, self.cut);
-            }
-            None => self.declare_as(query, opened).await?,
-        }
-        Ok(())
+        Ok(st)
     }
 
     /// DECLARE the cursor, in its transaction (cursor_tx) unless that is open already
@@ -1119,10 +1143,11 @@ mod tests {
         let (sql, how) = cut_projection("select * from t -- tail", &c, 64).unwrap();
         assert_eq!(
             sql,
-            "SELECT left(c1::text, 65) AS t, left(c2::text, 65) AS v, left(textin(bpcharout(c3)), 65) AS b, left(c4::text, 65) AS j, \
-             left(c5::text, 65) AS jb, left(c6::text, 65) AS x, substring(c7 from 1 for 65) AS \"by\", c8 AS arr, c9 AS i, c10 AS ts, c11 AS u, \
-             left(c12::text, 65) AS ci, left(textin(bpcharout(c13)), 65) AS c, c14 AS q FROM (\nselect * from t -- tail\n) AS \
-             qurry_page(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14)"
+            "SELECT pg_catalog.left(c1::text, 65) AS t, pg_catalog.left(c2::text, 65) AS v, \
+             pg_catalog.left(pg_catalog.textin(pg_catalog.bpcharout(c3)), 65) AS b, pg_catalog.left(c4::text, 65) AS j, \
+             pg_catalog.left(c5::text, 65) AS jb, pg_catalog.left(c6::text, 65) AS x, pg_catalog.substring(c7, 1, 65) AS \"by\", c8 AS arr, \
+             c9 AS i, c10 AS ts, c11 AS u, pg_catalog.left(c12::text, 65) AS ci, pg_catalog.left(pg_catalog.textin(pg_catalog.bpcharout(c13)), 65) AS c, \
+             c14 AS q FROM (\nselect * from t -- tail\n) AS qurry_page(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14)"
         );
         use CutAs::*;
         assert_eq!(how, [Text, Text, Text, Json, Json, Text, Bytes, Whole, Whole, Whole, Whole, Text, Text, Whole]);
@@ -1136,7 +1161,7 @@ mod tests {
     fn cut_projection_names() {
         let c = cols(&[("id", "INT4"), ("id", "TEXT"), ("", "TEXT"), ("Note \"x\"", "TEXT"), ("select", "INT4")]);
         let (sql, _) = cut_projection("q", &c, 10).unwrap();
-        assert_eq!(sql, "SELECT c1 AS id, left(c2::text, 11) AS id, left(c3::text, 11), left(c4::text, 11) AS \"Note \"\"x\"\"\", c5 AS \"select\" FROM (\nq\n) AS qurry_page(c1, c2, c3, c4, c5)");
+        assert_eq!(sql, "SELECT c1 AS id, pg_catalog.left(c2::text, 11) AS id, pg_catalog.left(c3::text, 11), pg_catalog.left(c4::text, 11) AS \"Note \"\"x\"\"\", c5 AS \"select\" FROM (\nq\n) AS qurry_page(c1, c2, c3, c4, c5)");
     }
 
     /// Cut by characters, not bytes: 4096 characters are not cut, 4097 are cut to 4096 and flagged; JSON not cut decodes as the
@@ -1396,8 +1421,9 @@ mod tests {
         sqlx::query("drop table qurry_cut_t").execute(&p).await.unwrap();
     }
 
-    /// A join's duplicate names; a reopen after the idle close stays cut; in a Manual transaction a statement the wrap can't take
-    /// (a data-modifying WITH) and one that doesn't parse fall back, and the transaction goes on; a lost connection isn't tried again
+    /// A join's duplicate names; several statements in Auto read the first without a warning; a reopen after the idle close stays
+    /// cut; in a Manual transaction a statement the wrap can't take (a data-modifying WITH) and one that doesn't parse fall back,
+    /// and the transaction goes on; columns added since a text ran (also one sqlx cached) are read; a lost connection isn't tried again
     #[tokio::test]
     #[ignore]
     async fn pg_cut_joins_reopen_and_fallback() {
@@ -1409,6 +1435,10 @@ mod tests {
         let j = s.run("select a.id, b.id, a.t from qurry_cut_j a join qurry_cut_j b on a.id = b.id order by 1", 500).await.unwrap();
         assert_eq!(j.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "id", "t"]);
         assert_eq!((j.rows[1][1].clone(), j.cut.clone()), (Value::from(2), vec![[1, 2]]));
+        // Several statements in Auto (the TUI sends its text unsplit): the describe fails outside any transaction, the plain DECLARE
+        // reads the first, and no ROLLBACK warns that no transaction is in progress
+        let m = s.run("select 1; select 2", 500).await.unwrap();
+        assert_eq!((m.rows.clone(), m.notices.len()), (vec![vec![Value::from(1)]], 0), "{:?}", m.notices);
         // After the idle close: reopened (after_fetched), still cut
         let r1 = s.run("select g, repeat('x', 100) as t from generate_series(1, 1200) g order by g", 500).await.unwrap();
         assert_eq!((r1.rows.len(), r1.cut.len()), (500, 500));
@@ -1431,6 +1461,13 @@ mod tests {
         s.run("alter table qurry_cut_j add column extra text default 'e'", 500).await.unwrap();
         let after = s.run("select * from qurry_cut_j where id = 1", 500).await.unwrap();
         assert_eq!((after.columns.len(), after.rows[0].last().cloned()), (before + 1, Some(Value::from("e"))));
+        // The same after a 0-row result without the cut, whose columns were described (and kept in sqlx's cache) on the session
+        s.set_cut(0);
+        let none = "select * from qurry_cut_j where id = 99";
+        assert_eq!(s.run(none, 500).await.unwrap().columns.len(), before + 1);
+        s.run("alter table qurry_cut_j add column extra2 text", 500).await.unwrap();
+        s.set_cut(64);
+        assert_eq!(s.run(none, 500).await.unwrap().columns.len(), before + 2, "not the cached columns");
         // A lost connection: its error, the statement not tried again in a new way
         let pid = s.backend_id();
         sqlx::query("select pg_terminate_backend($1::int)").bind(pid).execute(&p).await.unwrap();
