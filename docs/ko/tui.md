@@ -105,6 +105,10 @@ TUI 의 글자는 터미널이 그리므로 글꼴과 크기는 터미널의 것
 | WezTerm | `~/.wezterm.lua` 에 `config.font = wezterm.font("JetBrains Mono")`, `config.font_size = 13.0`. 저장하면 적용 |
 | Alacritty | `~/.config/alacritty/alacritty.toml` 의 `[font]` 에 `normal = { family = "JetBrains Mono" }`, `size = 13.0`. 저장하면 적용 |
 
+## 긴 값
+
+PostgreSQL 결과에서 긴 텍스트, JSON, XML 값은 잘려 오고 끝에 흐린 `…` 가 붙습니다. 값 패널 (`v`), `Enter`, `y` / `Y` 는 결과의 기본 키로 값 전체를 읽고, 키가 없으면 잘린 채 읽기 전용입니다. **⌃k › Grid Long Values…** 는 값을 자를 글자 수를 정하고 (기본 4,096, 0 = 자르지 않음), GUI 와 같은 설정입니다 ([설정 › 긴 값](settings.md#긴-값-long-values)).
+
 ## 작은 창
 
 화면은 **40 × 10** 칸까지 그려집니다. 80 × 24 이상이면 넉넉하고, 작은 창에서는 `⌥0` 으로 탐색기를 숨기거나 `⌥[` 로 좁히세요.
