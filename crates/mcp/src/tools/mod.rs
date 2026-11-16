@@ -1,15 +1,15 @@
 //! The MCP tools: their list (tools/list), and the dispatch of tools/call to one function per tool, grouped by file.
-use crate::mask::mask_query_text;
-use crate::{erd_json, report_ids, unknown_report, Server, ERD_MAX_TABLES};
+use crate::Server;
 use qurry_core::app::ConnectionView;
-use qurry_core::dba;
 use qurry_core::sql;
 use qurry_core::store::{DbKind, McpAccess};
 use serde_json::{json, Value};
 
+mod dba;
 mod query;
 mod sources;
 
+use dba::report_ids;
 use query::result_json;
 
 pub(crate) const MAX_ROWS: usize = 1000;
@@ -197,7 +197,6 @@ impl Server {
         let s = |k: &str| a.get(k).and_then(|v| v.as_str()).map(String::from);
         let n = |k: &str, d: usize| a.get(k).and_then(|v| v.as_u64()).map(|x| x as usize).unwrap_or(d);
         let e = |e: qurry_core::error::AppError| e.to_string();
-        let schema_or = |kind: DbKind, db: &str| s("schema").unwrap_or_else(|| if kind == DbKind::Postgres { "public".into() } else { db.to_string() });
         match name {
             "list_data_sources" => self.list_data_sources().await,
             "list_databases" => self.list_databases(a).await,
@@ -207,38 +206,8 @@ impl Server {
             "get_ddl" => self.get_ddl(a).await,
             "search_objects" => self.search_objects(a).await,
             "query" => self.query(a).await,
-            "get_erd" => {
-                let (t, kind, db, _) = self.target(a).await?;
-                if kind == DbKind::Redis {
-                    return Err("An ERD is not available for Redis".into());
-                }
-                let schemas: Vec<String> = match a.get("schemas").and_then(|v| v.as_array()) {
-                    Some(v) => v.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
-                    None => vec![schema_or(kind, &db)],
-                };
-                Ok(erd_json(st.erd(t, schemas).await.map_err(e)?, ERD_MAX_TABLES))
-            }
-            "dba_report" => {
-                let (t, kind, ..) = self.target(a).await?;
-                let report = s("report").ok_or("report is required")?;
-                let id = qurry_core::app::split_target(&t).0.to_string();
-                let c = self.sources().await?.into_iter().find(|c| c.config.id == id).ok_or("Data source not found")?.config;
-                if !c.mcp_dba_report_allowed() {
-                    return Err(format!(
-                        "\"{}\" is a Production data source: MCP reads its Database Admin reports (sessions, client addresses, settings, roles) only if a person allows it for this data source in Qurry (Data Source Properties › Options › \"AI tools can read admin reports\"; TUI: \"Admin reports\" in the data source form)",
-                        c.name
-                    ));
-                }
-                let info = dba::reports(kind).into_iter().find(|r| r.id == report).ok_or_else(|| unknown_report(&report, kind))?;
-                let mut r = st.dba_report(t, report).await.map_err(e)?;
-                mask_query_text(&mut r, kind);
-                if r.rows.len() > MAX_ROWS {
-                    r.rows.truncate(MAX_ROWS);
-                    r.truncated = true;
-                }
-                // Never the report's actions (Cancel Query, Terminate Session, generated SQL): MCP only reads
-                Ok(json!({ "report": info.id, "title": info.title, "help": info.help, "result": result_json(&r) }))
-            }
+            "get_erd" => self.get_erd(a).await,
+            "dba_report" => self.dba_report(a).await,
             "full_text_search" => {
                 let (t, kind, db, _) = self.target(a).await?;
                 let schemas: Vec<String> = match a.get("schemas").and_then(|v| v.as_array()) {

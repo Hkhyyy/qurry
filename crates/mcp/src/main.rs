@@ -7,9 +7,6 @@ mod mask;
 mod tools;
 
 use qurry_core::app::AppState;
-use qurry_core::dba;
-use qurry_core::erd::Erd;
-use qurry_core::store::DbKind;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -21,49 +18,6 @@ const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 struct Server {
     state: Arc<AppState>,
     allow_write: bool,
-}
-
-/// get_erd: at most this many tables
-const ERD_MAX_TABLES: usize = 200;
-
-/// Every report id of every kind, in the reports' order
-fn report_ids() -> Vec<&'static str> {
-    let mut ids: Vec<&str> = dba::reports(DbKind::Postgres).iter().map(|r| r.id).collect();
-    for r in dba::reports(DbKind::Mysql) {
-        if !ids.contains(&r.id) {
-            ids.push(r.id);
-        }
-    }
-    ids
-}
-
-fn unknown_report(report: &str, kind: DbKind) -> String {
-    let ids: Vec<&str> = dba::reports(kind).iter().map(|r| r.id).collect();
-    if ids.is_empty() {
-        return "Database Admin reports are available for PostgreSQL and MySQL data sources only".into();
-    }
-    format!("No report \"{report}\" for this data source. Reports: {}", ids.join(", "))
-}
-
-/// get_erd's answer: the first `cap` tables (in AppState::erd's order), the foreign keys whose both ends are kept, and Mermaid of that
-fn erd_json(mut e: Erd, cap: usize) -> Value {
-    let total = e.tables.len();
-    e.tables.truncate(cap);
-    let kept = |schema: &str, name: &str| e.tables.iter().any(|t| t.schema == schema && t.name == name);
-    let relations: Vec<_> = e.relations.iter().filter(|r| kept(&r.from_schema, &r.from_table) && kept(&r.to_schema, &r.to_table)).cloned().collect();
-    e.relations = relations;
-    let mut out = json!({
-        "mermaid": e.mermaid(),
-        "tables": e.tables.iter().map(|t| json!({ "schema": t.schema, "name": t.name, "primary_key": t.columns.iter().filter(|c| c.pk).map(|c| &c.name).collect::<Vec<_>>() })).collect::<Vec<_>>(),
-        "foreign_keys": e.relations.iter().map(|r| json!({
-            "name": r.name, "from_schema": r.from_schema, "from_table": r.from_table, "from_columns": r.from_columns,
-            "to_schema": r.to_schema, "to_table": r.to_table, "to_columns": r.to_columns
-        })).collect::<Vec<_>>(),
-    });
-    if total > cap {
-        out["note"] = format!("Showing {cap} of {total} tables; pass fewer schemas").into();
-    }
-    out
 }
 
 async fn handle(server: Arc<Server>, msg: Value) -> Option<Value> {
@@ -186,6 +140,7 @@ mod tests {
     use crate::tools::tests::{server_with, source};
     use crate::tools::MAX_ROWS;
     use qurry_core::explain::explain_sql;
+    use qurry_core::store::DbKind;
 
     /// "Docs" (on a shared source) and "docs" (on a hidden one): the index that is checked is the one that runs
     #[tokio::test]
@@ -206,51 +161,6 @@ mod tests {
             let e = server.call("semantic_search", &search(w)).await.unwrap_err();
             assert!(e.contains("not found"), "{w}: {e}");
         }
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn erd_keeps_the_first_tables_and_their_relations() {
-        use qurry_core::erd::{ErdColumn, ErdRelation, ErdTable};
-        let table = |i: usize| ErdTable { schema: "public".into(), name: format!("t{i:03}"), columns: vec![ErdColumn { name: "id".into(), data_type: "int".into(), pk: true, nullable: false }] };
-        let fk = |from: usize, to: usize| ErdRelation {
-            name: format!("fk_{from}_{to}"), from_schema: "public".into(), from_table: format!("t{from:03}"), from_columns: vec!["id".into()],
-            to_schema: "public".into(), to_table: format!("t{to:03}"), to_columns: vec!["id".into()],
-        };
-        let big = Erd { tables: (0..250).map(table).collect(), relations: vec![fk(1, 0), fk(210, 0), fk(5, 220)] };
-        let v = erd_json(big, 200);
-        assert_eq!(v["tables"].as_array().unwrap().len(), 200);
-        assert_eq!(v["tables"][199]["name"], "t199");
-        assert_eq!(v["tables"][0]["primary_key"], json!(["id"]));
-        assert_eq!(v["foreign_keys"], json!([{ "name": "fk_1_0", "from_schema": "public", "from_table": "t001", "from_columns": ["id"], "to_schema": "public", "to_table": "t000", "to_columns": ["id"] }]));
-        assert_eq!(v["note"], "Showing 200 of 250 tables; pass fewer schemas");
-        let m = v["mermaid"].as_str().unwrap();
-        assert!(m.contains("t000 ||--o{ t001") && !m.contains("t210") && !m.contains("t220"), "{m}");
-        let small = erd_json(Erd { tables: (0..3).map(table).collect(), relations: vec![fk(1, 0)] }, 200);
-        assert!(small.get("note").is_none() && small["foreign_keys"].as_array().unwrap().len() == 1, "{small}");
-    }
-
-    /// Production without the per-source setting, and a source not shared with MCP, get no report; an unknown id lists the ones there are
-    #[tokio::test]
-    async fn dba_report_gates() {
-        let mut allowed = source("4", "Prod allowed", Some("read"), true);
-        allowed.config.options.mcp_dba_reports = true;
-        let (server, dir) = server_with(&[source("1", "Dev", Some("read"), false), source("2", "Prod", Some("read"), true), source("3", "Hidden", Some("off"), false), allowed]);
-        let report = |ds: &str, r: &str| json!({ "data_source": ds, "report": r });
-        let e = server.call("dba_report", &report("Prod", "sessions")).await.unwrap_err();
-        assert!(e.contains("Production") && e.contains("only if a person allows it for this data source in Qurry"), "{e}");
-        let e = server.call("dba_report", &report("Hidden", "sessions")).await.unwrap_err();
-        assert!(e.contains("is not shared with MCP") && !e.contains("db.internal"), "{e}");
-        for ds in ["Dev", "Prod allowed"] {
-            let e = server.call("dba_report", &report(ds, "drop_everything")).await.unwrap_err();
-            assert!(e.starts_with("No report \"drop_everything\"") && e.contains("sessions, locks, slow_queries") && e.contains("vacuum_progress"), "{e}");
-            // PostgreSQL has no fragmentation (a MySQL report)
-            let e = server.call("dba_report", &report(ds, "fragmentation")).await.unwrap_err();
-            assert!(e.starts_with("No report \"fragmentation\""), "{e}");
-        }
-        let list = server.call("list_data_sources", &json!({})).await.unwrap();
-        let flag = |name: &str| list.as_array().unwrap().iter().find(|c| c["name"] == name).map(|c| c["dba_report"].clone());
-        assert_eq!((flag("Dev"), flag("Prod"), flag("Prod allowed"), flag("Hidden")), (Some(json!(true)), Some(json!(false)), Some(json!(true)), None));
         let _ = std::fs::remove_dir_all(dir);
     }
 
