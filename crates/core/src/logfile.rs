@@ -664,7 +664,8 @@ mod tests {
         }
         frontend_error_with(&mut limit, t0 + std::time::Duration::from_secs(61), "unhandledrejection", "after the minute", None, Some(""));
         *SINK.lock().unwrap() = None;
-        let l = lines(t.path(), "qurry.log");
+        // Other tests' lines may land in the file meanwhile
+        let l: Vec<String> = lines(t.path(), "qurry.log").into_iter().filter(|x| x.contains("] front-end ")).collect();
         let text = l.join("\n");
         assert!(!text.contains("s3cret") && !text.contains("Pw-"), "{text}");
         assert!(l[0].contains("] front-end boundary error: Failed near postgres://app:***@db.local/x where name = '…' | stack: Error: boom\\n    at render (index.js:1:2)"), "{}", l[0]);

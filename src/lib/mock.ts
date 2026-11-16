@@ -227,6 +227,15 @@ const redisKeys = (id: string) =>
 const redisMatch = (pattern: string | undefined, key: string) =>
   new RegExp(`^${(pattern?.trim() || "*").replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(key);
 const historyAdded: { id: string; connId: string; database?: string; sql: string; ts: number }[] = [];
+/** Consoles with an open transaction (tab id → data source name), kept across a reload like the backend's sessions */
+const TX_KEY = "mock-open-tx";
+const openTxs = (): Record<string, string> => JSON.parse(sessionStorage.getItem(TX_KEY) ?? "{}");
+const openTx = (tabId: string, id: string) =>
+  sessionStorage.setItem(TX_KEY, JSON.stringify({ ...openTxs(), [tabId]: conns.find((c) => c.id === String(id).split("::")[0])?.name ?? id }));
+const endTx = (tabId: string) => {
+  const { [tabId]: _, ...rest } = openTxs();
+  sessionStorage.setItem(TX_KEY, JSON.stringify(rest));
+};
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
   // window.__mockRedis (set before load): { readOnly, production, managed } for [Redis] cache (managed: CONFIG refused, as on ElastiCache).
@@ -411,8 +420,9 @@ const handlers: Record<string, (a: any) => unknown> = {
       : [{ value: "k0", count: 15 }, { value: "k1", count: 15 }],
   // A statement on no_such_table fails (console gutter marks) at its position, as PostgreSQL says it (qurry_shared::errors::with_position)
   run_query: (a: any) =>
-    // Each statement as it was sent (e2e reads it)
+    // Each statement as it was sent (e2e reads it); one in Manual mode leaves its console's transaction open
     (((window as any).__mockRan ??= []).push(a.sql),
+    (globalThis as any).__mockManual === true && a.tabId && openTx(a.tabId, a.id),
     /\bno_such_table\b/i.test(a.sql) ? Promise.reject(`ERROR: relation "no_such_table" does not exist (position ${[...a.sql.slice(0, a.sql.search(/\bno_such_table\b/i))].length + 1})`) : (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN \(FORMAT JSON/i.test(a.sql)
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }
       : /^\s*do\b/i.test(a.sql)
@@ -431,14 +441,15 @@ const handlers: Record<string, (a: any) => unknown> = {
           : /\bvoc\b[\s\S]*\bjoin\b/i.test(a.sql)
           ? { ...vocJoin, inTransaction: (globalThis as any).__mockManual === true }
           : { ...(usersLimit(a.sql) ?? { ...result, ...consoleEdit(a.sql) }), inTransaction: (globalThis as any).__mockManual === true })),
-  set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
+  set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; if (!a.manual) endTx(a.tabId); return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
-  commit_tx: () => {
+  commit_tx: (a: any) => {
     const e = (globalThis as any).__mockCommitError;
     if (e) throw e;
+    endTx(a.tabId);
     return null;
   },
-  rollback_tx: () => null,
+  rollback_tx: (a: any) => (endTx(a.tabId), null),
   rag_indexes: () => (globalThis as any).__rag ?? ((globalThis as any).__rag = [{ id: "r1", name: "tickets search", source: "dev", schema: "public", table: "users", idColumn: "id", textColumns: ["user_name"], provider: "ollama", model: "nomic-embed-text", baseUrl: "", dest: "dev", collection: "users_embeddings", dim: 768, rows: 3000, builtAt: "2026-10-27 14:50" }]),
   rag_save: (a: any) => { const x = { ...a.index, id: a.index.id || "r" + Date.now() }; const l = (globalThis as any).__rag ?? []; (globalThis as any).__rag = [...l.filter((y: any) => y.id !== x.id), x]; return x; },
   rag_delete: (a: any) => { (globalThis as any).__rag = ((globalThis as any).__rag ?? []).filter((y: any) => y.id !== a.id); return null; },
@@ -532,7 +543,14 @@ const handlers: Record<string, (a: any) => unknown> = {
     });
   },
   cancel_query: () => (cancelMore?.(), (cancelMore = null), true),
-  close_session: () => null,
+  close_session: (a: any) => (endTx(a.tabId), null),
+  // The page loaded again: the transactions the page before left open are rolled back (they live in sessionStorage, as the
+  // backend's sessions outlive a reload)
+  close_all_sessions: () => {
+    const open = openTxs();
+    sessionStorage.removeItem(TX_KEY);
+    return Object.entries(open).map(([tabId, name]) => ({ tabId, name, rolledBack: true }));
+  },
   // A console in Manual mode keeps them pending (tx_state)
   // As the core: what ran goes into the query history
   // window.__mockSubmitted: every statement Submit sent, in order (e2e)

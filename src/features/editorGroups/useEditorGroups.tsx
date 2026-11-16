@@ -407,7 +407,7 @@ export function useEditorGroups({
               return (
                 <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
                   {/* Reload Tab: the console's text stays (liveSql), its results go (one of them may be what failed) */}
-                  <ErrorBoundary scope="tab" onReload={() => patch(t.id, { results: [], activeResult: "output" })}>
+                  <ErrorBoundary scope="tab" label={labelOf(t)} onReload={() => patch(t.id, { results: [], activeResult: "output" })}>
                     <ConsolePane
                       tabId={t.id}
                       target={t.target}
@@ -469,7 +469,7 @@ export function useEditorGroups({
             .filter((t) => t.kind === "rag")
             .map((t) => (
               <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
-                <ErrorBoundary scope="tab">
+                <ErrorBoundary scope="tab" label={labelOf(t)}>
                   <RagView key={ragInit?.n} conns={conns} initial={ragInit} runJob={runJob} onStatus={setStatus} />
                 </ErrorBoundary>
               </div>
@@ -479,7 +479,7 @@ export function useEditorGroups({
             .filter((t) => t.kind === "migrate")
             .map((t) => (
               <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
-                <ErrorBoundary scope="tab">
+                <ErrorBoundary scope="tab" label={labelOf(t)}>
                   <MigrateView
                     conns={conns}
                     initialConnId={t.connId}
@@ -500,7 +500,7 @@ export function useEditorGroups({
               const c = conns.find((x) => x.id === t.connId);
               return (
                 <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
-                  <ErrorBoundary scope="tab">
+                  <ErrorBoundary scope="tab" label={labelOf(t)}>
                     <ErdView target={t.target} schemas={t.erdSchemas ?? []} visible={t.id === ga?.id} onOpenTable={(sc, tb) => c && openTable(c, sc, tb, t.database)} onStatus={setStatus} />
                   </ErrorBoundary>
                 </div>
@@ -514,7 +514,7 @@ export function useEditorGroups({
               const def = c ? defaultDbOf(c) : "";
               return (
                 <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
-                  <ErrorBoundary scope="tab">
+                  <ErrorBoundary scope="tab" label={labelOf(t)}>
                     <DbaReport
                       target={t.target}
                       connName={c?.name ?? ""}
@@ -549,7 +549,7 @@ export function useEditorGroups({
               const c = conns.find((x) => x.id === t.connId);
               return (
                 <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
-                  <ErrorBoundary scope="tab">
+                  <ErrorBoundary scope="tab" label={labelOf(t)}>
                     <RedisBrowser
                       target={t.target}
                       connId={t.connId}
@@ -571,7 +571,7 @@ export function useEditorGroups({
             .map((t) => (
               <div key={t.id} className="work-layer" data-tab={t.id} style={{ display: t.id === ga?.id ? "block" : "none" }}>
                 {/* Reload Tab: its rows again (the ones shown may be what failed) */}
-                <ErrorBoundary scope="tab" onReload={() => (patch(t.id, { result: null }), applyTableFilter(t, t.where, t.orderBy))}>
+                <ErrorBoundary scope="tab" label={labelOf(t)} onReload={() => (patch(t.id, { result: null }), applyTableFilter(t, t.where, t.orderBy))}>
                   <TableEditor
                     where={t.where}
                     orderBy={t.orderBy}
@@ -625,7 +625,7 @@ export function useEditorGroups({
               const pick = (v: DdlView) => pickDdlView(t, v);
               return (
               <div key={t.id} className="work-layer ddl-layer" style={{ display: t.id === ga?.id ? "flex" : "none" }}>
-                <ErrorBoundary scope="tab">
+                <ErrorBoundary scope="tab" label={labelOf(t)}>
                   <Toolbar>
                     <span className="tb-info" style={{ marginLeft: 0 }}>{t.title.startsWith("SQL Generator") ? "SQL Generator" : "DDL"} · read-only</span>
                     {t.edit && <ToolbarSep />}

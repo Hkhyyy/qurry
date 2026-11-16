@@ -182,6 +182,7 @@ pub fn run() {
             commands::fetch_more,
             commands::cancel_query,
             commands::close_session,
+            commands::close_all_sessions,
             commands::set_tx_mode,
             commands::commit_tx,
             commands::rollback_tx,

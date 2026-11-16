@@ -295,6 +295,15 @@ impl AppState {
     }
 }
 
+/// A console session AppState::close_all_sessions closed: its tab, its data source's name, whether a transaction was rolled back
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosedSession {
+    pub tab_id: String,
+    pub name: String,
+    pub rolled_back: bool,
+}
+
 /// A data source whose tunnel Qurry waits for or replaces (AppState::reconnecting): what the apps say meanwhile (`message`, and
 /// `slow` after RECONNECT_SLOW), the heading when the load waiting on it fails (`failed`), and what Cancel leaves (`cancelled`)
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -2220,6 +2229,22 @@ impl AppState {
         Ok(())
     }
 
+    /// Every console session, closed: the GUI's window loaded its page again (a reload after an error), so the tabs that owned them
+    /// are gone, and a session left open would keep its transaction and locks. An open transaction is rolled back (audited as
+    /// closed); one a running statement holds counts as open. The closed ones in order, with their data source's name
+    pub async fn close_all_sessions(&self) -> Vec<ClosedSession> {
+        let all: Vec<_> = self.sessions.read().await.iter().map(|(t, e)| (t.clone(), e.conn_id.clone(), e.session.clone(), e.housekept.clone())).collect();
+        let mut out = Vec::new();
+        for (tab_id, conn_id, session, housekept) in all {
+            let rolled_back = session.try_lock().map(|s| s.in_tx()).unwrap_or_else(|_| !housekept.load(SeqCst));
+            drop(session);
+            let _ = self.close_session(tab_id.clone()).await;
+            let name = self.source(&conn_id).map(|c| c.name).unwrap_or(conn_id);
+            out.push(ClosedSession { tab_id, name, rolled_back });
+        }
+        out
+    }
+
     /// Statements in one transaction. exact_one = saving table edits (roll back everything unless each UPDATE/DELETE hits exactly 1 row)
     pub async fn execute_batch(&self, id: String, statements: Vec<String>, exact_one: bool) -> AppResult<BatchResult> {
         self.execute_batch_with(id, statements, exact_one, false).await
@@ -4097,6 +4122,37 @@ pub(crate) mod tests {
             assert_eq!(first(&next), Some(10501), "run first: {run_first}: the new result goes on with its own rows");
             assert_eq!(st.sessions.read().await.len(), 1);
         }
+    }
+
+    /// The GUI's page loaded again (#181): every console session closes, the open transaction is rolled back (its row isn't
+    /// there, its lock is gone) and said, a session without one is closed too
+    #[tokio::test]
+    #[ignore]
+    async fn close_all_sessions_rolls_back_open_transactions() {
+        let Some(crate::testenv::Server { cfg, password }) = crate::testenv::pg() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        st.save_connection(ConnectionConfig { id: "d".into(), name: "dev".into(), ..cfg }, password, None).await.unwrap();
+        let q = |sql: &str, tab: &str| st.run_query("d".into(), sql.into(), None, Some(tab.into()));
+        q("create table if not exists qurry_close_all (a int primary key)", "setup").await.unwrap();
+        q("truncate qurry_close_all", "setup").await.unwrap();
+        st.close_session("setup".into()).await.unwrap();
+        st.set_tx_mode("d".into(), "open".into(), true).await.unwrap();
+        assert!(q("insert into qurry_close_all values (1)", "open").await.unwrap().in_transaction);
+        q("select 1", "plain").await.unwrap();
+        let mut closed = st.close_all_sessions().await;
+        closed.sort_by(|a, b| a.tab_id.cmp(&b.tab_id));
+        assert_eq!(
+            closed,
+            [ClosedSession { tab_id: "open".into(), name: "dev".into(), rolled_back: true }, ClosedSession { tab_id: "plain".into(), name: "dev".into(), rolled_back: false }]
+        );
+        assert!(st.sessions.read().await.is_empty());
+        assert!(st.close_all_sessions().await.is_empty());
+        // Rolled back: no row, and the key isn't locked (this would wait on the lock otherwise)
+        let r = tokio::time::timeout(std::time::Duration::from_secs(5), q("insert into qurry_close_all values (1) returning a", "after")).await.expect("not locked").unwrap();
+        assert_eq!(r.rows.len(), 1);
+        q("drop table qurry_close_all", "after").await.unwrap();
+        st.close_session("after".into()).await.unwrap();
     }
 
     /// A Production console's transaction left open and unused is reminded about once per stretch, with the server's limit for

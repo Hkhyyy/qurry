@@ -1,8 +1,10 @@
 // A render that throws unmounts everything up to the nearest error boundary (#181): the window has one at its root, each editor
-// tab and Settings page its own, so one failing view leaves the rest of the window working. Errors go to qurry.log
-import { Component, Fragment, useEffect, type ErrorInfo, type ReactNode } from "react";
+// tab and Settings page its own, so one failing view leaves the rest of the window working. Errors go to qurry.log.
+// The window's boundary mounts the app again (Recover): tabs, console text and open transactions are kept (features/recovery)
+import { Component, Fragment, useEffect, useState, type ErrorInfo, type ReactNode } from "react";
 import { api } from "../lib/api";
-import { Button, CodeBlock, EmptyState, Row } from "../ui";
+import { recoveryNotice, reloadWindow, uncommitted } from "../features/recovery";
+import { Button, CodeBlock, EmptyState, Notice, Row } from "../ui";
 
 type Source = "boundary" | "error" | "unhandledrejection";
 
@@ -33,7 +35,9 @@ export function logWindowErrors() {
 export type Scope = "window" | "tab" | "page";
 
 const TITLE: Record<Scope, string> = { window: "Qurry hit an error", tab: "This tab hit an error", page: "This page hit an error" };
-const RELOAD: Record<Scope, string> = { window: "Reload Window", tab: "Reload Tab", page: "Reload Page" };
+const RELOAD: Record<Scope, string> = { window: "Recover", tab: "Reload Tab", page: "Reload Page" };
+/** A remount that fails again within this shows the fallback (no loop); the window's then also offers Reload Window */
+export const AGAIN_MS = 10_000;
 
 /** What Copy Details puts on the clipboard */
 export const errorDetails = (error: unknown, componentStack?: string) => {
@@ -41,26 +45,55 @@ export const errorDetails = (error: unknown, componentStack?: string) => {
   return [d.message, d.stack, componentStack && `Components:${componentStack}`].filter(Boolean).join("\n\n");
 };
 
-/** A boundary's fallback: what failed, Reload and Copy Details. The window's also reloads on ⌘r (its keymap is gone with the app) */
-export function ErrorFallback({ scope, error, componentStack, onReload }: { scope: Scope; error: unknown; componentStack?: string; onReload: () => void }) {
+/** "1 console has uncommitted changes. Reload rolls them back." */
+export const rollbackAsk = (n: number) => `${n} console${n === 1 ? " has" : "s have"} uncommitted changes. Reload rolls them back.`;
+
+/**
+ * A boundary's fallback: what failed, Reload (the window's: Recover) and Copy Details. The window's also offers Reload Window once
+ * a Recover failed again (`again`), asking first when consoles have uncommitted changes; ⌘r does the first button (the app's
+ * keymap is gone with it)
+ */
+export function ErrorFallback({ scope, error, componentStack, onReload, again, uncommitted = 0, onReloadWindow }: {
+  scope: Scope;
+  error: unknown;
+  componentStack?: string;
+  onReload: () => void;
+  again?: boolean;
+  uncommitted?: number;
+  onReloadWindow?: () => void;
+}) {
+  const [asking, setAsking] = useState(false);
+  const offerReload = scope === "window" && again && !!onReloadWindow;
+  const reloadWindow = () => (uncommitted && !asking ? setAsking(true) : onReloadWindow?.());
+  const first = offerReload ? reloadWindow : onReload;
   useEffect(() => {
     if (scope !== "window") return;
-    const onKey = (e: KeyboardEvent) => (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "r" && (e.preventDefault(), onReload());
+    const onKey = (e: KeyboardEvent) => (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "r" && (e.preventDefault(), first());
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [scope, onReload]);
+  }, [scope, first]);
+  const copy = <Button onClick={() => navigator.clipboard?.writeText(errorDetails(error, componentStack)).catch(() => {})}>Copy Details</Button>;
   return (
     <div className={`error-fallback ${scope}`} role="alert">
       <EmptyState
         title={TITLE[scope]}
         action={
-          <Row gap={2} style={{ justifyContent: "center" }}>
-            <Button variant="primary" onClick={onReload} title={scope === "window" ? "Reload Window (⌘r)" : undefined}>{RELOAD[scope]}</Button>
-            <Button onClick={() => navigator.clipboard?.writeText(errorDetails(error, componentStack)).catch(() => {})}>Copy Details</Button>
-          </Row>
+          asking ? (
+            <Row gap={2} style={{ justifyContent: "center" }}>
+              <Button variant="danger" onClick={onReloadWindow}>Reload and Roll Back</Button>
+              <Button onClick={() => setAsking(false)}>Cancel</Button>
+            </Row>
+          ) : (
+            <Row gap={2} style={{ justifyContent: "center" }}>
+              {offerReload && <Button variant="primary" onClick={reloadWindow} title="Reload Window (⌘r)">Reload Window</Button>}
+              <Button variant={offerReload ? "default" : "primary"} onClick={onReload} title={scope === "window" && !offerReload ? "Recover (⌘r)" : undefined}>{RELOAD[scope]}</Button>
+              {copy}
+            </Row>
+          )
         }
       >
         <CodeBlock className="error-message">{summary(error).message}</CodeBlock>
+        {asking && <Notice tone="warn">{rollbackAsk(uncommitted)}</Notice>}
       </EmptyState>
     </div>
   );
@@ -70,13 +103,18 @@ interface State {
   error: unknown;
   failed: boolean;
   componentStack?: string;
-  /** Bumped by Reload: the children mount again from scratch */
+  /** Bumped by Reload / Recover: the children mount again from scratch */
   rev: number;
+  /** When the children were last mounted again (the window's: a Recover, or the automatic one) */
+  remounted?: number;
+  /** This error came within AGAIN_MS of that */
+  again?: boolean;
 }
 
-/** Catches a render error below it and shows ErrorFallback instead; Reload remounts the children (the window's reloads the page).
+/** Catches a render error below it and mounts its children again; when that fails again within AGAIN_MS (or for a Settings page,
+ *  at once) shows ErrorFallback instead, whose Reload / Recover remounts them. A toast says it recovered (`label`: the tab's name).
  *  `onReload`: first drops what the view keeps outside itself that may be what failed (a console's results) */
-export class ErrorBoundary extends Component<{ scope: Scope; onReload?: () => void; children: ReactNode }, State> {
+export class ErrorBoundary extends Component<{ scope: Scope; label?: string; onReload?: () => void; children: ReactNode }, State> {
   state: State = { error: null, failed: false, rev: 0 };
 
   static getDerivedStateFromError(error: unknown): Partial<State> {
@@ -84,19 +122,37 @@ export class ErrorBoundary extends Component<{ scope: Scope; onReload?: () => vo
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo) {
-    this.setState({ componentStack: info.componentStack ?? undefined });
     const d = summary(error);
     logFrontendError("boundary", `${this.props.scope}: ${d.message}`, d.stack, info.componentStack ?? undefined);
+    const again = this.state.remounted !== undefined && Date.now() - this.state.remounted < AGAIN_MS;
+    // The window and a tab mount again by themselves, once: the fallback only when that fails again soon after
+    if (this.props.scope !== "page" && !again) {
+      recoveryNotice(`Recovered from an error${this.props.label ? ` in ${this.props.label}` : ""} — details in the log`);
+      return this.reload();
+    }
+    this.setState({ componentStack: info.componentStack ?? undefined, again });
   }
 
   reload = () => {
-    if (this.props.scope === "window") return location.reload();
     this.props.onReload?.();
-    this.setState((s) => ({ error: null, failed: false, componentStack: undefined, rev: s.rev + 1 }));
+    this.setState((s) => ({ error: null, failed: false, componentStack: undefined, rev: s.rev + 1, remounted: Date.now(), again: false }));
   };
 
   render() {
-    if (this.state.failed) return <ErrorFallback scope={this.props.scope} error={this.state.error} componentStack={this.state.componentStack} onReload={this.reload} />;
+    if (this.state.failed) {
+      const win = this.props.scope === "window";
+      return (
+        <ErrorFallback
+          scope={this.props.scope}
+          error={this.state.error}
+          componentStack={this.state.componentStack}
+          onReload={this.reload}
+          again={win && this.state.again}
+          uncommitted={win ? uncommitted() : 0}
+          onReloadWindow={win ? () => void reloadWindow() : undefined}
+        />
+      );
+    }
     return <Fragment key={this.state.rev}>{this.props.children}</Fragment>;
   }
 }

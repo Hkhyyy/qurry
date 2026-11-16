@@ -5,7 +5,7 @@ import { api, ConnectionView, defaultDbOf, updateCheckEnabled } from "./lib/api"
 import { ContextMenu, Explorer, MenuItem } from "./components/Explorer";
 import { migrateOldHistory } from "./components/HistoryDialog";
 import { WorkspaceBar } from "./components/WorkspaceBar";
-import { Badge, Text, Toolbar, ToolbarSep } from "./ui";
+import { Badge, Text, Toast, Toolbar, ToolbarSep } from "./ui";
 import { invalidateSearchIndex } from "./components/SearchEverywhere";
 import { DEFAULT_FONT, font, setFont } from "./lib/prefs";
 import { loadKeymap, onKeymapChange } from "./lib/shortcuts";
@@ -25,6 +25,7 @@ import { useTabsStore } from "./features/tabs/store";
 import { wsConns } from "./features/workspaces/ops";
 import { stash, useWorkspacesStore } from "./features/workspaces/store";
 import { useWorkspaces } from "./features/workspaces/useWorkspaces";
+import { dismissRecovery, useRecoveryNotices } from "./features/recovery";
 import { useConsole } from "./features/console/useConsole";
 import { useTabs } from "./features/tabs/useTabs";
 import { useJobs } from "./features/jobs/useJobs";
@@ -86,6 +87,8 @@ export default function App() {
   const [status, setStatus] = useState("Ready");
   // A keymap.json that doesn't load: the default keys work, the status bar says how to get the saved ones back
   useEffect(() => void loadKeymap().then((err) => err && setStatus(err)), []);
+  // Recovered from an error, or reloaded with transactions the last page left open (features/recovery): toasts for a few seconds
+  const recovered = useRecoveryNotices();
   // The theme settings couldn't be read or the old pick moved (lib/theme.ts initTheme): what to do about it
   useEffect(() => {
     const n = takeThemeNotice();
@@ -339,7 +342,16 @@ export default function App() {
       {search.switcherPopup}
       <Dialogs conns={conns} setStatus={setStatus} openConsole={openConsole} startBackup={startBackup} startExport={startExport} startImport={startImport} readyToQuit={readyToQuit} />
       {search.popups}
-      <ReconnectToasts />
+      <ReconnectToasts
+        extra={
+          recovered.length > 0 &&
+          recovered.map((r) => (
+            <Toast key={r.id} onClose={() => dismissRecovery(r.id)}>
+              {r.text}
+            </Toast>
+          ))
+        }
+      />
       <StatusBar
         status={status}
         busy={

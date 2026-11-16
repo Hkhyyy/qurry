@@ -432,14 +432,14 @@ export const ToastCancelledLight = toastStory("cancelled", cancelledToast, 0, tr
 
 /** An error boundary's fallback (#181): a tab's keeps the rest of the window, the window's replaces it */
 const boom = Object.assign(new TypeError("Cannot read properties of undefined (reading 'map')"), { stack: "TypeError: Cannot read properties of undefined (reading 'map')\n    at ResultGrid (index.js:1:2)" });
-const fallbackStory = (scope: Scope): S => ({
-  name: `ErrorFallback · ${scope}`,
+const fallbackStory = (scope: Scope, name: string, again?: boolean): S => ({
+  name: `ErrorFallback · ${name}`,
   render: () => (
     // transform: the window's fallback (position: fixed) stays in the frame
     <div style={{ width: 640, height: 360, position: "relative", transform: "translateZ(0)", border: "1px solid var(--ui-border)", background: "var(--bg)" }}>
-      <ErrorFallback scope={scope} error={boom} componentStack={"\n    at ResultGrid\n    at ConsolePane"} onReload={() => {}} />
+      <ErrorFallback scope={scope} error={boom} componentStack={"\n    at ResultGrid\n    at ConsolePane"} onReload={() => {}} again={again} uncommitted={1} onReloadWindow={() => {}} />
     </div>
   ),
 });
-export const ErrorFallbackTab = fallbackStory("tab");
-export const ErrorFallbackWindow = fallbackStory("window");
+export const ErrorFallbackTab = fallbackStory("tab", "tab");
+export const ErrorFallbackWindow = fallbackStory("window", "window, Recover failed again (Reload Window asks first)", true);

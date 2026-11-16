@@ -167,6 +167,12 @@ pub async fn close_session(state: State<'_, AppState>, tab_id: String) -> AppRes
     state.close_session(tab_id).await
 }
 
+/// The window's page starts: the console sessions of the page before it (a reload) are closed, their transactions rolled back
+#[tauri::command]
+pub async fn close_all_sessions(state: State<'_, AppState>) -> AppResult<Vec<crate::app::ClosedSession>> {
+    Ok(state.close_all_sessions().await)
+}
+
 /// A result grid's Submit (each UPDATE / DELETE exactly one row). tab_id = the console the result is in: in Manual mode or with a
 /// transaction open the edits join it and stay pending (AppState::submit_edits)
 #[tauri::command]
