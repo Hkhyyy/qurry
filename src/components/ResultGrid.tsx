@@ -24,6 +24,8 @@ import { Button, CellEditor, cx, FixSql, GridCell, GridHead, GridHeaderCell, Gri
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
+import type { SortKey } from "../features/grid/shared";
+import { useSortOrder } from "../features/grid/useSortOrder";
 
 const ROW_H = 24;
 const HEADER_H = 26;
@@ -90,8 +92,6 @@ const SELECTION_ITEMS: StatusItemId[] = ["notNull", "sum", "avg", "min", "max"];
 /** pgvector columns (vector · halfvec · sparsevec) */
 const isVectorType = (t: string) => /^(vector|halfvec|sparsevec)$/i.test(t);
 
-type SortKey = { col: number; dir: "asc" | "desc" };
-
 function display(c: Cell): string {
   if (c === null) return "<null>";
   if (c === DEFAULT_TOKEN) return "<default>";
@@ -157,46 +157,7 @@ export function ResultGrid(p: Props) {
   const rowCount = baseCount + added.length;
   const serverSort = !!p.onServerSort && sortViaOrderBy;
 
-  // Reset sorting when the column set changes
-  const colKey = cols.map((c) => c.name).join("\u0001");
-  useEffect(() => setSorts([]), [colKey]);
-
-  /** Header sort: click = ↑ → ↓ → off, ⌥+click = add a sort key (DataGrip) */
-  const clickSort = (col: number, additive: boolean) => {
-    setSorts((cur) => {
-      const ex = cur.find((k) => k.col === col);
-      const nextDir = !ex ? "asc" : ex.dir === "asc" ? "desc" : null;
-      let next: SortKey[];
-      if (additive) next = nextDir ? (ex ? cur.map((k) => (k.col === col ? { col, dir: nextDir } : k)) : [...cur, { col, dir: nextDir }]) : cur.filter((k) => k.col !== col);
-      else next = nextDir ? [{ col, dir: nextDir }] : [];
-      if (serverSort) p.onServerSort!(next.map((k) => `${quoteIdent(cols[k.col].name)} ${k.dir.toUpperCase()}`).join(", "));
-      return next;
-    });
-  };
-
-  // Client-side sort (when not sorting on the server)
-  const order = useMemo(() => {
-    if (serverSort || sorts.length === 0) return null;
-    const idx = result.rows.map((_, i) => i);
-    const cmp = (a: Cell, b: Cell) => {
-      if (a === b) return 0;
-      if (a === null) return 1;
-      if (b === null) return -1;
-      if (typeof a === "number" && typeof b === "number") return a - b;
-      const na = Number(a), nb = Number(b);
-      if (a !== "" && b !== "" && !isNaN(na) && !isNaN(nb)) return na - nb;
-      return String(a).localeCompare(String(b));
-    };
-    idx.sort((x, y) => {
-      for (const k of sorts) {
-        const d = cmp(result.rows[x][k.col], result.rows[y][k.col]);
-        if (d) return k.dir === "asc" ? d : -d;
-      }
-      return x - y;
-    });
-    return idx;
-  }, [sorts, result.rows, serverSort]);
-  const dataIndex = (d: number) => (order && d < order.length ? order[d] : d);
+  const { clickSort, order, dataIndex } = useSortOrder({ cols, result, sorts, setSorts, serverSort, quoteIdent, p });
 
   const rowAt = (r: number) => (r < baseCount ? result.rows[r] : added[r - baseCount]);
   const valueAt = (r: number, c: number): Cell => (r < baseCount && changes[r] && c in changes[r] ? changes[r][c] : rowAt(r)?.[c] ?? null);
