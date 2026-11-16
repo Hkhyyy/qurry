@@ -348,6 +348,20 @@ mod tests {
         ], "q_parent", "q_child", true).await;
     }
 
+    /// A statement longer than tiberius 0.13's 30 s default command timeout still returns, and the connection stays usable
+    #[tokio::test]
+    #[ignore]
+    async fn mssql_driver_long_statement() {
+        let Some((cfg, pw)) = server_cfg("mssql", "QURRY_TEST_MSSQL") else { return };
+        if driver_path("mssql").is_none() {
+            return;
+        }
+        let c = connect(&cfg, Some(&pw), None).await.unwrap();
+        let r = c.query("WAITFOR DELAY '00:00:35'; SELECT 1", 10).await.unwrap();
+        assert_eq!(r.rows[0][0], json!(1));
+        assert_eq!(c.query("SELECT 2", 10).await.unwrap().rows[0][0], json!(2));
+    }
+
     /// MongoDB: shell syntax (insertMany · find · sort/limit · aggregate · countDocuments), explorer SELECT * FROM, field inference
     #[tokio::test]
     #[ignore]

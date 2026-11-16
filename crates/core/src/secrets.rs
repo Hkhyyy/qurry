@@ -7,9 +7,9 @@
 //! then a secret.key.keychain marker file remains instead of secret.key, and only the key is in the keychain (passwords stay in secrets.json).
 use crate::error::{AppError, AppResult};
 use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
-use rand::RngCore;
+use rand::Rng;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -177,12 +177,12 @@ impl SecretFile {
                     let _ = fs::rename(&secrets_path, dir.join(format!("secrets.json.orphaned-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))));
                 }
                 let mut k = vec![0u8; 32];
-                rand::thread_rng().fill_bytes(&mut k);
+                rand::rng().fill_bytes(&mut k);
                 write_private(&key_path, &k)?;
                 k
             }
         };
-        Ok(me(Some(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key)))))
+        Ok(me(Some(Aes256Gcm::new_from_slice(&key).expect("a 32-byte key"))))
     }
 
     /// Read the key now (before moving the key: so this store keeps using the same key after the move)
@@ -204,12 +204,12 @@ impl SecretFile {
             if k.len() != 32 {
                 return Err(AppError::Msg(format!("{} is corrupted — restore it from a backup, or delete it and secrets.json to start over", key_path.display())));
             }
-            let k = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&k));
+            let k = Aes256Gcm::new_from_slice(&k).expect("a 32-byte key");
             *c = Some(k.clone());
             return Ok(k);
         }
         let k = match self.vault.get(&keychain_account(&self.dir)) {
-            Ok(Some(k)) if k.len() == 32 => Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&k)),
+            Ok(Some(k)) if k.len() == 32 => Aes256Gcm::new_from_slice(&k).expect("a 32-byte key"),
             Ok(_) => return Err(AppError::Msg(format!("The password key is not in the system keychain (see {}) — restore it, or delete that file and secrets.json to start over", self.dir.join(KEYCHAIN_MARKER).display()))),
             Err(e) => return Err(AppError::Msg(format!("{e} — allow Qurry to use the keychain (saved passwords can't be read until then)"))),
         };
@@ -240,10 +240,10 @@ impl SecretFile {
 
     fn seal(&self, name: &str, v: &str) -> AppResult<String> {
         let mut nonce = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut nonce);
+        rand::rng().fill_bytes(&mut nonce);
         let ct = self
             .cipher()?
-            .encrypt(Nonce::from_slice(&nonce), Payload { msg: v.as_bytes(), aad: name.as_bytes() })
+            .encrypt(&Nonce::from(nonce), Payload { msg: v.as_bytes(), aad: name.as_bytes() })
             .map_err(|_| AppError::Msg("encryption failed".into()))?;
         let mut raw = nonce.to_vec();
         raw.extend(ct);
@@ -257,12 +257,13 @@ impl SecretFile {
             return None;
         }
         let (nonce, ct) = raw.split_at(12);
+        let nonce = Nonce::try_from(nonce).ok()?;
         // Bind the name as AAD (so ciphertext moved from another entry doesn't decrypt)
-        if let Ok(pt) = cipher.decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad: name.as_bytes() }) {
+        if let Ok(pt) = cipher.decrypt(&nonce, Payload { msg: ct, aad: name.as_bytes() }) {
             return String::from_utf8(pt).ok().map(|s| (s, false));
         }
         // Old format (no AAD): re-saved in the new format as soon as it is read. This fallback is removed in 0.4 (by then all used entries will have been converted)
-        String::from_utf8(cipher.decrypt(Nonce::from_slice(nonce), ct).ok()?).ok().map(|s| (s, true))
+        String::from_utf8(cipher.decrypt(&nonce, ct).ok()?).ok().map(|s| (s, true))
     }
 
     pub fn get(&self, name: &str) -> AppResult<Option<String>> {
@@ -445,8 +446,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dbtool-secrets-{}", uuid::Uuid::new_v4()));
         let s = SecretFile::open(&dir).unwrap();
         let mut nonce = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        let ct = s.cipher().unwrap().encrypt(Nonce::from_slice(&nonce), b"old".as_ref()).unwrap();
+        rand::rng().fill_bytes(&mut nonce);
+        let ct = s.cipher().unwrap().encrypt(&Nonce::from(nonce), b"old".as_ref()).unwrap();
         let enc = base64::engine::general_purpose::STANDARD.encode([nonce.to_vec(), ct].concat());
         std::fs::write(dir.join("secrets.json"), serde_json::json!({ "a": enc }).to_string()).unwrap();
         assert_eq!(s.get("a").unwrap().as_deref(), Some("old"));
@@ -455,6 +456,24 @@ mod tests {
         // Moved under a different name, it doesn't decrypt
         std::fs::write(dir.join("secrets.json"), serde_json::json!({ "b": now["a"] }).to_string()).unwrap();
         assert_eq!(s.get("b").unwrap(), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The file format stays byte-for-byte the same across crypto crate updates: this entry was written by aes-gcm 0.10 / base64 0.22
+    #[test]
+    fn fixed_vector_stays_readable() {
+        let key = [0x42u8; 32];
+        let nonce = [0x24u8; 12];
+        let cipher = Aes256Gcm::new_from_slice(&key).expect("a 32-byte key");
+        let ct = cipher.encrypt(&Nonce::from(nonce), Payload { msg: b"s3cret-pw".as_ref(), aad: b"pg:demo".as_ref() }).unwrap();
+        let enc = base64::engine::general_purpose::STANDARD.encode([nonce.to_vec(), ct].concat());
+        assert_eq!(enc, "JCQkJCQkJCQkJCQkZqKnM4yy605RvtUUpLwCRDIb2JmDQHg9dw==");
+        let dir = std::env::temp_dir().join(format!("dbtool-secrets-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("secret.key"), key).unwrap();
+        std::fs::write(dir.join("secrets.json"), serde_json::json!({ "pg:demo": enc }).to_string()).unwrap();
+        let s = SecretFile::open(&dir).unwrap();
+        assert_eq!(s.get("pg:demo").unwrap().as_deref(), Some("s3cret-pw"));
         let _ = std::fs::remove_dir_all(dir);
     }
 }
