@@ -191,7 +191,7 @@ export function LongValuesField() {
       group
       error={err ?? undefined}
       info={[
-        "Text, JSON, XML and array values longer than this come cut in PostgreSQL console and table results, so a wide row loads fast.",
+        "Text, JSON and XML values longer than this come cut in PostgreSQL console and table results, so a wide row loads fast.",
         "The Value Editor, copy and edits read the whole value by the result's primary key; a result without one keeps the cut text.",
       ]}
     >
