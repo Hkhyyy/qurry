@@ -8,6 +8,8 @@
 
 Rust, Node.js, pnpm, WebAssembly 도구: [CONTRIBUTING › Setup](../../CONTRIBUTING.md#setup) (영어).
 
+Rust 버전은 `rust-toolchain.toml` 에 고정돼 있습니다 (clippy, rustfmt, wasm32 타깃 포함). 저장소 안에서 처음 `cargo` 명령을 치면 rustup 이 그 버전을 설치합니다 (한 번, 몇 분). `drivers/sqlite` 안에서도 같습니다. CI 와 릴리스 빌드도 같은 파일을 씁니다. 새 Rust 로 올리려면 그 파일의 `channel` 을 따로 된 풀 리퀘스트에서 바꾸고 clippy 와 테스트가 알려 주는 것을 고칩니다. 버전을 적은 곳은 여기 하나뿐입니다. rustup 없이 설치한 Rust (배포판이나 Homebrew 패키지) 는 이 파일을 무시하고 자기 버전으로 빌드하므로 CI 와 버전이 다를 수 있습니다.
+
 ## 빌드와 실행
 
 ```bash
@@ -57,6 +59,8 @@ drivers/*     드라이버 프로그램 (SQLite, DuckDB, SQL Server, ClickHouse,
 - `compat`: core 통합 테스트를 옛 서버 (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017) 로
 - `web`: vitest, 웹 빌드, Storybook 빌드
 - `e2e (chromium)` 과 `e2e (webkit)`: mock 앱에 대한 Playwright. 브라우저마다 두 조각 (shard) 으로 나눠 동시에 돌고, 두 조각이 다 통과하면 그 브라우저의 검사가 통과합니다
+
+`scripts/ci-local.sh` 는 이 작업들을 `ci.yml` 의 명령 그대로, 직접 띄운 `qurry-demo-ci-…` 컨테이너로 이 컴퓨터에서 돌립니다. `scripts/ci-local.sh rust|compat|web|e2e [chromium|webkit]` 는 하나만 돌립니다 ([CONTRIBUTING › Tests](../../CONTRIBUTING.md#tests), 영어).
 
 `docs/` 아래 파일이나 `.md` 파일만 바꾼 풀 리퀘스트 (`docs/release-signing.md` 는 Rust 테스트가 읽어서 빼고) 는 `rust`, `compat`, e2e 를 건너뜁니다. 그 검사들은 그래도 통과로 나옵니다. 풀 리퀘스트에 새로 push 하면 이전 push 의 실행은 취소됩니다. `main` 에서는 언제나 전부 돌고 서로 취소하지 않습니다.
 

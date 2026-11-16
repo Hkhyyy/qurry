@@ -115,6 +115,8 @@ New paths go through these checks; they don't add their own.
 | Safety boundary | A test that the refused case is refused in core or MCP (like `mcp_hidden_source_secrets_stay_locked` in `app.rs`'s tests, `new_tools_are_listed_read_only` in `crates/mcp`) |
 | Any UI | A Storybook story |
 
+Before the pull request, run the CI job that covers the change locally: `scripts/ci-local.sh rust` (Rust), `compat` (core against servers), `web` (GUI logic, build, Storybook) or `e2e chromium` (GUI behavior).
+
 Warnings: CI runs `cargo clippy --all-targets -- -D warnings` on the workspace (the GUI crate `qurry` is checked on macOS: `cargo clippy -p qurry --all-targets`) and on `drivers/sqlite`, so a warning fails the build; `pnpm build` (tsc `strict`, `noUnusedLocals`) must be clean. A new `#[allow(…)]` has a one-line reason and is never crate-wide; a `@ts-expect-error` has a comment saying why. There is no TS lint in CI, so unused exports and the like are on the author and the reviewer.
 
 ### What a pull request says

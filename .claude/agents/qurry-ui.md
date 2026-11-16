@@ -32,7 +32,7 @@ Read ARCHITECTURE.md before changing code.
 1. Look at the current state first (screenshots via Playwright against the mock app or Storybook — the scripts live in the session scratchpad; TUI via `Harness::screen` or the real binary in `tmux` with a scratch `--config-dir`).
 2. Design in Storybook: add/update the story (component and, if relevant, full screen in `Screens.stories.tsx`; TUI scene in `kit_snapshots.rs` → regenerate `tui-snapshots.json`).
 3. Apply to the real GUI and TUI. Verify with Playwright (dark and light, check measurements, not just eyeballing) and with the TUI harness or tmux; for real-database behavior use Docker containers named `qurry-demo-<x>` on free localhost ports (never 127.0.0.1:15432/:25432, never other containers, stop yours afterwards). Do not automate the real Qurry.app while the user's copy is running.
-4. Tests: `npx tsc --noEmit -p .`, `npx vitest run`, `cargo test -p qurry-tui`; add tests for logic you add (pure helpers in `src/lib` with vitest, TUI behavior with the harness).
+4. Tests: `npx tsc --noEmit -p .`, `npx vitest run`, `cargo test -p qurry-tui`; add tests for logic you add (pure helpers in `src/lib` with vitest, TUI behavior with the harness). Before reporting, the CI jobs locally: `scripts/ci-local.sh web` and `scripts/ci-local.sh e2e chromium` (and `rust` for TUI changes).
 
 ## Engineering principles (apply to every change)
 
