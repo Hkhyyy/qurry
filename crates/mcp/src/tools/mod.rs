@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 
 mod dba;
 mod query;
+mod redis;
 mod sources;
 
 use dba::report_ids;
@@ -227,24 +228,8 @@ impl Server {
                 let hits = st.full_text_search(t, req).await.map_err(e)?;
                 Ok(json!(hits.iter().map(|h| json!({ "schema": h.schema, "table": h.table, "where": h.where_clause, "rows": result_json(&h.result) })).collect::<Vec<_>>()))
             }
-            "redis_scan" => {
-                let (t, kind, ..) = self.target(a).await?;
-                if kind != DbKind::Redis {
-                    return Err("Not a Redis data source".into());
-                }
-                let p = st
-                    .redis_scan(t, s("cursor").unwrap_or_else(|| "0".into()), s("pattern").unwrap_or_else(|| "*".into()), n("count", 200).clamp(1, 5000), s("type"))
-                    .await
-                    .map_err(e)?;
-                Ok(json!({ "next_cursor": p.cursor, "keys": p.keys }))
-            }
-            "redis_get" => {
-                let (t, kind, ..) = self.target(a).await?;
-                if kind != DbKind::Redis {
-                    return Err("Not a Redis data source".into());
-                }
-                Ok(json!(st.redis_key(t, s("key").ok_or("key is required")?, Some(n("limit", 200).clamp(1, 10000))).await.map_err(e)?))
-            }
+            "redis_scan" => self.redis_scan(a).await,
+            "redis_get" => self.redis_get(a).await,
             "export_csv" => self.export_csv(a).await,
             "execute" if self.allow_write => {
                 let (t, kind, _, access) = self.target(a).await?;
