@@ -207,7 +207,13 @@ fn route(ssh: &SshConfig) -> AppResult<Vec<crate::ssh_config::Hop>> {
     let home = dirs::home_dir().unwrap_or_default();
     let local = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default();
     let port = (ssh.port != 22).then_some(ssh.port);
-    crate::ssh_config::SshConfigFile::load()?.route(&ssh.host, port, Some(&ssh.user), &home, &local)
+    let hops = crate::ssh_config::SshConfigFile::load()?.route(&ssh.host, port, Some(&ssh.user), &home, &local)?;
+    // ~/.ssh/config's real host names and users, quoted by the tunnel's errors
+    for h in &hops {
+        crate::logfile::hide_word(&h.host, "<ssh host>");
+        crate::logfile::hide_word(&h.user, "<ssh user>");
+    }
+    Ok(hops)
 }
 
 /// Tests only the SSH login (Test Connection on the SSH/SSL tab).

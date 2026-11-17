@@ -438,6 +438,7 @@ impl Store {
 
     /// A data source only for this process (Store::temporary)
     pub fn add_temporary(&self, config: ConnectionConfig) {
+        crate::logfile::hide(&config);
         self.temporary.lock().unwrap().push(config);
     }
 
@@ -465,6 +466,7 @@ impl Store {
             if c.ssm.is_none() {
                 c.ssm = tunnels.get(&c.id).cloned();
             }
+            crate::logfile::hide(c);
         }
         Ok(all)
     }

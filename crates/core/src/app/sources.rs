@@ -143,7 +143,7 @@ impl AppState {
 
     /// `password`: None keeps the existing password, an empty string deletes it.
     pub async fn save_connection(&self, mut config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<ConnectionConfig> {
-        crate::log!("[qurry] save_connection host={} user={} db={}", config.host, config.user, config.database);
+        crate::log!("[qurry] save_connection {}", if config.id.is_empty() { "(new)" } else { &config.id });
         if config.id.is_empty() {
             config.id = uuid::Uuid::new_v4().to_string();
             // New sources (including duplicates) default to MCP Off unless set
