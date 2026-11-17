@@ -355,8 +355,8 @@ export function ResultGrid(p: Props) {
       colVirt.scrollToIndex(c);
       return stop();
     }
-    // Typing directly in a cell starts editing (DataGrip)
-    if (anyEdit && active && e.key.length === 1 && !mod && !e.altKey) {
+    // Typing directly in a cell starts editing (DataGrip). A key with ⌃, ⌘ or ⌥ is a shortcut on every platform (⌃` Quick Switch Theme): left to the global keys
+    if (anyEdit && active && e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
       startEdit(active.r, active.c, e.key);
       return stop();
     }
