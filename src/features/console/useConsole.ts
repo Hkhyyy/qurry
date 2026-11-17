@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { analyzePlan, api, auditLog, ConnectionView, defaultDbOf, dialectOf, DbKind, meta, previewImpact, QueryResult, targetId } from "../../lib/api";
+import { analyzePlan, api, auditLog, ConnectionView, defaultDbOf, dialectOf, DbKind, meta, previewImpact, QueryResult, searchPathSql, targetId } from "../../lib/api";
 import { ask, notice } from "../../lib/dialogs";
 import { pushHistory } from "../../components/HistoryDialog";
 import type { OutputLine } from "../../components/ConsolePane";
@@ -97,7 +97,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
         setStatus(`USE ${schema}`);
         return;
       }
-      await api.runQuery(tab.target, `SET search_path TO ${dialectOf("postgres").q(schema)}, public`, tab.id);
+      await api.runQuery(tab.target, searchPathSql(schema), tab.id);
       patch(tab.id, { schema });
       setStatus(`search_path = ${schema}, public`);
     } catch (e) {

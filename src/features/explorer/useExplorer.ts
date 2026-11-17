@@ -98,7 +98,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
           sql = `UPDATE ${full}\nSET ${cols.filter((c) => !c.isPk).map((c) => `${quoteIdent(c.name)} = ${ph(c)}`).join(",\n    ")}\nWHERE ${where};`;
         else sql = `DELETE\nFROM ${full}\nWHERE ${where};`;
       }
-      openConsole(info.conn, info.db, sql);
+      openConsole(info.conn, info.db, sql, info.schema);
     } catch (e) {
       setStatus(`Generate failed: ${String(e)}`);
     }
@@ -260,7 +260,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
   };
   const ddlToConsole = async (info: NodeInfo) => {
     try {
-      openConsole(info.conn, info.db, await ddlText(info));
+      openConsole(info.conn, info.db, await ddlText(info), info.schema);
     } catch (e) {
       setStatus(String(e));
     }
@@ -292,7 +292,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       x: x ?? (el ? el.left + 40 : 300),
       y: y ?? (el ? el.bottom : 200),
       items: [
-        { label: "New Query Console", ...cmd("console.new"), action: () => openConsole(info.conn, info.db) },
+        { label: "New Query Console", ...cmd("console.new"), action: () => openConsole(info.conn, info.db, undefined, info.schema) },
         ...(consoles.length ? ([{ separator: true }] as MenuItem[]) : []),
         ...consoles.map((t) => ({ label: t.title, action: () => activate(t) })),
       ],
@@ -381,7 +381,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
         ]
       : [];
     const items: MenuItem[] = [
-      { label: "New", submenu: [{ label: "Query Console", ...cmd("console.new"), action: () => openConsole(c, info.db) }, ...objects, { separator: true }, { label: "Data Source…", ...cmd("tree.newDs"), action: () => setDialog({}) }] },
+      { label: "New", submenu: [{ label: "Query Console", ...cmd("console.new"), action: () => openConsole(c, info.db, undefined, info.schema) }, ...objects, { separator: true }, { label: "Data Source…", ...cmd("tree.newDs"), action: () => setDialog({}) }] },
     ];
     if (canDdl(c) && (info.kind === "table" || info.kind === "partitioned")) items.push({ label: "Modify Table…", ...cmd("tree.modify"), action: () => modifyTable(info) });
     if (canDdl(c) && (["table", "partitioned", "view", "matview", "sequence"].includes(info.kind) || (pg && (info.kind === "schema" || info.kind === "db"))))

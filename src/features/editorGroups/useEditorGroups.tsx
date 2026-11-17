@@ -182,7 +182,7 @@ export function useEditorGroups({
   };
   const runDdl = (t: Tab) => {
     const c = conns.find((x) => x.id === t.connId);
-    if (c) openConsole(c, t.database, t.sql);
+    if (c) openConsole(c, t.database, t.sql, t.ddlOf?.schema);
   };
   const ddlCommands = (t: Tab): MenuItem[] =>
     t.kind !== "ddl"
@@ -600,7 +600,7 @@ export function useEditorGroups({
                       const c = conns.find((x) => x.id === t.connId);
                       if (c && t.edit) openDdl({ kind: (t.objKind ?? "table") as NodeInfo["kind"], conn: c, db: t.database, schema: t.edit.schema, name: t.edit.table });
                     }}
-                    onCopyQueryToConsole={(sql) => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, sql); }}
+                    onCopyQueryToConsole={(sql) => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, sql, t.edit?.schema); }}
                     onFindSimilar={
                       conns.find((x) => x.id === t.connId)?.kind === "postgres"
                         ? async (column, row) => {
@@ -608,7 +608,7 @@ export function useEditorGroups({
                             if (!c || !t.edit) return;
                             try {
                               const sql = await meta.similarRowsSql(t.target, t.edit.schema, t.edit.table, column, t.edit.pk.map((k) => [k, row[k] === null ? null : String(row[k])]));
-                              openConsole(c, t.database, sql);
+                              openConsole(c, t.database, sql, t.edit.schema);
                               setStatus("Similar-rows query opened in a new console");
                             } catch (e) {
                               setStatus(String(e));

@@ -711,6 +711,8 @@ const REST: Dialect = {
   },
 };
 export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && VECTOR_KINDS.includes(kind) ? REST : kind && PLUGIN_KINDS.includes(kind) ? GEN[kind] : PG);
+/** A PostgreSQL console's schema: the picker's switch, and a console opened from a schema (#191) */
+export const searchPathSql = (schema: string) => `SET search_path TO ${PG.q(schema)}, public`;
 
 /** Backend connection target: Data Source id + DB name */
 export const targetId = (connId: string, database?: string | null) => (database ? `${connId}::${database}` : connId);

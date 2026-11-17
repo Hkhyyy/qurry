@@ -113,7 +113,7 @@ export function Dialogs({ conns, setStatus, openConsole, startBackup, startExpor
             schemaChanged(objEdit.conn.id, objEdit.db ?? defaultDbOf(objEdit.conn));
           };
           const toConsole = (sql: string) => {
-            openConsole(objEdit.conn, objEdit.db, sql);
+            openConsole(objEdit.conn, objEdit.db, sql, objEdit.schema);
             setObjEdit(null);
           };
           return objEdit.newKind ? (

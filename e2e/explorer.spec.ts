@@ -257,3 +257,48 @@ test("the explorer splitter shows the accent line when focused from the keyboard
   await page.keyboard.press("ArrowRight");
   await expect.poll(async () => (await sep.boundingBox())!.x).toBeGreaterThan(x);
 });
+
+test("a console opened from a schema, or a table in it, starts in that schema (#191)", async ({ page }) => {
+  const runs: string[] = [];
+  await page.exposeFunction("__ranSql", (sql: string) => runs.push(sql));
+  await page.evaluate(() => {
+    const w = window as any;
+    const orig = w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_INTERNALS__.invoke = (cmd: string, args: any) => (cmd === "run_query" && w.__ranSql(args.sql), orig(cmd, args));
+  });
+  const schema = page.locator('.work-layer:visible select[title="Switch current schema"]');
+
+  await treeItem(page, "billing").click();
+  await page.keyboard.press("Meta+Shift+L");
+  await expect(editor(page)).toBeVisible();
+  await expect(schema).toHaveValue("billing");
+  await expect.poll(() => runs).toEqual(["SET search_path TO billing, public"]);
+
+  // A table of public starts in public; the data source itself switches nothing
+  await treeItem(page, "users").first().click();
+  await page.keyboard.press("Meta+Shift+L");
+  await expect.poll(() => tabStrips(page)).toEqual(["console [DEV] shop_app | console_2 [DEV] shop_app"]);
+  await expect(schema).toHaveValue("public");
+  await expect.poll(() => runs).toEqual(["SET search_path TO billing, public", "SET search_path TO public, public"]);
+  await treeItem(page, "[DEV] shop_app 3").click();
+  await page.keyboard.press("Meta+Shift+L");
+  await expect.poll(() => tabStrips(page)).toEqual(["console [DEV] shop_app | console_2 [DEV] shop_app | console_3 [DEV] shop_app"]);
+  expect(runs).toHaveLength(2);
+});
+
+test("the Database Explorer width saved before 0.3.4 comes back after the update (#192)", async ({ page }) => {
+  await page.evaluate(() => {
+    for (const k of Object.keys(localStorage)) if (k.startsWith("react-resizable-panels")) localStorage.removeItem(k);
+    localStorage.setItem("react-resizable-panels:dbtool-h", JSON.stringify({ "editors,explorer": { expandToSizes: {}, layout: [40, 60] } }));
+  });
+  await page.reload();
+  // 40% of the row beside the workspace bar, not the default 20%; saved where version 4 reads it, so it stays
+  const share = async () => {
+    const [e, g] = await Promise.all([page.locator('[data-panel][id="explorer"]').boundingBox(), page.locator('[data-panel][id="editors"]').boundingBox()]);
+    return Math.round((e!.width / (e!.width + g!.width)) * 100);
+  };
+  await expect.poll(share).toBe(40);
+  expect(await page.evaluate(() => localStorage.getItem("react-resizable-panels:dbtool-h"))).toBeNull();
+  await page.reload();
+  await expect.poll(share).toBe(40);
+});

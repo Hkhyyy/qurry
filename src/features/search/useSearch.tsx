@@ -138,7 +138,7 @@ export function useSearch({
     const t = active;
     const c = treeSel?.conn ?? conns.find((x) => x.id === t?.connId);
     return [
-      { name: "New Query Console", ...cmd("console.new"), group: "File", run: () => c && openConsole(c, treeSel?.db ?? t?.database), disabled: !c },
+      { name: "New Query Console", ...cmd("console.new"), group: "File", run: () => c && openConsole(c, treeSel?.db ?? t?.database, undefined, treeSel?.schema), disabled: !c },
       { name: "New Data Source…", ...cmd("tree.newDs"), group: "File", run: () => setDialog({}) },
       { name: "New Workspace…", ...cmd("ws.new"), group: "Window", run: () => newWs() },
       { name: "Rename Workspace…", ...cmd("ws.rename"), group: "Window", run: () => renameWs(curWs) },
