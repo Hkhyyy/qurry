@@ -1,5 +1,5 @@
 import type { Locator } from "@playwright/test";
-import { dialog, expect, menuItem, openApp, openBothUsers, tabStrips, test, treeItem } from "./app";
+import { dialog, expect, menuItem, openApp, openBothUsers, spyRuns, tabStrips, test, treeItem, work } from "./app";
 
 test.beforeEach(async ({ page }) => openApp(page));
 
@@ -58,6 +58,34 @@ test("⇧⌘T reopens the closed tab", async ({ page }) => {
   await page.keyboard.press("Meta+Shift+T");
   await expect(page.getByRole("tab", { name: /contracts/ })).toHaveAttribute("aria-selected", "true");
   await expect.poll(() => tabStrips(page)).toEqual(["users | contracts"]);
+});
+
+// Tabs restored on relaunch load when first shown, whatever shows them; a tab that loaded already doesn't load again (#187)
+test("a restored table tab shown by closing the active one loads its rows; a loaded one isn't loaded again", async ({ page }) => {
+  await treeItem(page, "users").first().dblclick();
+  await treeItem(page, "contracts").first().dblclick();
+  await expect(work(page).getByRole("gridcell").first()).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("mock-ws") ?? "")).toContain('"title":"contracts"');
+  await page.reload();
+  await openApp(page);
+  await expect.poll(() => tabStrips(page)).toEqual(["users | contracts"]);
+  await expect(work(page).getByRole("gridcell").first()).toBeVisible();
+  const runs = await spyRuns(page);
+  // Click the shown tab, close it: users (restored, never shown) becomes the shown tab and loads
+  await page.getByRole("tab", { name: /contracts/ }).click();
+  await page.keyboard.press("Meta+W");
+  await expect(page.getByRole("tab", { name: /users/ })).toHaveAttribute("aria-selected", "true");
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  expect(await runs()).toBe(1);
+  // Open contracts again (one load), close it: users shows again with its rows, without another load
+  await treeItem(page, "contracts").first().dblclick();
+  await expect(page.getByRole("tab", { name: /contracts/ })).toHaveAttribute("aria-selected", "true");
+  await expect.poll(runs).toBe(2);
+  await page.keyboard.press("Meta+W");
+  await expect(page.getByRole("tab", { name: /users/ })).toHaveAttribute("aria-selected", "true");
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(await runs()).toBe(2);
 });
 
 /** Computed style of a tab, and the theme's accent / dimmed-bar colors resolved the same way */

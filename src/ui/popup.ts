@@ -1,4 +1,4 @@
-/** Logic of the list popup under a field (PopupList · ComboBox), kept pure for the tests */
+/** Logic of the list popup under a field (PopupList · ComboBox) and of a dialog being moved (Modal), kept pure for the tests */
 
 /** Suggestions for what's typed: case-insensitive, an exact match first, then the ones starting with it, then the ones containing it */
 export function matchOptions(options: string[], query: string): string[] {
@@ -34,4 +34,13 @@ export function placePopup(field: { left: number; top: number; bottom: number },
   const fitsBelow = below + size.height <= view.height - MARGIN;
   const top = fitsBelow || view.height - below >= field.top ? below : Math.max(MARGIN, field.top - GAP - size.height);
   return { left: Math.max(MARGIN, Math.min(field.left, view.width - size.width - MARGIN)), top };
+}
+
+/** A dialog moved by its title bar (Modal): the offset `off` from where it opens, held so the whole dialog stays inside the window.
+ * `base` is where it is at offset 0; one larger than the window keeps its top left corner in */
+export function clampDrag(off: { x: number; y: number }, base: { left: number; top: number; width: number; height: number }, view: { width: number; height: number }): { x: number; y: number } {
+  return {
+    x: Math.max(0, Math.min(base.left + off.x, view.width - base.width)) - base.left,
+    y: Math.max(0, Math.min(base.top + off.y, view.height - base.height)) - base.top,
+  };
 }

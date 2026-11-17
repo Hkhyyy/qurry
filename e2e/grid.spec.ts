@@ -781,3 +781,22 @@ test("a WebView that refuses WebAssembly: Submit and Preview Pending Changes say
   await expect(dialog(page)).toHaveCount(0);
   expect(await submitted(page)).toEqual([]);
 });
+
+test("a key with ⌃, ⌘ or ⌥ on a cell is a shortcut, not typing: ⌃` opens Quick Switch Theme and the value stays; a plain letter still edits (#186)", async ({ page }) => {
+  const cell = work(page).getByRole("gridcell", { name: "user_1", exact: true });
+  const input = work(page).locator(".cell-input");
+  await cell.click();
+  await page.keyboard.press("Control+Backquote");
+  await expect(page.locator(".ui-popover").getByRole("option").first()).toHaveText(/Dark/);
+  await expect(input).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".ui-popover")).toHaveCount(0);
+  await cell.click();
+  for (const key of ["Control+KeyA", "Alt+KeyX"]) {
+    await page.keyboard.press(key);
+    await expect(input).toHaveCount(0);
+  }
+  await expect(cell).toBeVisible();
+  await page.keyboard.press("q");
+  await expect(input).toHaveValue("q");
+});

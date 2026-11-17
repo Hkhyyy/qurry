@@ -471,18 +471,17 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-editor-head { display: flex; align-items: center; gap: var(--ui-sp-3); padding-bottom: var(--ui-sp-3); border-bottom: 1px solid var(--ui-border); font-size: var(--ui-fs-sm); }
 .theme-editor-head b { font-size: var(--ui-fs-md); }
 .theme-editor-body { flex: 1; min-height: 0; display: flex; }
-.theme-editor-side { width: 340px; flex: none; display: flex; flex-direction: column; gap: var(--ui-sp-2); padding: var(--ui-sp-3) var(--ui-sp-4) 0 0; border-right: 1px solid var(--ui-border); min-height: 0; }
+/* The color list is as narrow as name · swatch · hex allow; the preview takes the rest and follows the dialog's width */
+.theme-editor-side { flex: 0 1 268px; min-width: 228px; display: flex; flex-direction: column; gap: var(--ui-sp-2); padding: var(--ui-sp-3) var(--ui-sp-4) 0 0; border-right: 1px solid var(--ui-border); min-height: 0; }
 .theme-editor-base { font-size: var(--ui-fs-sm); }
 .theme-tokens { flex: 1; min-height: 0; overflow: auto; padding-right: var(--ui-sp-2); }
 .theme-group { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; padding: 8px 0 3px; border-bottom: 1px solid var(--ui-border); margin-bottom: 3px; }
 .theme-token { display: flex; align-items: center; gap: 6px; padding: 3px 4px; margin: 0 -4px; border-radius: 4px; font-size: var(--ui-fs-sm); }
 .theme-token:hover, .theme-token:focus-within { background: var(--ui-hover); }
 .theme-token-label { flex: 1; min-width: 0; }
-.theme-token-name { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
-.theme-token-desc { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theme-token-name { display: flex; align-items: center; gap: 5px; }
 .theme-edited { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); flex: none; }
-.theme-warn { color: var(--ui-warn); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
-.theme-token-name .theme-warn { margin-left: auto; }
+.theme-warn { color: var(--ui-warn); font-size: 11px; }
 .theme-swatch { position: relative; width: 18px; height: 18px; overflow: hidden; }
 .theme-swatch input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; border: 0; padding: 0; }
 .ui-input.theme-hex { width: 76px; flex: none; font-family: var(--ui-font-mono); font-size: 12px; }
@@ -492,6 +491,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-advanced > .muted:nth-of-type(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .theme-advanced .theme-warn { margin-left: auto; }
 .theme-editor-actions { display: flex; flex-direction: column; gap: var(--ui-sp-2); padding: var(--ui-sp-3) 0; border-top: 1px solid var(--ui-border); }
+.theme-editor-actions > .ui-row { flex-wrap: wrap; gap: var(--ui-sp-2); }
 /* Fixed height: a message under the buttons doesn't move the token list */
 .theme-editor-actions > :last-child { height: 34px; overflow: hidden; }
 .theme-editor-preview { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--ui-sp-2); padding: var(--ui-sp-3) 0 0 var(--ui-sp-4); overflow: auto; }

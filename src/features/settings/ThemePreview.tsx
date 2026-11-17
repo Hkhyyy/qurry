@@ -8,7 +8,8 @@ import { DatabaseIcon, PgIcon, TableIcon } from "../../ui/icons";
 // a console, a result grid with each edit state, a JSON cell, notices). Monaco draws from its one theme, which the editor's live
 // preview has set to the palette. Pointing at a color's name outlines what draws it (usedBy)
 
-const SQL = "-- users to check this week\nselect upper(name) as who, 100 as n\nfrom users where name <> 'lee';";
+// Short lines: the console sits next to the tree, so a line isn't cut in the narrowest dialog
+const SQL = "-- users to check this week\nselect upper(name) as who,\n  100 as n\nfrom users\nwhere name <> 'lee';";
 const ROWS: [string, string, string | null][] = [
   ["1", "kim", "12.50"],
   ["2", "lee", null],
@@ -60,7 +61,7 @@ export function ThemePreview({ p, hot }: { p: Palette; hot: string | null }) {
     els.forEach((el) => el.classList.add("tok-hot"));
     return () => els.forEach((el) => el.classList.remove("tok-hot"));
   }, [hot, colors]);
-  const w = [44, 110, 90];
+  const w = [44, 120, 180];
   return (
     <div ref={wrap} className="theme-preview" style={{ ...themeVars(p), background: p.bg, color: p.text }} aria-label="Theme preview">
       <div className="theme-preview-top">

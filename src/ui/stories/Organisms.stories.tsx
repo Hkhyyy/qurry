@@ -150,7 +150,7 @@ export const MenuStory: S = {
   ),
 };
 
-/** Like Search Everywhere: header (tabs · search field) + list + key hints below */
+/** Like Search Everywhere: header (tabs · search field) + list + key hints below. Drag the title or header (not its controls) to move it */
 export const PopoverStory: S = {
   name: "Popover",
   parameters: { layout: "fullscreen" },
@@ -224,6 +224,7 @@ export const FormGridStory: S = {
   },
 };
 
+/** Every dialog: drag its title bar to move it (as DataGrip's), kept inside the window; it opens in its place again next time */
 export const ModalStory: S = {
   name: "Modal",
   parameters: { layout: "fullscreen" },

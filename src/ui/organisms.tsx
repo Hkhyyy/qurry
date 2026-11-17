@@ -2,11 +2,11 @@
  * Organisms: chunks assembled from molecules — toolbars, dialogs, confirm boxes, menus, popovers, lists, tables, form grids.
  * Spec in README.md
  */
-import { Children, CSSProperties, FocusEvent, HTMLAttributes, InputHTMLAttributes, KeyboardEvent, ReactNode, Ref, RefObject, TdHTMLAttributes, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Children, CSSProperties, FocusEvent, HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent, ReactNode, Ref, RefObject, TdHTMLAttributes, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, Checkbox, IconButton, Spacer, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { DetailRow, EmptyState, ListItem, MenuItem, MenuLabel, MenuSeparator, SectionTitle } from "./molecules";
-import { listKey, matchOptions, placePopup } from "./popup";
+import { clampDrag, listKey, matchOptions, placePopup } from "./popup";
 
 // ───────── Toolbar ─────────
 export function Toolbar({ children, className, ...rest }: HTMLAttributes<HTMLDivElement>) {
@@ -17,10 +17,53 @@ export function Toolbar({ children, className, ...rest }: HTMLAttributes<HTMLDiv
   );
 }
 
+// ───────── Moving a floating window ─────────
+/** A press here is the control's, not a drag */
+const NOT_A_HANDLE = "button, input, select, textarea, a, label, [role=button], [role=tab], .ui-search";
+/**
+ * A floating window (Modal, Popover) moved by dragging its title bar or header (`handle`, spread on it; not its controls), always
+ * inside the browser window, also when that is resized. `style` places it; it opens in its usual place each time (offset 0). The press
+ * keeps the focus where it was (typing and the keys go on as before) and still reaches what closes on a click outside (an open ⓘ)
+ */
+function useDrag(box: RefObject<HTMLElement | null>) {
+  const [off, setOff] = useState({ x: 0, y: 0 });
+  const offRef = useRef(off);
+  offRef.current = off;
+  const drag = useRef<{ x: number; y: number; off: { x: number; y: number }; base: { left: number; top: number; width: number; height: number } } | null>(null);
+  /** Where the window is at offset 0 */
+  const base = () => {
+    const r = box.current!.getBoundingClientRect();
+    return { left: r.left - offRef.current.x, top: r.top - offRef.current.y, width: r.width, height: r.height };
+  };
+  const view = () => ({ width: window.innerWidth, height: window.innerHeight });
+  useEffect(() => {
+    const onResize = () => box.current && setOff((o) => clampDrag(o, base(), view()));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const grab = (t: EventTarget) => !(t as Element).closest(NOT_A_HANDLE);
+  const handle = {
+    onMouseDown: (e: ReactMouseEvent) => grab(e.target) && e.preventDefault(),
+    onPointerDown: (e: PointerEvent<HTMLElement>) => {
+      if (e.button !== 0 || !grab(e.target)) return;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      drag.current = { x: e.clientX, y: e.clientY, off: offRef.current, base: base() };
+    },
+    onPointerMove: (e: PointerEvent) => {
+      const d = drag.current;
+      if (d) setOff(clampDrag({ x: d.off.x + e.clientX - d.x, y: d.off.y + e.clientY - d.y }, d.base, view()));
+    },
+    onPointerUp: () => (drag.current = null),
+    onPointerCancel: () => (drag.current = null),
+  };
+  // `translate` adds to a `transform` the window may have (a Popover's centering)
+  return { handle, style: off.x || off.y ? { translate: `${off.x}px ${off.y}px` } : undefined };
+}
+
 // ───────── Dialog ─────────
 export type ModalSize = "sm" | "md" | "lg" | "xl";
 /**
- * Dialog. Closes on Esc · outside click. The footer is right-aligned (Cancel → primary button).
+ * Dialog. Closes on Esc · outside click; moved by dragging its title bar, inside the window (opens in its place each time). The footer is right-aligned (Cancel → primary button).
  * layer="dialog" is a confirm · input box shown above other modals
  */
 export function Modal(p: {
@@ -45,6 +88,7 @@ export function Modal(p: {
   useEffect(() => {
     if (box.current && !box.current.contains(document.activeElement)) box.current.focus();
   }, []);
+  const drag = useDrag(box);
   return (
     <div className={cx("ui-backdrop", "for-modal", p.layer === "dialog" && "layer-dialog")} onMouseDown={p.stickyBackdrop ? undefined : p.onClose}>
       <div
@@ -53,6 +97,7 @@ export function Modal(p: {
         role="dialog"
         aria-modal="true"
         className={cx("ui-modal", p.size && p.size !== "md" && `size-${p.size}`, p.fixed && "fixed", p.tone && `tone-${p.tone}`, p.className)}
+        style={drag.style}
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           // Don't leak to app-wide shortcuts
@@ -61,7 +106,7 @@ export function Modal(p: {
           if (e.key === "Escape" && !e.defaultPrevented) p.onClose();
         }}
       >
-        <div className="ui-modal-head">
+        <div className="ui-modal-head" {...drag.handle}>
           <div className="ui-modal-title" title={typeof p.title === "string" ? p.title : undefined}>
             {p.title}
           </div>
@@ -84,12 +129,19 @@ export function Overlay({ onClose, variant, children, onKeyDown }: { onClose: ()
   );
 }
 
-/** Floating panel (Search Everywhere · switcher · Go to …): title / header · body (list) · hint at the bottom */
+/** Floating panel (Search Everywhere · switcher · Go to …): title / header · body (list) · hint at the bottom. Moved by dragging its title
+ *  or header (not the search field or other controls there), as a Modal */
 export function Popover({ title, head, foot, children, className, width }: { title?: ReactNode; head?: ReactNode; foot?: ReactNode; children: ReactNode; className?: string; width?: number }) {
+  const box = useRef<HTMLDivElement>(null);
+  const drag = useDrag(box);
   return (
-    <div className={cx("ui-popover", className)} style={width ? { width } : undefined} onMouseDown={(e) => e.stopPropagation()}>
-      {title && <div className="ui-popover-title">{title}</div>}
-      {head}
+    <div ref={box} className={cx("ui-popover", className)} style={{ width, ...drag.style }} onMouseDown={(e) => e.stopPropagation()}>
+      {(title || head) && (
+        <div className="ui-popover-head" {...drag.handle}>
+          {title && <div className="ui-popover-title">{title}</div>}
+          {head}
+        </div>
+      )}
       {children}
       {foot && <div className="ui-popover-foot">{foot}</div>}
     </div>

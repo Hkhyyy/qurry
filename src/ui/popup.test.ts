@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listKey, matchOptions, placePopup } from "./popup";
+import { clampDrag, listKey, matchOptions, placePopup } from "./popup";
 
 const TYPES = ["integer", "bigint", "smallint", "numeric(10,2)", "text", "timestamp", "timestamptz", "time", "interval", "text[]"];
 
@@ -46,4 +46,16 @@ describe("placePopup: under the field, above it when there's no room, inside the
     expect(placePopup({ ...field, left: 900 }, { width: 160, height: 200 }, view).left).toBe(832);
     expect(placePopup({ ...field, top: 500, bottom: 526 }, { width: 160, height: 600 }, view).top).toBe(8);
   });
+});
+
+describe("clampDrag: a dialog moved by its title bar stays inside the window", () => {
+  const view = { width: 1000, height: 800 };
+  const base = { left: 250, top: 64, width: 500, height: 400 };
+  it("moves freely inside", () => expect(clampDrag({ x: -100, y: 200 }, base, view)).toEqual({ x: -100, y: 200 }));
+  it("stops at each edge", () => {
+    expect(clampDrag({ x: -900, y: -900 }, base, view)).toEqual({ x: -250, y: -64 });
+    expect(clampDrag({ x: 900, y: 900 }, base, view)).toEqual({ x: 250, y: 336 });
+  });
+  it("a narrower window pulls a moved dialog back in", () => expect(clampDrag({ x: 250, y: 0 }, base, { width: 800, height: 800 })).toEqual({ x: 50, y: 0 }));
+  it("one larger than the window keeps its top left corner in", () => expect(clampDrag({ x: 30, y: 30 }, { left: 0, top: 0, width: 1200, height: 900 }, view)).toEqual({ x: 0, y: 0 }));
 });

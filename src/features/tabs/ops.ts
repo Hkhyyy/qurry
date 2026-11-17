@@ -141,6 +141,10 @@ const settle = (next: Tab[], pane: Pane, show?: { g: Group; id: string }) => {
   setFocused((f) => (show && ls.includes(show.g) ? show.g : ls.includes(f) ? f : ls[0]));
 };
 
+/** Restored tabs not loaded yet that a pane shows: they load however they became shown (click, close, move, tab limit, layout
+ *  restore), hidden ones wait (#187) */
+const shownStale = (s: { tabs: Tab[]; activeIds: (string | null)[] }): Tab[] => s.tabs.filter((t) => t.stale && s.activeIds.includes(t.id));
+
 /** Move a tab to another pane */
 const moveTo = (id: string, g: Group) =>
   setTabs((ts) => {
@@ -157,4 +161,4 @@ const togglePin = (t: Tab) => {
   });
 };
 
-export { allTabs, buildTab, closeTabs, ddlObject, moveTo, patch, remember, settle, snapshot, sqlOf, togglePin, updStashed, updTab };
+export { allTabs, buildTab, closeTabs, ddlObject, moveTo, patch, remember, settle, shownStale, snapshot, sqlOf, togglePin, updStashed, updTab };
