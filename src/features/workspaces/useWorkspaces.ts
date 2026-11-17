@@ -31,7 +31,7 @@ export function saveWorkspaceNow(): Promise<void> {
 }
 
 /** Workspaces: restore and save the open tabs, sync the workspace list shared with the TUI, switch · create · rename · delete, move a tab to another one */
-export function useWorkspaces({ conns, setStatus, loadStale }: { conns: ConnectionView[]; setStatus: (s: string) => void; loadStale: (t: Tab) => void }) {
+export function useWorkspaces({ conns, setStatus }: { conns: ConnectionView[]; setStatus: (s: string) => void }) {
   const tabs = useTabsStore((s) => s.tabs);
   const activeIds = useTabsStore((s) => s.activeIds);
   const panes = useTabsStore((s) => s.panes);
@@ -132,7 +132,7 @@ export function useWorkspaces({ conns, setStatus, loadStale }: { conns: Connecti
     const target = stash.get(id) ?? emptyLayout();
     stash.delete(id);
     if (!discard) stash.set(from, { tabs: useTabsStore.getState().tabs, panes: useTabsStore.getState().panes, activeIds: useTabsStore.getState().activeIds, focused: useTabsStore.getState().focused, mru: useTabsStore.getState().mru });
-    showLayout(target, loadStale);
+    showLayout(target);
     setCurWs(id);
   };
   const newWs = async () => {
@@ -183,7 +183,7 @@ export function useWorkspaces({ conns, setStatus, loadStale }: { conns: Connecti
     restored.current = true;
     api
       .loadWorkspace()
-      .then((data) => restoreWs(data, conns, loadStale))
+      .then((data) => restoreWs(data, conns))
       .catch(() => false)
       .then((synced) => adoptShared(synced))
       .catch((e) => setStatus(`Workspaces: ${String(e)}`))

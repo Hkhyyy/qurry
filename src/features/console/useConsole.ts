@@ -15,7 +15,7 @@ import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "../../lib/
 import { explainSql } from "../../lib/explain";
 import { withoutComments } from "../../lib/sqlSplit";
 import { noticeLines } from "./notices";
-import { patch, updTab } from "../tabs/ops";
+import { patch, shownStale, updTab } from "../tabs/ops";
 import { editorApis, setTabs, useTabsStore } from "../tabs/store";
 import type { Tab } from "../tabs/types";
 import { appendRows, applyFull, fullRequest, ofRun, sameRun } from "../grid/shared";
@@ -45,6 +45,11 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     if (t.kind === "console" && t.txManual) api.setTxMode(t.target, t.id, true).catch((e) => setStatus(String(e)));
     if (t.kind === "table") loadTable(t);
   };
+  // One place for every way a tab becomes shown (#187): loadStale clears stale first, so each tab loads once
+  const staleShown = useTabsStore((s) => shownStale(s).map((t) => t.id).join(" "));
+  useEffect(() => {
+    for (const t of shownStale(useTabsStore.getState())) loadStale(t);
+  }, [staleShown]);
   /** Load a table tab's PK, then its data: the same load as a tab just opened (loadTableTab: a reconnect it waits on shows with
    *  Cancel, a metadata error is said) */
   const loadTable = (t: Tab) => {
@@ -528,5 +533,5 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     // The reload replaces the status line right away, and a table tab has no Output: tell them in a dialog (as the TUI does)
     if (r.warning) void notice(r.warning, "Submitted, with a warning");
   };
-  return { dbCache, schemaCache, loadDbList, loadSchemaList, switchDatabase, switchSchema, run, log, reconnectAfterTls, focusTableGrid, executeConsole, fetchMoreEntry, setTxMode, txEnd, applyTableFilter, fetchMore, fetchFull, cancel, setPendingRuns, canCancel, busyLabel, cancelRun, submitEdits, loadStale };
+  return { dbCache, schemaCache, loadDbList, loadSchemaList, switchDatabase, switchSchema, run, log, reconnectAfterTls, focusTableGrid, executeConsole, fetchMoreEntry, setTxMode, txEnd, applyTableFilter, fetchMore, fetchFull, cancel, setPendingRuns, canCancel, busyLabel, cancelRun, submitEdits };
 }
