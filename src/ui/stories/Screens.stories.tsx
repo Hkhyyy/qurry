@@ -167,9 +167,10 @@ export const SettingsThemeSync: S = {
   },
 };
 /** Settings › Appearance › Theme › Edit Colors…: a custom theme from any built-in (or custom) one. Basic colors, the rest under "Advanced
- *  colors"; a picker and the hex per color, ↺ back to the base's. The whole window draws the colors being edited, the preview shows every
- *  state, and pointing at a color's name outlines what draws it (here Comment, set too dark: its contrast warning shows next to it and in
- *  the header, and it is saved with the warning if asked, never changed). Import… / Export… read and write a small JSON file */
+ *  colors"; a compact row per color (name, picker, hex, ↺ back to the base's), so the preview gets most of the width. The whole window
+ *  draws the colors being edited, the preview shows every state, and pointing at a color's name says what it colors above the preview and
+ *  outlines what draws it (here Comment, set too dark: its contrast warning shows under it and in the header, and it is saved with the
+ *  warning if asked, never changed). Import… / Export… read and write a small JSON file */
 export const SettingsThemeEditor: S = {
   name: "Settings — Theme editor",
   render: () => <SettingsDialog initialPage="theme" onClose={noop} onUpdate={noop} onChannel={noop} />,

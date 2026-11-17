@@ -8,8 +8,9 @@ import { ThemePreview } from "./ThemePreview";
 
 // Settings › Appearance › Theme › Edit Colors…: a custom theme made from any theme (a built-in one, or a custom one to change).
 // Basic colors first, the rest behind "Advanced colors"; each color has a picker and its hex. The whole window draws the colors being
-// edited (previewTheme) and the preview shows every state; pointing at a color's name outlines what draws it. Contrast below a
-// minimum is warned about next to the color and in the header, never fixed silently; a hex that isn't one is not applied
+// edited (previewTheme) and the preview, which gets most of the width, shows every state; a color's row is its name, swatch and hex,
+// and pointing at the name says what it colors (above the preview) and outlines what draws it. Contrast below a
+// minimum is warned about under the color's name and in the header, never fixed silently; a hex that isn't one is not applied
 
 /** Leaving the editor, or replacing its colors (Based on, Import…), with colors not saved as a theme asks first */
 export const askDiscardColors = () => ask("The changed colors aren't saved as a theme. Discard them?", { title: "Theme Colors", okLabel: "Discard", danger: true });
@@ -52,13 +53,12 @@ function TokenRow({ t, value, edited, warning, onHot, onChange, onReset }: { t: 
         <div className="theme-token-name">
           <span>{t.label}</span>
           {edited && <span className="theme-edited" title="Changed from the base theme" />}
-          {warning && (
-            <span className="theme-warn" title={`${LABEL[warning.fg]} on ${LABEL[warning.bg]}: needs ${warning.min}:1`}>
-              ⚠ {warning.ratio.toFixed(1)}:1 on {LABEL[other!].split(",")[0]}
-            </span>
-          )}
         </div>
-        <div className="theme-token-desc">{t.desc}</div>
+        {warning && (
+          <div className="theme-warn" title={`${LABEL[warning.fg]} on ${LABEL[warning.bg]}: needs ${warning.min}:1`}>
+            ⚠ {warning.ratio.toFixed(1)}:1 on {LABEL[other!].split(",")[0]}
+          </div>
+        )}
       </div>
       <HexField label={t.label} value={value} onChange={onChange} onPick={() => onHot(false)} />
       <button className="ui-icon-btn ui-icon-btn-sm" title="Reset to base" aria-label={`Reset ${t.label}`} style={{ visibility: edited ? "visible" : "hidden" }} onClick={onReset}>
@@ -178,7 +178,7 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
         <Button size="sm" variant="link" onClick={onBack}>
           ‹ Appearance
         </Button>
-        <Named about="Theme colors" info={["Point at a color's name to see where it's used in the preview.", "Colors below the contrast minimum are saved with their warning, never changed.", "An invalid hex is not applied."]}>
+        <Named about="Theme colors" info={["Point at a color's name to see what it colors, above the preview, and where it's used in it.", "Colors below the contrast minimum are saved with their warning, never changed.", "An invalid hex is not applied."]}>
           <b>Theme colors</b>
         </Named>
         <span className="muted">
@@ -245,7 +245,7 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
               )}
             </div>
             <div className="ui-row">
-              <TextInput aria-label="Theme name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Theme name" maxLength={64} style={{ flex: 1 }} />
+              <TextInput aria-label="Theme name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Theme name" maxLength={64} style={{ flex: 1, minWidth: 120 }} />
               {saved && (
                 <Button size="sm" disabled={!name.trim() || !dirty} onClick={() => save(false)}>
                   Save
@@ -259,8 +259,9 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
           </div>
         </div>
         <div className="theme-editor-preview">
-          <Text size="sm" tone="muted">
-            Preview{hot ? ` — ${LABEL[hot]}: ${TOKENS.find((t) => t.key === hot)?.desc}` : ""}
+          {/* One line: pointing at another color doesn't move the preview */}
+          <Text size="sm" tone="muted" truncate>
+            {`Preview${hot ? ` — ${LABEL[hot]}: ${TOKENS.find((t) => t.key === hot)?.desc}` : ""}`}
           </Text>
           <ThemePreview p={colors} hot={hot} />
         </div>
