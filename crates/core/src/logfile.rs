@@ -243,10 +243,109 @@ const SECRET_KEYS: &[&str] = &[
 const AUTH_SCHEMES: &[&str] = &["basic", "bearer", "digest", "negotiate"];
 
 /// The one redaction every log line goes through (stderr and the file): passwords, keys, tokens and SQL literals (values) are
-/// replaced, names, hosts and users are kept
+/// replaced, and so are the names, hosts, users and databases of the data sources this process has read (hide)
 pub fn redact(s: &str) -> Cow<'_, str> {
-    let out = detail_values(&quotes(&mysql_near(&key_values(&userinfo(&pem(s))))));
+    let out = hidden(&detail_values(&quotes(&mysql_near(&key_values(&userinfo(&pem(s)))))));
     if out == s { Cow::Borrowed(s) } else { Cow::Owned(out) }
+}
+
+/// What the log never shows (lowercased, longest first) and the word in its place. Process-wide; per test thread in tests, so a
+/// test's data sources can't change another test's lines
+#[cfg(not(test))]
+static HIDDEN: Mutex<Vec<(String, &'static str)>> = Mutex::new(Vec::new());
+#[cfg(test)]
+thread_local! {
+    static HIDDEN: std::cell::RefCell<Vec<(String, &'static str)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn with_hidden<R>(f: impl FnOnce(&mut Vec<(String, &'static str)>) -> R) -> R {
+    #[cfg(not(test))]
+    return f(&mut HIDDEN.lock().unwrap_or_else(|e| e.into_inner()));
+    #[cfg(test)]
+    return HIDDEN.with(|h| f(&mut h.borrow_mut()));
+}
+
+/// Keeps `cfg`'s name, host, user and database, and its tunnel's host, user, SSM target and AWS profile, out of the log from now on:
+/// error text quotes them (`Can't connect to host:port`, `password authentication failed for user "u"`). Called for every data
+/// source read from connections.json and every form connected (Test Connection)
+pub fn hide(cfg: &crate::store::ConnectionConfig) {
+    hide_word(&cfg.host, "<host>");
+    hide_word(&cfg.user, "<user>");
+    hide_word(&cfg.database, "<database>");
+    hide_word(&cfg.name, "<name>");
+    if let Some(s) = &cfg.ssh {
+        hide_word(&s.host, "<ssh host>");
+        hide_word(&s.user, "<ssh user>");
+    }
+    if let Some(s) = &cfg.ssm {
+        hide_word(&s.target, "<ssm target>");
+        hide_word(&s.profile, "<aws profile>");
+    }
+}
+
+/// hide, one word. Shorter than 3 characters it says little and would replace parts of ordinary text, so it is kept
+pub fn hide_word(w: &str, label: &'static str) {
+    let w = w.trim().to_ascii_lowercase();
+    if w.chars().count() < 3 {
+        return;
+    }
+    with_hidden(|h| {
+        if !h.iter().any(|(x, _)| *x == w) {
+            h.push((w, label));
+            // A host before a name it contains (shop-db.acme.test before shop)
+            h.sort_by_key(|(x, _)| std::cmp::Reverse(x.len()));
+        }
+    });
+}
+
+/// The hidden words (whole words, any case) → their label, and the database of a `<data source id>::<database>` target
+fn hidden(s: &str) -> String {
+    let s = target_dbs(s);
+    with_hidden(|h| h.iter().fold(s, |s, (w, label)| replace_word(&s, w, label)))
+}
+
+/// `<id>::orders` (a pool's or console's target: the source's id ends in a UUID) → `<id>::<database>`
+fn target_dbs(s: &str) -> String {
+    let uuid_end = |head: &str| {
+        let b = head.as_bytes();
+        b.len() >= 36 && b[b.len() - 36..].iter().enumerate().all(|(i, c)| if [8, 13, 18, 23].contains(&i) { *c == b'-' } else { c.is_ascii_hexdigit() })
+    };
+    let (mut out, mut rest) = (String::new(), s);
+    while let Some(i) = rest.find("::") {
+        let (head, tail) = (&rest[..i], &rest[i + 2..]);
+        out.push_str(head);
+        out.push_str("::");
+        rest = tail;
+        if uuid_end(head) {
+            let end = tail.find(|c: char| c.is_whitespace() || ":,;()[]\"'".contains(c)).unwrap_or(tail.len());
+            if end > 0 {
+                out.push_str("<database>");
+            }
+            rest = &tail[end..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Each whole-word `w` (lowercase) in `s`, compared ASCII case-insensitively → `with`
+fn replace_word(s: &str, w: &str, with: &str) -> String {
+    // ASCII lowercasing keeps every byte offset
+    let lower = s.to_ascii_lowercase();
+    let (mut out, mut last, mut from) = (String::new(), 0, 0);
+    while let Some(i) = lower[from..].find(w).map(|i| i + from) {
+        let end = i + w.len();
+        if !s[..i].chars().next_back().is_some_and(word) && !s[end..].chars().next().is_some_and(word) {
+            out.push_str(&s[last..i]);
+            out.push_str(with);
+            last = end;
+            from = end;
+        } else {
+            from = i + w.chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    out.push_str(&s[last..]);
+    out
 }
 
 /// `-----BEGIN … KEY-----` up to its END line (or the end) → one marker
@@ -552,6 +651,67 @@ mod tests {
     fn keeps_plain_lines_borrowed() {
         let s = "connect 6f1c… ok in 12 ms (db.local:5432 as app)";
         assert!(matches!(redact(s), Cow::Borrowed(_)));
+    }
+
+    /// A data source made up for the tests below: every field that says where it points is a word no other test uses
+    fn acme(name: &str, host: &str, ssh: Option<serde_json::Value>) -> crate::store::ConnectionConfig {
+        serde_json::from_value(serde_json::json!({ "id": "", "name": name, "kind": "postgres", "host": host, "port": 59431, "user": "ledger_admin",
+            "database": "orders_ledger", "ssh": ssh })).unwrap()
+    }
+
+    /// hide: a data source's name, host, user and database (and its tunnel's) never show, whole words in any case; other text and
+    /// longer words that only contain one are kept
+    #[test]
+    fn hides_data_source_words() {
+        hide(&acme("Acme Ledger Prod", "shop-db.acme.test", Some(serde_json::json!({ "enabled": true, "host": "jump.acme.test", "user": "ops-jumper" }))));
+        assert_eq!(
+            redact("Can't connect to Shop-DB.acme.test:59431 — the server didn't answer within 10s"),
+            "Can't connect to <host>:59431 — the server didn't answer within 10s"
+        );
+        assert_eq!(redact(r#"password authentication failed for user "ledger_admin""#), r#"password authentication failed for user "<user>""#);
+        assert_eq!(redact("Access denied for user 'ledger_admin'@'10.0.0.5' (using password: YES)"), "Access denied for user '<user>'@'10.0.0.5' (using password: YES)");
+        assert_eq!(redact(r#"database "orders_ledger" does not exist; ledger_admins orders_ledger2"#), r#"database "<database>" does not exist; ledger_admins orders_ledger2"#);
+        assert_eq!(
+            redact("SSH login OK, but ops-jumper@jump.acme.test cannot reach shop-db.acme.test:59431"),
+            "SSH login OK, but <ssh user>@<ssh host> cannot reach <host>:59431"
+        );
+        assert_eq!(redact("Acme Ledger Prod was disconnected"), "<name> was disconnected");
+        // Too short to hide, and words that are no data source's
+        hide_word("db", "<database>");
+        assert_eq!(redact("the db pool of 6f1c closed"), "the db pool of 6f1c closed");
+        // The database of a target id, not Rust paths
+        assert_eq!(
+            redact("pool open 6f1c2b0e-1a2b-4c3d-8e9f-0a1b2c3d4e5f::archive_2026 failed: x; tmp-6f1c2b0e-1a2b-4c3d-8e9f-0a1b2c3d4e5f::crm, core::option"),
+            "pool open 6f1c2b0e-1a2b-4c3d-8e9f-0a1b2c3d4e5f::<database> failed: x; tmp-6f1c2b0e-1a2b-4c3d-8e9f-0a1b2c3d4e5f::<database>, core::option"
+        );
+    }
+
+    /// Save, connect, pool open, a failing tunnel and Test Connection of an unsaved form, as the apps run them: the file names each
+    /// data source by its id, and none of their names, hosts, ports, users or databases (error text included)
+    #[tokio::test]
+    async fn log_has_no_data_source_details() {
+        let _one = SET.lock().await;
+        let t = tempfile::tempdir().unwrap();
+        init_at(&t.path().join("logs"), "gui");
+        let st = crate::open_state(Some(t.path().join("config"))).unwrap();
+        let direct = st.save_connection(acme("Acme Ledger Prod", "shop-db.acme.test", None), Some("Pw-unused-1".into()), None).await.unwrap();
+        let ssh = serde_json::json!({ "enabled": true, "host": "jump.acme.test", "port": 22, "user": "ops-jumper", "auth": "password", "keyPath": "" });
+        let tunneled = st.save_connection(acme("Acme Ledger Jump", "inner-db.acme.test", Some(ssh)), Some("Pw-unused-1".into()), Some("Pw-unused-2".into())).await.unwrap();
+        assert!(st.connect(direct.id.clone()).await.is_err());
+        assert!(st.connect(tunneled.id.clone()).await.is_err());
+        assert!(st.test_connection(acme("Acme Draft", "draft-db.acme.test", None), Some("Pw-unused-1".into()), None).await.is_err());
+        *SINK.lock().unwrap() = None;
+        let text = std::fs::read_to_string(t.path().join("logs/qurry.log")).unwrap();
+        println!("{text}");
+        for w in ["Acme", "acme.test", "ledger_admin", "orders_ledger", "ops-jumper", "Pw-unused"] {
+            assert!(!text.to_lowercase().contains(&w.to_lowercase()), "{w} in\n{text}");
+        }
+        // The port only next to <host> in a driver's error text, never in Qurry's own words
+        assert!(text.lines().filter(|l| l.contains("59431")).all(|l| l.contains("<host>:59431")), "{text}");
+        for (what, id) in [("save_connection", "(new)"), ("connect", direct.id.as_str()), ("pool open", direct.id.as_str()), ("connect", tunneled.id.as_str()), ("SSH tunnel of", tunneled.id.as_str()), ("connect", "(unsaved) failed")] {
+            assert!(text.lines().any(|l| l.contains(&format!("] {what} {id}"))), "{what} {id} in\n{text}");
+        }
+        assert!(text.lines().any(|l| l.contains(&format!("] SSH tunnel of {} failed after ", tunneled.id))), "{text}");
     }
 
     fn lines(dir: &Path, name: &str) -> Vec<String> {

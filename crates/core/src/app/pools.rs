@@ -257,16 +257,23 @@ pub async fn connect_config(
     password: Option<&str>,
     ssh_secret: Option<&str>,
 ) -> AppResult<(Pool, Option<crate::tunnel::Tunnel>)> {
+    // A form's settings (Test Connection) may not be saved yet
+    crate::logfile::hide(cfg);
     let tunnel = open_tunnel(cfg, ssh_secret).await?;
     let mark = tunnel.as_ref().and_then(|t| t.ssm_mark());
     let started = std::time::Instant::now();
-    crate::log!("[qurry] connect {} ({}) {}:{} as {} db={}", cfg.name, cfg.id, cfg.host, cfg.port, cfg.user, cfg.database);
+    crate::log!("[qurry] connect {}", log_id(cfg));
     let r = db::connect_via(cfg, password, tunnel.as_ref().map(|t| t.local_port)).await;
-    log_connect("connect", &cfg.id, started, &r);
+    log_connect("connect", log_id(cfg), started, &r);
     match r {
         Ok(pool) => Ok((pool, tunnel)),
         Err(e) => Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, timeout_error(cfg, e, false)).await),
     }
+}
+
+/// The data source in a log line: its id only (a form's settings that aren't saved have none)
+fn log_id(cfg: &ConnectionConfig) -> &str {
+    if cfg.id.is_empty() { "(unsaved)" } else { &cfg.id }
 }
 
 /// How a connect to the database (not its tunnel) went, and how long it took
@@ -286,10 +293,11 @@ async fn open_tunnel(cfg: &ConnectionConfig, ssh_secret: Option<&str>) -> AppRes
         (None, Some(ssm)) => crate::ssm::open(ssm, &cfg.host, cfg.port).await,
         (None, None) => return Ok(None),
     };
-    let (ms, way) = (started.elapsed().as_millis(), way(cfg).unwrap_or_default());
+    // Not `way`: it names the tunnel's host or instance
+    let (ms, kind) = (started.elapsed().as_millis(), if cfg.active_ssm().is_some() { "AWS SSM tunnel" } else { "SSH tunnel" });
     match &r {
-        Ok(t) => crate::log!("[qurry] {way} of {} ({}) to {}:{} open in {ms} ms on local port {}", cfg.name, cfg.id, cfg.host, cfg.port, t.local_port),
-        Err(e) => crate::log!("[qurry] {way} of {} ({}) to {}:{} failed after {ms} ms: {e}", cfg.name, cfg.id, cfg.host, cfg.port),
+        Ok(t) => crate::log!("[qurry] {kind} of {} open in {ms} ms on local port {}", log_id(cfg), t.local_port),
+        Err(e) => crate::log!("[qurry] {kind} of {} failed after {ms} ms: {e}", log_id(cfg)),
     }
     r.map(Some)
 }
@@ -412,7 +420,7 @@ async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppRes
         let mark = state.tunnels.read().await.get(base).and_then(|t| t.ssm_mark());
         // Each database connects on its own: one that is missing or refused fails only for its caller, not for the whole source
         let started = std::time::Instant::now();
-        crate::log!("[qurry] pool open {id}: {}:{} as {} db={}{}", cfg.host, cfg.port, cfg.user, cfg.database, port.map(|p| format!(" through local port {p}")).unwrap_or_default());
+        crate::log!("[qurry] pool open {id}{}", port.map(|p| format!(" through local port {p}")).unwrap_or_default());
         let r = db::connect_via(&cfg, password.as_deref(), port).await;
         log_connect("pool open", id, started, &r);
         match r {
