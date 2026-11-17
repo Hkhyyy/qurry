@@ -81,20 +81,16 @@ const buildLayout = (ws: any, conns: ConnectionView[]): WsLayout => {
   });
   return { tabs: ts, panes: pane, activeIds: act, focused: ls.includes(ws.focused) ? ws.focused : ls[0], mru: act.filter((x): x is string => !!x) };
 };
-/** Show this tab and split view. Only the tab shown in each pane is loaded (the rest when selected) */
-const showLayout = (l: WsLayout, loadStale: (t: Tab) => void) => {
+/** Show this tab and split view. Only the tab shown in each pane is loaded (the rest when selected; useConsole loads shown stale tabs) */
+const showLayout = (l: WsLayout) => {
   setTabs(l.tabs);
   setPanes(l.panes);
   setActiveIds(l.activeIds);
   setFocused(l.focused);
   useTabsStore.setState({ mru: l.mru });
-  for (const id of l.activeIds) {
-    const t = l.tabs.find((x) => x.id === id);
-    if (t?.stale) loadStale(t);
-  }
 };
 /** Restore saved tabs and workspaces. Returns whether the list has been synced with the shared workspace list */
-const restoreWs = (data: any, conns: ConnectionView[], loadStale: (t: Tab) => void): boolean => {
+const restoreWs = (data: any, conns: ConnectionView[]): boolean => {
   // version 1 (before workspaces) = a single workspace
   const list: any[] | null = Array.isArray(data?.workspaces) ? data.workspaces : Array.isArray(data?.tabs) ? [{ id: "ws1", name: "Default", ...data }] : null;
   if (!list?.length) return false;
@@ -109,7 +105,7 @@ const restoreWs = (data: any, conns: ConnectionView[], loadStale: (t: Tab) => vo
   stash.clear();
   list.forEach((w, i) => {
     const l = buildLayout(w, conns);
-    if (infos[i].id === cur) showLayout(l, loadStale);
+    if (infos[i].id === cur) showLayout(l);
     else stash.set(infos[i].id, l);
   });
   setWorkspaces(infos);

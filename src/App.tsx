@@ -201,7 +201,7 @@ export default function App() {
   const labelOf = (t: Tab) => tabLabels.get(t.id) ?? t.title;
 
   const cons = useConsole({ conns, setStatus, refresh });
-  const { run, busyLabel, cancelRun, loadStale, loadDbList, loadSchemaList } = cons;
+  const { run, busyLabel, cancelRun, loadDbList, loadSchemaList } = cons;
   // The database (and schema) selects of the shown consoles and Redis browsers list as soon as they are shown, so their first click
   // opens the whole list (the caches keep them; focus / mousedown ask again only when the list isn't there)
   const listed = leaves(panes).flatMap((g) => groupActive(g) ?? []).filter((t) => t.kind === "console" || t.kind === "redis");
@@ -220,9 +220,9 @@ export default function App() {
   const activeBusy = active && busyLabel(active);
   // A source that reconnects while a load waits on it (#135): the running indicator says so, its ✕ cancels those loads
   const reconnect = waitingToast(useReconnect((s) => s.toasts));
-  const tabOps = useTabs({ setStatus, loadStale });
+  const tabOps = useTabs({ setStatus });
   const { activate, addTab, openConsole } = tabOps;
-  const ws = useWorkspaces({ conns, setStatus, loadStale });
+  const ws = useWorkspaces({ conns, setStatus });
   const { readyToQuit, switchWs, newWs, renameWs, deleteWs, setInWs, shownWs } = ws;
 
   const transfer = useJobs({ setStatus });

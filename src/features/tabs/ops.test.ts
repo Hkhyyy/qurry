@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionView } from "../../lib/api";
 import { leaf, type Pane } from "../../lib/panes";
 import { stash } from "../workspaces/store";
-import { buildTab, closeTabs, ddlObject, moveTo, patch, settle, togglePin, updTab } from "./ops";
+import { buildTab, closeTabs, ddlObject, moveTo, patch, settle, shownStale, togglePin, updTab } from "./ops";
 import { liveSql, setTabs, useTabsStore } from "./store";
 import { emptyLayout, type Group } from "./types";
 
@@ -105,6 +105,26 @@ describe("pane operations", () => {
     expect(useTabsStore.getState().closedStack.map((s) => [s.title, s.sql])).toEqual([["b", "select 2"]]);
     expect(liveSql.has(ts[1].id)).toBe(false);
     expect(closed).toEqual([ts[1].id]);
+  });
+
+  it("shownStale: a restored tab revealed by closing or moving is due to load, hidden ones and loaded ones are not (#187)", async () => {
+    const [a, b, c, d, e] = [tab("a"), tab("b"), tab("c"), tab("d", 1), tab("e", 1)].map((t) => ({ ...t, stale: true }));
+    const loaded = (t: typeof a) => ({ ...t, stale: false });
+    useTabsStore.setState({ tabs: [a, b, loaded(c), d, loaded(e)], panes: split(0, 1), activeIds: [a.id, e.id, null, null], mru: [a.id, b.id, c.id, e.id] });
+    const due = () => shownStale(useTabsStore.getState()).map((t) => t.title);
+    // b and d are stale but hidden
+    expect(due()).toEqual(["a"]);
+    patch(a.id, { stale: false });
+    await closeTabs([a.id]);
+    expect(shown()).toEqual(["b", "e", null, null]);
+    expect(due()).toEqual(["b"]);
+    patch(b.id, { stale: false });
+    await closeTabs([b.id]);
+    expect(shown()).toEqual(["c", "e", null, null]);
+    expect(due()).toEqual([]);
+    moveTo(d.id, 0);
+    expect(shown()).toEqual(["d", "e", null, null]);
+    expect(due()).toEqual(["d"]);
   });
 
   it("a Production console starts in Manual where Manual works (PostgreSQL, MySQL), never on Redis or a driver plugin (core ConnectionConfig::starts_manual)", () => {

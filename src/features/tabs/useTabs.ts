@@ -6,11 +6,9 @@ import { setActiveIds, setFocused, setTabs, useTabsStore } from "./store";
 import { DdlOf, Group, Tab, TAB_LIMIT } from "./types";
 
 /** Showing a tab, and opening new ones (in the focused pane unless told otherwise) */
-export function useTabs({ setStatus, loadStale }: { setStatus: (s: string) => void; loadStale: (t: Tab) => void }) {
+export function useTabs({ setStatus }: { setStatus: (s: string) => void }) {
   const focused = useTabsStore((s) => s.focused);
   const activate = (t: Tab) => {
-    const cur = useTabsStore.getState().tabs.find((x) => x.id === t.id);
-    if (cur?.stale) loadStale(cur);
     setFocused(t.group);
     setActiveIds((a) => a.map((x, g) => (g === t.group ? t.id : x)));
     useTabsStore.setState({ mru: [t.id, ...useTabsStore.getState().mru.filter((x) => x !== t.id)] });
