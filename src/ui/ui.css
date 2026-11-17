@@ -270,8 +270,8 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-menu.sub { position: absolute; left: 100%; top: calc(-1 * var(--ui-sp-2) - 1px); }
 .ui-menu-footer { display: flex; flex-direction: column; gap: var(--ui-sp-2); padding: var(--ui-sp-2) var(--ui-sp-3); }
 .ui-popover { position: fixed; top: 18%; left: 50%; transform: translateX(-50%); width: 460px; max-height: 60vh; display: flex; flex-direction: column; overflow: hidden; background: var(--ui-surface); border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-lg); box-shadow: var(--ui-shadow-modal); }
-/* Title and header: what moves the popover (useDrag) */
-.ui-popover-head { flex: none; }
+/* Title and header: what moves the popover (useDrag); a column, so the search field keeps the full width */
+.ui-popover-head { flex: none; display: flex; flex-direction: column; }
 .ui-popover-title { padding: var(--ui-sp-3) var(--ui-sp-4) var(--ui-sp-2); font-size: var(--ui-fs-sm); font-weight: 600; }
 .ui-popover > .ui-list { flex: 1; min-height: 0; padding: 0 var(--ui-sp-2) var(--ui-sp-2); }
 .ui-popover .popover-search { margin: 0 var(--ui-sp-3) var(--ui-sp-2); }
