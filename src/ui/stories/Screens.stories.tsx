@@ -184,7 +184,8 @@ export const SettingsThemeEditor: S = {
     await userEvent.hover(canvasElement.ownerDocument.querySelector('[data-token="comment"] .theme-token-label')!);
   },
 };
-/** Quick Switch Theme (⌃`, as DataGrip's): the built-in themes, custom ones (marked), Sync with OS with its pair, and Edit Colors… */
+/** Quick Switch Theme (⌃`, as DataGrip's): the built-in themes, custom ones (marked), Sync with OS with its pair, and Edit Colors…; drag
+ *  its title to move it */
 export const QuickSwitchTheme: S = {
   name: "Quick Switch Theme",
   render: () => <App />,
@@ -697,6 +698,7 @@ function SearchDemo({ initialTab, initial }: { initialTab: SeTab; initial: Searc
     </div>
   );
 }
+/** Search Everywhere (⇧⇧): drag its header (the tabs row, not the tabs, scope or search field) to move it, as a dialog */
 export const Search: S = { name: "Search Everywhere (⇧⇧)", render: () => <SearchDemo initialTab="all" initial="workspace" /> };
 /** Go to Database Object (⌘o) in This Workspace: PostgreSQL and MySQL objects of the workspace's two sources; the ⓘ says what each scope covers */
 export const SearchScopePicker: S = {
@@ -711,6 +713,7 @@ export const SearchScopePicker: S = {
 };
 export const SearchAllPlaces: S = { name: "Search Everywhere — All Places", render: () => <SearchDemo initialTab="database" initial="all" /> };
 export const FindInData: S = { name: "Full-text Search", render: () => <FullTextSearchDialog scope={{ connId: "dev", connName: "[DEV] shop_app", db: "shop_app", schemas: ["public"], tables: [] }} onClose={noop} onSearch={noop} /> };
+/** Switcher (⌃⇥): drag its title to move it, as a dialog */
 export const SwitcherStory: S = {
   name: "Switcher (⌃⇥)",
   render: () => (

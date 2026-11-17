@@ -150,7 +150,7 @@ export const MenuStory: S = {
   ),
 };
 
-/** Like Search Everywhere: header (tabs · search field) + list + key hints below */
+/** Like Search Everywhere: header (tabs · search field) + list + key hints below. Drag the title or header (not its controls) to move it */
 export const PopoverStory: S = {
   name: "Popover",
   parameters: { layout: "fullscreen" },
