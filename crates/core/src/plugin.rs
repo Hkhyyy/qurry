@@ -128,7 +128,7 @@ impl PluginConn {
             in_transaction: false,
             warning: None,
             editable: None,
-            notices: vec![],
+            notices: vec![], cut: vec![],
         })
     }
 }
@@ -348,6 +348,20 @@ mod tests {
         ], "q_parent", "q_child", true).await;
     }
 
+    /// A statement longer than tiberius 0.13's 30 s default command timeout still returns, and the connection stays usable
+    #[tokio::test]
+    #[ignore]
+    async fn mssql_driver_long_statement() {
+        let Some((cfg, pw)) = server_cfg("mssql", "QURRY_TEST_MSSQL") else { return };
+        if driver_path("mssql").is_none() {
+            return;
+        }
+        let c = connect(&cfg, Some(&pw), None).await.unwrap();
+        let r = c.query("WAITFOR DELAY '00:00:35'; SELECT 1", 10).await.unwrap();
+        assert_eq!(r.rows[0][0], json!(1));
+        assert_eq!(c.query("SELECT 2", 10).await.unwrap().rows[0][0], json!(2));
+    }
+
     /// MongoDB: shell syntax (insertMany · find · sort/limit · aggregate · countDocuments), explorer SELECT * FROM, field inference
     #[tokio::test]
     #[ignore]
@@ -481,7 +495,8 @@ mod tests {
         let ins = c.query(r#"POST /entities/insert
 {collectionName: 'q_items', data: [{id: 1, vector: [1, 0, 0], name: 'apple'}, {id: 2, vector: [0, 1, 0], name: 'pear'}, {id: 3, vector: [0.9, 0.1, 0], name: 'apricot'}]}"#, 1).await.unwrap();
         assert_eq!(ins.rows_affected, 3);
-        let r = c.query("POST /entities/search\n{collectionName: 'q_items', data: [[1, 0, 0]], limit: 2, outputFields: ['name']}", 500).await.unwrap();
+        // Strong: the default consistency may search before the insert is visible and return no rows (#159)
+        let r = c.query("POST /entities/search\n{collectionName: 'q_items', data: [[1, 0, 0]], limit: 2, outputFields: ['name'], consistencyLevel: 'Strong'}", 500).await.unwrap();
         let name = r.columns.iter().position(|c| c.name == "name").unwrap();
         assert_eq!(r.rows.iter().map(|x| x[name].clone()).collect::<Vec<_>>(), vec![json!("apple"), json!("apricot")]);
         let objs: crate::meta::SchemaObjects = c.call("objects", json!({ "schema": "default" })).await.unwrap();

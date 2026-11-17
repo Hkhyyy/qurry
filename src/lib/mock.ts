@@ -103,6 +103,31 @@ const vocJoin = {
     columns: [{ table: 0, column: "idx" }, { table: 0, column: "user_idx" }, { table: 0, column: "status" }, { table: 1, column: "idx" }, { table: 1, column: "role" }, { table: 1, column: "status" }, { readOnly: "Read-only: shout is computed, not a column of the table." }],
   },
 };
+/** settings.json "gridCutChars" (Settings › Data grid › Long values; kept across a reload, as the file is) */
+let gridCutChars = Number(localStorage.getItem("mock-gridCutChars") ?? 4096);
+/** `select * from cut_demo` (a key) / `select * from cut_log` (none): rows 1 to 3 hold values past Long values, which come cut as the
+ *  core cuts them (the first gridCutChars characters, listed in `cut`); fetch_values reads cut_demo's whole */
+const cutFull = Array.from({ length: 20 }, (_, i) => [
+  i + 1,
+  i < 3 ? JSON.stringify({ id: i + 1, items: Array.from({ length: 400 }, (_, k) => ({ sku: `A-${k}`, qty: k })), end: "tail" }) : JSON.stringify({ id: i + 1, ok: true }),
+  i === 1 ? "long note ".repeat(600) + "the end" : `note ${i + 1}`,
+]);
+const cutDemo = (sql: string) => {
+  const m = /^\s*select\s+\*\s+from\s+(?:public\.)?(cut_demo|cut_log)\s*;?\s*$/i.exec(sql);
+  if (!m) return null;
+  const cut: [number, number][] = [];
+  const rows = cutFull.map((row, r) => row.map((v, c) => {
+    const chars = [...String(v)];
+    if (typeof v !== "string" || !gridCutChars || chars.length <= gridCutChars) return v;
+    cut.push([r, c]);
+    return chars.slice(0, gridCutChars).join("");
+  }));
+  const columns = [{ name: "id", typeName: "INT8" }, { name: "doc", typeName: "JSONB" }, { name: "note", typeName: "TEXT" }];
+  const to = m[1].toLowerCase() === "cut_demo"
+    ? { edit: { schema: "public", table: "cut_demo", pk: ["id"], columns: columns.map((c) => c.name) } }
+    : { readOnlyReason: "Read-only: public.cut_log has no primary key." };
+  return { ...result, columns, rows, truncated: false, cut, ...to };
+};
 /** A console result's edit target or why it has none, as the backend says (#86): `select * from users` is one table with its key; a
  *  join of voc and users edits per table (vocJoin), other joins lack a key */
 const consoleEdit = (sql: string) =>
@@ -227,6 +252,15 @@ const redisKeys = (id: string) =>
 const redisMatch = (pattern: string | undefined, key: string) =>
   new RegExp(`^${(pattern?.trim() || "*").replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(key);
 const historyAdded: { id: string; connId: string; database?: string; sql: string; ts: number }[] = [];
+/** Consoles with an open transaction (tab id → data source name), kept across a reload like the backend's sessions */
+const TX_KEY = "mock-open-tx";
+const openTxs = (): Record<string, string> => JSON.parse(sessionStorage.getItem(TX_KEY) ?? "{}");
+const openTx = (tabId: string, id: string) =>
+  sessionStorage.setItem(TX_KEY, JSON.stringify({ ...openTxs(), [tabId]: conns.find((c) => c.id === String(id).split("::")[0])?.name ?? id }));
+const endTx = (tabId: string) => {
+  const { [tabId]: _, ...rest } = openTxs();
+  sessionStorage.setItem(TX_KEY, JSON.stringify(rest));
+};
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
   // window.__mockRedis (set before load): { readOnly, production, managed } for [Redis] cache (managed: CONFIG refused, as on ElastiCache).
@@ -411,8 +445,9 @@ const handlers: Record<string, (a: any) => unknown> = {
       : [{ value: "k0", count: 15 }, { value: "k1", count: 15 }],
   // A statement on no_such_table fails (console gutter marks) at its position, as PostgreSQL says it (qurry_shared::errors::with_position)
   run_query: (a: any) =>
-    // Each statement as it was sent (e2e reads it)
+    // Each statement as it was sent (e2e reads it); one in Manual mode leaves its console's transaction open
     (((window as any).__mockRan ??= []).push(a.sql),
+    (globalThis as any).__mockManual === true && a.tabId && openTx(a.tabId, a.id),
     /\bno_such_table\b/i.test(a.sql) ? Promise.reject(`ERROR: relation "no_such_table" does not exist (position ${[...a.sql.slice(0, a.sql.search(/\bno_such_table\b/i))].length + 1})`) : (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN \(FORMAT JSON/i.test(a.sql)
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }
       : /^\s*do\b/i.test(a.sql)
@@ -424,6 +459,8 @@ const handlers: Record<string, (a: any) => unknown> = {
           ? { ...wide, inTransaction: (globalThis as any).__mockManual === true }
           : /\bcjk_demo\b/i.test(a.sql)
           ? { ...cjkDemo, inTransaction: (globalThis as any).__mockManual === true }
+          : cutDemo(a.sql)
+          ? { ...cutDemo(a.sql), inTransaction: (globalThis as any).__mockManual === true }
           : /\bjson_demo\b/i.test(a.sql)
           ? { ...jsonDemo, inTransaction: (globalThis as any).__mockManual === true }
           : /\bpayments\b/i.test(a.sql)
@@ -431,14 +468,15 @@ const handlers: Record<string, (a: any) => unknown> = {
           : /\bvoc\b[\s\S]*\bjoin\b/i.test(a.sql)
           ? { ...vocJoin, inTransaction: (globalThis as any).__mockManual === true }
           : { ...(usersLimit(a.sql) ?? { ...result, ...consoleEdit(a.sql) }), inTransaction: (globalThis as any).__mockManual === true })),
-  set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
+  set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; if (!a.manual) endTx(a.tabId); return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
-  commit_tx: () => {
+  commit_tx: (a: any) => {
     const e = (globalThis as any).__mockCommitError;
     if (e) throw e;
+    endTx(a.tabId);
     return null;
   },
-  rollback_tx: () => null,
+  rollback_tx: (a: any) => (endTx(a.tabId), null),
   rag_indexes: () => (globalThis as any).__rag ?? ((globalThis as any).__rag = [{ id: "r1", name: "tickets search", source: "dev", schema: "public", table: "users", idColumn: "id", textColumns: ["user_name"], provider: "ollama", model: "nomic-embed-text", baseUrl: "", dest: "dev", collection: "users_embeddings", dim: 768, rows: 3000, builtAt: "2026-10-27 14:50" }]),
   rag_save: (a: any) => { const x = { ...a.index, id: a.index.id || "r" + Date.now() }; const l = (globalThis as any).__rag ?? []; (globalThis as any).__rag = [...l.filter((y: any) => y.id !== x.id), x]; return x; },
   rag_delete: (a: any) => { (globalThis as any).__rag = ((globalThis as any).__rag ?? []).filter((y: any) => y.id !== a.id); return null; },
@@ -531,8 +569,24 @@ const handlers: Record<string, (a: any) => unknown> = {
       cancelMore = () => (clearTimeout(h), fail("ERROR: canceling statement due to user request"));
     });
   },
+  // As the core: the rows of public.cut_demo by their key, `columns` whole (null: no such row). window.__mockFetched: every request (e2e)
+  fetch_values: (a: any) => {
+    ((window as any).__mockFetched ??= []).push(a.req);
+    const names = ["id", "doc", "note"];
+    return a.req.rows.map((key: (string | null)[]) => {
+      const row = a.req.table === "cut_demo" && cutFull.find((x) => String(x[0]) === key[0]);
+      return row ? a.req.columns.map((c: string) => row[names.indexOf(c)]) : null;
+    });
+  },
   cancel_query: () => (cancelMore?.(), (cancelMore = null), true),
-  close_session: () => null,
+  close_session: (a: any) => (endTx(a.tabId), null),
+  // The page loaded again: the transactions the page before left open are rolled back (they live in sessionStorage, as the
+  // backend's sessions outlive a reload)
+  close_all_sessions: () => {
+    const open = openTxs();
+    sessionStorage.removeItem(TX_KEY);
+    return Object.entries(open).map(([tabId, name]) => ({ tabId, name, rolledBack: true }));
+  },
   // A console in Manual mode keeps them pending (tx_state)
   // As the core: what ran goes into the query history
   // window.__mockSubmitted: every statement Submit sent, in order (e2e)
@@ -767,6 +821,8 @@ const handlers: Record<string, (a: any) => unknown> = {
   },
   save_keymap: () => null,
   show_log: () => null,
+  // The specs read what reached the log
+  log_frontend_error: (a: any) => (((window as any).__mockLogged ??= []).push(a), null),
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
   update_channel: () => updateChannel,
   // Fonts that ship with macOS (the specs run as on macOS), one of them proportional
@@ -850,6 +906,12 @@ const handlers: Record<string, (a: any) => unknown> = {
     if (!(a.n >= 1)) throw "Enter 1 or more.";
     resultTabs = a.n;
     localStorage.setItem("mock-resultTabs", String(a.n));
+  },
+  grid_cut_chars: () => gridCutChars,
+  set_grid_cut_chars: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    gridCutChars = a.n;
+    localStorage.setItem("mock-gridCutChars", String(a.n));
   },
   grid_align: () => gridAlign,
   set_grid_align: (a: any) => {

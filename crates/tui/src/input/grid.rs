@@ -95,10 +95,16 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
 /// ↩ / F2: edit the current cell of tab `id`'s grid (table data, or a console result that can be edited)
 fn edit_cell(app: &mut App, id: u64) {
     let Some(g) = app.edit_grid() else { return };
-    let (r, c, gid) = (g.row, g.col, g.id);
+    let (r, c) = (g.row, g.col);
     if g.cols() == 0 {
         return;
     }
+    // A cut value is edited whole: read first, then the editor opens on it (no key: the status line says why)
+    if !app.read_then(r, c, move |a| edit_cell(a, id)) {
+        return;
+    }
+    let Some(g) = app.grid_mut() else { return };
+    let gid = g.id;
     let name = g.result.columns[c].name.clone();
     let ty = g.result.columns[c].type_name.clone();
     let cur = g.value(r, c).unwrap_or_default();
@@ -118,6 +124,19 @@ fn edit_cell(app: &mut App, id: u64) {
             g.set_value(r, c, v);
         }
     });
+}
+
+/// y: TSV if a range or rows are selected (pastes into cells in a sheet), otherwise the current cell
+fn copy_cells(app: &mut App) {
+    let Some(g) = app.grid_mut() else { return };
+    let Some((rows, cols)) = g.selection() else {
+        let v = g.value(g.row, g.col).unwrap_or_else(|| "NULL".into());
+        return copy(app, &v);
+    };
+    let text = g.selection_tsv();
+    copy(app, &text);
+    let (nr, nc) = (rows.len(), cols.len());
+    app.status = format!("Copied {nr} row{} × {nc} column{}", if nr == 1 { "" } else { "s" }, if nc == 1 { "" } else { "s" });
 }
 
 /// Grid navigation
@@ -142,16 +161,9 @@ pub(super) fn nav(app: &mut App, k: KeyEvent) {
         KeyCode::Char('g') => g.row = 0,
         KeyCode::Char('G') => g.row = g.rows().saturating_sub(1),
         KeyCode::Char('y') => {
-            // TSV if a range or rows are selected (pastes into cells in a sheet), otherwise the current cell
-            let Some((rows, cols)) = g.selection() else {
-                let v = g.value(g.row, g.col).unwrap_or_else(|| "NULL".into());
-                return copy(app, &v);
-            };
-            let text = g.selection_tsv();
-            copy(app, &text);
-            let (nr, nc) = (rows.len(), cols.len());
-            app.status = format!("Copied {nr} row{} × {nc} column{}", if nr == 1 { "" } else { "s" }, if nc == 1 { "" } else { "s" });
-            return;
+            // Cut values are read whole first
+            let cells = g.cut_in_copy();
+            return app.copy_whole(cells, copy_cells);
         }
         KeyCode::Char('s') => {
             g.toggle_local_sort();
@@ -386,7 +398,7 @@ mod tests {
             in_transaction: false,
             warning: None,
             editable: None,
-            notices: vec![],
+            notices: vec![], cut: vec![],
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res("pid", 4123))), loaded: None, error: None, running: true, run: 0, auto: true };
@@ -426,7 +438,7 @@ mod tests {
             in_transaction: false,
             warning: None,
             editable: None,
-            notices: vec![],
+            notices: vec![], cut: vec![],
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res(&[10, 20, 30]))), loaded: None, error: None, running: false, run: 0, auto: true };
@@ -459,7 +471,7 @@ mod tests {
             in_transaction: false,
             warning: None,
             editable: None,
-            notices: vec![],
+            notices: vec![], cut: vec![],
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: true };
@@ -492,7 +504,7 @@ mod tests {
             in_transaction: false,
             warning: None,
             editable: None,
-            notices: vec![],
+            notices: vec![], cut: vec![],
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "vacuum_progress");
         let d = crate::app::DbaTab { report: "vacuum_progress".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, run: 0, auto: true };
@@ -640,7 +652,7 @@ mod tests {
             in_transaction: false,
             warning: None,
             editable: None,
-            notices: vec![],
+            notices: vec![], cut: vec![],
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Mysql).into_iter().find(|r| r.id == "slow_queries");
         let d = crate::app::DbaTab { report: "slow_queries".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, run: 0, auto: true };
@@ -750,7 +762,7 @@ mod tests {
         let mut h = Harness::new().await;
         let id = h.table_tab("users", &["id"], &[&["1"], &["2"]], &["id"]);
         let fresh = || {
-            let mut g = crate::grid::Grid::new(qurry_core::db::QueryResult { columns: vec![qurry_core::db::ColumnInfo { name: "id".into(), type_name: "text".into() }], rows: vec![vec!["9".into()]], rows_affected: 0, truncated: true, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] });
+            let mut g = crate::grid::Grid::new(qurry_core::db::QueryResult { columns: vec![qurry_core::db::ColumnInfo { name: "id".into(), type_name: "text".into() }], rows: vec![vec!["9".into()]], rows_affected: 0, truncated: true, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![], cut: vec![] });
             g.more_session = Some("s".into());
             g
         };
@@ -811,7 +823,7 @@ mod tests {
     }
 
     fn one_row() -> QueryResult {
-        QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 1, has_result_set: false, in_transaction: false, warning: None, editable: None, notices: vec![] }
+        QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 1, has_result_set: false, in_transaction: false, warning: None, editable: None, notices: vec![], cut: vec![] }
     }
 
     /// Submit runs DELETE, then UPDATE, then INSERT (the GUI's order); the edited deleted row is only deleted, a new row's cell set to

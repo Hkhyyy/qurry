@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { QueryResult, Dialect, DbKind, currentFirst } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
 import { DEFAULT_EXEC, ExecSettings, planExecution, planSelection, type Stmt } from "../lib/execPlan";
@@ -124,6 +124,8 @@ interface Props {
   onPin: (id: string, pinned: boolean) => void;
   onCloseResult: (id: string) => void;
   onFetchMore: (entryId: string) => void;
+  /** The whole values of a result tab's cut cells (useConsole fetchFull) */
+  onFetchFull?: (entryId: string, cells: [number, number][]) => Promise<QueryResult | undefined>;
   /** Save a result's grid edits (the table tab's path), then run its statement again */
   onSubmit: (entryId: string, statements: string[]) => Promise<void>;
   onExport: (sql: string) => void;
@@ -154,6 +156,7 @@ export function ConsolePane(p: Props) {
   const [api, setApi] = useState<EditorApi | null>(null);
   /** The Output line of the gutter mark last clicked: selected, and scrolled to on each click */
   const [markedOut, setMarkedOut] = useState<{ out: string } | null>(null);
+  const layout = useDefaultLayout({ id: "dbtool-console", panelIds: ["editor", "results"] });
   const outputRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     outputRef.current?.querySelector(".ol.on")?.scrollIntoView({ block: "nearest" });
@@ -424,8 +427,8 @@ export function ConsolePane(p: Props) {
         </Select>
       </Toolbar>
 
-      <PanelGroup direction="vertical" autoSaveId="dbtool-console">
-        <Panel defaultSize={58} minSize={15}>
+      <Group orientation="vertical" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
+        <Panel id="editor" defaultSize="58%" minSize="15%">
           <div className="editor-area">
             <ConsoleEditor
               tabId={p.tabId}
@@ -470,8 +473,8 @@ export function ConsolePane(p: Props) {
             )}
           </div>
         </Panel>
-        <PanelResizeHandle className="resize-v" />
-        <Panel defaultSize={42} minSize={10}>
+        <Separator className="resize-v" />
+        <Panel id="results" defaultSize="42%" minSize="10%">
           <div className="panel results-panel">
             {/* Result tabs: Output + result sets (Services results area) */}
             <div className="result-tabs">
@@ -542,6 +545,7 @@ export function ConsolePane(p: Props) {
                   loadingMore={p.loadingMore}
                   query={active.sql}
                   onFetchMore={() => p.onFetchMore(active.id)}
+                  onFetchFull={p.onFetchFull && ((cells) => p.onFetchFull!(active.id, cells))}
                   onSubmit={(st) => p.onSubmit(active.id, st)}
                   onReload={() => execute([{ sql: active.sql, stmt: active.stmt, into: active.id }])}
                   onCancel={p.onCancel}
@@ -555,7 +559,7 @@ export function ConsolePane(p: Props) {
             </div>
           </div>
         </Panel>
-      </PanelGroup>
+      </Group>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   );

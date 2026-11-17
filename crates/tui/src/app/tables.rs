@@ -139,7 +139,7 @@ impl App {
                                 Some(g) => g.result.columns.clone(),
                                 None => cols.into_iter().map(|(name, type_name)| qurry_core::db::ColumnInfo { name, type_name }).collect(),
                             };
-                            let empty = qurry_core::db::QueryResult { columns, rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] };
+                            let empty = qurry_core::db::QueryResult { columns, rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![], cut: vec![] };
                             let mut g = Grid::new(empty);
                             g.set_user_widths(widths);
                             tt.grid = Some(g);
@@ -418,7 +418,7 @@ impl App {
         // A table's new rows: the table, for the hint when their key's sequence is behind (SeqFix)
         let (stmts, seq) = match self.edit_to() {
             Ok(EditTo::Table(to)) => (table_stmts(kind, &to, g), (g.added > 0).then_some(SeqFix { kind, schema: to.schema, table: to.table, pk: to.pk })),
-            Ok(EditTo::Join(j)) => (Ok(join_stmts(kind, &j, g)), None),
+            Ok(EditTo::Join(j)) => (join_stmts(kind, &j, g), None),
             Err(why) => (Err(why), None),
         };
         let stmts = match stmts {
@@ -539,6 +539,9 @@ fn raw_rows(g: &Grid) -> Vec<Vec<Option<String>>> {
 /// `g.added` rows, each with the cells set on it. Err: the table has no key
 fn table_stmts(kind: DbKind, to: &EditTarget, g: &Grid) -> Result<Vec<String>, String> {
     use qurry_shared::result_edit::edit_statements;
+    let key_at: Vec<usize> = to.pk.iter().filter_map(|k| to.columns.iter().position(|c| c == k)).collect();
+    let keyed_rows = g.edits.keys().map(|(r, _)| *r).chain(g.deleted.iter().copied());
+    cut_guard(g, keyed_rows.flat_map(|r| key_at.iter().map(move |&k| (r, k))))?;
     let base = g.rows() - g.added;
     let mut rows = raw_rows(g);
     rows.truncate(base);
@@ -549,6 +552,263 @@ fn table_stmts(kind: DbKind, to: &EditTarget, g: &Grid) -> Result<Vec<String>, S
 }
 
 /// A join's statements (#102, qurry_shared::result_edit::join_statements). Cells that can't be edited never got an edit (App::edit_grid)
-fn join_stmts(kind: DbKind, j: &JoinEdit, g: &Grid) -> Vec<String> {
-    qurry_shared::result_edit::join_statements(kind, j, &raw_rows(g), &g.edits)
+fn join_stmts(kind: DbKind, j: &JoinEdit, g: &Grid) -> Result<Vec<String>, String> {
+    use qurry_shared::result_edit::ColumnEdit;
+    let key_cells = g.edits.keys().filter_map(|&(r, c)| match j.columns.get(c) {
+        Some(ColumnEdit::To { table, .. }) => Some(j.tables[*table].pk_at.iter().map(move |&k| (r, k))),
+        _ => None,
+    });
+    cut_guard(g, key_cells.flatten())?;
+    Ok(qurry_shared::result_edit::join_statements(kind, j, &raw_rows(g), &g.edits))
+}
+
+/// Submit never writes a cut value's start (#183). An edit of a cut cell is a whole value (App::read_then reads it before the
+/// editor opens; a paste or NULL is a value of its own), so what is left is a row found by a key cell that came cut: refused.
+/// `cells` = the key cells Submit reads
+fn cut_guard(g: &Grid, mut cells: impl Iterator<Item = (usize, usize)>) -> Result<(), String> {
+    match cells.find(|k| g.cut.contains(k)) {
+        Some((r, c)) => Err(format!("Not submitted: row {}'s key {} came cut, so the row can't be found. Set ⌃k › Grid Long Values… to 0 and run again", r + 1, g.result.columns[c].name)),
+        None => Ok(()),
+    }
+}
+
+// ───────── Cut values (#183): QueryResult::cut, read whole by the table's key ─────────
+
+/// The grid a tab shows (a console's shown result)
+fn grid_of(t: &Tab) -> Option<&Grid> {
+    match &t.kind {
+        TabKind::Table(tt) => tt.grid.as_ref(),
+        TabKind::Console(c) => c.grid(),
+        _ => None,
+    }
+}
+
+/// The table a tab's cut values are read whole from, by its key; else why they can't be (what follows "Cut at N characters; ")
+fn whole_from(t: &Tab, g: &Grid) -> Result<EditTarget, String> {
+    let needs = "the whole value needs a primary key";
+    match &t.kind {
+        TabKind::Table(tt) if tt.pk.is_empty() => Err(format!("{needs} ({}.{} has none)", tt.schema, tt.table)),
+        TabKind::Table(tt) => Ok(EditTarget { schema: tt.schema.clone(), table: tt.table.clone(), pk: tt.pk.clone(), columns: g.result.columns.iter().map(|c| c.name.clone()).collect() }),
+        TabKind::Console(_) => match &g.result.editable {
+            Some(Editable::Table(e)) if !e.pk.is_empty() => Ok(e.clone()),
+            Some(Editable::Table(e)) => Err(format!("{needs} ({}.{} has none)", e.schema, e.table)),
+            Some(Editable::Join(_)) => Err("whole values are read only in a result from one table. Open the table to edit it".into()),
+            Some(Editable::ReadOnly(why)) => Err(format!("{needs}. {why}")),
+            None => Err(format!("{needs}. {}", errors::CONSOLE_READ_ONLY)),
+        },
+        _ => Err(needs.into()),
+    }
+}
+
+/// The result column of each key column of `to`
+fn key_columns(to: &EditTarget) -> Vec<usize> {
+    to.pk.iter().filter_map(|k| to.columns.iter().position(|c| c == k)).collect()
+}
+
+/// Why cut cell (r, c) of tab `t` can't be read whole; None: it can (its table has a key and none of the row's key cells came cut)
+fn cut_reason(t: &Tab, g: &Grid, r: usize, c: usize) -> Option<String> {
+    let at = format!("Cut at {} characters", g.value(r, c).map_or(0, |v| v.chars().count()));
+    match whole_from(t, g) {
+        Err(why) => Some(format!("{at}; {why}")),
+        Ok(to) if key_columns(&to).iter().any(|&k| g.cut.contains(&(r, k))) => Some(format!("{at}; the whole value is read by the row's key, which is cut too")),
+        Ok(_) => None,
+    }
+}
+
+/// The status line and the value panel while a cut value is read whole
+const LOADING: &str = "Loading the whole value…";
+
+/// The value panel's line over a cut value: the whole value is on its way, or why it can't come
+pub(crate) fn cut_note(t: &Tab) -> Option<String> {
+    let g = grid_of(t)?;
+    if !g.is_cut(g.row, g.col) {
+        return None;
+    }
+    Some(match cut_reason(t, g, g.row, g.col) {
+        Some(why) => why,
+        None => match &g.unread {
+            Some((at, why)) if *at == (g.row, g.col) => why.clone(),
+            _ => LOADING.into(),
+        },
+    })
+}
+
+impl App {
+    /// Read the active grid's cut `cells` whole (AppState::fetch_values by the table's key, in the tab's session, so a Manual
+    /// console's own changes too): the values go into the grid's rows and the cells leave its cut set, wherever their rows are by
+    /// then (found by their key). `then` runs once the answer is in, while that grid is still the active one; a row no longer
+    /// in the table is said on the status line after it, and the cell under the cursor left cut keeps why (Grid::unread). Then
+    /// the value panel reads the cell the cursor went to meanwhile. Cells of rows without a key (cut_reason) are left as they are
+    pub(crate) fn fetch_full(&mut self, cells: Vec<(usize, usize)>, then: impl FnOnce(&mut App) + Send + 'static) {
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let Some(g) = grid_of(t) else { return };
+        let Ok(to) = whole_from(t, g) else { return };
+        let session = match &t.kind {
+            TabKind::Table(tt) => tt.session.clone(),
+            TabKind::Console(c) => c.session.clone(),
+            _ => return,
+        };
+        let cells: Vec<(usize, usize)> = cells.into_iter().filter(|&(r, c)| g.is_cut(r, c) && cut_reason(t, g, r, c).is_none()).collect();
+        if cells.is_empty() {
+            return then(self);
+        }
+        let key_at = key_columns(&to);
+        let rows: Vec<usize> = cells.iter().map(|x| x.0).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        let cols: Vec<usize> = cells.iter().map(|x| x.1).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        let keys: Vec<Vec<Option<String>>> = rows.iter().map(|&r| key_at.iter().map(|&k| g.result.rows[r].get(k).and_then(raw_text)).collect()).collect();
+        let req = qurry_core::app::FullValues { schema: to.schema.clone(), table: to.table.clone(), key: to.pk.clone(), columns: cols.iter().map(|&c| to.columns[c].clone()).collect(), rows: keys.clone() };
+        let (id, gid, target, table) = (t.id, g.id, t.target.clone(), format!("{}.{}", to.schema, to.table));
+        if let Some(g) = self.grid_mut() {
+            g.reading = true;
+        }
+        let (st, fake) = (self.state.clone(), self.fake_db());
+        self.spawn(
+            async move {
+                match fake {
+                    // Tests: the stand-in database answers a row per key it has, its place in the ask first (as the core's read)
+                    Some(f) => f(&format!("-- fetch_values {}.{} {:?} by {:?}: {:?}", req.schema, req.table, req.columns, req.key, req.rows)).map(|q| {
+                        let mut out = vec![None; req.rows.len()];
+                        for row in q.rows {
+                            if let Some(at) = row.first().and_then(Value::as_u64).and_then(|i| out.get_mut(i as usize)) {
+                                *at = Some(row[1..].to_vec());
+                            }
+                        }
+                        out
+                    }),
+                    None => st.fetch_values(target, session, req).await.map_err(err),
+                }
+            },
+            move |a, r| {
+                let active = a.tabs.get(a.active).is_some_and(|t| t.id == id);
+                let grid = a.tab_mut(id).and_then(|t| match &mut t.kind {
+                    TabKind::Table(tt) => tt.grid.as_mut(),
+                    TabKind::Console(c) => c.results.tabs.iter_mut().map(|t| &mut t.grid).find(|g| g.id == gid),
+                    _ => None,
+                });
+                // A run (or a reload) replaced the grid meanwhile: the answer is for the one it replaced
+                let Some(g) = grid.filter(|g| g.id == gid) else { return };
+                g.reading = false;
+                let (got, err) = match r {
+                    Ok(got) => (got, None),
+                    Err(e) => (vec![None; rows.len()], Some(e)),
+                };
+                let mut missing = 0;
+                // The asked cells this read left cut, where their rows are now
+                let mut left = Vec::new();
+                for (i, sent) in rows.iter().enumerate() {
+                    if got[i].is_none() {
+                        missing += 1;
+                    }
+                    // The row asked for, wherever a sort or a delete moved it since
+                    let key_of = |r: usize| key_at.iter().map(|&k| g.result.rows[r].get(k).and_then(raw_text)).collect::<Vec<_>>();
+                    let base = g.rows() - g.added;
+                    let Some(r) = std::iter::once(*sent).chain(0..base).find(|&r| r < base && key_of(r) == keys[i]) else { continue };
+                    for (j, &c) in cols.iter().enumerate().filter(|&(_, c)| cells.contains(&(*sent, *c))) {
+                        match &got[i] {
+                            Some(vals) if g.cut.remove(&(r, c)) => g.result.rows[r][c] = vals[j].clone(),
+                            _ if g.is_cut(r, c) => left.push((r, c)),
+                            _ => {}
+                        }
+                    }
+                }
+                // The asked cell under the cursor that this read left cut keeps why: the value panel says it and doesn't ask again
+                let at = (g.row, g.col);
+                if left.contains(&at) {
+                    let why = match err {
+                        Some(_) => "The whole value couldn't be read (see the status line): this is its start".into(),
+                        None => format!("This row isn't in {table} any more: this is its start"),
+                    };
+                    g.unread = Some((at, why));
+                }
+                if let Some(e) = err {
+                    a.status = format!("Couldn't read the whole value: {e}");
+                } else {
+                    if active && a.grid_mut().is_some_and(|g| g.id == gid) {
+                        then(a);
+                    } else if a.status == LOADING {
+                        a.status = "Not done: the result changed before the whole value came".into();
+                    }
+                    if missing > 0 {
+                        let (s, its) = if missing == 1 { (" isn't", "its") } else { ("s aren't", "their") };
+                        let note = format!("{missing} row{s} in {table} any more: {its} values stay cut. Run the query again to see the rows as they are now.");
+                        if !a.status.ends_with(&note) {
+                            a.status = if a.status.is_empty() || a.status == LOADING { note } else { format!("{} · {note}", a.status) };
+                        }
+                    }
+                    // Nothing came of it here (the cursor moved on, or ↩ waited on the value panel's read): the loading note goes
+                    if a.status == LOADING {
+                        a.status = "Ready".into();
+                    }
+                }
+                // The cursor may have gone to another cut cell while this one loaded
+                a.panel_whole();
+            },
+        );
+    }
+
+    /// Before an edit of cell (r, c) of the active grid: true when it isn't cut (go on). A cut one is read whole first and `then`
+    /// runs once it is (the status line says it is loading), or the status line says why it can't be
+    pub(crate) fn read_then(&mut self, r: usize, c: usize, then: impl FnOnce(&mut App) + Send + 'static) -> bool {
+        let Some(t) = self.tabs.get(self.active) else { return true };
+        let Some(g) = grid_of(t).filter(|g| g.is_cut(r, c)) else { return true };
+        if let Some(why) = cut_reason(t, g, r, c) {
+            self.status = why;
+            return false;
+        }
+        // One read at a time: a second ↩ while it loads would open the editor again over what was typed. Said apart from
+        // LOADING, which the value panel's read (its `then` opens nothing) turns to Ready
+        if g.reading {
+            self.status = "Still loading the whole value: edit it once it's in".into();
+            return false;
+        }
+        self.status = LOADING.into();
+        self.fetch_full(vec![(r, c)], move |a| {
+            if a.grid_mut().is_some_and(|g| !g.is_cut(r, c) && (g.row, g.col) == (r, c)) {
+                a.status = "Ready".into();
+                then(a);
+            }
+        });
+        false
+    }
+
+    /// A copy of the active grid's `cells` (Grid::cut_in_copy / cut_in_list): the cut ones are read whole first, then `copy` runs;
+    /// cells of rows without a key are copied as they are, and the status line says how many and how to get them whole
+    pub(crate) fn copy_whole(&mut self, cells: Vec<(usize, usize)>, copy: fn(&mut App)) {
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let Some(g) = grid_of(t) else { return };
+        let (keyed, left): (Vec<_>, Vec<_>) = cells.into_iter().partition(|&(r, c)| cut_reason(t, g, r, c).is_none());
+        let n = left.len();
+        let note = (n > 0).then(|| {
+            let (s, it) = if n == 1 { (" is", "it") } else { ("s are", "them") };
+            format!("{n} value{s} cut (no key to fetch {it} whole); {} › Grid Long Values… raises the limit", self.keys.label(Action::Palette))
+        });
+        let then = move |a: &mut App| {
+            copy(a);
+            // The note first: a narrow status line cuts its end
+            if let Some(n) = note {
+                a.status = format!("{n} · {}", a.status);
+            }
+        };
+        if keyed.is_empty() {
+            return then(self);
+        }
+        self.status = LOADING.into();
+        self.fetch_full(keyed, then);
+    }
+
+    /// The value panel on a cut cell: its whole value is read by itself, once while the cursor stays on it (Grid::unread)
+    pub(crate) fn panel_whole(&mut self) {
+        if let Some(g) = self.grid_mut().filter(|g| g.unread.as_ref().is_some_and(|(at, _)| *at != (g.row, g.col))) {
+            g.unread = None;
+        }
+        if !self.value_panel {
+            return;
+        }
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let Some(g) = grid_of(t).filter(|g| !g.reading && g.unread.is_none() && g.is_cut(g.row, g.col)) else { return };
+        if cut_reason(t, g, g.row, g.col).is_none() {
+            let cell = (g.row, g.col);
+            self.fetch_full(vec![cell], |_| {});
+        }
+    }
 }

@@ -15,10 +15,13 @@ use crate::session::Session;
 use crate::store::ConnectionConfig;
 use crate::transfer::{Exporter, Tx};
 
+pub mod db;
 pub(crate) mod mysql;
+pub mod mysql_db;
 pub(crate) mod pg;
 pub(crate) mod plugin;
 pub(crate) mod redis;
+pub mod redisdb;
 
 /// Error for an operation this kind doesn't have
 fn unsupported<T>(op: &str, b: &(impl Backend + ?Sized)) -> AppResult<T> {

@@ -367,7 +367,8 @@ impl AppState {
             DbKind::Postgres => format!("SELECT source_id, content, 1 - (embedding <=> '{0}') AS score FROM {1} ORDER BY embedding <=> '{0}' LIMIT {limit}", vec_lit(&v), pg_table(c)),
             DbKind::Qdrant => format!("POST /collections/{c}/points/search\n{}", json!({ "vector": v, "limit": limit, "with_payload": true })),
             DbKind::Chroma => format!("POST /collections/{c}/query\n{}", json!({ "query_embeddings": [v], "n_results": limit, "include": ["documents", "distances"] })),
-            DbKind::Milvus => format!("POST /entities/search\n{}", json!({ "collectionName": c, "data": [v], "annsField": "embedding", "limit": limit, "outputFields": ["source_id", "content"] })),
+            // Strong: the default (Bounded) may not see rows upserted in the last seconds and finds nothing right after a build
+            DbKind::Milvus => format!("POST /entities/search\n{}", json!({ "collectionName": c, "data": [v], "annsField": "embedding", "limit": limit, "outputFields": ["source_id", "content"], "consistencyLevel": "Strong" })),
             _ => unreachable!(),
         };
         let r = self.run_query(idx.dest.clone(), sql, Some(limit), None).await?;
@@ -394,7 +395,7 @@ impl AppState {
             let ids: Vec<String> = hits.iter().map(|h| literal(src_kind, Some(&h.0))).collect();
             self.run_query(idx.source.clone(), format!("SELECT * FROM {}.{} WHERE {} IN ({})", q(&idx.schema), q(&idx.table), q(&idx.id_column), ids.join(", ")), Some(limit), None).await.ok()
         };
-        let mut out = QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![] };
+        let mut out = QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![], cut: vec![] };
         match src.as_ref().and_then(|s| s.columns.iter().position(|c| c.name.eq_ignore_ascii_case(&idx.id_column)).map(|p| (s, p))) {
             Some((s, pos)) => {
                 out.columns = std::iter::once(col_info("score", "FLOAT8")).chain(s.columns.iter().cloned()).collect();

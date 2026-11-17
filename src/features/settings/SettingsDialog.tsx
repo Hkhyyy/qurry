@@ -7,6 +7,7 @@ import { setResultTabs, useResultTabs } from "../../lib/resultTabsSetting";
 import { api, openExternal, secretKey, setUpdateCheckEnabled, UpdateInfo, updateCheckEnabled } from "../../lib/api";
 import type { FontFamily, UpdateChannel } from "../../lib/api";
 import { KeymapEditor } from "../../components/KeymapEditor";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { Button, Checkbox, cx, Field, Modal, Select, Text, TextInput, TreeRow } from "../../ui";
 import { IcGitHub } from "../../ui/icons";
 import { allThemes, currentTheme, setThemePick, setThemeSync, SYSTEM, useThemeState, type ThemeDef } from "../../lib/theme";
@@ -171,6 +172,48 @@ export function KeywordCaseField() {
           <option value="upper">UPPER</option>
           <option value="lower">lower</option>
         </Select>
+      </div>
+    </Field>
+  );
+}
+
+/** Settings › Appearance › Data grid › Long values: values longer than this many characters come cut (0 = never; settings.json, shared
+ *  with the TUI). Read when the page opens, saved as typed; it applies to the next run or page of rows */
+export function LongValuesField() {
+  const [text, setText] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    api.gridCutChars().then((n) => setText(String(n)), (x) => setErr(`Couldn't read the setting (${x}).`));
+  }, []);
+  return (
+    <Field
+      label="Long values"
+      group
+      error={err ?? undefined}
+      info={[
+        "Text, JSON and XML values longer than this come cut in PostgreSQL console and table results, so a wide row loads fast.",
+        "The Value Editor, copy and edits read the whole value by the result's primary key; a result without one keeps the cut text.",
+      ]}
+    >
+      <div className="ui-row">
+        <label htmlFor="long-values">Cut values longer than</label>
+        <TextInput
+          id="long-values"
+          className="w-port"
+          type="number"
+          min={0}
+          value={text}
+          aria-invalid={!!err}
+          onChange={(e) => {
+            const v = e.target.value;
+            setText(v);
+            const k = Number(v);
+            if (v.trim() === "" || !Number.isInteger(k) || k < 0) return setErr("Enter 0 or more.");
+            setErr(null);
+            api.setGridCutChars(k).catch((x) => setErr(`Couldn't save the setting (${x}).`));
+          }}
+        />
+        <span>characters (0 = never)</span>
       </div>
     </Field>
   );
@@ -466,59 +509,63 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage }: { 
             />
           ))}
         </div>
-        {page === "keymap" && <KeymapEditor />}
-        {page === "passwords" && <PasswordSettings />}
-        {page === "theme" && <ThemeEditor start={currentTheme().id} onBack={() => go("appearance")} onDirty={(d) => (themeDirty.current = d)} />}
-        {page === "appearance" && (
-          <div className="settings-form">
-            <ThemeField onEdit={() => setPage("theme")} />
-            <FontField target="editor" label="Editor font" info={fontKeys ? [`In the editor, ${fontKeys} change the size too.`] : undefined} installed={fonts} onOpen={loadFonts} />
-            <FontField target="grid" label="Grid font" installed={fonts} onOpen={loadFonts} />
-          </div>
-        )}
-        {page === "console" && (
-          <div className="settings-form">
-            <KeywordCaseField />
-            <ResultTabsField />
-          </div>
-        )}
-        {page === "grid" && (
-          <div className="settings-form">
-            <GridAlignField />
-            <StatusBarField />
-          </div>
-        )}
-        {page === "updates" && (
-          <div className="settings-form">
-            <Field label="Updates" hint={updMsg ?? undefined}>
-              <div className="ui-row">
-                <Checkbox
-                  checked={checkOnStart}
-                  onChange={(v) => {
-                    setCheckOnStart(v);
-                    setUpdateCheckEnabled(v);
-                  }}
-                >
-                  Check for updates automatically
-                </Checkbox>
-                <Button size="sm" onClick={checkNow}>
-                  Check Now
-                </Button>
-                <Button size="sm" className="settings-github" aria-label="Open GitHub" title="Open GitHub" onClick={() => openExternal(REPO_URL)}>
-                  <IcGitHub />
-                </Button>
-              </div>
-            </Field>
-            <Field label="Channel" hint={chMsg ?? undefined} info={["Stable: releases made from a version tag.", "Beta: also the pre-release built from every merge to main.", "Shared with the TUI."]}>
-              <div className="ui-row">
-                <Select aria-label="Channel" value={channel ?? ""} disabled={!channel} onChange={(e) => pickChannel(e.target.value as UpdateChannel)}>
-                  <option value="stable">Stable</option>
-                  <option value="beta">Beta</option>
-                </Select>
-              </div>
-            </Field>
-          </div>
-        )}
+        {/* A page that fails to render leaves the tree and the other pages working (another page starts it again) */}
+        <ErrorBoundary key={page} scope="page">
+          {page === "keymap" && <KeymapEditor />}
+          {page === "passwords" && <PasswordSettings />}
+          {page === "theme" && <ThemeEditor start={currentTheme().id} onBack={() => go("appearance")} onDirty={(d) => (themeDirty.current = d)} />}
+          {page === "appearance" && (
+            <div className="settings-form">
+              <ThemeField onEdit={() => setPage("theme")} />
+              <FontField target="editor" label="Editor font" info={fontKeys ? [`In the editor, ${fontKeys} change the size too.`] : undefined} installed={fonts} onOpen={loadFonts} />
+              <FontField target="grid" label="Grid font" installed={fonts} onOpen={loadFonts} />
+            </div>
+          )}
+          {page === "console" && (
+            <div className="settings-form">
+              <KeywordCaseField />
+              <ResultTabsField />
+            </div>
+          )}
+          {page === "grid" && (
+            <div className="settings-form">
+              <GridAlignField />
+              <LongValuesField />
+              <StatusBarField />
+            </div>
+          )}
+          {page === "updates" && (
+            <div className="settings-form">
+              <Field label="Updates" hint={updMsg ?? undefined}>
+                <div className="ui-row">
+                  <Checkbox
+                    checked={checkOnStart}
+                    onChange={(v) => {
+                      setCheckOnStart(v);
+                      setUpdateCheckEnabled(v);
+                    }}
+                  >
+                    Check for updates automatically
+                  </Checkbox>
+                  <Button size="sm" onClick={checkNow}>
+                    Check Now
+                  </Button>
+                  <Button size="sm" className="settings-github" aria-label="Open GitHub" title="Open GitHub" onClick={() => openExternal(REPO_URL)}>
+                    <IcGitHub />
+                  </Button>
+                </div>
+              </Field>
+              <Field label="Channel" hint={chMsg ?? undefined} info={["Stable: releases made from a version tag.", "Beta: also the pre-release built from every merge to main.", "Shared with the TUI."]}>
+                <div className="ui-row">
+                  <Select aria-label="Channel" value={channel ?? ""} disabled={!channel} onChange={(e) => pickChannel(e.target.value as UpdateChannel)}>
+                    <option value="stable">Stable</option>
+                    <option value="beta">Beta</option>
+                  </Select>
+                </div>
+              </Field>
+            </div>
+          )}
+        </ErrorBoundary>
       </div>
     </Modal>
   );

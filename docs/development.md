@@ -8,6 +8,8 @@ Building from source, how the code is laid out, and the tests.
 
 Rust, Node.js, pnpm and the WebAssembly tools: [CONTRIBUTING › Setup](../CONTRIBUTING.md#setup).
 
+The Rust version is pinned in `rust-toolchain.toml` (with clippy, rustfmt and the wasm32 target): rustup installs it on the first `cargo` command in the repository (once, a few minutes), also in `drivers/sqlite`. CI and the release builds use the same file. To move to a newer Rust, change `channel` there in a pull request of its own and fix what clippy and the tests report; nothing else names the version. A Rust installed without rustup (a distribution or Homebrew package) ignores the file and builds with its own version, which may differ from the one CI uses.
+
 ## Build & run
 
 ```bash
@@ -58,11 +60,13 @@ How to run the unit tests and the tests against real PostgreSQL, MySQL and Redis
 - `web`: vitest, the web build and the Storybook build
 - `e2e (chromium)` and `e2e (webkit)`: Playwright against the mock app, each browser in two shards that run side by side; each check passes when both of its shards pass
 
+`scripts/ci-local.sh` runs these jobs locally with the commands from `ci.yml` and its own `qurry-demo-ci-…` containers; `scripts/ci-local.sh rust|compat|web|e2e [chromium|webkit]` runs one ([CONTRIBUTING › Tests](../CONTRIBUTING.md#tests)).
+
 A pull request that only changes files under `docs/` or `.md` files (other than `docs/release-signing.md`, which a Rust test reads) skips `rust`, `compat` and e2e; their checks still pass. A new push to a pull request cancels the run of the previous push; runs on `main` always run everything and never cancel each other.
 
 The Audit workflow (`.github/workflows/audit.yml`) checks the lockfiles for known vulnerabilities (`cargo deny check advisories`, `pnpm audit --prod`) on pull requests that change a lockfile and every week on `main`. It is not a required check. What to do when it fails: [CONTRIBUTING › Dependencies](../CONTRIBUTING.md#dependencies). Dependabot opens weekly update pull requests for Cargo, npm and GitHub Actions.
 
-Redis TLS (16391), Sentinel (26392 → 16392) and Cluster (17001-17003) servers are described in the test comments in `crates/core/src/redisdb.rs` (TLS certificate folder: `QURRY_TEST_TLS_DIR`, default `/tmp/dbtool-tls`).
+Redis TLS (16391), Sentinel (26392 → 16392) and Cluster (17001-17003) servers are described in the test comments in `crates/core/src/backend/redisdb.rs` (TLS certificate folder: `QURRY_TEST_TLS_DIR`, default `/tmp/dbtool-tls`).
 
 Driver and vector database tests run when their server is given as `host:port:user:password:database` (and the driver is built — `cargo build -p qurry-driver-<name>`): `QURRY_TEST_CH`, `QURRY_TEST_MSSQL`, `QURRY_TEST_MONGO`, `QURRY_TEST_ORACLE`, `QURRY_TEST_QDRANT`, `QURRY_TEST_CHROMA`, `QURRY_TEST_MILVUS` (e.g. `QURRY_TEST_QDRANT=127.0.0.1:6333:::qdrant`). The pgvector and RAG tests use `QURRY_TEST_PG` when the server has the `vector` extension (`pgvector/pgvector:pg16`); RAG tests use a fake embedding server, so no model is needed.
 

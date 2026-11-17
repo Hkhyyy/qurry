@@ -241,7 +241,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
-        notices: vec![],
+        notices: vec![], cut: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.results.ran(10, Some(0), None, String::new(), "payment".into(), crate::grid::Grid::new(res));
@@ -286,7 +286,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
-        notices: vec![],
+        notices: vec![], cut: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         let mut g = crate::grid::Grid::new(wide);
@@ -338,7 +338,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: Some(editable),
-        notices: vec![],
+        notices: vec![], cut: vec![],
     };
     let target = qurry_core::editable::EditTarget { schema: "public".into(), table: "users".into(), pk: vec!["id".into()], columns: vec!["id".into(), "user_name".into(), "email".into()] };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
@@ -499,7 +499,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
-        notices: vec![],
+        notices: vec![], cut: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.results.ran(10, Some(0), None, String::new(), "payment_check".into(), crate::grid::Grid::new(res));
@@ -534,7 +534,22 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Left).unwrap();
     }
     h.app.close_tab_now(h.app.active);
-    // Column widths (#109): < > = on the current column, saved per table in settings.json "columnWidths" (shared with the GUI)
+    // Cut values (#183): long values come cut at gridCutChars and end with a dim …; the value panel says why a keyless one stays cut
+    let payload = "{\"order\": {\"id\": 486, \"items\": [{\"sku\": \"A-1\", \"qty\": 2}, {\"sku\": \"B-7\", \"qty\": 1}], \"note\": \"call first\"";
+    h.table_tab("webhook_log", &["received_at", "payload"], &[&["2026-11-01 09:12", payload], &["2026-11-01 09:14", "{\"ping\": true}"]], &[]);
+    h.app.focus = crate::app::Focus::Grid;
+    if let Some(g) = h.app.grid_mut() {
+        g.cut.insert((0, 1));
+        g.col = 1;
+    }
+    h.app.value_panel = true;
+    scenes.push(app_scene(h, "Grid cut values", "A value cut at ⌃k › Grid Long Values… ends with a dim …; a table without a primary key keeps the cut text, and the value panel says why", 120, 16));
+    h.app.value_panel = false;
+    h.app.run_action(crate::app::Action::GridLongValues);
+    scenes.push(app_scene(h, "Grid Long Values", "⌃k › Grid Long Values…: where long values are cut (0 = never), shared with the GUI's Settings › Appearance › Data grid › Long values", 120, 16));
+    h.app.popup = None;
+    h.app.close_tab_now(h.app.active);
+    // Column widths (#109):< > = on the current column, saved per table in settings.json "columnWidths" (shared with the GUI)
     // The Hangul memo is the widest (2 cells a character), though the English one has more characters
     let memo = "first order after the promotion; call before delivery";
     let wide = "배송 전에 꼭 전화 주세요. 부재 시 경비실에 맡겨 주세요";
@@ -573,7 +588,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
-        notices: vec![],
+        notices: vec![], cut: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.results.ran(10, Some(0), None, String::new(), "webhook_event".into(), crate::grid::Grid::new(res));
@@ -693,7 +708,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_transaction: false,
         warning: None,
         editable: None,
-        notices: vec![],
+        notices: vec![], cut: vec![],
     };
     let timeout = "The report ran into its time limit (30 s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.\n(error returned from database: canceling statement due to statement timeout)";
     let info = |kind, id| qurry_core::dba::reports(kind).into_iter().find(|r| r.id == id);
@@ -1221,7 +1236,7 @@ fn shop_db(q: &str) -> Result<qurry_core::db::QueryResult, String> {
         in_transaction: false,
         warning: None,
         editable: None,
-        notices: vec![],
+        notices: vec![], cut: vec![],
     })
 }
 

@@ -129,6 +129,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::KeywordCase, hint: "", run: |app| app.palette_keyword_case() },
     ActionDef { action: Action::ResultTabs, hint: "", run: |app| app.palette_result_tabs() },
     ActionDef { action: Action::GridAlign, hint: "", run: |app| app.palette_grid_align(qurry_core::format::ValueClass::String) },
+    ActionDef { action: Action::GridLongValues, hint: "", run: grid_long_values },
     ActionDef { action: Action::StatusBarItems, hint: "", run: |app| app.palette_status_items(0) },
     ActionDef { action: Action::Theme, hint: "", run: |app| app.palette_theme() },
     ActionDef { action: Action::CheckUpdate, hint: "", run: |app| app.check_update() },
@@ -290,6 +291,25 @@ fn set_null(app: &mut App) {
     }
 }
 
+/// ⌃k › Grid Long Values…: the characters a long value is cut at (settings.json "gridCutChars", shared with the GUI's Settings ›
+/// Appearance › Data grid › Long values), read when opened. The core reads it on every run and page of rows
+fn grid_long_values(app: &mut App) {
+    let n = app.state.store.grid_cut_chars();
+    app.input("Grid Long Values: cut after (characters, 0 = never)", &n.to_string(), |a, s| {
+        let Ok(n) = s.trim().parse::<usize>() else {
+            return a.status = format!("Not saved: \"{}\" isn't a number. Enter 0 or more", s.trim());
+        };
+        a.status = match a.state.store.set_grid_cut_chars(n) {
+            Ok(()) if n == 0 => "Long values come whole from the next run".into(),
+            Ok(()) => format!("Long values are cut at {n} characters from the next run"),
+            Err(e) => format!("Couldn't save the setting ({e})"),
+        };
+    });
+    if let Some(Popup::Input { body, .. }) = &mut app.popup {
+        *body = "Text, JSON, XML and array values longer than this come cut in PostgreSQL console and table results, ending with a dim …. v, ↩ and y read the whole value by the primary key; a result without one keeps the cut text.".into();
+    }
+}
+
 /// v in a result or table grid: the value panel beside it, on or off
 fn toggle_value_panel(app: &mut App) {
     if matches!(app.tabs.get(app.active).map(|t| &t.kind), Some(TabKind::Table(_) | TabKind::Console(_))) && app.grid_mut().is_some() {
@@ -308,12 +328,19 @@ fn close_tab(app: &mut App) {
     app.close_tab(app.active)
 }
 
+/// Y: cut values in the list are read whole first
 fn copy_in_list(app: &mut App) {
-    let kind = app.tabs.get(app.active).map_or(DbKind::Postgres, |t| app.kind_of(&t.conn));
     let Some(g) = app.grid_mut() else {
         app.status = "Open a result or table to copy a column".into();
         return;
     };
+    let cells = g.cut_in_list();
+    app.copy_whole(cells, in_list_now);
+}
+
+fn in_list_now(app: &mut App) {
+    let kind = app.tabs.get(app.active).map_or(DbKind::Postgres, |t| app.kind_of(&t.conn));
+    let Some(g) = app.grid_mut() else { return };
     let (text, n) = g.in_list(kind);
     crate::input::copy(app, &text);
     let short: String = text.chars().take(80).collect();

@@ -21,7 +21,7 @@ pub fn redis_grid(d: &KeyDetail) -> Option<Grid> {
         in_transaction: false,
         warning: None,
         editable: None,
-        notices: vec![],
+        notices: vec![], cut: vec![],
     };
     Some(Grid::new(result))
 }

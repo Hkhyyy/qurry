@@ -27,7 +27,7 @@ Read ARCHITECTURE.md before changing code.
 ## Integration rules
 
 1. Merge each finished item branch into the batch branch with a merge commit (`Merge branch '<branch>' into <batch>`), resolving conflicts by keeping both intents; re-run the item's tests after a conflicted merge.
-2. Full verification on the batch branch: `cargo test -p qurry-core -p qurry-tui -p qurry-mcp`, `cargo clippy` for new warnings in touched code, `npx tsc --noEmit -p .`, `npx vitest run`, `cargo build -p qurry`, plus the real-server tests the items listed (Docker containers named `qurry-demo-<x>` on free localhost ports — check with `lsof`; never 127.0.0.1:15432/:25432; never touch other containers; stop yours afterwards). Do not automate the user's running Qurry.app.
+2. Full verification on the batch branch: `cargo test -p qurry-core -p qurry-tui -p qurry-mcp`, `cargo clippy` for new warnings in touched code, `npx tsc --noEmit -p .`, `npx vitest run`, `cargo build -p qurry`, plus the real-server tests the items listed (Docker containers named `qurry-demo-<x>` on free localhost ports — check with `lsof`; never 127.0.0.1:15432/:25432; never touch other containers; stop yours afterwards). Do not automate the user's running Qurry.app. Then `scripts/ci-local.sh` (every CI job, its own `qurry-demo-ci-*` containers; one run at a time) or the jobs the batch touches (`scripts/ci-local.sh rust|compat|web|e2e chromium`).
 3. PR: title `[feat] …` / `[fix] …` in English; body in English with one section per item (what changed, how it was verified), a "Behavior changes" section for anything users must know, and a "Testing" section. No AI attribution footer. Never merge — the user merges, and every merge to main is a release.
 
 ## Engineering principles (apply to every change)

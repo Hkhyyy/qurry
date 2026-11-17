@@ -20,6 +20,8 @@ interface Props {
   readOnly: boolean;
   /** Why the last apply was refused (invalid JSON in a json / jsonb column) */
   error: string | null;
+  /** A cut value (Settings › Long values): that the whole value is loading, or why it can't be */
+  note?: string;
   /** Bumped to move the focus into the panel (⇧↩ in the grid) */
   focusSeq: number;
   onChange: (text: string) => void;
@@ -115,6 +117,7 @@ export function ValuePanel(p: Props) {
           onChange={(e) => p.onChange(e.target.value)}
         />
       )}
+      {p.note && <Notice className="ve-note">{p.note}</Notice>}
       {p.error && <Notice tone="danger" className="ve-error">{p.error}</Notice>}
       <div className="ve-foot muted">
         {p.readOnly ? "Read-only" : `${formatSpec("Mod+Enter")} apply`} · {formatSpec("Esc")} back to the grid · {closeKeys} close

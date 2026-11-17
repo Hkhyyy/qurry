@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api, ConnectionView } from "../../lib/api";
 import { ask, askText } from "../../lib/dialogs";
 import { forgetConsoleModel } from "../../lib/monaco";
@@ -10,6 +10,26 @@ import { emptyLayout, Tab } from "../tabs/types";
 import { restoreWs, showLayout, wsJson } from "./layout";
 import { setCurWs, setWorkspaces, stash, useWorkspacesStore } from "./store";
 
+// Kept outside the hook: after a render error the window's error boundary mounts the app again (Recover), and the tabs must not be
+// restored from the file a second time over the ones open now
+/** The saved workspace was read in (restoring on relaunch, workspace-gui.json): only then is saving it allowed */
+const restored = { current: false };
+/** The workspace as last saved */
+const savedWs = { current: "" };
+/** The workspace list last synced with the file shared with the TUI (null = not yet) */
+const sharedPrev: { current: WorkspaceInfo[] | null } = { current: null };
+/** The restore has finished */
+let wsDone = false;
+
+/** Save the open tabs now (the hook saves shortly after each change, and every 5 s for console text); nothing before the restore */
+export function saveWorkspaceNow(): Promise<void> {
+  if (!restored.current) return Promise.resolve();
+  const j = wsJson();
+  if (j === savedWs.current) return Promise.resolve();
+  savedWs.current = j;
+  return api.saveWorkspace(JSON.parse(j)).catch(() => {});
+}
+
 /** Workspaces: restore and save the open tabs, sync the workspace list shared with the TUI, switch · create · rename · delete, move a tab to another one */
 export function useWorkspaces({ conns, setStatus, loadStale }: { conns: ConnectionView[]; setStatus: (s: string) => void; loadStale: (t: Tab) => void }) {
   const tabs = useTabsStore((s) => s.tabs);
@@ -18,9 +38,6 @@ export function useWorkspaces({ conns, setStatus, loadStale }: { conns: Connecti
   const focused = useTabsStore((s) => s.focused);
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
-  // ───────── Restoring on relaunch (workspace-gui.json) ─────────
-  const restored = useRef(false);
-  const savedWs = useRef("");
   /** Before closing the app or relaunching for an update: ask about uncommitted changes and save the open tabs */
   const readyToQuit = async () => {
     const n = allTabs().filter((t) => t.inTx).length;
@@ -28,17 +45,9 @@ export function useWorkspaces({ conns, setStatus, loadStale }: { conns: Connecti
     saveWs();
     return true;
   };
-  const saveWs = () => {
-    if (!restored.current) return;
-    const j = wsJson();
-    if (j === savedWs.current) return;
-    savedWs.current = j;
-    api.saveWorkspace(JSON.parse(j)).catch(() => {});
-  };
+  const saveWs = () => void saveWorkspaceNow();
 
   // ── The workspace list (name · Data Sources) is shared with the TUI: send only what changed, and pull in what the other side changed ──
-  /** List last synced with the shared file (null = not yet) */
-  const sharedPrev = useRef<WorkspaceInfo[] | null>(null);
   const sameWs = (a: WorkspaceInfo[], b: WorkspaceInfo[]) => JSON.stringify(a.map((w) => [w.id, w.name, w.connIds])) === JSON.stringify(b.map((w) => [w.id, w.name, w.connIds]));
   const wsTabs = (id: string) => (id === useWorkspacesStore.getState().curWs ? useTabsStore.getState().tabs : stash.get(id)?.tabs ?? []);
   /** Apply the shared list to the UI. Close the tabs of workspaces deleted on the other side (keep them if a console has uncommitted changes — they come back on the next sync) */
@@ -178,10 +187,10 @@ export function useWorkspaces({ conns, setStatus, loadStale }: { conns: Connecti
       .catch(() => false)
       .then((synced) => adoptShared(synced))
       .catch((e) => setStatus(`Workspaces: ${String(e)}`))
-      .finally(() => setWsReady(true));
+      .finally(() => ((wsDone = true), setWsReady(true)));
   }, [conns]);
   // Data Sources in no workspace (just created, or created in the TUI) → into the current workspace
-  const [wsReady, setWsReady] = useState(false);
+  const [wsReady, setWsReady] = useState(wsDone);
   useEffect(() => {
     if (!wsReady) return;
     const known = new Set(useWorkspacesStore.getState().workspaces.flatMap((w) => w.connIds));

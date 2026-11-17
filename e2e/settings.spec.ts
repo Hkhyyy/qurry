@@ -204,7 +204,7 @@ test("Settings › Add Font File…: a font file that can't be loaded (damaged) 
 const PAGES: [string, string[]][] = [
   ["Appearance", ["Theme", "Editor font", "Grid font"]],
   ["Console", ["Keyword case", "Result tabs"]],
-  ["Data grid", ["Alignment", "Status bar"]],
+  ["Data grid", ["Alignment", "Long values", "Status bar"]],
   ["Updates", ["Updates", "Channel"]],
   ["Keymap", []],
   ["Passwords", ["Key"]],
@@ -255,7 +255,7 @@ test("Settings › pages tree keys: ↑↓ move, → opens then goes to the firs
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await expect(settingsRow(page, "Data grid")).toHaveAttribute("aria-selected", "true");
-  await expect(labels(page)).toHaveText(["Alignment", "Status bar"]);
+  await expect(labels(page)).toHaveText(["Alignment", "Long values", "Status bar"]);
   // Focused from the keyboard: the ring shows
   expect(await tree.evaluate((e) => getComputedStyle(e).boxShadow)).not.toBe("none");
   await page.keyboard.press("ArrowUp");

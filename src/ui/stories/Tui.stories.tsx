@@ -113,6 +113,8 @@ export const ScreenGridAlign = { ...by("Grid alignment"), name: "Screen · Grid 
 export const ScreenGridAlignChanged = { ...by("Grid alignment: changed"), name: "Screen · Grid alignment: changed" };
 export const ScreenGridAlignPalette = { ...by("Grid alignment palette"), name: "Screen · Grid alignment palette" };
 export const ScreenGridAlignPick = { ...by("Grid alignment: pick"), name: "Screen · Grid alignment: pick" };
+export const ScreenGridCutValues = { ...by("Grid cut values"), name: "Screen · Grid cut values" };
+export const ScreenGridLongValues = { ...by("Grid Long Values"), name: "Screen · Grid Long Values" };
 // The explorer screen in each color mode the TUI picks from NO_COLOR · COLORTERM · TERM (crates/tui/src/theme.rs)
 export const ColorsTruecolor = { ...by("Colors: truecolor"), name: "Colors · truecolor" };
 export const Colors256 = { ...by("Colors: 256"), name: "Colors · 256" };

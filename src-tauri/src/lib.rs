@@ -71,7 +71,10 @@ pub fn run() {
             });
 
             qurry_core::logfile::init("gui", None);
-            app.manage(qurry_core::open_state(Some(app.path().app_config_dir()?))?);
+            qurry_core::logfile::log_panics();
+            let mut state = qurry_core::open_state(Some(app.path().app_config_dir()?))?;
+            state.cut_grids = true;
+            app.manage(state);
             app.manage(commands::PendingImport::default());
             app.manage(commands::PendingData::default());
             app.manage(commands::PickedDirs::default());
@@ -179,8 +182,10 @@ pub fn run() {
             commands::column_hints,
             commands::object_ddl,
             commands::fetch_more,
+            commands::fetch_values,
             commands::cancel_query,
             commands::close_session,
+            commands::close_all_sessions,
             commands::set_tx_mode,
             commands::commit_tx,
             commands::rollback_tx,
@@ -207,6 +212,8 @@ pub fn run() {
             commands::set_update_channel,
             commands::grid_align,
             commands::set_grid_align,
+            commands::grid_cut_chars,
+            commands::set_grid_cut_chars,
             commands::status_bar_items,
             commands::set_status_bar_item,
             commands::reset_status_bar_items,
@@ -233,6 +240,7 @@ pub fn run() {
             fonts::font_file,
             commands::install_update,
             commands::show_log,
+            commands::log_frontend_error,
         ])
         .build(app_context())
         .expect("error while running tauri application")

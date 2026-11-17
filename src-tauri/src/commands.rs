@@ -141,6 +141,12 @@ pub async fn fetch_more(state: State<'_, AppState>, tab_id: String, limit: Optio
     state.fetch_more(tab_id, limit).await
 }
 
+/// The whole values of a console result's cut cells, by the table's key, in the tab's session
+#[tauri::command]
+pub async fn fetch_values(state: State<'_, AppState>, id: String, tab_id: String, req: qurry_core::app::FullValues) -> AppResult<Vec<Option<Vec<serde_json::Value>>>> {
+    state.fetch_values(id, tab_id, req).await
+}
+
 #[tauri::command]
 pub async fn cancel_query(state: State<'_, AppState>, tab_id: String) -> AppResult<bool> {
     state.cancel_query(tab_id).await
@@ -165,6 +171,12 @@ pub async fn rollback_tx(state: State<'_, AppState>, tab_id: String) -> AppResul
 #[tauri::command]
 pub async fn close_session(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
     state.close_session(tab_id).await
+}
+
+/// The window's page starts: the console sessions of the page before it (a reload) are closed, their transactions rolled back
+#[tauri::command]
+pub async fn close_all_sessions(state: State<'_, AppState>) -> AppResult<Vec<crate::app::ClosedSession>> {
+    Ok(state.close_all_sessions().await)
 }
 
 /// A result grid's Submit (each UPDATE / DELETE exactly one row). tab_id = the console the result is in: in Manual mode or with a
@@ -821,6 +833,17 @@ pub fn set_grid_align(state: State<'_, AppState>, class: qurry_core::format::Val
     state.store.set_grid_align(class, align)
 }
 
+/// Characters of a long value a console's PostgreSQL result reads, 0 = never cut (settings.json "gridCutChars", shared with the TUI)
+#[tauri::command]
+pub fn grid_cut_chars(state: State<'_, AppState>) -> usize {
+    state.store.grid_cut_chars()
+}
+
+#[tauri::command]
+pub fn set_grid_cut_chars(state: State<'_, AppState>, n: usize) -> AppResult<()> {
+    state.store.set_grid_cut_chars(n)
+}
+
 /// Status bar items on (shared with the TUI)
 #[tauri::command]
 pub fn status_bar_items(state: State<'_, AppState>) -> Vec<qurry_core::statusbar::Item> {
@@ -939,6 +962,13 @@ pub fn show_log() -> AppResult<()> {
     std::fs::create_dir_all(&dir)?;
     let opened = if file.exists() { tauri_plugin_opener::reveal_item_in_dir(&file) } else { tauri_plugin_opener::open_path(&dir, None::<&str>) };
     opened.map_err(|e| crate::error::AppError::Msg(format!("Couldn't open the log ({e}). Open it from Finder: {}", file.display())))
+}
+
+/// A front-end error (an error boundary's, window error, unhandledrejection) into qurry.log: message and stacks only, redacted,
+/// cut short and rate limited (qurry_core::logfile::frontend_error)
+#[tauri::command]
+pub fn log_frontend_error(source: String, message: String, stack: Option<String>, component_stack: Option<String>) {
+    qurry_core::logfile::frontend_error(&source, &message, stack.as_deref(), component_stack.as_deref());
 }
 
 /// Saves the channel, then answers what it offers from the saved check only (no request): None if nothing was checked yet or checks are off

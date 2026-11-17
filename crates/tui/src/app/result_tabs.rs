@@ -268,7 +268,7 @@ mod tests {
             in_transaction: false,
             warning: None,
             editable: None,
-            notices: vec![],
+            notices: vec![], cut: vec![],
         })
     }
     const S3: [&str; 3] = ["select * from customers", "select * from orders where status = 'paid'", "select * from payments limit 5"];

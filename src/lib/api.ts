@@ -130,6 +130,17 @@ export interface QueryResult {
   readOnlyReason?: string;
   /** What the server said while it ran (PostgreSQL NOTICE / WARNING / INFO), in order; level "" is the "… N more" line after the cap */
   notices?: Notice[];
+  /** Cells cut at gridCutChars, as [row, column] of this page (a PostgreSQL console result; api.fetchValues reads the whole value) */
+  cut?: [number, number][];
+}
+
+/** The whole values of cut cells, read by the table's key (AppState::fetch_values): rows = each row's key values as the grid holds them */
+export interface FullValues {
+  schema: string;
+  table: string;
+  key: string[];
+  columns: string[];
+  rows: (string | null)[][];
 }
 
 /** A server notice (qurry_core::notice::Notice) */
@@ -236,6 +247,9 @@ export const api = {
   /** Grid alignment per value class: only the classes the user changed. Kept in the config folder, shared with the TUI */
   gridAlign: () => invoke<Alignments>("grid_align"),
   setGridAlign: (cls: ValueClass, align: Align) => invoke<Alignments>("set_grid_align", { class: cls, align }),
+  /** Characters of a long text / JSON / XML value a PostgreSQL console result reads (QueryResult.cut), 0 = never cut. settings.json "gridCutChars", shared with the TUI */
+  gridCutChars: () => invoke<number>("grid_cut_chars"),
+  setGridCutChars: (n: number) => invoke<void>("set_grid_cut_chars", { n }),
   /** Status bar items on (settings.json, shared with the TUI); each change returns what is saved */
   statusBarItems: () => invoke<StatusItemId[]>("status_bar_items"),
   setStatusBarItem: (item: StatusItemId, on: boolean) => invoke<StatusItemId[]>("set_status_bar_item", { item, on }),
@@ -268,6 +282,8 @@ export const api = {
   installUpdate: () => invoke<void>("install_update"),
   /** Help › Show Log: reveals the log file in Finder (its folder until the file exists) */
   showLog: () => invoke<void>("show_log"),
+  /** A front-end error into qurry.log (message and stacks only; the backend redacts, cuts and rate limits it) */
+  logFrontendError: (e: { source: "boundary" | "error" | "unhandledrejection"; message: string; stack?: string; componentStack?: string }) => invoke<void>("log_frontend_error", e),
   /** Open tabs·splits (restored on restart) */
   loadWorkspace: () => invoke<unknown>("load_workspace"),
   saveWorkspace: (ws: unknown) => invoke<void>("save_workspace", { ws }),
@@ -300,12 +316,16 @@ export const api = {
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   runQuery: (id: string, sql: string, tabId?: string, limit = 500) => invoke<QueryResult>("run_query", { id, sql, limit, tabId: tabId ?? null }),
   fetchMore: (tabId: string, limit = 500) => invoke<QueryResult>("fetch_more", { tabId, limit }),
+  /** The whole values of `req.columns` per row of `req.rows`, in the console's session (its uncommitted edits too); null for a key no row has */
+  fetchValues: (id: string, tabId: string, req: FullValues) => invoke<(Cell[] | null)[]>("fetch_values", { id, tabId, req }),
   cancelQuery: (tabId: string) => invoke<boolean>("cancel_query", { tabId }),
   setTxMode: (id: string, tabId: string, manual: boolean) => invoke<void>("set_tx_mode", { id, tabId, manual }),
   /** → a warning when it committed but couldn't be logged */
   commitTx: (tabId: string) => invoke<string | null>("commit_tx", { tabId }),
   rollbackTx: (tabId: string) => invoke<string | null>("rollback_tx", { tabId }),
   closeSession: (tabId: string) => invoke<void>("close_session", { tabId }),
+  /** At page start: close the console sessions of the page before (a reload), rolling back their transactions */
+  closeAllSessions: () => invoke<{ tabId: string; name: string; rolledBack: boolean }[]>("close_all_sessions"),
   /** A grid's Submit: none is saved unless each UPDATE / DELETE changes exactly 1 row. tabId = the console the result is in: in Manual
    *  mode or with a transaction open, the edits run in it and stay pending until Commit / Roll back */
   submitEdits: (id: string, tabId: string | undefined, statements: string[]) => invoke<BatchResult>("submit_edits", { id, tabId, statements }),

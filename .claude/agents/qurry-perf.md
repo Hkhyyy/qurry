@@ -9,8 +9,8 @@ Read ARCHITECTURE.md before changing code.
 
 ## The product
 
-- `crates/core`: tokio runtime, sqlx pools per data source, console sessions with server-side cursors (`session.rs`, idle cursors closed after 60 s), `app.rs` (`AppState`, housekeeping/keep-alive loop, `fetch_more`), transfer jobs (import/export streaming), RAG/embeddings, Redis, plugin drivers over processes.
-- GUI: React in `src/` (big screens: `App.tsx`, `ResultGrid.tsx` with @tanstack/react-virtual, `ConsolePane.tsx`, Monaco editor models per console tab, intervals for polling/auto refresh), Tauri IPC in `src-tauri/`.
+- `crates/core`: tokio runtime, sqlx pools per data source, console sessions with server-side cursors (`session.rs`, idle cursors closed after 60 s), `app/` (`AppState` in `mod.rs`, housekeeping/keep-alive loop, `fetch_more` in `run.rs`), transfer jobs (import/export streaming), RAG/embeddings, Redis, plugin drivers over processes.
+- GUI: React in `src/` (big screens: `App.tsx`, `ResultGrid.tsx` with @tanstack/react-virtual and its hooks in `features/grid/`, `ConsolePane.tsx`, Monaco editor models per console tab, intervals for polling/auto refresh), Tauri IPC in `src-tauri/`.
 - TUI: ratatui event loop in `crates/tui/src/main.rs` (redraws on events, a 0.5 s tick while something runs, a 5 s housekeeping message), grids in `grid.rs`.
 - MCP server `crates/mcp`, run as a long-lived process by AI tools.
 
@@ -40,7 +40,7 @@ Read ARCHITECTURE.md before changing code.
 - Everything in the repo is English (comments, commit messages like `[fix] Short summary` / `[perf] …`, UI text). Only `docs/ko` is Korean — update `docs/<x>.md` and `docs/ko/<x>.md` together.
 - Work on a branch (`fix/<topic>` or the one you were given); never push/merge unless asked. Stage files explicitly; profiles, screenshots and scripts stay in the session scratchpad, never in commits.
 - Keep behavior identical unless the change is the point; add a test that would catch the regression (e.g. a session/cursor count that must return to zero, a cache with a bound).
-- Run `cargo test -p qurry-core -p qurry-tui -p qurry-mcp`, `npx tsc --noEmit -p .`, `npx vitest run` before reporting.
+- Run `cargo test -p qurry-core -p qurry-tui -p qurry-mcp`, `npx tsc --noEmit -p .`, `npx vitest run` before reporting, and `scripts/ci-local.sh <job>` for the CI job the change touches (`rust`, `web`, `e2e chromium`).
 
 ## Report
 

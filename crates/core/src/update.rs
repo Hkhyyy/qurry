@@ -291,7 +291,15 @@ pub fn expected_sha(sums: &str, name: &str) -> Option<String> {
 pub fn sha256_of(path: &Path) -> std::io::Result<String> {
     use sha2::Digest;
     let mut h = sha2::Sha256::new();
-    std::io::copy(&mut std::fs::File::open(path)?, &mut h)?;
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = std::io::Read::read(&mut f, &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 

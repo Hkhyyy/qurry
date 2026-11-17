@@ -1,0 +1,8 @@
+# The Rust toolchain for CI, release and local builds: rustup reads this file, also in drivers/sqlite (its own workspace, same root).
+# Bump it deliberately, in a pull request of its own: CI broke twice on 2026-11-13 when the floating `stable` moved to 1.100.
+# Without rustup (a distro or Homebrew rustc) the file is ignored; CI and releases build with this version.
+[toolchain]
+channel = "1.100.0"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

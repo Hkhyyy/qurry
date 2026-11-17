@@ -11,10 +11,17 @@ import { loadSearchScope } from "./features/search/scope";
 import { loadCustomFonts } from "./lib/prefs";
 import { initTheme } from "./lib/theme";
 import App from "./App";
+import { ErrorBoundary, logWindowErrors } from "./components/ErrorBoundary";
+import { closeSessionsOfLastPage } from "./features/recovery";
 
 async function boot() {
   // Dev only: opening in the browser with ?mock uses a fake backend (for checking the UI)
   if (import.meta.env.DEV && location.search.includes("mock")) await import("./lib/mock");
+  // Front-end errors into qurry.log (the status bar, in App, goes with the app when a render error takes it down)
+  logWindowErrors();
+  // After a reload the backend still holds the consoles of the page before (their transactions, their locks): closed. Not awaited:
+  // the tabs restored next have new ids
+  void closeSessionsOfLastPage();
   // Not awaited: the app, and with it the in-app updater, must start even when the WebView refuses WebAssembly
   initShared().catch((e) =>
     console.error(`Qurry could not load its shared WebAssembly module (${e}). If the WebView refused to create a WebAssembly object, the system WebView is too old: update macOS (Safari) or webkit2gtk.`),
@@ -30,7 +37,9 @@ async function boot() {
   loadCustomFonts().catch((e) => console.warn(`The added font files could not be listed (${e})`));
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
-      <App />
+      <ErrorBoundary scope="window">
+        <App />
+      </ErrorBoundary>
     </React.StrictMode>,
   );
 }

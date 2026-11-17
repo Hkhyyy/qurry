@@ -1,5 +1,5 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Group as PanelGroup, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { api, ConnectionView, defaultDbOf, dialectOf, meta, redisDb, targetId } from "../../lib/api";
 import { askText } from "../../lib/dialogs";
 import { leaf, leaves, MAX_PANES, Pane, splitPane } from "../../lib/panes";
@@ -8,6 +8,7 @@ import { ConsoleEditor } from "../../components/ConsoleEditor";
 import { ConsolePane } from "../../components/ConsolePane";
 import { DbaReport } from "../../components/DbaReport";
 import { ErdView } from "../../components/ErdView";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 import type { MenuItem } from "../../components/Explorer";
 import { MigrateView } from "../../components/MigrateView";
 import { RagView } from "../../components/RagView";
@@ -57,11 +58,13 @@ type Deps = {
 
 /** The editor groups (split panes): their tab strips, what each tab shows, the tab menu, splitting and tab drag and drop */
 export function useEditorGroups({
-  conns, setStatus, groupActive, labelOf, setTabMenu, setMaximized, activate, addTab, openConsole, openTable, openTableTab, openDdl, ragInit, runJob, exportCsv, moveToWs, dbCache, schemaCache, executeConsole, cancel, fetchMoreEntry, setTxMode, txEnd, loadDbList, loadSchemaList, switchDatabase, switchSchema, log, reconnectAfterTls, setPendingRuns, applyTableFilter, fetchMore, submitEdits, focusTableGrid,
+  conns, setStatus, groupActive, labelOf, setTabMenu, setMaximized, activate, addTab, openConsole, openTable, openTableTab, openDdl, ragInit, runJob, exportCsv, moveToWs, dbCache, schemaCache, executeConsole, cancel, fetchMoreEntry, setTxMode, txEnd, loadDbList, loadSchemaList, switchDatabase, switchSchema, log, reconnectAfterTls, setPendingRuns, applyTableFilter, fetchMore, fetchFull, submitEdits, focusTableGrid,
 }: Deps) {
   const tabs = useTabsStore((s) => s.tabs);
   const panes = useTabsStore((s) => s.panes);
   const split = panes.t === "split";
+  // The outermost split's ratio, saved per direction (no group reads it while there is no split)
+  const rootLayout = useDefaultLayout({ id: `dbtool-split-${split ? panes.dir : "right"}`, panelIds: ["a", "b"] });
   const focused = useTabsStore((s) => s.focused);
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
@@ -280,10 +283,10 @@ export function useEditorGroups({
     p.t === "leaf" ? (
       renderGroup(p.g)
     ) : (
-      <PanelGroup key={path} direction={p.dir === "right" ? "horizontal" : "vertical"} autoSaveId={path === "" ? `dbtool-split-${p.dir}` : undefined}>
-        <Panel minSize={15}>{renderPanes(p.a, path + "a")}</Panel>
-        <PanelResizeHandle className={p.dir === "right" ? "resize-h" : "resize-v"} />
-        <Panel minSize={15}>{renderPanes(p.b, path + "b")}</Panel>
+      <PanelGroup key={path} orientation={p.dir === "right" ? "horizontal" : "vertical"} {...(path === "" && { defaultLayout: rootLayout.defaultLayout, onLayoutChanged: rootLayout.onLayoutChanged })}>
+        <Panel id="a" minSize="15%">{renderPanes(p.a, path + "a")}</Panel>
+        <Separator className={p.dir === "right" ? "resize-h" : "resize-v"} />
+        <Panel id="b" minSize="15%">{renderPanes(p.b, path + "b")}</Panel>
       </PanelGroup>
     );
   const renderGroup = (g: Group) => {
@@ -405,58 +408,62 @@ export function useEditorGroups({
               const c = conns.find((x) => x.id === t.connId);
               return (
                 <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
-                  <ConsolePane
-                    tabId={t.id}
-                    target={t.target}
-                    initialSql={sqlOf(t)}
-                    connName={c?.name ?? ""}
-                    database={tabDatabase(t, c)}
-                    schema={t.schema ?? (c?.kind === "mysql" ? t.database || c?.database || "" : "public")}
-                    kind={c?.kind}
-                    dialect={dialectOf(c?.kind)}
-                    dbList={dbCache[t.connId] ?? []}
-                    schemaList={schemaCache[t.target] ?? []}
-                    running={t.running}
-                    loadingMore={t.loadingMore}
-                    results={t.results}
-                    activeResult={t.activeResult}
-                    output={t.output}
-                    txManual={t.txManual}
-                    inTx={t.inTx}
-                    production={!!c?.options?.confirmChanges}
-                    txIdle={t.txIdle}
-                    onChange={(sql) => liveSql.set(t.id, sql)}
-                    onExecute={(stmts, explain, mark) => executeConsole(t.id, stmts, explain, mark)}
-                    onCancel={() => cancel(t)}
-                    onSetActiveResult={(id) => updTab(t.id, (x) => show(x, id))}
-                    onCaret={(stmt) => follow(t.id, (x) => caret(x, stmt))}
-                    onStatements={(before, after, keep) => follow(t.id, (x) => edited(x, before, after, keep))}
-                    onPin={(id, pinned) => setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.map((r) => (r.id === id ? { ...r, pinned } : r)) } : x)))}
-                    onCloseResult={(id) =>
-                      setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.filter((r) => r.id !== id), activeResult: x.activeResult === id ? "output" : x.activeResult } : x)))
-                    }
-                    onFetchMore={(entryId) => fetchMoreEntry(t.id, entryId)}
-                    readOnly={!!c?.readOnly}
-                    onSubmit={(entryId, st) => submitEdits(t, st, () => {
-                      const e = t.results.find((r) => r.id === entryId);
-                      if (e) void executeConsole(t.id, [{ sql: e.sql, stmt: e.stmt, into: e.id }]);
-                    })}
-                    onExport={(sql) => exportCsv({ ...t, lastSql: sql })}
-                    onHistory={() => (setHistoryTab("history"), setHistoryFor(t.id))}
-                    onTxMode={(manual) => setTxMode(t, manual)}
-                    onCommit={() => txEnd(t, "commit")}
-                    onRollback={() => txEnd(t, "rollback")}
-                    onLoadDbs={() => loadDbList(t.connId)}
-                    onLoadSchemas={() => loadSchemaList(t.target)}
-                    onSwitchDb={(db) => switchDatabase(t, db)}
-                    onSwitchSchema={(sc) => switchSchema(t, sc)}
-                    schemaSwitchDisabled={conns.find((x) => x.id === t.connId)?.options?.switchSchema === "disable"}
-                    registerApi={(id, a) => editorApis.set(id, a)}
-                    onClearOutput={() => patch(t.id, { output: [] })}
-                    errorAction={<TlsFix conn={c} msg={t.output[t.output.length - 1]?.level === "error" ? t.output[t.output.length - 1].text : null} then={() => (editorApis.get(t.id)?.focus(), reconnectAfterTls(t.connId, t.id))} />}
-                    onError={(m) => (log(t.id, "error", m), patch(t.id, { activeResult: "output" }), setStatus("Not run: the statement splitter couldn't load (see Output)"))}
-                    onLoadingChange={() => setPendingRuns((n) => n + 1)}
-                  />
+                  {/* Reload Tab: the console's text stays (liveSql), its results go (one of them may be what failed) */}
+                  <ErrorBoundary scope="tab" label={labelOf(t)} onReload={() => patch(t.id, { results: [], activeResult: "output" })}>
+                    <ConsolePane
+                      tabId={t.id}
+                      target={t.target}
+                      initialSql={sqlOf(t)}
+                      connName={c?.name ?? ""}
+                      database={tabDatabase(t, c)}
+                      schema={t.schema ?? (c?.kind === "mysql" ? t.database || c?.database || "" : "public")}
+                      kind={c?.kind}
+                      dialect={dialectOf(c?.kind)}
+                      dbList={dbCache[t.connId] ?? []}
+                      schemaList={schemaCache[t.target] ?? []}
+                      running={t.running}
+                      loadingMore={t.loadingMore}
+                      results={t.results}
+                      activeResult={t.activeResult}
+                      output={t.output}
+                      txManual={t.txManual}
+                      inTx={t.inTx}
+                      production={!!c?.options?.confirmChanges}
+                      txIdle={t.txIdle}
+                      onChange={(sql) => liveSql.set(t.id, sql)}
+                      onExecute={(stmts, explain, mark) => executeConsole(t.id, stmts, explain, mark)}
+                      onCancel={() => cancel(t)}
+                      onSetActiveResult={(id) => updTab(t.id, (x) => show(x, id))}
+                      onCaret={(stmt) => follow(t.id, (x) => caret(x, stmt))}
+                      onStatements={(before, after, keep) => follow(t.id, (x) => edited(x, before, after, keep))}
+                      onPin={(id, pinned) => setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.map((r) => (r.id === id ? { ...r, pinned } : r)) } : x)))}
+                      onCloseResult={(id) =>
+                        setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.filter((r) => r.id !== id), activeResult: x.activeResult === id ? "output" : x.activeResult } : x)))
+                      }
+                      onFetchMore={(entryId) => fetchMoreEntry(t.id, entryId)}
+                      onFetchFull={(entryId, cells) => fetchFull(t.id, entryId, cells)}
+                      readOnly={!!c?.readOnly}
+                      onSubmit={(entryId, st) => submitEdits(t, st, () => {
+                        const e = t.results.find((r) => r.id === entryId);
+                        if (e) void executeConsole(t.id, [{ sql: e.sql, stmt: e.stmt, into: e.id }]);
+                      })}
+                      onExport={(sql) => exportCsv({ ...t, lastSql: sql })}
+                      onHistory={() => (setHistoryTab("history"), setHistoryFor(t.id))}
+                      onTxMode={(manual) => setTxMode(t, manual)}
+                      onCommit={() => txEnd(t, "commit")}
+                      onRollback={() => txEnd(t, "rollback")}
+                      onLoadDbs={() => loadDbList(t.connId)}
+                      onLoadSchemas={() => loadSchemaList(t.target)}
+                      onSwitchDb={(db) => switchDatabase(t, db)}
+                      onSwitchSchema={(sc) => switchSchema(t, sc)}
+                      schemaSwitchDisabled={conns.find((x) => x.id === t.connId)?.options?.switchSchema === "disable"}
+                      registerApi={(id, a) => editorApis.set(id, a)}
+                      onClearOutput={() => patch(t.id, { output: [] })}
+                      errorAction={<TlsFix conn={c} msg={t.output[t.output.length - 1]?.level === "error" ? t.output[t.output.length - 1].text : null} then={() => (editorApis.get(t.id)?.focus(), reconnectAfterTls(t.connId, t.id))} />}
+                      onError={(m) => (log(t.id, "error", m), patch(t.id, { activeResult: "output" }), setStatus("Not run: the statement splitter couldn't load (see Output)"))}
+                      onLoadingChange={() => setPendingRuns((n) => n + 1)}
+                    />
+                  </ErrorBoundary>
                 </div>
               );
             })}
@@ -465,7 +472,9 @@ export function useEditorGroups({
             .filter((t) => t.kind === "rag")
             .map((t) => (
               <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
-                <RagView key={ragInit?.n} conns={conns} initial={ragInit} runJob={runJob} onStatus={setStatus} />
+                <ErrorBoundary scope="tab" label={labelOf(t)}>
+                  <RagView key={ragInit?.n} conns={conns} initial={ragInit} runJob={runJob} onStatus={setStatus} />
+                </ErrorBoundary>
               </div>
             ))}
           {/* Compare & migrate */}
@@ -473,16 +482,18 @@ export function useEditorGroups({
             .filter((t) => t.kind === "migrate")
             .map((t) => (
               <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
-                <MigrateView
-                  conns={conns}
-                  initialConnId={t.connId}
-                  initialDb={t.database}
-                  onOpenConsole={(connId, db, sql) => {
-                    const c = conns.find((x) => x.id === connId);
-                    if (c) openConsole(c, db, sql);
-                  }}
-                  onStatus={setStatus}
-                />
+                <ErrorBoundary scope="tab" label={labelOf(t)}>
+                  <MigrateView
+                    conns={conns}
+                    initialConnId={t.connId}
+                    initialDb={t.database}
+                    onOpenConsole={(connId, db, sql) => {
+                      const c = conns.find((x) => x.id === connId);
+                      if (c) openConsole(c, db, sql);
+                    }}
+                    onStatus={setStatus}
+                  />
+                </ErrorBoundary>
               </div>
             ))}
           {/* ERD */}
@@ -492,7 +503,9 @@ export function useEditorGroups({
               const c = conns.find((x) => x.id === t.connId);
               return (
                 <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
-                  <ErdView target={t.target} schemas={t.erdSchemas ?? []} visible={t.id === ga?.id} onOpenTable={(sc, tb) => c && openTable(c, sc, tb, t.database)} onStatus={setStatus} />
+                  <ErrorBoundary scope="tab" label={labelOf(t)}>
+                    <ErdView target={t.target} schemas={t.erdSchemas ?? []} visible={t.id === ga?.id} onOpenTable={(sc, tb) => c && openTable(c, sc, tb, t.database)} onStatus={setStatus} />
+                  </ErrorBoundary>
                 </div>
               );
             })}
@@ -504,29 +517,31 @@ export function useEditorGroups({
               const def = c ? defaultDbOf(c) : "";
               return (
                 <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
-                  <DbaReport
-                    target={t.target}
-                    connName={c?.name ?? ""}
-                    report={t.dbaReport ?? "sessions"}
-                    readOnly={!!c?.readOnly}
-                    dialect={dialectOf(c?.kind ?? "postgres")}
-                    visible={t.id === ga?.id}
-                    database={t.database ?? def}
-                    // Every database of the server (as the console lists them), through the report's own database (the account may not
-                    // connect to the default one), else through the source's (the report's may be one it can't connect to);
-                    // MySQL without a default schema can go back to all schemas
-                    loadDbs={() =>
-                      meta
-                        .databases(t.target)
-                        .catch((e) => (c && t.target !== c.id ? meta.databases(c.id) : Promise.reject(e)))
-                        .then((ds) => [...(def ? [] : [""]), ...ds])
-                    }
-                    fixedDb={!!c?.options?.singleDb}
-                    onDatabase={(db) => c && patch(t.id, { database: db !== def ? db : undefined, target: targetId(c.id, db !== def ? db : undefined) })}
-                    onReport={(id, title) => c && patch(t.id, { dbaReport: id, title: `${title} — ${c.name}` })}
-                    onOpenConsole={(sql) => c && openConsole(c, t.database, sql)}
-                    onStatus={setStatus}
-                  />
+                  <ErrorBoundary scope="tab" label={labelOf(t)}>
+                    <DbaReport
+                      target={t.target}
+                      connName={c?.name ?? ""}
+                      report={t.dbaReport ?? "sessions"}
+                      readOnly={!!c?.readOnly}
+                      dialect={dialectOf(c?.kind ?? "postgres")}
+                      visible={t.id === ga?.id}
+                      database={t.database ?? def}
+                      // Every database of the server (as the console lists them), through the report's own database (the account may not
+                      // connect to the default one), else through the source's (the report's may be one it can't connect to);
+                      // MySQL without a default schema can go back to all schemas
+                      loadDbs={() =>
+                        meta
+                          .databases(t.target)
+                          .catch((e) => (c && t.target !== c.id ? meta.databases(c.id) : Promise.reject(e)))
+                          .then((ds) => [...(def ? [] : [""]), ...ds])
+                      }
+                      fixedDb={!!c?.options?.singleDb}
+                      onDatabase={(db) => c && patch(t.id, { database: db !== def ? db : undefined, target: targetId(c.id, db !== def ? db : undefined) })}
+                      onReport={(id, title) => c && patch(t.id, { dbaReport: id, title: `${title} — ${c.name}` })}
+                      onOpenConsole={(sql) => c && openConsole(c, t.database, sql)}
+                      onStatus={setStatus}
+                    />
+                  </ErrorBoundary>
                 </div>
               );
             })}
@@ -537,17 +552,19 @@ export function useEditorGroups({
               const c = conns.find((x) => x.id === t.connId);
               return (
                 <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
-                  <RedisBrowser
-                    target={t.target}
-                    connId={t.connId}
-                    connName={c?.name ?? ""}
-                    database={t.database ?? redisDb(c?.database)}
-                    readOnly={!!c?.readOnly}
-                    production={!!c?.options?.confirmChanges}
-                    initialKey={t.redisKey}
-                    onSwitchDb={(db) => c && patch(t.id, { database: db, target: targetId(c.id, db), title: `${c.name} [${db}]`, redisKey: undefined })}
-                    onStatus={setStatus}
-                  />
+                  <ErrorBoundary scope="tab" label={labelOf(t)}>
+                    <RedisBrowser
+                      target={t.target}
+                      connId={t.connId}
+                      connName={c?.name ?? ""}
+                      database={t.database ?? redisDb(c?.database)}
+                      readOnly={!!c?.readOnly}
+                      production={!!c?.options?.confirmChanges}
+                      initialKey={t.redisKey}
+                      onSwitchDb={(db) => c && patch(t.id, { database: db, target: targetId(c.id, db), title: `${c.name} [${db}]`, redisKey: undefined })}
+                      onStatus={setStatus}
+                    />
+                  </ErrorBoundary>
                 </div>
               );
             })}
@@ -556,47 +573,51 @@ export function useEditorGroups({
             .filter((t) => t.kind === "table")
             .map((t) => (
               <div key={t.id} className="work-layer" data-tab={t.id} style={{ display: t.id === ga?.id ? "block" : "none" }}>
-                <TableEditor
-                  where={t.where}
-                  orderBy={t.orderBy}
-                  running={t.running}
-                  error={t.error}
-                  errorAction={<TlsFix conn={conns.find((x) => x.id === t.connId)} msg={t.error} then={() => (focusTableGrid(t.id), reconnectAfterTls(t.connId))} />}
-                  result={t.result}
-                  query={t.lastSql}
-                  edit={t.edit && t.lastSql === t.tableSql ? t.edit : undefined}
-                  readOnly={!!conns.find((x) => x.id === t.connId)?.readOnly}
-                  dialect={dialectOf(conns.find((x) => x.id === t.connId)?.kind)}
-                  loadingMore={t.loadingMore}
-                  table={t.edit && { source: t.connId, database: t.database ?? "", schema: t.edit.schema, table: t.edit.table }}
-                  target={t.target}
-                  completion={t.edit && { target: t.target, schema: t.edit.schema, table: t.edit.table, db: tabDatabase(t, conns.find((x) => x.id === t.connId)), mysql: conns.find((x) => x.id === t.connId)?.kind === "mysql" }}
-                  onApply={(w, o) => applyTableFilter(t, w, o)}
-                  onCancel={() => cancel(t)}
-                  onFetchMore={() => fetchMore(t)}
-                  onSubmit={(st) => submitEdits(t, st)}
-                  onExportCsv={() => exportCsv(t)}
-                  onDdl={() => {
-                    const c = conns.find((x) => x.id === t.connId);
-                    if (c && t.edit) openDdl({ kind: (t.objKind ?? "table") as NodeInfo["kind"], conn: c, db: t.database, schema: t.edit.schema, name: t.edit.table });
-                  }}
-                  onCopyQueryToConsole={(sql) => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, sql); }}
-                  onFindSimilar={
-                    conns.find((x) => x.id === t.connId)?.kind === "postgres"
-                      ? async (column, row) => {
-                          const c = conns.find((x) => x.id === t.connId);
-                          if (!c || !t.edit) return;
-                          try {
-                            const sql = await meta.similarRowsSql(t.target, t.edit.schema, t.edit.table, column, t.edit.pk.map((k) => [k, row[k] === null ? null : String(row[k])]));
-                            openConsole(c, t.database, sql);
-                            setStatus("Similar-rows query opened in a new console");
-                          } catch (e) {
-                            setStatus(String(e));
+                {/* Reload Tab: its rows again (the ones shown may be what failed) */}
+                <ErrorBoundary scope="tab" label={labelOf(t)} onReload={() => (patch(t.id, { result: null }), applyTableFilter(t, t.where, t.orderBy))}>
+                  <TableEditor
+                    where={t.where}
+                    orderBy={t.orderBy}
+                    running={t.running}
+                    error={t.error}
+                    errorAction={<TlsFix conn={conns.find((x) => x.id === t.connId)} msg={t.error} then={() => (focusTableGrid(t.id), reconnectAfterTls(t.connId))} />}
+                    result={t.result}
+                    query={t.lastSql}
+                    edit={t.edit && t.lastSql === t.tableSql ? t.edit : undefined}
+                    readOnly={!!conns.find((x) => x.id === t.connId)?.readOnly}
+                    dialect={dialectOf(conns.find((x) => x.id === t.connId)?.kind)}
+                    loadingMore={t.loadingMore}
+                    table={t.edit && { source: t.connId, database: t.database ?? "", schema: t.edit.schema, table: t.edit.table }}
+                    target={t.target}
+                    completion={t.edit && { target: t.target, schema: t.edit.schema, table: t.edit.table, db: tabDatabase(t, conns.find((x) => x.id === t.connId)), mysql: conns.find((x) => x.id === t.connId)?.kind === "mysql" }}
+                    onApply={(w, o) => applyTableFilter(t, w, o)}
+                    onCancel={() => cancel(t)}
+                    onFetchMore={() => fetchMore(t)}
+                    onFetchFull={(cells) => fetchFull(t.id, undefined, cells)}
+                    onSubmit={(st) => submitEdits(t, st)}
+                    onExportCsv={() => exportCsv(t)}
+                    onDdl={() => {
+                      const c = conns.find((x) => x.id === t.connId);
+                      if (c && t.edit) openDdl({ kind: (t.objKind ?? "table") as NodeInfo["kind"], conn: c, db: t.database, schema: t.edit.schema, name: t.edit.table });
+                    }}
+                    onCopyQueryToConsole={(sql) => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, sql); }}
+                    onFindSimilar={
+                      conns.find((x) => x.id === t.connId)?.kind === "postgres"
+                        ? async (column, row) => {
+                            const c = conns.find((x) => x.id === t.connId);
+                            if (!c || !t.edit) return;
+                            try {
+                              const sql = await meta.similarRowsSql(t.target, t.edit.schema, t.edit.table, column, t.edit.pk.map((k) => [k, row[k] === null ? null : String(row[k])]));
+                              openConsole(c, t.database, sql);
+                              setStatus("Similar-rows query opened in a new console");
+                            } catch (e) {
+                              setStatus(String(e));
+                            }
                           }
-                        }
-                      : undefined
-                  }
-                />
+                        : undefined
+                    }
+                  />
+                </ErrorBoundary>
               </div>
             ))}
           {/* DDL (read-only) */}
@@ -608,32 +629,34 @@ export function useEditorGroups({
               const pick = (v: DdlView) => pickDdlView(t, v);
               return (
               <div key={t.id} className="work-layer ddl-layer" style={{ display: t.id === ga?.id ? "flex" : "none" }}>
-                <Toolbar>
-                  <span className="tb-info" style={{ marginLeft: 0 }}>{t.title.startsWith("SQL Generator") ? "SQL Generator" : "DDL"} · read-only</span>
-                  {t.edit && <ToolbarSep />}
-                  {t.edit && <Tabs size="sm" label="DDL view" items={[{ id: "sql", label: "SQL" }, { id: "structure", label: "Structure" }]} value={view} onChange={pick} />}
-                  <IconButton title={ddlObject(t) ? keyTitle("Reload", "ddl.reload") : "Reopen the DDL to reload"} onClick={() => void reloadDdl(t)} disabled={!ddlObject(t)}><IcReload /></IconButton>
-                  <Spacer />
-                  <ToolButton title={keyTitle("Copy to Clipboard", "ddl.copy")} onClick={() => copyDdl(t)}>Copy</ToolButton>
-                  <ToolButton title={keyTitle("Save to File", "ddl.save")} onClick={() => void saveDdl(t)}>Save to File</ToolButton>
-                  <ToolButton title={keyTitle("Run in a console", "ddl.run")} onClick={() => runDdl(t)}>Run in Console</ToolButton>
-                </Toolbar>
-                {/* Stays mounted (loads once per tab, on first show; a restored or background tab doesn't connect) */}
-                {t.edit && <TableStructureView key={structureRev[t.id] ?? 0} target={t.target} schema={t.edit.schema} table={t.edit.table} visible={view === "structure" && t.id === ga?.id} onShowSql={() => pick("sql")} />}
-                <div className="ddl-editor" style={{ display: view === "sql" ? undefined : "none" }}>
-                <ConsoleEditor
-                  tabId={t.id}
-                  connId={t.target}
-                  database={tabDatabase(t, conns.find((x) => x.id === t.connId))}
-                  initialSql={t.sql}
-                  language={dialectOf(conns.find((x) => x.id === t.connId)?.kind).monaco}
-                  kind={dialectOf(conns.find((x) => x.id === t.connId)?.kind).quoting}
-                  readOnly
-                  onChange={() => {}}
-                  onRun={() => {}}
-                  registerApi={() => {}}
-                />
-                </div>
+                <ErrorBoundary scope="tab" label={labelOf(t)}>
+                  <Toolbar>
+                    <span className="tb-info" style={{ marginLeft: 0 }}>{t.title.startsWith("SQL Generator") ? "SQL Generator" : "DDL"} · read-only</span>
+                    {t.edit && <ToolbarSep />}
+                    {t.edit && <Tabs size="sm" label="DDL view" items={[{ id: "sql", label: "SQL" }, { id: "structure", label: "Structure" }]} value={view} onChange={pick} />}
+                    <IconButton title={ddlObject(t) ? keyTitle("Reload", "ddl.reload") : "Reopen the DDL to reload"} onClick={() => void reloadDdl(t)} disabled={!ddlObject(t)}><IcReload /></IconButton>
+                    <Spacer />
+                    <ToolButton title={keyTitle("Copy to Clipboard", "ddl.copy")} onClick={() => copyDdl(t)}>Copy</ToolButton>
+                    <ToolButton title={keyTitle("Save to File", "ddl.save")} onClick={() => void saveDdl(t)}>Save to File</ToolButton>
+                    <ToolButton title={keyTitle("Run in a console", "ddl.run")} onClick={() => runDdl(t)}>Run in Console</ToolButton>
+                  </Toolbar>
+                  {/* Stays mounted (loads once per tab, on first show; a restored or background tab doesn't connect) */}
+                  {t.edit && <TableStructureView key={structureRev[t.id] ?? 0} target={t.target} schema={t.edit.schema} table={t.edit.table} visible={view === "structure" && t.id === ga?.id} onShowSql={() => pick("sql")} />}
+                  <div className="ddl-editor" style={{ display: view === "sql" ? undefined : "none" }}>
+                  <ConsoleEditor
+                    tabId={t.id}
+                    connId={t.target}
+                    database={tabDatabase(t, conns.find((x) => x.id === t.connId))}
+                    initialSql={t.sql}
+                    language={dialectOf(conns.find((x) => x.id === t.connId)?.kind).monaco}
+                    kind={dialectOf(conns.find((x) => x.id === t.connId)?.kind).quoting}
+                    readOnly
+                    onChange={() => {}}
+                    onRun={() => {}}
+                    registerApi={() => {}}
+                  />
+                  </div>
+                </ErrorBoundary>
               </div>
               );
             })}

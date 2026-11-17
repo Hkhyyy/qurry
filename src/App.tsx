@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Group as PanelGroup, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { api, ConnectionView, defaultDbOf, updateCheckEnabled } from "./lib/api";
 import { ContextMenu, Explorer, MenuItem } from "./components/Explorer";
 import { migrateOldHistory } from "./components/HistoryDialog";
 import { WorkspaceBar } from "./components/WorkspaceBar";
-import { Badge, Text, Toolbar, ToolbarSep } from "./ui";
+import { Badge, Text, Toast, Toolbar, ToolbarSep } from "./ui";
 import { invalidateSearchIndex } from "./components/SearchEverywhere";
 import { DEFAULT_FONT, font, setFont } from "./lib/prefs";
 import { loadKeymap, onKeymapChange } from "./lib/shortcuts";
@@ -25,6 +25,7 @@ import { useTabsStore } from "./features/tabs/store";
 import { wsConns } from "./features/workspaces/ops";
 import { stash, useWorkspacesStore } from "./features/workspaces/store";
 import { useWorkspaces } from "./features/workspaces/useWorkspaces";
+import { dismissRecovery, useRecoveryNotices } from "./features/recovery";
 import { useConsole } from "./features/console/useConsole";
 import { useTabs } from "./features/tabs/useTabs";
 import { useJobs } from "./features/jobs/useJobs";
@@ -86,6 +87,8 @@ export default function App() {
   const [status, setStatus] = useState("Ready");
   // A keymap.json that doesn't load: the default keys work, the status bar says how to get the saved ones back
   useEffect(() => void loadKeymap().then((err) => err && setStatus(err)), []);
+  // Recovered from an error, or reloaded with transactions the last page left open (features/recovery): toasts for a few seconds
+  const recovered = useRecoveryNotices();
   // The theme settings couldn't be read or the old pick moved (lib/theme.ts initTheme): what to do about it
   useEffect(() => {
     const n = takeThemeNotice();
@@ -251,6 +254,11 @@ export default function App() {
   const bumpFont = (d: number) => void setFont("editor", { size: d === 0 ? DEFAULT_FONT : font("editor").size + d });
   const search = useSearch({ ...app, ...groups, setExplorerHidden, toggleExplorer, bumpFont });
   const { findOpen } = search;
+  const showExplorer = !maximized && !explorerHidden;
+  const showFind = findOpen && !maximized;
+  // Saved splitter positions, one per set of shown panels (as before: the Find window keeps its height while closed)
+  const vLayout = useDefaultLayout({ id: "dbtool-v", panelIds: showFind ? ["top", "find"] : ["top"] });
+  const hLayout = useDefaultLayout({ id: "dbtool-h", panelIds: showExplorer ? ["explorer", "editors"] : ["editors"] });
 
   useGlobalShortcuts({ ...app, ...groups, ...search, keymapVer, focused, tabs, split, toggleExplorer, bumpFont });
 
@@ -286,11 +294,11 @@ export default function App() {
           onSettings={() => setSettingsOpen(true)}
         />
       )}
-      <PanelGroup direction="vertical" className="main" autoSaveId="dbtool-v">
-      <Panel id="top" order={1} minSize={20}>
-      <PanelGroup direction="horizontal" autoSaveId="dbtool-h">
-        {!maximized && !explorerHidden && (
-        <Panel id="explorer" order={1} defaultSize={20} minSize={12}>
+      <PanelGroup orientation="vertical" className="main" defaultLayout={vLayout.defaultLayout} onLayoutChanged={vLayout.onLayoutChanged}>
+      <Panel id="top" minSize="20%">
+      <PanelGroup orientation="horizontal" defaultLayout={hLayout.defaultLayout} onLayoutChanged={hLayout.onLayoutChanged}>
+        {showExplorer && (
+        <Panel id="explorer" defaultSize="20%" minSize="12%">
           {workspaces
             .filter((w) => shownWs.includes(w.id))
             .map((w) => {
@@ -319,16 +327,16 @@ export default function App() {
             })}
         </Panel>
         )}
-        {!maximized && !explorerHidden && <PanelResizeHandle className="resize-h" />}
-        <Panel id="editors" order={2}>
+        {showExplorer && <Separator className="resize-h" />}
+        <Panel id="editors">
           {renderPanes(panes, "")}
         </Panel>
       </PanelGroup>
       </Panel>
-      {findOpen && !maximized && (
+      {showFind && (
         <>
-          <PanelResizeHandle className="resize-v" />
-          <Panel id="find" order={2} defaultSize={30} minSize={10}>
+          <Separator className="resize-v" />
+          <Panel id="find" defaultSize="30%" minSize="10%">
             {search.findPanel}
           </Panel>
         </>
@@ -339,7 +347,16 @@ export default function App() {
       {search.switcherPopup}
       <Dialogs conns={conns} setStatus={setStatus} openConsole={openConsole} startBackup={startBackup} startExport={startExport} startImport={startImport} readyToQuit={readyToQuit} />
       {search.popups}
-      <ReconnectToasts />
+      <ReconnectToasts
+        extra={
+          recovered.length > 0 &&
+          recovered.map((r) => (
+            <Toast key={r.id} onClose={() => dismissRecovery(r.id)}>
+              {r.text}
+            </Toast>
+          ))
+        }
+      />
       <StatusBar
         status={status}
         busy={
