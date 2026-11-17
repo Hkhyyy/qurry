@@ -98,7 +98,8 @@
 /* fixed: windows whose content changes (tabs · preview · loading) keep a fixed size */
 .ui-modal.fixed { height: min(640px, calc(92vh - 24px)); }
 .ui-modal.fixed.size-xl { height: min(740px, calc(92vh - 24px)); }
-.ui-modal-head { flex: none; display: flex; align-items: center; gap: var(--ui-sp-3); padding: var(--ui-sp-5) var(--ui-sp-5) 0; }
+/* The title bar moves the dialog (Modal): dragging it doesn't select its text */
+.ui-modal-head { flex: none; display: flex; align-items: center; gap: var(--ui-sp-3); padding: var(--ui-sp-5) var(--ui-sp-5) 0; -webkit-user-select: none; user-select: none; }
 .ui-modal-title { font-size: var(--ui-fs-lg); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ui-modal-body { flex: 1; min-height: 0; overflow: auto; padding: var(--ui-sp-4) var(--ui-sp-5); }
 .ui-modal-body.fill { display: flex; flex-direction: column; overflow: hidden; }

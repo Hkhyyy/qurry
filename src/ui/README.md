@@ -70,7 +70,7 @@ The light and high-contrast themes give the same names other values.
 | Piece | Rules |
 |---|---|
 | `Toolbar` | 30px high, 2px between icons, `ToolbarSep` between groups |
-| `Modal` · `Overlay` · `Popover` | Dialog (`size` sm 420 · md 520 · lg 760 · xl 900, closes on Esc · a click outside, buttons on the right: Cancel → primary) / the backdrop behind a popup / a floating panel (header · list · footer hint) |
+| `Modal` · `Overlay` · `Popover` | Dialog (`size` sm 420 · md 520 · lg 760 · xl 900, closes on Esc · a click outside, moved by dragging its title bar inside the window, buttons on the right: Cancel → primary) / the backdrop behind a popup / a floating panel (header · list · footer hint) |
 | `confirm()` · `ConfirmHost` | The in-app confirm. `detail` = DetailList; with `danger`, a red button and focus on Cancel by default. Buttons are named for the action (Delete · Run …) |
 | `Menu` | Right-click (`at`) · dropdown. Items: action · separator · description line (`heading`) · submenu. Closes on a click outside · ⎋ |
 | `List` · `ListGroup` · `DetailList` | List (`boxed`, `empty` when empty) / a group title inside a list / detail list |

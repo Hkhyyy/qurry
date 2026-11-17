@@ -224,6 +224,7 @@ export const FormGridStory: S = {
   },
 };
 
+/** Every dialog: drag its title bar to move it (as DataGrip's), kept inside the window; it opens in its place again next time */
 export const ModalStory: S = {
   name: "Modal",
   parameters: { layout: "fullscreen" },

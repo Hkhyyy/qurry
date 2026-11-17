@@ -10,7 +10,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 ### Keys that stay fixed
 
 - `⇧⇧` (Search Everywhere) is a double tap, and the Switcher (`⌃⇥`) opens on release of `⌃`: neither is a key combination.
-- `Esc` always closes (a popup, a dialog, the find bar), so `⇧⎋` (hide the tool window) stays with it.
+- `Esc` always closes (a popup, a dialog, the find bar), so `⇧⎋` (hide the tool window) stays with it. A dialog moves by dragging its title bar, inside the window, and opens in its place again next time.
 - Moving and opening: arrows, Home / End, Page Up / Down, Tab and `↩` in the tree, the grid, lists and popups. As in DataGrip, they are not commands.
 - Typing: letters start speed search in the tree and edit the cell in the grid (`↩` / `F2` too), so a letter can't be a key there.
 - The editor's and the system's own keys: `⌘c` / `⌘v` / `⌘a` in the grid, `⌘/`, `⌘f` (and the find bar's toggles) and `⌃Space` in the editor.

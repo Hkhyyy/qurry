@@ -6,7 +6,7 @@ import { Children, CSSProperties, FocusEvent, HTMLAttributes, InputHTMLAttribute
 import { Button, Checkbox, IconButton, Spacer, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { DetailRow, EmptyState, ListItem, MenuItem, MenuLabel, MenuSeparator, SectionTitle } from "./molecules";
-import { listKey, matchOptions, placePopup } from "./popup";
+import { clampDrag, listKey, matchOptions, placePopup } from "./popup";
 
 // ───────── Toolbar ─────────
 export function Toolbar({ children, className, ...rest }: HTMLAttributes<HTMLDivElement>) {
@@ -20,7 +20,7 @@ export function Toolbar({ children, className, ...rest }: HTMLAttributes<HTMLDiv
 // ───────── Dialog ─────────
 export type ModalSize = "sm" | "md" | "lg" | "xl";
 /**
- * Dialog. Closes on Esc · outside click. The footer is right-aligned (Cancel → primary button).
+ * Dialog. Closes on Esc · outside click; moved by dragging its title bar, inside the window (opens in its place each time). The footer is right-aligned (Cancel → primary button).
  * layer="dialog" is a confirm · input box shown above other modals
  */
 export function Modal(p: {
@@ -45,6 +45,22 @@ export function Modal(p: {
   useEffect(() => {
     if (box.current && !box.current.contains(document.activeElement)) box.current.focus();
   }, []);
+  // Moved by dragging the title bar (not its controls), always inside the window; it opens where it always does
+  const [off, setOff] = useState({ x: 0, y: 0 });
+  const offRef = useRef(off);
+  offRef.current = off;
+  const drag = useRef<{ x: number; y: number; off: { x: number; y: number }; base: { left: number; top: number; width: number; height: number } } | null>(null);
+  /** Where the dialog is at offset 0 */
+  const base = () => {
+    const r = box.current!.getBoundingClientRect();
+    return { left: r.left - offRef.current.x, top: r.top - offRef.current.y, width: r.width, height: r.height };
+  };
+  const view = () => ({ width: window.innerWidth, height: window.innerHeight });
+  useEffect(() => {
+    const onResize = () => setOff((o) => clampDrag(o, base(), view()));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   return (
     <div className={cx("ui-backdrop", "for-modal", p.layer === "dialog" && "layer-dialog")} onMouseDown={p.stickyBackdrop ? undefined : p.onClose}>
       <div
@@ -53,6 +69,7 @@ export function Modal(p: {
         role="dialog"
         aria-modal="true"
         className={cx("ui-modal", p.size && p.size !== "md" && `size-${p.size}`, p.fixed && "fixed", p.tone && `tone-${p.tone}`, p.className)}
+        style={off.x || off.y ? { transform: `translate(${off.x}px, ${off.y}px)` } : undefined}
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           // Don't leak to app-wide shortcuts
@@ -61,7 +78,21 @@ export function Modal(p: {
           if (e.key === "Escape" && !e.defaultPrevented) p.onClose();
         }}
       >
-        <div className="ui-modal-head">
+        <div
+          className="ui-modal-head"
+          onPointerDown={(e) => {
+            if (e.button !== 0 || (e.target as Element).closest("button, input, select, textarea, a, label, [role=button], [role=tab]")) return;
+            // No preventDefault: the mousedown still closes an open ⓘ or popup, as a click on the title always did
+            e.currentTarget.setPointerCapture(e.pointerId);
+            drag.current = { x: e.clientX, y: e.clientY, off: offRef.current, base: base() };
+          }}
+          onPointerMove={(e) => {
+            const d = drag.current;
+            if (d) setOff(clampDrag({ x: d.off.x + e.clientX - d.x, y: d.off.y + e.clientY - d.y }, d.base, view()));
+          }}
+          onPointerUp={() => (drag.current = null)}
+          onPointerCancel={() => (drag.current = null)}
+        >
           <div className="ui-modal-title" title={typeof p.title === "string" ? p.title : undefined}>
             {p.title}
           </div>
