@@ -97,6 +97,35 @@ test("Edit Colors…: live preview, contrast warnings kept, an invalid hex not a
   await expect.poll(() => drawn(page)).toMatchObject({ bg: "rgb(16, 16, 24)", kind: "dark" });
 });
 
+// #188: the preview gets most of the width (a color's row is its name, swatch and hex), so its parts aren't cut
+test("Edit Colors…: the preview is wider than the color list and its grid header, tree and console text aren't cut", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  const preview = dialog(page).locator(".theme-preview");
+  await expect(preview.locator(".monaco-editor .view-line").first()).toBeVisible();
+  const side = (await dialog(page).locator(".theme-editor-side").boundingBox())!;
+  const shown = (await preview.boundingBox())!;
+  expect(shown.width).toBeGreaterThanOrEqual(400);
+  expect(shown.width).toBeGreaterThan(side.width);
+  // Nothing in the tree, the grid header or the console is wider than its box
+  const cut = await preview.evaluate((p) => {
+    const box = (el: Element) => el.getBoundingClientRect();
+    const out = [...p.querySelectorAll(".tree-node, .grid-header .cell, .col-name, .col-type")].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent);
+    const editor = box(p.querySelector(".theme-preview-editor")!);
+    // A console line's text ends inside the console
+    for (const line of p.querySelectorAll(".view-line > span")) if (box(line).right > editor.right + 1) out.push(line.textContent);
+    return out;
+  });
+  expect(cut).toEqual([]);
+  // A color's row is one line: name, swatch, hex; what it colors is said above the preview when pointing at its name
+  const row = dialog(page).locator('[data-token="keyword"]');
+  expect((await row.boundingBox())!.height).toBeLessThanOrEqual(32);
+  await expect(row.locator(".theme-token-label")).toHaveText("Keyword");
+  await row.locator(".theme-token-label").hover();
+  await expect(dialog(page).locator(".theme-editor-preview > .ui-text")).toHaveText(/^Preview — Keyword: SQL keywords/);
+});
+
 test("leaving the editor with unsaved colors asks; discarding goes back to the theme picked", async ({ page }) => {
   await openApp(page);
   await settings(page);

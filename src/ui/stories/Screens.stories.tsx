@@ -167,9 +167,10 @@ export const SettingsThemeSync: S = {
   },
 };
 /** Settings › Appearance › Theme › Edit Colors…: a custom theme from any built-in (or custom) one. Basic colors, the rest under "Advanced
- *  colors"; a picker and the hex per color, ↺ back to the base's. The whole window draws the colors being edited, the preview shows every
- *  state, and pointing at a color's name outlines what draws it (here Comment, set too dark: its contrast warning shows next to it and in
- *  the header, and it is saved with the warning if asked, never changed). Import… / Export… read and write a small JSON file */
+ *  colors"; a compact row per color (name, picker, hex, ↺ back to the base's), so the preview gets most of the width. The whole window
+ *  draws the colors being edited, the preview shows every state, and pointing at a color's name says what it colors above the preview and
+ *  outlines what draws it (here Comment, set too dark: its contrast warning shows under it and in the header, and it is saved with the
+ *  warning if asked, never changed). Import… / Export… read and write a small JSON file */
 export const SettingsThemeEditor: S = {
   name: "Settings — Theme editor",
   render: () => <SettingsDialog initialPage="theme" onClose={noop} onUpdate={noop} onChannel={noop} />,
@@ -183,7 +184,8 @@ export const SettingsThemeEditor: S = {
     await userEvent.hover(canvasElement.ownerDocument.querySelector('[data-token="comment"] .theme-token-label')!);
   },
 };
-/** Quick Switch Theme (⌃`, as DataGrip's): the built-in themes, custom ones (marked), Sync with OS with its pair, and Edit Colors… */
+/** Quick Switch Theme (⌃`, as DataGrip's): the built-in themes, custom ones (marked), Sync with OS with its pair, and Edit Colors…; drag
+ *  its title to move it */
 export const QuickSwitchTheme: S = {
   name: "Quick Switch Theme",
   render: () => <App />,
@@ -696,6 +698,7 @@ function SearchDemo({ initialTab, initial }: { initialTab: SeTab; initial: Searc
     </div>
   );
 }
+/** Search Everywhere (⇧⇧): drag its header (the tabs row, not the tabs, scope or search field) to move it, as a dialog */
 export const Search: S = { name: "Search Everywhere (⇧⇧)", render: () => <SearchDemo initialTab="all" initial="workspace" /> };
 /** Go to Database Object (⌘o) in This Workspace: PostgreSQL and MySQL objects of the workspace's two sources; the ⓘ says what each scope covers */
 export const SearchScopePicker: S = {
@@ -710,6 +713,7 @@ export const SearchScopePicker: S = {
 };
 export const SearchAllPlaces: S = { name: "Search Everywhere — All Places", render: () => <SearchDemo initialTab="database" initial="all" /> };
 export const FindInData: S = { name: "Full-text Search", render: () => <FullTextSearchDialog scope={{ connId: "dev", connName: "[DEV] shop_app", db: "shop_app", schemas: ["public"], tables: [] }} onClose={noop} onSearch={noop} /> };
+/** Switcher (⌃⇥): drag its title to move it, as a dialog */
 export const SwitcherStory: S = {
   name: "Switcher (⌃⇥)",
   render: () => (
