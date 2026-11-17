@@ -132,7 +132,7 @@ export function useGlobalShortcuts({
         "console.new": () => {
           e.preventDefault();
           const conn = treeSel?.conn ?? conns.find((c) => c.id === active?.connId);
-          if (conn) openConsole(conn, treeSel?.db ?? active?.database);
+          if (conn) openConsole(conn, treeSel?.db ?? active?.database, undefined, treeSel?.schema);
         },
         // Edit Data (default console for a data source)
         "tree.editData": () => (node ? act(() => ((node.kind === "conn" || node.kind === "db") && node.conn.kind !== "redis" ? jumpToConsole(node) : activateNode(node))) : false),

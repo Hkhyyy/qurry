@@ -36,7 +36,12 @@ import { useSearch } from "./features/search/useSearch";
 import { Dialogs, TopDialogs } from "./features/dialogs/Dialogs";
 import { useGlobalShortcuts } from "./features/shortcuts/useGlobalShortcuts";
 import { setDialog, setKeymapOpen, setSettingsOpen, setUpdate, setUpdateOpen, useDialogsStore } from "./features/dialogs/store";
+import { moveOldLayout } from "./lib/panelLayout";
 import "./App.css";
+
+// Splitter sizes saved before 0.3.4, before the first render reads them (#192)
+moveOldLayout("dbtool-h", ["explorer", "editors"]);
+moveOldLayout("dbtool-v", ["top", "find"]);
 
 export default function App() {
   // Redraw the menu shortcut labels when the keymap changes (or the WASM module that draws them has loaded)

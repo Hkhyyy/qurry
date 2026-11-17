@@ -1,7 +1,7 @@
-import { api, ConnectionView, defaultDbOf } from "../../lib/api";
+import { api, ConnectionView, defaultDbOf, searchPathSql } from "../../lib/api";
 import { leaves } from "../../lib/panes";
 import type { EditTarget } from "../../components/ResultGrid";
-import { buildTab, closeTabs, remember } from "./ops";
+import { buildTab, closeTabs, patch, remember } from "./ops";
 import { setActiveIds, setFocused, setTabs, useTabsStore } from "./store";
 import { DdlOf, Group, Tab, TAB_LIMIT } from "./types";
 
@@ -48,6 +48,15 @@ export function useTabs({ setStatus }: { setStatus: (s: string) => void }) {
     return tab;
   };
 
-  const openConsole = (c: ConnectionView, db?: string, sql?: string) => addTab(c, "console", { database: db, sql });
+  /** schema: where it was opened from (a schema, or an object in it). On PostgreSQL the console starts there, as if picked top right,
+   *  unless the data source's Switch schema is Manual or Disable (#191) */
+  const openConsole = (c: ConnectionView, db?: string, sql?: string, schema?: string) => {
+    const tab = addTab(c, "console", { database: db, sql });
+    if (schema && c.kind === "postgres" && (c.options?.switchSchema ?? "auto") === "auto") {
+      patch(tab.id, { schema });
+      api.runQuery(tab.target, searchPathSql(schema), tab.id).catch((e) => (patch(tab.id, { schema: undefined }), setStatus(String(e))));
+    }
+    return tab;
+  };
   return { activate, addTab, openConsole };
 }
