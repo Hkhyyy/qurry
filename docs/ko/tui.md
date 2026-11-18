@@ -47,6 +47,8 @@ URL 에 없는 부분은 `psql` · `mysql` · `redis-cli` 처럼 환경에서 �
 
 **⌃k › Show Log** 는 Finder 에서 로그 파일을 보여 주고 (Linux 에서는 그 폴더를 엽니다) 상태 줄에 경로를 띄웁니다 ([위치와 담기는 것](getting-started.md#설정이-저장되는-곳)). SSH 로 접속했을 때는 내 화면에 아무것도 열리지 않으니 그 경로를 그쪽에서 읽으세요 (`tail -f`). GUI 에서는 **Help › Show Log** 입니다.
 
+**⌃k › Copy Diagnostics** 는 버그를 알릴 때 필요한 것을 복사하고, 임시 폴더의 `qurry-diagnostics.txt` 에도 저장합니다 (0600, 상태 줄에 경로가 나옴): SSH 로 접속했을 때는 터미널이 복사를 넘겨 주지 않을 수 있으니 그 파일을 쓰세요. 버전, OS, 설치된 드라이버 플러그인, 종류별 데이터 소스 개수 (그중 Production · Read-only · SSH 터널 · SSM 개수), 로그의 마지막 200 줄이 담기고, 데이터 소스의 이름 · 호스트 · 사용자 · 데이터베이스와 비밀은 절대 담기지 않습니다 ([자세히](getting-started.md#설정이-저장되는-곳)). GUI 에서는 **Help › Copy Diagnostics** 입니다.
+
 ## 색
 
 TUI 는 시작할 때 아래 환경 변수로 색 모드를 하나 고릅니다 (먼저 맞는 줄이 이깁니다):
