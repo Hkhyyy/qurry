@@ -6,11 +6,16 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use unicode_width::UnicodeWidthStr;
 
+/// Columns have two numberings: the result's (a data index: `col`, `widths`, `edits`, `cut`, `sort`, `col_x`, and every method that
+/// takes a column) and the display's (a position in `view.view`, pinned first, hidden ones left out: `col_off`, `max_off`, `shown`).
+/// `cols()` counts the result's columns, `visible_cols()` the displayed ones. The cursor is always on a displayed column
 pub struct Grid {
     pub result: QueryResult,
     pub row: usize,
+    /// The cursor's column (a data index)
     pub col: usize,
     pub row_off: usize,
+    /// The first scrollable display position drawn after the pinned ones (at least `view.pinned`)
     pub col_off: usize,
     /// Server cursor session (console) — scrolling to the end loads more
     pub more_session: Option<String>,
@@ -61,6 +66,10 @@ pub struct Grid {
     /// The cell under the cursor that a read left cut (its row is gone, or the read failed) and why: the value panel doesn't ask
     /// for it again while the cursor stays on it (cleared when rows move)
     pub unread: Option<((usize, usize), String)>,
+    /// Hidden and pinned columns (a table tab's saved one, settings.json "columnLayout"; a console result's until it runs again)
+    pub layout: ColumnLayout,
+    /// `layout` over this result's columns (set_layout)
+    pub view: ColumnView,
 }
 
 /// Text placed in a cell `w` columns wide (display width, so wide characters line up too); text wider than the cell is left as is
@@ -133,7 +142,7 @@ pub fn cell_text(v: &Value) -> String {
     }
 }
 pub(crate) use qurry_core::format::{is_time_type, pad_frac};
-use qurry_core::format::{cell_align, cell_class, column_class, column_keys, column_width, is_json_type, json_spans, text_width, type_class, Align, Alignments, ColumnWidths, JsonKind, ValueClass};
+use qurry_core::format::{cell_align, cell_class, column_class, column_keys, column_view, column_width, is_json_type, json_spans, text_width, type_class, Align, Alignments, ColumnLayout, ColumnView, ColumnWidths, JsonKind, ValueClass};
 use qurry_core::extract::{self, Format, Rows};
 use qurry_core::store::DbKind;
 
@@ -166,7 +175,8 @@ static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), before_fit: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), shown: None, orig: vec![], cut: BTreeSet::new(), reading: false, unread: None };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), before_fit: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), shown: None, orig: vec![], cut: BTreeSet::new(), reading: false, unread: None, layout: ColumnLayout::default(), view: ColumnView { view: vec![], pinned: 0, hidden: 0 } };
+        g.set_layout(ColumnLayout::default());
         g.cut = g.result.cut.iter().map(|&[r, c]| (r, c)).collect();
         g.compute_widths();
         g
@@ -335,6 +345,90 @@ impl Grid {
         self.result.columns.len()
     }
 
+    /// Columns on display (pinned ones included, hidden ones not)
+    pub fn visible_cols(&self) -> usize {
+        self.view.view.len()
+    }
+
+    /// Display position of column `c` (None: hidden)
+    fn pos(&self, c: usize) -> Option<usize> {
+        self.view.view.iter().position(|&v| v == c)
+    }
+
+    /// The cursor's display position
+    fn cur_pos(&self) -> usize {
+        self.pos(self.col).unwrap_or(0)
+    }
+
+    /// The columns at display positions `a..=b`, in display order
+    fn cols_at(&self, a: usize, b: usize) -> Vec<usize> {
+        self.view.view.get(a..=b.min(self.visible_cols().saturating_sub(1))).map_or(vec![], <[usize]>::to_vec)
+    }
+
+    /// The first and the last column on display (Home / End)
+    pub fn first_col(&self) -> usize {
+        self.view.view.first().copied().unwrap_or(0)
+    }
+    pub fn last_col(&self) -> usize {
+        self.view.view.last().copied().unwrap_or(0)
+    }
+
+    /// Show the columns as `layout` says (qurry_shared::format::column_view over this result's column keys). A cursor on a column
+    /// it hides moves to the one now at its place
+    pub fn set_layout(&mut self, layout: ColumnLayout) {
+        let at = self.pos(self.col).unwrap_or(0);
+        self.layout = layout;
+        self.view = column_view(&self.width_keys(), &self.layout);
+        // A saved layout that hides every column (the GUI's, or one from columns renamed since) shows them all instead
+        if self.view.view.is_empty() {
+            self.view = column_view(&self.width_keys(), &ColumnLayout { hidden: vec![], pinned: self.layout.pinned.clone() });
+        }
+        if self.pos(self.col).is_none() && !self.view.view.is_empty() {
+            self.col = self.view.view[at.min(self.visible_cols() - 1)];
+        }
+        if self.anchor.is_some_and(|(_, c)| self.pos(c).is_none()) {
+            self.anchor = None;
+        }
+    }
+
+    pub fn is_pinned(&self, c: usize) -> bool {
+        self.pos(c).is_some_and(|p| p < self.view.pinned)
+    }
+
+    /// Column `c` shown or hidden; the last shown column stays (false: refused)
+    pub fn set_hidden(&mut self, c: usize, hide: bool) -> bool {
+        if hide && self.pos(c).is_some() && self.visible_cols() <= 1 {
+            return false;
+        }
+        let key = self.width_keys().swap_remove(c);
+        let mut l = self.layout.clone();
+        l.hidden.retain(|k| *k != key);
+        l.pinned.retain(|k| !(hide && *k == key));
+        if hide {
+            l.hidden.push(key);
+        }
+        self.set_layout(l);
+        true
+    }
+
+    /// Column `c` pinned at the left (after the ones pinned before it) or not
+    pub fn set_pinned(&mut self, c: usize, pin: bool) {
+        let key = self.width_keys().swap_remove(c);
+        let mut l = self.layout.clone();
+        l.pinned.retain(|k| *k != key);
+        if pin {
+            l.hidden.retain(|k| *k != key);
+            l.pinned.push(key);
+        }
+        self.set_layout(l);
+    }
+
+    /// Show All: every column on display again, the pinned ones still pinned
+    pub fn show_all(&mut self) {
+        let l = ColumnLayout { hidden: vec![], pinned: self.layout.pinned.clone() };
+        self.set_layout(l);
+    }
+
     /// Value with edits applied
     pub fn value(&self, r: usize, c: usize) -> Option<String> {
         if let Some(v) = self.edits.get(&(r, c)) {
@@ -365,8 +459,10 @@ impl Grid {
         let cells: Vec<(usize, usize)> = if !self.marked.is_empty() {
             self.marked.iter().map(|&r| (r, self.col)).collect()
         } else {
-            let (r0, c0, r1, c1) = self.sel_rect().unwrap_or((0, self.col, self.rows().saturating_sub(1), self.col));
-            (r0..=r1).flat_map(|r| (c0..=c1).map(move |c| (r, c))).collect()
+            let p = self.cur_pos();
+            let (r0, p0, r1, p1) = self.sel_box().unwrap_or((0, p, self.rows().saturating_sub(1), p));
+            let cols = self.cols_at(p0, p1);
+            (r0..=r1).flat_map(|r| cols.iter().map(move |&c| (r, c))).collect()
         };
         cells.into_iter().filter(|&(r, c)| self.is_cut(r, c)).collect()
     }
@@ -379,39 +475,53 @@ impl Grid {
         }
     }
 
-    /// Range as IN-list text and value count. One column gives ('a', 'b'), several give row tuples (('a', 1), …). Duplicates·NULL are dropped.
-    /// Numeric columns keep number text bare (numeric·bigint arrive as text); NaN and the like are quoted. Strings as `kind` reads them
-    fn in_list_of(&self, (r0, c0, r1, c1): (usize, usize, usize, usize), kind: DbKind) -> (String, usize) {
-        self.in_list_rows(r0..=r1, (c0, c1), kind)
-    }
-
-    fn in_list_rows(&self, rows: impl Iterator<Item = usize>, (c0, c1): (usize, usize), kind: DbKind) -> (String, usize) {
-        let rows: Vec<Vec<Value>> = rows.filter(|&r| r < self.rows()).map(|r| (c0..=c1).map(|c| self.cell(r, c)).collect()).collect();
-        let types: Vec<String> = (c0..=c1).map(|c| self.result.columns.get(c).map(|x| x.type_name.clone()).unwrap_or_default()).collect();
+    /// Rows × columns as IN-list text and value count. One column gives ('a', 'b'), several give row tuples (('a', 1), …). Duplicates·NULL
+    /// are dropped. Numeric columns keep number text bare (numeric·bigint arrive as text); NaN and the like are quoted. Strings as `kind` reads them
+    fn in_list_rows(&self, rows: impl Iterator<Item = usize>, cols: &[usize], kind: DbKind) -> (String, usize) {
+        let rows: Vec<Vec<Value>> = rows.filter(|&r| r < self.rows()).map(|r| cols.iter().map(|&c| self.cell(r, c)).collect()).collect();
+        let types: Vec<String> = cols.iter().map(|&c| self.result.columns.get(c).map(|x| x.type_name.clone()).unwrap_or_default()).collect();
         extract::in_list(&rows, &types, kind, extract::Options::default())
     }
 
     /// Whole column as an IN list
     pub fn column_in_list(&self, c: usize, kind: DbKind) -> (String, usize) {
-        self.in_list_of((0, c, self.rows().saturating_sub(1), c), kind)
+        self.in_list_rows(0..self.rows(), &[c], kind)
     }
 
     /// The current column of the marked rows (in grid order), else the selected range, else the whole current column, as an IN list
     /// (the GUI's Copy as IN List of ⌘-clicked rows lists only their cells)
     pub fn in_list(&self, kind: DbKind) -> (String, usize) {
         if !self.marked.is_empty() {
-            return self.in_list_rows(self.marked.iter().copied(), (self.col, self.col), kind);
+            return self.in_list_rows(self.marked.iter().copied(), &[self.col], kind);
         }
-        match self.sel_rect() {
-            Some(r) => self.in_list_of(r, kind),
+        match self.sel_box() {
+            Some((r0, p0, r1, p1)) => self.in_list_rows(r0..=r1, &self.cols_at(p0, p1), kind),
             None => self.column_in_list(self.col, kind),
         }
     }
 
-    /// Selected range (first row, first col, last row, last col). Selected with Shift+arrows·dragging
-    pub fn sel_rect(&self) -> Option<(usize, usize, usize, usize)> {
+    /// Selected range (first row, first display position, last row, last display position). Selected with Shift+arrows·dragging
+    fn sel_box(&self) -> Option<(usize, usize, usize, usize)> {
         let (ar, ac) = self.anchor?;
-        Some((ar.min(self.row), ac.min(self.col), ar.max(self.row), ac.max(self.col)))
+        let (a, p) = (self.pos(ac)?, self.cur_pos());
+        Some((ar.min(self.row), a.min(p), ar.max(self.row), a.max(p)))
+    }
+
+    /// The selected rows and columns (in grid order) the status line's items count: the marked rows (and a range's rows) in the
+    /// cursor's column, else the range, else the cursor's cell
+    pub fn status_cells(&self) -> (Vec<usize>, Vec<usize>) {
+        let rect = self.sel_box();
+        if !self.marked.is_empty() {
+            let mut rows = self.marked.clone();
+            if let Some((r0, _, r1, _)) = rect {
+                rows.extend(r0..=r1);
+            }
+            return (rows.into_iter().filter(|&r| r < self.rows()).collect(), vec![self.col]);
+        }
+        match rect {
+            Some((r0, p0, r1, p1)) => ((r0..=r1).collect(), self.cols_at(p0, p1)),
+            None => (vec![self.row], vec![self.col]),
+        }
     }
 
     /// Extend the range (starting from the current cell the first time)
@@ -430,26 +540,27 @@ impl Grid {
 
     /// Whether (r, c) is selected: in the range, or in a marked row
     fn selected(&self, r: usize, c: usize) -> bool {
-        self.marked.contains(&r) || self.sel_rect().is_some_and(|(r0, c0, r1, c1)| r >= r0 && r <= r1 && c >= c0 && c <= c1)
+        let p = self.pos(c);
+        p.is_some() && (self.marked.contains(&r) || self.sel_box().zip(p).is_some_and(|((r0, p0, r1, p1), p)| r >= r0 && r <= r1 && p >= p0 && p <= p1))
     }
 
     /// Rows and columns the selection (marked rows and the range) touches, in grid order. None when nothing is selected
     pub fn selection(&self) -> Option<(Vec<usize>, Vec<usize>)> {
-        let rect = self.sel_rect();
+        let rect = self.sel_box();
         if rect.is_none() && self.marked.is_empty() {
             return None;
         }
         let mut rows = self.marked.clone();
         let cols: Vec<usize> = match rect {
-            Some((r0, c0, r1, c1)) if self.marked.is_empty() => {
+            Some((r0, p0, r1, p1)) if self.marked.is_empty() => {
                 rows.extend(r0..=r1);
-                (c0..=c1).collect()
+                self.cols_at(p0, p1)
             }
             Some((r0, _, r1, _)) => {
                 rows.extend(r0..=r1);
-                (0..self.cols()).collect()
+                self.view.view.clone()
             }
-            None => (0..self.cols()).collect(),
+            None => self.view.view.clone(),
         };
         Some((rows.into_iter().collect(), cols))
     }
@@ -540,23 +651,30 @@ impl Grid {
 
     /// The cells a paste of `text` writes from the current cell (rows past the last one would be added)
     pub fn paste_spots(&self, text: &str) -> Vec<(usize, usize)> {
-        let n = self.cols();
         let rows = extract::paste_cells(text, extract::PasteFormat::Auto);
-        rows.iter().enumerate().flat_map(|(i, cells)| (0..cells.len()).map(move |j| (self.row + i, self.col + j))).filter(|&(_, c)| c < n).collect()
+        let cols = self.paste_cols(&rows);
+        rows.iter().enumerate().flat_map(|(i, cells)| cols.iter().take(cells.len()).map(move |&c| (self.row + i, c))).collect()
     }
 
-    /// Paste: fill from the current cell, `text` read as TSV or CSV (extract::paste_cells, as the GUI reads it; an empty field is NULL).
-    /// Missing rows are added, overflowing columns dropped
+    /// The columns a paste of `rows` fills: from the cursor's to the right in display order, hidden ones skipped
+    fn paste_cols<T>(&self, rows: &[Vec<T>]) -> Vec<usize> {
+        let p = self.cur_pos();
+        self.cols_at(p, p + rows.iter().map(Vec::len).max().unwrap_or(0).saturating_sub(1))
+    }
+
+    /// Paste: fill from the current cell (paste_cols), `text` read as TSV or CSV (extract::paste_cells, as the GUI reads it; an empty
+    /// field is NULL). Missing rows are added, overflowing columns dropped
     pub fn paste(&mut self, text: &str) {
         let (row, col) = (self.row, self.col);
-        for (i, cells) in extract::paste_cells(text, extract::PasteFormat::Auto).into_iter().enumerate() {
+        let rows = extract::paste_cells(text, extract::PasteFormat::Auto);
+        let cols = self.paste_cols(&rows);
+        for (i, cells) in rows.into_iter().enumerate() {
             let r = row + i;
             while r >= self.rows() {
                 self.add_row();
             }
-            let n = self.cols();
-            for (j, v) in cells.into_iter().enumerate().filter(|(j, _)| col + j < n) {
-                self.set_cell(r, col + j, v);
+            for (&c, v) in cols.iter().zip(cells) {
+                self.set_cell(r, c, v);
             }
         }
         (self.row, self.col) = (row, col);
@@ -582,33 +700,34 @@ impl Grid {
     pub fn move_by(&mut self, dr: isize, dc: isize) {
         self.anchor = None;
         let rows = self.rows() as isize;
-        let cols = self.cols() as isize;
+        let cols = self.visible_cols() as isize;
         if rows > 0 {
             self.row = (self.row as isize + dr).clamp(0, rows - 1) as usize;
         }
         if cols > 0 {
-            self.col = (self.col as isize + dc).clamp(0, cols - 1) as usize;
+            self.col = self.view.view[(self.cur_pos() as isize + dc).clamp(0, cols - 1) as usize];
         }
     }
 
-    /// Horizontal scroll (trackpad·Shift+wheel): move the first visible column and the selection with it
+    /// Horizontal scroll (trackpad·Shift+wheel): move the first scrollable column and the selection with it (pinned ones stay)
     pub fn hscroll(&mut self, d: isize) {
-        if self.cols() == 0 {
+        let (n, pinned) = (self.visible_cols(), self.view.pinned);
+        if n <= pinned {
             return;
         }
-        self.col_off = (self.col_off as isize + d).clamp(0, self.max_off.min(self.cols() - 1) as isize) as usize;
-        self.col = self.col_off;
+        self.col_off = (self.col_off.max(pinned) as isize + d).clamp(pinned as isize, self.max_off.clamp(pinned, n - 1) as isize) as usize;
+        self.col = self.view.view[self.col_off];
     }
 
-    /// Jump to the clicked·dragged scrollbar position
+    /// Jump to the clicked·dragged scrollbar position (the track covers the scrollable columns)
     pub fn hscroll_to(&mut self, x: u16) {
-        let b = self.hbar;
-        if b.width == 0 || self.cols() == 0 {
+        let (b, n, pinned) = (self.hbar, self.visible_cols(), self.view.pinned);
+        if b.width == 0 || n <= pinned {
             return;
         }
-        let c = (x.saturating_sub(b.x) as usize * self.cols() / b.width as usize).min(self.max_off).min(self.cols() - 1);
-        self.col_off = c;
-        self.col = c;
+        let p = (pinned + x.saturating_sub(b.x) as usize * (n - pinned) / b.width as usize).min(self.max_off).min(n - 1);
+        self.col_off = p;
+        self.col = self.view.view[p];
     }
 
     /// When near the end, time to load more (only up to MAX_ROWS: beyond that, export to CSV)
@@ -638,6 +757,50 @@ impl Grid {
         }
     }
 
+    /// Horizontal scroll in `avail` cells: the pinned columns first, always, then the scrollable ones from `col_off`, keeping the
+    /// cursor's column in view. Returns the drawn columns, their widths (a last one that doesn't fit is cut to the rest) and how many
+    /// of them are whole
+    fn place_cols(&mut self, avail: u16) -> (Vec<usize>, Vec<u16>, usize) {
+        let (n, pinned) = (self.visible_cols(), self.view.pinned);
+        let dw: Vec<u16> = self.view.view.iter().map(|&c| self.widths[c]).collect();
+        let room = avail.saturating_sub(dw[..pinned].iter().map(|w| w + 1).sum());
+        // So the right side isn't empty when scrolled to the end: don't scroll past the first column at which the last column reaches the right edge
+        self.max_off = {
+            let mut off = n;
+            let mut w = 0u16;
+            while off > pinned && w + dw[off - 1] < room {
+                off -= 1;
+                w += dw[off] + 1;
+            }
+            off.min(n - 1).max(pinned)
+        };
+        self.col_off = self.col_off.clamp(pinned, self.max_off);
+        let cur = self.cur_pos();
+        if cur >= pinned {
+            self.col_off = self.col_off.min(cur);
+            while self.col_off < cur && dw[self.col_off..=cur].iter().map(|w| w + 1).sum::<u16>() > room {
+                self.col_off += 1;
+            }
+        }
+        let (mut cols, mut shown_w, mut used, mut full) = (vec![], vec![], 0u16, 0usize);
+        for p in (0..pinned).chain(self.col_off..n) {
+            let (c, w) = (self.view.view[p], dw[p]);
+            if used + w + 1 > avail && !cols.is_empty() {
+                let rest = avail.saturating_sub(used + 1);
+                if rest >= 3 {
+                    cols.push(c);
+                    shown_w.push(rest);
+                }
+                break;
+            }
+            used += w + 1;
+            cols.push(c);
+            shown_w.push(w);
+            full += 1;
+        }
+        (cols, shown_w, full)
+    }
+
     /// `aligns` = App::align (settings.json "gridAlign", shared with the GUI)
     pub fn render(&mut self, f: &mut Frame, area: Rect, title: String, focused: bool, color: crate::theme::ColorMode, aligns: &Alignments) {
         let block = Block::default()
@@ -658,7 +821,7 @@ impl Grid {
             inner.height -= h;
             f.render_widget(ratatui::widgets::Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }), Rect { y: inner.y + inner.height, height: h, ..inner });
         }
-        if inner.height < 2 || self.cols() == 0 {
+        if inner.height < 2 || self.visible_cols() == 0 {
             return;
         }
         // Body below the header (rows are separated by underlines, not separate lines)
@@ -670,51 +833,8 @@ impl Grid {
         } else if self.row >= self.row_off + body_h {
             self.row_off = self.row + 1 - body_h;
         }
-        // Horizontal scroll: keep the selected column visible
         let num_w = (self.rows().max(1).to_string().len() + 1) as u16;
-        let avail = inner.width.saturating_sub(num_w + 1);
-        // So the right side isn't empty when scrolled to the end: don't scroll past the first column at which the last column reaches the right edge
-        self.max_off = {
-            let mut off = self.cols();
-            let mut w = 0u16;
-            while off > 0 && w + self.widths[off - 1] < avail {
-                off -= 1;
-                w += self.widths[off] + 1;
-            }
-            off.min(self.cols() - 1)
-        };
-        if self.col_off > self.max_off {
-            self.col_off = self.max_off;
-        }
-        if self.col < self.col_off {
-            self.col_off = self.col;
-        }
-        loop {
-            let used: u16 = self.widths[self.col_off..=self.col].iter().map(|w| w + 1).sum();
-            if used <= avail || self.col_off == self.col {
-                break;
-            }
-            self.col_off += 1;
-        }
-        // Visible columns and their widths. A last column that doesn't fit is shown cut to the remaining width
-        let mut cols: Vec<usize> = vec![];
-        let mut shown_w: Vec<u16> = vec![];
-        let mut used = 0u16;
-        let mut full = 0usize;
-        for (c, &w) in self.widths.iter().enumerate().take(self.cols()).skip(self.col_off) {
-            if used + w + 1 > avail && !cols.is_empty() {
-                let rest = avail.saturating_sub(used + 1);
-                if rest >= 3 {
-                    cols.push(c);
-                    shown_w.push(rest);
-                }
-                break;
-            }
-            used += w + 1;
-            cols.push(c);
-            shown_w.push(w);
-            full += 1;
-        }
+        let (cols, shown_w, full) = self.place_cols(inner.width.saturating_sub(num_w + 1));
         // Record positions for click hit-testing
         self.body = Rect { x: inner.x, y: inner.y + 1, width: inner.width, height: inner.height - 1 };
         self.header = Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 };
@@ -740,7 +860,7 @@ impl Grid {
         // What a NULL on "Column type" follows (an untyped column goes by its values)
         let nclass: Vec<ValueClass> = cols.iter().map(|&c| column_class(&self.result.columns[c].type_name, self.result.rows.iter().filter_map(|row| row.get(c)))).collect();
         let tjson: Vec<bool> = cols.iter().map(|&c| is_json_type(&self.result.columns[c].type_name)).collect();
-        let sel = self.sel_rect();
+        let sel = self.sel_box();
         let end = (self.row_off + body_h).min(self.rows());
         let rows: Vec<Row> = (self.row_off..end)
             .map(|r| {
@@ -827,32 +947,39 @@ impl Grid {
         let seps: Vec<u16> = std::iter::once(inner.x + num_w).chain(self.col_x.iter().take(full).map(|c| c.2)).filter(|x| *x < inner.right()).collect();
         // Underline runs to the end of the last column (including a cut one)
         let last = self.col_x.last().map(|c| c.2).max(seps.last().map(|x| x + 1)).unwrap_or(inner.x);
+        // The line after the pinned columns is double: what stays when scrolling (shows in NO_COLOR too; not the focused border's ┃)
+        let pin_edge = self.view.pinned.checked_sub(1).filter(|&p| p < full).map(|p| self.col_x[p].2);
         let rows_end = (inner.y + 1 + shown_rows).min(inner.bottom());
         for y in inner.y..rows_end {
             for x in inner.x..inner.right().min(last) {
                 buf[(x, y)].set_style(under);
             }
             for &x in &seps {
-                buf[(x, y)].set_symbol("│").set_style(line);
+                buf[(x, y)].set_symbol(if Some(x) == pin_edge { "║" } else { "│" }).set_style(line);
             }
         }
         // Horizontal scrollbar on the bottom border (GUI: "cols 3–8 of 14" in the status bar): the border line itself is the bar, a dim
         // thin track with a heavier bold thumb over the shown columns (the same focused or not, so it shows in NO_COLOR too), then the
         // shown range at its right end. Click or drag the track to move
+        // In display positions over the shown columns (hidden ones not counted); the pinned ones count as shown from 1 until scrolled
         self.hbar = Rect::default();
-        let last = self.col_off + full.max(1);
-        self.shown = Some((self.col_off + 1, last.min(self.cols()), self.cols()));
-        if let Some(text) = qurry_shared::format::shown_cols(self.col_off + 1, last, self.cols()) {
+        let (n, pinned) = (self.visible_cols(), self.view.pinned);
+        let scrolled = full.saturating_sub(pinned).max(1);
+        let first = if self.col_off == pinned { 1 } else { self.col_off + 1 };
+        let last = (self.col_off + scrolled).min(n);
+        self.shown = Some((first, last, n));
+        if let Some(text) = qurry_shared::format::shown_cols(first, last, n) {
             let accent = if focused { Color::Cyan } else { Color::Gray };
             let label = format!(" ◀ {text} ▶ ");
             let room = inner.width;
             // A narrow grid keeps the track and drops the range
             let label_w = if room >= label.width() as u16 + 10 { label.width() as u16 } else { 0 };
             let track = Rect { x: inner.x, y: area.bottom().saturating_sub(1), width: room - label_w, height: 1 };
-            let n = self.cols() as u32;
+            // The track covers the scrollable columns
+            let n = (n - pinned).max(1) as u32;
             let tw = track.width as u32;
-            let start = (self.col_off as u32 * tw / n) as u16;
-            let len = ((full.max(1) as u32 * tw).div_ceil(n) as u16).clamp(2, track.width - start);
+            let start = ((self.col_off - pinned) as u32 * tw / n) as u16;
+            let len = ((scrolled as u32 * tw).div_ceil(n) as u16).clamp(2, track.width - start);
             for x in track.left()..track.right() {
                 let on = (track.x + start..track.x + start + len).contains(&x);
                 let st = if on { Style::default().fg(accent).add_modifier(Modifier::BOLD) } else { Style::default().fg(crate::kit::DIM) };
@@ -1137,16 +1264,16 @@ mod tests {
         let ty = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
         let rows = vec![vec![json!("1.2.3.4"), json!(1)], vec![json!("5.6.7.8"), json!(2)], vec![json!("9.9.9.9"), json!(3)]];
         let mut g = Grid::new(QueryResult { columns: vec![ty("ip", "TEXT"), ty("n", "INT4")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![], cut: vec![] });
-        assert_eq!(g.sel_rect(), None);
+        assert_eq!(g.sel_box(), None);
         g.extend(1, 0);
-        assert_eq!(g.sel_rect(), Some((0, 0, 1, 0)));
+        assert_eq!(g.sel_box(), Some((0, 0, 1, 0)));
         assert_eq!(g.in_list(DbKind::Postgres), ("('1.2.3.4', '5.6.7.8')".to_string(), 2));
         g.extend(0, 1);
         assert_eq!(g.selection_tsv(), "1.2.3.4\t1\n5.6.7.8\t2");
         assert_eq!(g.in_list(DbKind::Postgres), ("(('1.2.3.4', 1), ('5.6.7.8', 2))".to_string(), 2));
         // Plain movement clears it, and the IN list is the whole current column
         g.move_by(1, 0);
-        assert_eq!(g.sel_rect(), None);
+        assert_eq!(g.sel_box(), None);
         assert_eq!(g.in_list(DbKind::Postgres), ("(1, 2, 3)".to_string(), 3));
     }
 

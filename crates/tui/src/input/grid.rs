@@ -156,8 +156,8 @@ pub(super) fn nav(app: &mut App, k: KeyEvent) {
         KeyCode::Left | KeyCode::Char('h') => g.move_by(0, -1),
         KeyCode::PageDown => g.move_by(page, 0),
         KeyCode::PageUp => g.move_by(-page, 0),
-        KeyCode::Home => g.col = 0,
-        KeyCode::End => g.col = g.cols().saturating_sub(1),
+        KeyCode::Home => g.col = g.first_col(),
+        KeyCode::End => g.col = g.last_col(),
         KeyCode::Char('g') => g.row = 0,
         KeyCode::Char('G') => g.row = g.rows().saturating_sub(1),
         KeyCode::Char('y') => {
