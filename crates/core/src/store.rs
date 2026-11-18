@@ -53,6 +53,13 @@ pub struct ConnectionConfig {
     /// kept in connection-tunnels.json too (Store::list), and the DB password of an SSM source is saved under a key they don't read
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssm: Option<SsmConfig>,
+    /// A program whose output is the DB password, run at each login (crate::password_command: RDS / Cloud SQL IAM tokens, #177).
+    /// Never exported or imported (export_to, merge_import). Older apps drop it when they save: the source then asks for a password
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub password_command: String,
+    /// Seconds the command's output is used again for the next login (None = the command runs at every login)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_reuse_secs: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -573,7 +580,12 @@ impl Store {
     }
 
     pub fn export_to(&self, path: &std::path::Path) -> AppResult<usize> {
-        let connections = self.saved()?;
+        let mut connections = self.saved()?;
+        // A password command runs a program on the computer that imports the file: never shared (merge_import clears it too)
+        for c in &mut connections {
+            c.password_command.clear();
+            c.password_reuse_secs = None;
+        }
         let n = connections.len();
         let file = ExportFile { app: "dbtool".into(), version: 1, connections };
         crate::secrets::write_private(path, serde_json::to_string_pretty(&file)?.as_bytes())?;
@@ -729,6 +741,9 @@ impl Store {
             if c.id.is_empty() {
                 c.id = uuid::Uuid::new_v4().to_string();
             }
+            // A file never brings a password command (a program to run here): an updated source keeps its own, a new one has none
+            let own = all.iter().find(|e| e.id == c.id).map(|e| (e.password_command.clone(), e.password_reuse_secs));
+            (c.password_command, c.password_reuse_secs) = own.unwrap_or_default();
             match all.iter_mut().find(|e| e.id == c.id) {
                 Some(e) => {
                     // A file without an MCP setting keeps what the source has now (not the legacy default for unset)
@@ -1522,7 +1537,7 @@ mod tests {
             ssh: None,
             password_saved: false,
             ssh_secret_saved: false,
-            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         }
     }
 
@@ -1580,6 +1595,38 @@ mod tests {
         let names: Vec<_> = b.list().unwrap().into_iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["PROD", "DEV"]);
         assert_eq!(b.get("1").unwrap().unwrap().color.as_deref(), Some("#5c2b2b"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A password command (#177) never leaves in an export, and a file that has one (hand-edited, another tool) can't bring it:
+    /// a new source gets none, an updated one keeps its own
+    #[test]
+    fn password_commands_are_not_exported_or_imported() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let a = Store::new(base.join("a"));
+        let mut c = conn("1", "IAM");
+        (c.password_command, c.password_reuse_secs) = ("/opt/homebrew/bin/aws rds generate-db-auth-token".into(), Some(600));
+        a.save(&c).unwrap();
+        assert_eq!(a.get("1").unwrap().unwrap().password_command, c.password_command, "kept in connections.json");
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("export.json");
+        a.export_to(&file).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(!text.contains("passwordCommand") && !text.contains("passwordReuseSecs") && !text.contains("generate-db-auth-token"), "{text}");
+        // A file carrying one anyway
+        let carried = base.join("carried.json");
+        std::fs::write(&carried, text.replacen(r#""name": "IAM""#, r#""name": "IAM", "passwordCommand": "/bin/sh -c id", "passwordReuseSecs": 5"#, 1)).unwrap();
+        assert!(std::fs::read_to_string(&carried).unwrap().contains("passwordCommand"));
+        let b = Store::new(base.join("b"));
+        assert_eq!(import_all(&b, &carried), (1, 0, vec![]));
+        let got = b.get("1").unwrap().unwrap();
+        assert!(got.password_command.is_empty() && got.password_reuse_secs.is_none());
+        let mut own = c.clone();
+        own.password_command = "/usr/local/bin/mine".into();
+        b.save(&own).unwrap();
+        assert_eq!(import_all(&b, &carried), (0, 1, vec![]));
+        let got = b.get("1").unwrap().unwrap();
+        assert_eq!((got.password_command.as_str(), got.password_reuse_secs), ("/usr/local/bin/mine", Some(600)));
         let _ = std::fs::remove_dir_all(&base);
     }
 

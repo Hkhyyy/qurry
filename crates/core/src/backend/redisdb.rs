@@ -1057,7 +1057,7 @@ mod tests {
         ConnectionConfig {
             id: "rd".into(), name: "rd".into(), kind: DbKind::Redis, host: host.into(), port: port.parse().expect("QURRY_TEST_REDIS port"), user: String::new(),
             database: db.into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(),
-            read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         }
     }
 

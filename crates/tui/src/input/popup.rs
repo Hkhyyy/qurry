@@ -461,7 +461,7 @@ mod tests {
         let mut h = Harness::new().await;
         let cfg = ConnectionConfig {
             id: "c1".into(), name: "pg".into(), kind: DbKind::Postgres, host: "localhost".into(), port: 5432, user: "postgres".into(), database: "postgres".into(),
-            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         h.app.state.store.save(&cfg).unwrap();
         h.app.reload_conns();
@@ -565,7 +565,7 @@ mod tests {
         let mut h = Harness::new().await;
         let cfg = ConnectionConfig {
             id: "c1".into(), name: "pg".into(), kind: DbKind::Postgres, host: "qurry.invalid".into(), port: 1, user: "postgres".into(), database: "postgres".into(),
-            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         h.app.conn_form(Some(cfg));
         h.key("Ctrl+t");

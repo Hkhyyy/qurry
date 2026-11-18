@@ -163,7 +163,7 @@ impl App {
             ssh: None,
             color: None,
             read_only: false,
-            options: Default::default(), ssl: None, redis: None, ssm: None,
+            options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         });
         let ssh = c.ssh.clone().unwrap_or(SshConfig { enabled: false, host: String::new(), port: 22, user: String::new(), auth: SshAuth::Key, key_path: "~/.ssh/id_ed25519".into() });
         let ssm = c.ssm.clone().unwrap_or_default();
@@ -244,7 +244,7 @@ impl App {
             ssh: None,
             color: None,
             read_only: false,
-            options: Default::default(), ssl: None, redis: None, ssm: None,
+            options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         });
         c.kind = serde_json::from_value(serde_json::Value::String(v("Type"))).unwrap_or(DbKind::Postgres);
         c.host = v("Host").trim().into();

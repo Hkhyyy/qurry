@@ -379,7 +379,7 @@ async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppRes
         return Err(AppError::Msg(format!("Data source \"{}\" is not shared with MCP", c.name)));
     }
     touch(state, id);
-    let (base, db) = split_target(id);
+    let base = split_target(id).0;
     // After the Mac woke or a long idle: the tunnel and the pools' idle connections are checked first. It may close them. Whenever
     // the source has anything open, not only this database's pool: a database opened first after a wake goes through the same tunnel
     let open = state.pools.read().await.keys().any(|k| belongs(k, base));
@@ -395,15 +395,8 @@ async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppRes
     {
         return Ok(p);
     }
-    let mut cfg = state
-        .store
-        .get(base)?
-        .ok_or_else(|| AppError::Msg("Data source not found".into()))?;
-    // For file DBs (SQLite, DuckDB) database is the file path: do not overwrite it with the DB name (main)
-    if let Some(db) = db.filter(|_| !cfg.kind.is_file()) {
-        cfg.database = db.to_string();
-    }
-    let password = state.saved_secret(&cfg.password_key(), cfg.password_saved)?;
+    let cfg = target(state, id)?;
+    let password = state.login_password(&cfg).await?;
     let ssh_secret = if cfg.active_ssh().is_some() { state.saved_secret(&store::ssh_secret_key(base), cfg.ssh_secret_saved)? } else { None };
     let c = state.connecting(base);
     loop {
@@ -429,6 +422,16 @@ async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppRes
             Err(e) => return Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, timeout_error(&cfg, e, stale.is_some())).await),
         }
     }
+}
+
+/// The settings a connect to `id` (a source, or one of its databases) uses
+fn target(state: &AppState, id: &str) -> AppResult<ConnectionConfig> {
+    let mut cfg = state.source(id)?;
+    // For file DBs (SQLite, DuckDB) database is the file path: do not overwrite it with the DB name (main)
+    if let Some(db) = split_target(id).1.filter(|_| !cfg.kind.is_file()) {
+        cfg.database = db.to_string();
+    }
+    Ok(cfg)
 }
 
 /// Runs `f` on the pool of `id` (ensure_pool). When a pool that was already open times out getting a connection through the
@@ -483,6 +486,7 @@ pub(super) async fn with_pool_after<T, Fut: std::future::Future<Output = AppResu
     };
     let e = match r {
         Err(e) if timed_out(&e) => e,
+        Err(e) if login_refused(&e) => return refill(state, id, e, &f).await,
         r => return r,
     };
     let cfg = state.source(id)?;
@@ -492,15 +496,42 @@ pub(super) async fn with_pool_after<T, Fut: std::future::Future<Output = AppResu
     }
 }
 
+/// The server refused a new connection's login: PostgreSQL SQLSTATE class 28, MySQL 1045. Nothing ran on it
+fn login_refused(e: &AppError) -> bool {
+    match crate::mysql::error_number(e) {
+        Some(n) => n == 1045,
+        None => matches!(e, AppError::Db(sqlx::Error::Database(d)) if d.code().is_some_and(|c| c.starts_with("28"))),
+    }
+}
+
+/// A use of a PostgreSQL / MySQL pool failed because the server refused a new connection's login (with_pool_after): with a
+/// password command, the token the pool opened with may have expired (an RDS IAM token lasts 15 minutes), and sqlx connects with
+/// the options the pool holds (no hook asks for a new password). The command runs again, the pool takes its output and `f` runs
+/// once more: the refused login ran no statement, so this is safe for writes too. Without a command it is the error
+async fn refill<T, Fut: std::future::Future<Output = AppResult<T>>>(state: &AppState, id: &str, e: AppError, f: impl Fn(Pool) -> Fut) -> AppResult<T> {
+    let cfg = target(state, id)?;
+    let Some(pool) = state.pools.read().await.get(id).cloned().filter(|_| !cfg.password_command.trim().is_empty()) else { return Err(e) };
+    let password = state.command_password(&cfg, true).await?;
+    match &pool {
+        Pool::Pg(p) => p.set_connect_options((*p.connect_options()).clone().password(&password)),
+        Pool::My(p) => p.set_connect_options((*p.connect_options()).clone().password(&password)),
+        _ => return Err(e),
+    }
+    crate::log!("[qurry] pool of {id} took a new password from its command");
+    f(pool).await
+}
+
 /// ensure_pool, for work that changes data or runs long: through a tunnel, the pool answers a round trip first (with_pool), so a
-/// tunnel that stopped forwarding is replaced before anything runs. Other errors of that round trip are left to the work itself
+/// tunnel that stopped forwarding is replaced before anything runs. So it does with a password command, so a login the server
+/// refuses (an expired token) gets a new password first (refill). Other errors of that round trip are left to the work itself
 pub async fn checked_pool(state: &AppState, id: &str) -> AppResult<Pool> {
-    if !state.source(id)?.tunneled() {
+    let cfg = state.source(id)?;
+    if !cfg.tunneled() && cfg.password_command.trim().is_empty() {
         return ensure_pool(state, id).await;
     }
     with_pool(state, id, |p| async move {
         match p.server_version().await {
-            Err(e) if timed_out(&e) => Err(e),
+            Err(e) if timed_out(&e) || login_refused(&e) => Err(e),
             _ => Ok(p),
         }
     })

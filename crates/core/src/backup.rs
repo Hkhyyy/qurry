@@ -561,7 +561,9 @@ async fn endpoint(st: &AppState, id: &str) -> AppResult<(String, u16, String, St
         None if cfg.tunneled() => return Err(AppError::Msg("The tunnel of this data source was closed meanwhile — run it again.".into())),
         None => (cfg.host.clone(), cfg.port),
     };
-    Ok((host, port, cfg.user.clone(), db, st.saved_secret(&cfg.password_key(), cfg.password_saved)?, cfg))
+    // The password command's %DATABASE% is the database dumped or restored, as for its pool
+    let password = st.login_password(&crate::store::ConnectionConfig { database: db.clone(), ..cfg.clone() }).await?;
+    Ok((host, port, cfg.user.clone(), db, password, cfg))
 }
 
 /// Whether psql knows \restrict (from 17.6 · 16.10 · 15.14 · 14.19 · 13.22)

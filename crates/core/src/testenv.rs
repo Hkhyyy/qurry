@@ -99,6 +99,8 @@ fn cfg(kind: DbKind, var: &str, host: &str, port: &str, user: &str, database: &s
         ssl: None,
         redis: None,
         ssm: None,
+        password_command: String::new(),
+        password_reuse_secs: None,
     }
 }
 
