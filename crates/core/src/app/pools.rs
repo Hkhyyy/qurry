@@ -396,7 +396,8 @@ async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppRes
         return Ok(p);
     }
     let cfg = target(state, id)?;
-    let password = state.login_password(&cfg).await?;
+    let asked = std::time::SystemTime::now();
+    let mut password = state.login_password(&cfg).await?;
     let ssh_secret = if cfg.active_ssh().is_some() { state.saved_secret(&store::ssh_secret_key(base), cfg.ssh_secret_saved)? } else { None };
     let c = state.connecting(base);
     loop {
@@ -419,6 +420,9 @@ async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppRes
         match r {
             Ok(pool) => return keep_pool(state, &c, g, id, port, pool).await,
             Err(e) if port.is_some() && stale.is_none() && timed_out(&e) => stale = Some(g),
+            // A password command's output kept from an earlier login (Password reuse) that the server no longer takes: the token
+            // expired while no pool was open (Disconnect, Auto-disconnect, a wake). It runs again and this connects once more
+            Err(e) if login_refused(&e) && state.command_password_older(&cfg, asked) => password = Some(state.command_password(&cfg, true).await?),
             Err(e) => return Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, timeout_error(&cfg, e, stale.is_some())).await),
         }
     }

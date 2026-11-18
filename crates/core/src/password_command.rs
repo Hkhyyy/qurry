@@ -5,17 +5,21 @@
 use crate::error::{AppError, AppResult};
 use crate::store::ConnectionConfig;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::io::AsyncReadExt;
 
 /// How long the command may run before it is stopped (an `aws` CLI signing in again, a hung helper)
 pub(crate) const PASSWORD_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A run of a command kept for reuse: its words, when it started, what it printed
-pub(crate) type Ran = (Vec<String>, Instant, String);
+/// A run of a command kept for reuse: its words, when it started (by the wall clock, which a token's life follows: an Instant
+/// stops while the Mac sleeps), what it printed
+pub(crate) type Ran = (Vec<String>, SystemTime, String);
 
-/// How much of the command's standard error an error quotes
+/// How much of the command's standard error an error quotes (the rest is read and dropped)
 const STDERR_SHOWN: usize = 4096;
+
+/// The most a password command may print (an RDS IAM token is about 1 KB): a command that streams is stopped there
+const STDOUT_MAX: usize = 64 * 1024;
 
 /// The command's words with the placeholders replaced: %HOSTNAME% %PORT% %USERNAME% %DATABASE% are the data source's own (its
 /// host and port, not a tunnel's local one). Replaced after splitting, so a value with spaces stays one argument
@@ -50,7 +54,7 @@ pub(crate) async fn run(cfg: &ConnectionConfig, timeout: Duration) -> AppResult<
             AppError::Msg(format!("The password command {} couldn't start: {e}", argv[0]))
         })?;
     let (out, err) = (child.stdout.take(), child.stderr.take());
-    let done = tokio::time::timeout(timeout, async { tokio::join!(read_all(out), read_all(err), child.wait()) }).await;
+    let done = tokio::time::timeout(timeout, async { tokio::join!(read_upto(out, STDOUT_MAX + 1, false), read_upto(err, STDERR_SHOWN, true), child.wait()) }).await;
     let (stdout, stderr, status) = match done {
         Ok((o, e, s)) => (o, e, s.map_err(|e| AppError::Msg(format!("The password command couldn't be waited for: {e}")))?),
         Err(_) => {
@@ -63,10 +67,14 @@ pub(crate) async fn run(cfg: &ConnectionConfig, timeout: Duration) -> AppResult<
             )));
         }
     };
+    if stdout.len() > STDOUT_MAX {
+        crate::log!("[qurry] password command of {id} printed more than {} KB after {} ms", STDOUT_MAX / 1024, ms());
+        return Err(AppError::Msg(format!("The password command printed more than {} KB: it must print only the password.", STDOUT_MAX / 1024)));
+    }
     if !status.success() {
         let code = status.code().map_or_else(|| "killed by a signal".to_string(), |c| format!("exit {c}"));
         crate::log!("[qurry] password command of {id} {} after {} ms", status.code().map_or_else(|| "was killed by a signal".to_string(), |c| format!("exit code {c}")), ms());
-        let shown = String::from_utf8_lossy(&stderr[..stderr.len().min(STDERR_SHOWN)]).trim().to_string();
+        let shown = String::from_utf8_lossy(&stderr).trim().to_string();
         return Err(AppError::Msg(format!("Password command failed ({code}): {}", if shown.is_empty() { "(nothing on standard error)" } else { &shown })));
     }
     let Ok(password) = String::from_utf8(stdout) else {
@@ -78,17 +86,16 @@ pub(crate) async fn run(cfg: &ConnectionConfig, timeout: Duration) -> AppResult<
         crate::log!("[qurry] password command of {id} printed nothing after {} ms", ms());
         return Err(AppError::Msg("The password command printed nothing: it must print the password on standard output.".into()));
     }
-    // Defense in depth: no log line shows it even if a driver's error text quotes it
-    crate::logfile::hide_word(&password, "<password>");
     crate::log!("[qurry] password command of {id} ok in {} ms", ms());
     Ok(password)
 }
 
 impl crate::app::AppState {
     /// The DB password a login of `cfg` sends: its password command's output when it has one (the saved password, if any, isn't
-    /// read then, and stays in secrets.json untouched), else the saved password
+    /// read then, and stays in secrets.json untouched), else the saved password. A file database (SQLite, DuckDB) sends none, so
+    /// its command is ignored
     pub(crate) async fn login_password(&self, cfg: &ConnectionConfig) -> AppResult<Option<String>> {
-        if cfg.password_command.trim().is_empty() {
+        if cfg.password_command.trim().is_empty() || cfg.kind.is_file() {
             return self.saved_secret(&cfg.password_key(), cfg.password_saved);
         }
         self.mcp_may_log_in(&cfg.id)?;
@@ -102,25 +109,45 @@ impl crate::app::AppState {
         if let Some(reuse) = cfg.password_reuse_secs.filter(|_| !fresh).map(|s| Duration::from_secs(s.into()))
             && let Some((w, at, password)) = self.command_passwords.lock().unwrap().get(&cfg.id)
             && *w == words
-            && at.elapsed() < reuse
+            // A clock set back counts as expired
+            && at.elapsed().is_ok_and(|e| e < reuse)
         {
             return Ok(password.clone());
         }
-        let started = Instant::now();
+        let started = SystemTime::now();
         let password = run(cfg, PASSWORD_COMMAND_TIMEOUT).await?;
+        // Defense in depth: no log line shows it even if a driver's error text quotes it. One hidden word per data source: the
+        // token it replaces is shown no more (a new IAM token at every login would grow the list for as long as the app runs)
+        crate::logfile::hide_word(&password, "<password>");
         // A form that isn't saved has no id to keep it under
         if !cfg.id.is_empty() {
-            self.command_passwords.lock().unwrap().insert(cfg.id.clone(), (words, started, password.clone()));
+            let mut kept = self.command_passwords.lock().unwrap();
+            if let Some((_, _, old)) = kept.insert(cfg.id.clone(), (words, started, password.clone()))
+                && old != password
+                && !kept.values().any(|(_, _, p)| *p == old)
+            {
+                crate::logfile::unhide_word(&old, "<password>");
+            }
         }
         Ok(password)
     }
+
+    /// Whether the password command's output kept for `cfg` is from a run that started before `since`: a login with it that the
+    /// server refused may be with a token that has expired since (open_pool runs the command again then)
+    pub(crate) fn command_password_older(&self, cfg: &ConnectionConfig, since: SystemTime) -> bool {
+        !cfg.password_command.trim().is_empty() && self.command_passwords.lock().unwrap().get(&cfg.id).is_some_and(|(_, at, _)| *at < since)
+    }
 }
 
-/// Everything a pipe of the command gives until it closes
-async fn read_all(pipe: Option<impl tokio::io::AsyncRead + Unpin>) -> Vec<u8> {
+/// What a pipe of the command gives until it closes, up to `max` bytes. `drain`: the rest is read and dropped (so the command
+/// isn't stopped by a full pipe); otherwise the pipe is closed there
+async fn read_upto(pipe: Option<impl tokio::io::AsyncRead + Unpin>, max: usize, drain: bool) -> Vec<u8> {
     let mut buf = Vec::new();
     if let Some(mut p) = pipe {
-        let _ = p.read_to_end(&mut buf).await;
+        let _ = (&mut p).take(max as u64).read_to_end(&mut buf).await;
+        if drain {
+            let _ = tokio::io::copy(&mut p, &mut tokio::io::sink()).await;
+        }
     }
     buf
 }
@@ -217,6 +244,57 @@ mod tests {
         assert_eq!(runs(&n), 7);
     }
 
+    /// Reuse ages by the wall clock: a Mac that slept past the token's life runs the command again (an Instant would not have
+    /// moved), and so does a clock set back
+    #[tokio::test]
+    async fn reuse_counts_time_the_mac_slept() {
+        let t = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(t.path().join("config"))).unwrap();
+        let (command, n) = counting(t.path());
+        let mut c = cfg(&command);
+        c.password_reuse_secs = Some(600);
+        let shift = |by: i64| {
+            if let Some((_, at, _)) = st.command_passwords.lock().unwrap().get_mut(&c.id) {
+                *at = if by < 0 { *at - Duration::from_secs(by.unsigned_abs()) } else { *at + Duration::from_secs(by as u64) };
+            }
+        };
+        st.login_password(&c).await.unwrap();
+        shift(-3600);
+        st.login_password(&c).await.unwrap();
+        assert_eq!(runs(&n), 2, "an hour asleep");
+        shift(120);
+        st.login_password(&c).await.unwrap();
+        assert_eq!(runs(&n), 3, "the clock was set back");
+        st.login_password(&c).await.unwrap();
+        assert_eq!(runs(&n), 3, "reused");
+        assert!(st.command_password_older(&c, SystemTime::now() + Duration::from_secs(1)));
+        assert!(!st.command_password_older(&c, SystemTime::now() - Duration::from_secs(60)));
+        c.password_command.clear();
+        assert!(!st.command_password_older(&c, SystemTime::now() + Duration::from_secs(1)), "no command: nothing to run again");
+    }
+
+    /// A command that prints far more than a password is stopped; a long standard error is read past what is shown
+    #[tokio::test]
+    async fn output_is_limited() {
+        let e = run(&cfg("/bin/cat /dev/zero"), T).await.unwrap_err().to_string();
+        assert!(e.contains("more than 64 KB"), "{e}");
+        let c = cfg("/bin/sh -c '/usr/bin/yes w | /usr/bin/head -c 300000 >&2; echo tok'");
+        assert_eq!(run(&c, T).await.unwrap(), "tok");
+        let c = cfg("/bin/sh -c '/usr/bin/yes w | /usr/bin/head -c 300000 >&2; exit 1'");
+        let e = run(&c, T).await.unwrap_err().to_string();
+        assert!(e.len() < STDERR_SHOWN + 100 && e.contains("w\nw"), "{}", e.len());
+    }
+
+    /// A file database sends no password: its command (the TUI form shows the row) never runs
+    #[tokio::test]
+    async fn a_file_database_ignores_its_command() {
+        let t = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(t.path().join("config"))).unwrap();
+        let mut c = cfg("/no/such/program");
+        c.kind = crate::store::DbKind::Sqlite;
+        assert_eq!(st.login_password(&c).await.unwrap(), None);
+    }
+
     /// With a command the saved password is neither read nor removed
     #[tokio::test]
     async fn a_command_wins_over_the_saved_password() {
@@ -289,6 +367,22 @@ mod tests {
         assert_eq!(runs(&runs_file), 2, "the command ran again");
         st.run_query(id.clone(), "select 1".into(), Some(10), Some("tab".into())).await.expect("a console opens on it");
         st.close_session("tab".into()).await.unwrap();
+        st.disconnect(id.clone()).await.unwrap();
+
+        // With Password reuse the output is kept past a Disconnect: when the server no longer takes it (the token expired while no
+        // pool was open), opening the pool runs the command again
+        let mut c = st.source(&id).unwrap();
+        c.password_reuse_secs = Some(600);
+        st.save_connection(c, None, None).await.unwrap();
+        st.run_read_only(id.clone(), "select 1".into(), 10).await.unwrap();
+        let before = runs(&runs_file);
+        st.disconnect(id.clone()).await.unwrap();
+        sql(if pg { "alter role qurry_pwcmd password 'Pw-three-3'" } else { "alter user 'qurry_pwcmd'@'%' identified by 'Pw-three-3'" }).await.unwrap();
+        std::fs::write(&password, "Pw-three-3\n").unwrap();
+        st.run_read_only(id.clone(), "select 1".into(), 10).await.expect("the pool opens with a new output");
+        assert_eq!(runs(&runs_file), before + 1, "the command ran again");
+        st.run_read_only(id.clone(), "select 1".into(), 10).await.unwrap();
+        assert_eq!(runs(&runs_file), before + 1, "and its output is reused");
         st.disconnect(id).await.unwrap();
         sql(if pg { "drop role qurry_pwcmd" } else { "drop user 'qurry_pwcmd'@'%'" }).await.unwrap();
     }

@@ -305,6 +305,12 @@ pub fn hide_word(w: &str, label: &'static str) {
     });
 }
 
+/// The word hide_word hid under `label` shows again (a password command's token another one replaced)
+pub fn unhide_word(w: &str, label: &'static str) {
+    let w = w.trim().to_ascii_lowercase();
+    with_hidden(|h| h.retain(|(x, l)| !(*x == w && *l == label)));
+}
+
 /// The hidden words (whole words, any case) → their label, and the database of a `<data source id>::<database>` target
 fn hidden(s: &str) -> String {
     let s = target_dbs(s);
@@ -849,6 +855,21 @@ mod tests {
         for l in [format!("] password command of {} ok in ", c.id), format!("] password command of {} exit code 2 after ", c.id)] {
             assert!(text.contains(&l), "{l} in\n{text}");
         }
+    }
+
+    /// A data source's password command hides one token at a time: a new output replaces the one it hid before
+    #[tokio::test]
+    async fn a_new_password_command_output_replaces_the_hidden_one() {
+        let t = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(t.path().join("config"))).unwrap();
+        let (n, script) = (t.path().join("n"), t.path().join("token.sh"));
+        std::fs::write(&script, format!("echo x >> '{0}'\necho tok-$(/usr/bin/wc -l < '{0}' | /usr/bin/tr -d ' ')\n", n.display())).unwrap();
+        let mut c = acme("Acme IAM", "shop-db.acme.test", None);
+        c.password_command = format!("/bin/sh {}", script.display());
+        let c = st.save_connection(c, None, None).await.unwrap();
+        assert_eq!(st.login_password(&c).await.unwrap().as_deref(), Some("tok-1"));
+        assert_eq!(st.login_password(&c).await.unwrap().as_deref(), Some("tok-2"));
+        assert_eq!(hidden("failed with tok-1 and tok-2"), "failed with tok-1 and <password>");
     }
 
     /// A GUI front-end error (log_frontend_error): message and stacks redacted and cut, at most FRONTEND_PER_MINUTE a minute, then
