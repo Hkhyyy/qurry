@@ -11,7 +11,7 @@ import { schemaChanged } from "../../components/SchemaTree";
 import { commitNoticeTitle } from "../../lib/commitNotice";
 import { sharedOr } from "../../lib/shared";
 import { cancelTableLoad, loadTableTab } from "../explorer/tableTab";
-import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "../../lib/stmtKind";
+import { askedStatements, explainAnalyzeAsk, explainAnalyzeNote, impactLine, isDdl, isRead } from "../../lib/stmtKind";
 import { explainSql } from "../../lib/explain";
 import { withoutComments } from "../../lib/sqlSplit";
 import { noticeLines } from "./notices";
@@ -196,19 +196,15 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     if (explain === "analyze" && !(await askExplainAnalyze(c?.name, kind, stmts))) return drop();
     // Production: for data-changing statements, count the rows that will change, show it and ask (counted with SELECT count(*))
     if (c?.options?.confirmChanges && !explain) {
-      // Same check as the TUI (core guard): a write keyword only inside a string or a comment (MySQL # too) doesn't make a read a write
-      const writes = stmts.filter((s) => !isRead(kind, s));
+      // The TUI's rule and words (qurry_shared::production): a write keyword only inside a string or a comment (MySQL # too) doesn't
+      // make a read a write; 0 rows normal, 1~99 warning, 100+ · uncountable · DDL danger
+      const writes = askedStatements(kind, stmts, !!explain);
       if (writes.length) {
         setStatus("Counting the rows this will change…");
         const detail: { text: string; value: string; tone?: "danger" | "warn" }[] = [];
         for (const w of writes) {
-          const n = await previewImpact(tab.target, w).catch((e) => `can't count: ${String(e).split("\n")[0]}`);
-          // isDdl is null while the WASM module isn't loaded
-          const ddl = n === null ? isDdl(kind, w) : false;
-          const value = typeof n === "number" ? `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}` : n === null ? (ddl ? "schema change" : ddl === null ? "can't count · may change the schema" : "can't count") : n;
-          // More rows changed = more prominent: 0 rows normal, 1~99 warning, 100+ · uncountable · DDL danger
-          const tone = typeof n === "number" ? (n >= 100 ? "danger" : n > 0 ? "warn" : undefined) : "danger";
-          detail.push({ text: withoutComments(w, kind).slice(0, 300), value, tone });
+          const n = await previewImpact(tab.target, w).then((n): { Ok: number | null } => ({ Ok: n }), (e): { Err: string } => ({ Err: String(e) }));
+          detail.push({ text: withoutComments(w, kind).slice(0, 300), ...impactLine(kind, w, n) });
         }
         setStatus("Ready");
         if (!(await ask("These statements change data. Run them?", { title: `Production: ${c.name}`, detail, okLabel: "Run", danger: true }))) return drop();
