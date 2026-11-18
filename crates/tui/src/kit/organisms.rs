@@ -52,17 +52,19 @@ pub fn confirm_lines(text: &str) -> Vec<Line<'static>> {
     lines
 }
 
-/// The N of "→ N rows" (None when it isn't a number: "schema change", "can't count")
+/// The N of "→ N rows" (None when it isn't a number: "schema change", "can't count", "can't count: <error>"; the words of
+/// qurry_shared::production::impact_line)
 fn row_count(v: &str) -> Option<u64> {
     v.split_whitespace().next().and_then(|x| x.replace(',', "").parse().ok())
 }
 
-/// "→ N rows": 0 dimmed · 1~99 WARN · 100+ or unknown DANGER
+/// "→ N rows" by the GUI's thresholds (qurry_shared::production::tone): 0 dimmed · 1~99 WARN · 100+ or unknown DANGER
 fn count_style(n: Option<u64>) -> Style {
-    let c = match n {
-        Some(0) => DIM,
-        Some(n) if n < 100 => WARN,
-        _ => DANGER,
+    use qurry_shared::production::{Tone, tone};
+    let c = match tone(n) {
+        Tone::None => DIM,
+        Tone::Warn => WARN,
+        Tone::Danger => DANGER,
     };
     Style::default().fg(c).add_modifier(Modifier::BOLD)
 }

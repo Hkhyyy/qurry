@@ -216,7 +216,7 @@ mod tests {
             }
         }
         let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
-        assert!(text.contains("Production data source \"PROD\"") && text.contains("delete from t using s") && text.contains("can't count this statement"), "{text}");
+        assert!(text.contains("Production data source \"PROD\"") && text.contains("delete from t using s") && text.contains("→ can't count\n"), "{text}");
         // Saying no doesn't run it
         h.key("Esc");
         assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Console(c) if !c.running && c.output.is_empty()));

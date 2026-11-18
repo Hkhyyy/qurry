@@ -48,3 +48,32 @@ export function isDdl(kind: DbKind, sql: string): boolean | null {
     return null;
   }
 }
+
+/**
+ * The statements of a run the Production confirmation lists: the writes, none for Explain (qurry_shared::production::asked_statements,
+ * the TUI's rule). Without the WASM module nothing can be checked, so every statement is asked
+ */
+export function askedStatements(kind: DbKind, stmts: string[], explain: boolean): string[] {
+  try {
+    return shared().askedStatements(stmts, kind, explain);
+  } catch {
+    return explain ? [] : stmts;
+  }
+}
+
+/**
+ * What the Production confirmation says of a statement from its count (rows, null when it can't be counted, or why counting failed)
+ * and its tone (qurry_shared::production::impact_line, the TUI's words and thresholds). Without the WASM module a statement that
+ * can't be counted may change the schema; counted lines keep their tone by number
+ */
+export function impactLine(kind: DbKind, sql: string, count: { Ok: number | null } | { Err: string }): { value: string; tone?: "warn" | "danger" } {
+  try {
+    const [value, tone] = shared().impactLine(sql, kind, count);
+    return { value, tone: tone === "none" ? undefined : tone };
+  } catch {
+    if ("Err" in count) return { value: `can't count: ${count.Err.split("\n")[0]}`, tone: "danger" };
+    const n = count.Ok;
+    if (n === null) return { value: "can't count · may change the schema", tone: "danger" };
+    return { value: `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}`, tone: n >= 100 ? "danger" : n > 0 ? "warn" : undefined };
+  }
+}

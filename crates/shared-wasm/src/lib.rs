@@ -81,6 +81,19 @@ pub fn unsafe_statement(sql: &str, kind: JsValue) -> Result<Option<String>, JsEr
     Ok(qurry_shared::guard::unsafe_statement(sql, parse_kind(kind)?))
 }
 
+/// UI only: the statements of a run the Production confirmation lists (the writes; none for Explain), the TUI's rule
+#[wasm_bindgen(js_name = askedStatements)]
+pub fn asked_statements(stmts: JsValue, kind: JsValue, explain: bool) -> Result<JsValue, JsError> {
+    to(&qurry_shared::production::asked_statements(&from::<Vec<String>>(stmts)?, parse_kind(kind)?, explain))
+}
+
+/// UI only: what the Production confirmation says of a statement from its count ({ Ok: rows or null } or { Err: why counting
+/// failed }), as [line, "none" | "warn" | "danger"] (the TUI's words and thresholds)
+#[wasm_bindgen(js_name = impactLine)]
+pub fn impact_line(sql: &str, kind: JsValue, count: JsValue) -> Result<JsValue, JsError> {
+    to(&qurry_shared::production::impact_line(sql, parse_kind(kind)?, from(count)?))
+}
+
 /// The connect error asks for "Allow unencrypted connection" (the GUI then offers to turn it on)
 #[wasm_bindgen(js_name = tlsOptIn)]
 pub fn tls_opt_in(msg: &str) -> bool {

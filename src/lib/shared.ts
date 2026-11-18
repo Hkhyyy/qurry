@@ -285,6 +285,8 @@ const api = {
   systemDatabases: (kind: DbKind): string[] => wasm.systemDatabases(kind),
   isRead: (sql: string, kind: DbKind): boolean => wasm.isRead(sql, kind),
   isDdl: (sql: string, kind: DbKind): boolean => wasm.isDdl(sql, kind),
+  askedStatements: (stmts: string[], kind: DbKind, explain: boolean): string[] => wasm.askedStatements(stmts, kind, explain),
+  impactLine: (sql: string, kind: DbKind, count: { Ok: number | null } | { Err: string }): [string, "none" | "warn" | "danger"] => wasm.impactLine(sql, kind, count),
   explainAnalyzeAsk: (sql: string, kind: DbKind): string | undefined => wasm.explainAnalyzeAsk(sql, kind),
   /** [warn, text after "Explain Analyse "] */
   explainAnalyzeNote: (sql: string, kind: DbKind): [boolean, string] | undefined => wasm.explainAnalyzeNote(sql, kind),
