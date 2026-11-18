@@ -13,7 +13,7 @@ const SELECTION_ITEMS: StatusItemId[] = ["notNull", "sum", "avg", "min", "max"];
 
 /** What the result grid shows in the status bar while focus is in it */
 export function useGridStatus({
-  colVirt, scrollRef, wrapRef, chart, transposed, rownumW, hasSel, sel, cur, wasmReady, forSelected, valueAt,
+  colVirt, scrollRef, wrapRef, chart, transposed, pinned, pinEdge, hasSel, sel, cur, wasmReady, forSelected, valueAt,
   result, changes, added, dataIndex, view, hidden, edit, tcol, cols, p,
 }: {
   colVirt: Virtualizer<HTMLDivElement, Element>;
@@ -21,7 +21,9 @@ export function useGridStatus({
   wrapRef: RefObject<HTMLDivElement | null>;
   chart: boolean;
   transposed: boolean;
-  rownumW: number;
+  /** How many display columns are pinned, and the right edge of the pinned strip (useColumnLayout) */
+  pinned: number;
+  pinEdge: number;
   hasSel: boolean;
   sel: Selection | null;
   cur: Pos | null;
@@ -45,7 +47,11 @@ export function useGridStatus({
   // sideways scrolling (the column virtualizer renders again on scroll); Chart and Transpose have neither ───
   const statusItems = useStatusItems();
   const offset = colVirt.scrollOffset ?? 0;
-  const range = scrollRef.current && !chart && !transposed ? shownColumns(colVirt.measurementsCache, offset + rownumW, offset + scrollRef.current.clientWidth) : null;
+  // The pinned columns are always on screen; the others count from the pinned strip's right edge (those under it don't show). The
+  // range takes the pinned ones in while the first unpinned column still shows next to them
+  const el = !chart && !transposed ? scrollRef.current : null;
+  const rest = el ? shownColumns(colVirt.measurementsCache.slice(pinned), offset + pinEdge, offset + el.clientWidth) : null;
+  const range = rest ? [rest[0] ? rest[0] + pinned : 0, rest[1] + pinned] : el && pinned ? [0, pinned - 1] : null;
   const multi = hasSel && !isSingle(sel);
   const posSpans = useMemo<GridStatus["pos"]>(() => (chart || transposed || !cur ? undefined : multi ? [spanOf(rowsOf(sel)), spanOf(selCols(sel))] : [spanOf([cur.r]), spanOf([cur.c])]), [sel, chart, transposed]);
   // Only while one of them is on: every selected cell's value goes to the module (at most qurry_shared::statusbar::MAX_CELLS)

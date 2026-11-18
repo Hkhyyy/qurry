@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { dialectOf } from "./api";
 import { copied, extractRows, HOLE_TOKEN, pasteCells } from "./extract";
-import { contains, copyTable, extend, fitCols, forEachCell, isSingle, selCols, selRows, single, toggle, type Selection } from "./gridSelection";
+import { contains, copyTable, extend, forEachCell, isSingle, remapCols, selCols, selRows, single, toggle, type Selection } from "./gridSelection";
 
 const cells = (sel: Selection | null) => {
   const out: string[] = [];
@@ -106,12 +106,22 @@ describe("grid selection", () => {
     expect(cells(sel)).toEqual(["0,0", "0,1", "1,0", "1,1", "1,2", "2,1", "2,2"]);
   });
 
-  it("fitCols keeps a selection that fits and cuts one past the last column (a column was hidden)", () => {
-    const sel = toggle(single({ r: 0, c: 1 }, { r: 2, c: 3 }), { r: 5, c: 4 });
-    expect(fitCols(sel, 5)).toBe(sel);
-    expect(fitCols(null, 3)).toBeNull();
-    // The cell in column 4 is gone, the range is cut at column 2, the cursor (on 4) moves to 2
-    expect(fitCols(sel, 3)).toEqual({ ranges: [{ r0: 0, r1: 2, c0: 1, c1: 2 }], anchor: { r: 5, c: 2 }, cur: { r: 5, c: 2 } });
+  it("remapCols keeps each selected column and the cursor on their result columns when the layout changes", () => {
+    expect(remapCols(null, [0, 1], [1, 0])).toBeNull();
+    // Display 0..4 = result 0..4; result 4 pinned → [4, 0, 1, 2, 3]: the cursor's column 4 is now display 0
+    const col = single({ r: 0, c: 4 }, { r: 9, c: 4 });
+    expect(remapCols(col, [0, 1, 2, 3, 4], [4, 0, 1, 2, 3])).toEqual(single({ r: 0, c: 0 }, { r: 9, c: 0 }));
+    // Unpinned again: back where it was
+    expect(remapCols(single({ r: 0, c: 0 }, { r: 9, c: 0 }), [4, 0, 1, 2, 3], [0, 1, 2, 3, 4])).toEqual(col);
+    // Result 2 pinned out of the range 1..3: the range splits around it, it stays selected at display 0
+    const range = single({ r: 1, c: 1 }, { r: 2, c: 3 });
+    expect(remapCols(range, [0, 1, 2, 3, 4], [2, 0, 1, 3, 4])).toEqual({
+      ranges: [{ r0: 1, r1: 2, c0: 0, c1: 0 }, { r0: 1, r1: 2, c0: 2, c1: 3 }], anchor: { r: 1, c: 2 }, cur: { r: 2, c: 3 },
+    });
+    // Result 1 hidden: the range keeps its other columns, the anchor (on the hidden one) moves to the cursor
+    expect(remapCols(range, [0, 1, 2, 3, 4], [0, 2, 3, 4])).toEqual({ ranges: [{ r0: 1, r1: 2, c0: 1, c1: 2 }], anchor: { r: 2, c: 2 }, cur: { r: 2, c: 2 } });
+    // The cursor's column hidden: nothing is selected (no edit or copy lands on the neighbour)
+    expect(remapCols(range, [0, 1, 2, 3, 4], [0, 1, 2, 4])).toBeNull();
   });
 });
 

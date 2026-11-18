@@ -67,5 +67,5 @@ export function useColumnLayout({ cols, widths, rownumW, scrollRef, wasmReady, l
     cols.map((col, i) => ({ key: keys[i], label: col.name, hint: col.typeName.toLowerCase(), mark: layout.pinned.includes(keys[i]) ? "pinned" : undefined, checked: !layout.hidden.includes(keys[i]) }));
   const setShown = (key: string, on: boolean) => (on ? show(key) : hide(keys.indexOf(key)));
 
-  return { view, pinned, hidden, colVirt, shownCols, padR, total, pinOf, scrollToCol, hide, show, showAll, pin, unpin, reset, listItems, setShown };
+  return { view, pinned, pinEdge: pinLeft[pinned], hidden, colVirt, shownCols, padR, total, pinOf, scrollToCol, hide, show, showAll, pin, unpin, reset, listItems, setShown };
 }

@@ -168,3 +168,35 @@ test("Copy of a selection skips hidden columns and follows the pinned order; Exp
   await dialog(page).getByRole("button", { name: "Export" }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__exportSql as string | undefined)).toMatch(/^select \* from/i);
 });
+
+test("the selection stays on its column after Pin, Unpin and Hide", async ({ page }) => {
+  await openApp(page);
+  await openUsers(page);
+  const selHeads = () => work(page).locator(".grid-head [role=columnheader].col-sel .col-name").allTextContents();
+  // The right-click selects memo; pinned, it is still the selected one at the left, and after Unpin back in its place
+  await headerMenu(page, "memo", /^Pin Column/);
+  await expect.poll(() => heads(page)).toEqual(["memo", "id", "user_name", "amount", "created_at"]);
+  await expect.poll(selHeads).toEqual(["memo"]);
+  await headerMenu(page, "memo", /^Unpin Column/);
+  await expect.poll(() => heads(page)).toEqual(["id", "user_name", "amount", "created_at", "memo"]);
+  await expect.poll(selHeads).toEqual(["memo"]);
+  // Its own column hidden: nothing stays selected (no edit or copy lands on the neighbour)
+  await headerMenu(page, "amount", /^Hide Column/);
+  await expect.poll(() => heads(page)).toEqual(["id", "user_name", "created_at", "memo"]);
+  await expect.poll(selHeads).toEqual([]);
+  await expect(work(page).locator('[role=gridcell][aria-selected="true"]')).toHaveCount(0);
+});
+
+test("the status bar's shown columns skip those under the pinned ones once the grid scrolls", async ({ page }) => {
+  await openApp(page);
+  await runWide(page);
+  for (const n of ["column_1", "column_2", "column_3"]) await headerMenu(page, n, /^Pin Column/);
+  const cols = page.locator(".statusbar .ui-status-item").filter({ hasText: /^cols / });
+  await work(page).locator(".grid-wrap .cell:not(.rownum)").first().click();
+  await expect(cols).toHaveText(/^cols 1–\d+ of 30$/);
+  // Scrolled by column_4..7: the first one at the pinned edge is column_8, those four are under the pinned ones
+  let by = 0;
+  for (const n of ["column_4", "column_5", "column_6", "column_7"]) by += await header(page, n).evaluate((h) => h.getBoundingClientRect().width);
+  await work(page).locator(".grid-scroll").evaluate((el, x) => (el.scrollLeft = x), by);
+  await expect(cols).toHaveText(/^cols 8–\d+ of 30$/);
+});

@@ -12,7 +12,7 @@ import { DEFAULTS, useFonts } from "../lib/prefs";
 import { CELL_KIND } from "../lib/gridAlign";
 import { type WidthsOf } from "../lib/columnWidths";
 import { jsonCell } from "../lib/jsonSpans";
-import { contains, extend, fitCols, forEachCell, type Pos, selCols, selRows as rowsOf, type Selection, single, toggle } from "../lib/gridSelection";
+import { contains, extend, forEachCell, type Pos, remapCols, selCols, selRows as rowsOf, type Selection, single, toggle } from "../lib/gridSelection";
 
 import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/shortcuts";
 import { draftAt, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
@@ -246,8 +246,13 @@ export function ResultGrid(p: Props) {
   // display columns, edits, values and widths in result columns
   const layout = useColumnLayout({ cols, widths, rownumW, scrollRef, wasmReady, layoutOf: p.widthsOf });
   const { view, colVirt, shownCols, padR, total } = layout;
-  // A column just hidden leaves the selection inside the columns shown
-  const sel = useMemo(() => fitCols(selState, view.length), [selState, view.length]);
+  // Pin, Unpin or Hide: the selection and the cursor follow their columns (as rows follow dataIndex), set before this render paints
+  const [selView, setSelView] = useState(view);
+  const sel = selView === view ? selState : remapCols(selState, selView, view);
+  if (selView !== view) {
+    setSelView(view);
+    setSel(sel);
+  }
   /** The column header's menu on display column c: hide or pin it, Columns…, widths of it or all of them */
   const headerItems = (c: number, i = view[c]): MenuItem[] => [
     { label: "Hide Column", ...cmd("grid.colHide"), action: () => layout.hide(i), disabled: view.length < 2 },
@@ -288,7 +293,7 @@ export function ResultGrid(p: Props) {
   const clickSel = (e: React.MouseEvent, a: Pos, b: Pos = a) => setSel((s) => (e.shiftKey ? extend(s, b) : (isMac ? e.metaKey : e.ctrlKey) ? toggle(s, a, b) : single(a, b)));
 
   useGridStatus({
-    colVirt, scrollRef, wrapRef, chart, transposed, rownumW, hasSel, sel, cur, wasmReady, forSelected, valueAt,
+    colVirt, scrollRef, wrapRef, chart, transposed, pinned: layout.pinned, pinEdge: layout.pinEdge, hasSel, sel, cur, wasmReady, forSelected, valueAt,
     result, changes, added, dataIndex, view, hidden: layout.hidden, edit, tcol, cols, p,
   });
 
@@ -479,8 +484,9 @@ export function ResultGrid(p: Props) {
     { label: "Export Data…", ...cmd("grid.export"), action: p.onExport },
     ...viewItems(),
     ...optionItems(),
-    // The header menu's commands on the current column (the focused cell's, or the clicked header's); not in Transpose or Chart
-    ...(cur && !chart && !transposed ? headerItems(cur.c) : headerItems(0).map((x) => ({ ...x, disabled: true }))),
+    // The header menu's commands on the current column (the focused cell's, or the clicked header's); not in Transpose or Chart.
+    // Columns… needs no column
+    ...(cur && !chart && !transposed ? headerItems(cur.c) : headerItems(0).map((x) => ({ ...x, disabled: chart || transposed || !("label" in x && x.label === "Columns…") }))),
   ];
 
   /** An edit button's tooltip and description: the command, and why it's greyed out when the grid says so (a join's row buttons: why
