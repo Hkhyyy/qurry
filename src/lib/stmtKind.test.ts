@@ -68,5 +68,9 @@ describe("stmtKind (core guard through WASM)", () => {
     expect(fresh.explainAnalyzeNote("postgres", "select 1")?.text).toMatch(/couldn't be checked/);
     expect(fresh.askedStatements("postgres", ["select 1", "delete from t"], false)).toEqual(["select 1", "delete from t"]);
     expect(fresh.impactLine("postgres", "create table x (a int)", { Ok: null })).toEqual({ value: "can't count · may change the schema", tone: "danger" });
+    // A count keeps its tone by number: 0 normal, 1~99 warning, 100+ danger
+    expect(fresh.impactLine("postgres", "delete from t", { Ok: 0 })).toEqual({ value: "0 rows", tone: undefined });
+    expect(fresh.impactLine("postgres", "delete from t", { Ok: 5 })).toEqual({ value: "5 rows", tone: "warn" });
+    expect(fresh.impactLine("postgres", "delete from t", { Ok: 12408 })).toEqual({ value: "12,408 rows", tone: "danger" });
   });
 });

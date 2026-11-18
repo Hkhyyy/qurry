@@ -266,20 +266,21 @@ async fn production_confirm_lists_commented_statements_by_their_sql() {
     assert_eq!(c.results.tabs.iter().map(|t| (t.stmt, t.title.as_str())).collect::<Vec<_>>(), [(place, "Name: list")]);
 }
 
-/// Production confirmation on a real PostgreSQL (QURRY_TEST_PG=host:port:user:db): the server counts the rows (SELECT count(*), nothing
+/// Production confirmation on a real PostgreSQL (QURRY_TEST_PG=host:port:user:db[:password]): the server counts the rows (SELECT count(*), nothing
 /// changes), lists only the writes in qurry_shared::production's words, and a no runs nothing
 #[tokio::test]
 #[ignore]
 async fn production_confirm_counts_on_a_real_server() {
     let e = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG");
-    let p: Vec<&str> = e.split(':').collect();
+    // The core's testenv format (it is test-only there): the password is the rest of the line
+    let p: Vec<&str> = e.splitn(5, ':').collect();
     let mut h = Harness::new().await;
     let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
         "id": "p", "name": "PROD", "kind": "postgres", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[3]
     }))
     .unwrap();
     cfg.options.confirm_changes = true;
-    h.app.state.save_connection(cfg, Some("pw".into()), None).await.unwrap();
+    h.app.state.save_connection(cfg, p.get(4).map(|s| s.to_string()), None).await.unwrap();
     h.app.reload_conns();
     h.settle().await;
     h.app.exec.inside = qurry_core::exec::Inside::Whole;

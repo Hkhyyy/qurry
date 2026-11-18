@@ -64,7 +64,7 @@ export function askedStatements(kind: DbKind, stmts: string[], explain: boolean)
 /**
  * What the Production confirmation says of a statement from its count (rows, null when it can't be counted, or why counting failed)
  * and its tone (qurry_shared::production::impact_line, the TUI's words and thresholds). Without the WASM module a statement that
- * can't be counted may change the schema, and every line is danger
+ * can't be counted may change the schema; counted lines keep their tone by number
  */
 export function impactLine(kind: DbKind, sql: string, count: { Ok: number | null } | { Err: string }): { value: string; tone?: "warn" | "danger" } {
   try {
@@ -73,6 +73,7 @@ export function impactLine(kind: DbKind, sql: string, count: { Ok: number | null
   } catch {
     if ("Err" in count) return { value: `can't count: ${count.Err.split("\n")[0]}`, tone: "danger" };
     const n = count.Ok;
-    return { value: n === null ? "can't count · may change the schema" : `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}`, tone: "danger" };
+    if (n === null) return { value: "can't count · may change the schema", tone: "danger" };
+    return { value: `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}`, tone: n >= 100 ? "danger" : n > 0 ? "warn" : undefined };
   }
 }
