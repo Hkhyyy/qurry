@@ -189,6 +189,11 @@ export interface TableRef {
 
 /** Column widths a user set, by column name, in characters (qurry_shared::format::ColumnWidths) */
 export type ColumnWidths = Record<string, number>;
+/** The columns a user hid and pinned in a table tab, by the keys widths are kept under; pinned in the order they show (qurry_shared::format::ColumnLayout) */
+export interface ColumnLayout {
+  hidden: string[];
+  pinned: string[];
+}
 
 export interface UpdateInfo {
   current: string;
@@ -278,6 +283,10 @@ export const api = {
   columnWidths: (table: TableRef) => invoke<ColumnWidths>("column_widths", { table }),
   setColumnWidths: (table: TableRef, widths: ColumnWidths) => invoke<ColumnWidths>("set_column_widths", { table, widths }),
   resetColumnWidths: (table: TableRef) => invoke<void>("reset_column_widths", { table }),
+  /** A table tab's hidden and pinned columns (settings.json "columnLayout", shared with the TUI) */
+  columnLayout: (table: TableRef) => invoke<ColumnLayout>("column_layout", { table }),
+  /** Replaces them; the default layout (nothing hidden or pinned) removes the table's entry */
+  setColumnLayout: (table: TableRef, layout: ColumnLayout) => invoke<void>("set_column_layout", { table, layout }),
   /** Download the new version, swap it in, and restart the app (progress via the "update-progress" event) */
   installUpdate: () => invoke<void>("install_update"),
   /** Help › Show Log: reveals the log file in Finder (its folder until the file exists) */
