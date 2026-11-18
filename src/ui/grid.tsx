@@ -65,7 +65,8 @@ export const GridHeaderRow = ({ width, height, children }: { width: number; heig
  * Header cell: 🔑 name type ……… sort button (↑ ↓ · order number if several).
  * sort = current sort (if none, ⇅ only on hover). With onResize the right edge is a resize handle: drag it to resize,
  * double-click it to fit (onFit). readOnly = why the column can't be edited in a grid whose other columns can (a join's).
- * pin: a pinned column (its `left` isn't used: the header strip moves it, GridHead)
+ * pin: a pinned column (its `left` isn't used: the header strip moves it, GridHead). before: px of columns not drawn before it
+ * (sideways virtual scrolling)
  */
 export function GridHeaderCell({
   name,
@@ -74,6 +75,7 @@ export function GridHeaderCell({
   readOnly,
   width,
   pin,
+  before,
   colSelected,
   sort,
   onMouseDown,
@@ -88,6 +90,7 @@ export function GridHeaderCell({
   readOnly?: string;
   width: number;
   pin?: Pin;
+  before?: number;
   colSelected?: boolean;
   sort?: { dir: "asc" | "desc"; order?: number };
   onMouseDown?: Mouse;
@@ -97,7 +100,7 @@ export function GridHeaderCell({
   onFit?: () => void;
 }) {
   return (
-    <div className={cx("cell head", pinClass(pin), sort && "sorted", colSelected && "col-sel", readOnly && "read-only")} style={{ width }} title={readOnly ? `${name} : ${type}\n${readOnly}` : `${name} : ${type}`} aria-description={readOnly} role="columnheader" onMouseDown={onMouseDown} onContextMenu={onContextMenu}>
+    <div className={cx("cell head", pinClass(pin), sort && "sorted", colSelected && "col-sel", readOnly && "read-only")} style={{ width, marginLeft: before || undefined }} title={readOnly ? `${name} : ${type}\n${readOnly}` : `${name} : ${type}`} aria-description={readOnly} role="columnheader" onMouseDown={onMouseDown} onContextMenu={onContextMenu}>
       {pk && <span className="pk-mark">🔑</span>}
       {readOnly && <span className="ro-mark" aria-hidden>🔒</span>}
       <span className="col-name">{name}</span>
@@ -150,6 +153,7 @@ export function GridCell({
   title,
   cut,
   pin,
+  before,
   onMouseDown,
   onMouseEnter,
   onDoubleClick,
@@ -172,6 +176,8 @@ export function GridCell({
   cut?: string;
   /** A pinned column's cell (sticky at its left) */
   pin?: Pin;
+  /** Pixels of columns not drawn before this cell (sideways virtual scrolling) */
+  before?: number;
   onMouseDown?: Mouse;
   onMouseEnter?: () => void;
   onDoubleClick?: Mouse;
@@ -180,7 +186,7 @@ export function GridCell({
   return (
     <div
       className={cx("cell", pinClass(pin), kind, align && `al-${align}`, selected && "sel", active && "active", changed && "changed", match && "match", cut && "cut")}
-      style={{ width, left: pin?.left }}
+      style={{ width, left: pin?.left, marginLeft: before || undefined }}
       title={cut ?? title}
       role="gridcell"
       aria-selected={selected}
@@ -241,6 +247,7 @@ export function CellEditor({
   children,
   style,
   pin,
+  before,
 }: {
   width: number;
   value: string;
@@ -253,11 +260,13 @@ export function CellEditor({
   style?: CSSProperties;
   /** Editing a pinned column's cell: it stays where the cell is */
   pin?: Pin;
+  /** As GridCell's */
+  before?: number;
 }) {
   return (
     <span
       className={cx("cell-edit", pinClass(pin))}
-      style={{ width, left: pin?.left, ...style }}
+      style={{ width, left: pin?.left, marginLeft: before || undefined, ...style }}
       onBlur={(e: FocusEvent<HTMLSpanElement>) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node)) onBlurOut();
       }}

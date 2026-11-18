@@ -181,8 +181,16 @@ export function CheckListPopover({ title, items, onToggle, action, onClose }: {
   const shown = items.filter((it) => it.label.toLowerCase().includes(q.trim().toLowerCase()));
   const at = Math.min(active, Math.max(shown.length - 1, 0));
   const toggle = (it: CheckItem) => onToggle(it.key, !it.checked);
+  // ⎋ wherever the focus is (WebKit doesn't focus a clicked checkbox, so it may be on the page), and only this closes
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && (e.preventDefault(), e.stopPropagation(), closeRef.current());
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
   return (
-    <Overlay variant="clear" onClose={onClose} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), onClose())}>
+    <Overlay variant="clear" onClose={onClose}>
       <Popover
         className="ui-checklist"
         width={320}
@@ -198,10 +206,9 @@ export function CheckListPopover({ title, items, onToggle, action, onClose }: {
             onKeyDown={(e) => {
               e.stopPropagation();
               const k = listKey(e.key, at, shown.length);
-              if (k === null) return;
+              if (k === null || k === "close") return;
               e.preventDefault();
-              if (k === "close") onClose();
-              else if (k === "pick") toggle(shown[at]);
+              if (k === "pick") toggle(shown[at]);
               else setActive(k);
             }}
           />
