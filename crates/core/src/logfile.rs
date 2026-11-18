@@ -265,7 +265,7 @@ fn with_hidden<R>(f: impl FnOnce(&mut Vec<(String, &'static str)>) -> R) -> R {
     return HIDDEN.with(|h| f(&mut h.borrow_mut()));
 }
 
-/// Keeps `cfg`'s name, host, user and database, and its tunnel's host, user, SSM target and AWS profile, out of the log from now on:
+/// Keeps `cfg`'s name, host, user and database, and its tunnel's host, user, key file name, SSM target and AWS profile, out of the log from now on:
 /// error text quotes them (`Can't connect to host:port`, `password authentication failed for user "u"`). Called for every data
 /// source read from connections.json and every form connected (Test Connection)
 pub fn hide(cfg: &crate::store::ConnectionConfig) {
@@ -276,6 +276,10 @@ pub fn hide(cfg: &crate::store::ConnectionConfig) {
     if let Some(s) = &cfg.ssh {
         hide_word(&s.host, "<ssh host>");
         hide_word(&s.user, "<ssh user>");
+        // The key's file name: error text and paths in other words quote it (`/Users/x/.ssh/id_work: no such file`)
+        if let Some(f) = Path::new(&s.key_path).file_name() {
+            hide_word(&f.to_string_lossy(), "<ssh key>");
+        }
     }
     if let Some(s) = &cfg.ssm {
         hide_word(&s.target, "<ssm target>");
