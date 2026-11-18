@@ -689,6 +689,25 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         .collect();
     h.app.popup = Some(Popup::Confirm { opened: None, sql: Some(qurry_core::store::DbKind::Postgres), text: crate::app::explain_analyze_ask_text(&asks), on_yes: Box::new(|_| {}) });
     scenes.push(app_scene(h, "Explain Analyze confirm", "Explain Analyze of statements a rollback can't fully undo: each statement with its own reason", 120, 22));
+    // Parameters (#173): ⌃↩ on a statement with :name in code asks first; the console's last values are filled in
+    h.app.popup = None;
+    let (back, status) = (h.app.active, h.app.status.clone());
+    let id = h.console_with("select id, amount, status\nfrom payment\nwhere user_id = :user_id\n  and status = :status\n  and created_at >= :since;", 2, 0);
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tab_mut(id).map(|t| &mut t.kind) {
+        c.params = [("user_id", "42"), ("status", "'paid'")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    }
+    h.app.focus = crate::app::Focus::Editor;
+    h.app.execute(false);
+    h.key("Tab");
+    h.key("Tab");
+    h.type_str("now() - interval '7 days'");
+    scenes.push(app_scene(h, "Parameters", "⌃↩ on a statement with :name in code: a field per name with the console's last values, the statement below with the names marked; Tab / ⇧Tab / ↑↓ move, Enter runs from any field, Esc runs nothing", 120, 26));
+    h.app.popup = None;
+    if let Some(i) = h.app.tab_index(id) {
+        h.app.close_tab_now(i);
+    }
+    h.app.activate(back);
+    h.app.status = status;
     // TLS opt-in: a dev source's connect error that needs TLS (Production gets only a status line). It never replaces an open popup
     h.app.popup = None;
     h.app.offer_tls_opt_in("dev", &qurry_shared::errors::needs_tls_pg(), |_| {});
