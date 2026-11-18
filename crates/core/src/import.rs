@@ -856,6 +856,8 @@ fn new_mapped(name: &str, t: Target) -> Mapped {
         ssl: None,
         redis: None,
         ssm: None,
+        password_command: String::new(),
+        password_reuse_secs: None,
     };
     // A file database has no password
     let no_password = config.kind.is_file();

@@ -16,6 +16,7 @@ fn empty_field_note(label: &str, ssh_auth: &str) -> Option<&'static str> {
         "AWS region" => Some("(the profile's region)"),
         "SSH key file" => Some("(ssh-agent, then ~/.ssh/config IdentityFile)"),
         "SSH secret" if ssh_auth == "password" => Some("(ssh-agent)"),
+        "Password reuse" => Some("(seconds; empty: run the command at every login)"),
         _ => None,
     }
 }

@@ -19,16 +19,20 @@ impl AppState {
         if self.store.is_temporary(store::secret_owner(key)) {
             return Ok(self.temporary.lock().unwrap().get(key).cloned());
         }
-        // MCP server: never reads passwords of Data Sources hidden from MCP (so it cannot connect either)
-        if self.mcp {
-            let id = store::secret_owner(key);
-            if let Some(c) = self.store.get(id)?.filter(|c| c.mcp_access(false) == store::McpAccess::Off) {
-                return Err(AppError::Msg(format!("Data source \"{}\" is not shared with MCP (turn it on in the data source's Options)", c.name)));
-            }
-        }
+        self.mcp_may_log_in(store::secret_owner(key))?;
         // No in-memory cache: another app (the GUI) may have changed the server and its password since; the file is cheap to read
         // Passwords live only in the encrypted file (the keychain holds at most the master key: crate::secrets)
         self.secret_file.get(key)
+    }
+
+    /// MCP server: never reads passwords of, or runs password commands for, Data Sources hidden from MCP (so it cannot connect either)
+    pub(crate) fn mcp_may_log_in(&self, id: &str) -> AppResult<()> {
+        if self.mcp
+            && let Some(c) = self.store.get(id)?.filter(|c| c.mcp_access(false) == store::McpAccess::Off)
+        {
+            return Err(AppError::Msg(format!("Data source \"{}\" is not shared with MCP (turn it on in the data source's Options)", c.name)));
+        }
+        Ok(())
     }
 
     /// Where the password file's master key is kept (shown in Settings)
@@ -150,12 +154,17 @@ impl AppState {
         // Check against the saved source, set the secrets and write under the store lock: another app's save in between
         // (another server, a password saved or removed) can't be decided on stale settings
         let config = self.store.save_with(config, |prev, config| {
+            let mut forget_password = false;
             // If the server changed, do not use the saved password for the new server: ask for it again
             // "Saved" means the password actually exists, not the flag (old imports left entries with only the flag turned off).
             // A damaged secrets.json that may hold it counts as saved
             if let Some(p) = prev {
                 if password.is_none() && self.secret_file.contains(&p.password_key()).unwrap_or(true) && !p.same_server(config) {
-                    return Err(AppError::Msg(SERVER_CHANGED.into()));
+                    // With a password command there is no password to enter (the field is off): the old one is forgotten instead
+                    if config.password_command.trim().is_empty() {
+                        return Err(AppError::Msg(SERVER_CHANGED.into()));
+                    }
+                    forget_password = true;
                 }
                 if ssh_secret.is_none() && self.secret_file.contains(&store::ssh_secret_key(&p.id)).unwrap_or(true) && config.active_ssh().is_some() && !p.same_ssh(config) {
                     return Err(AppError::Msg(SSH_CHANGED.into()));
@@ -164,7 +173,7 @@ impl AppState {
             // The saved-password flag is managed on the backend (None = keep the existing value)
             config.password_saved = prev.is_some_and(|p| p.password_saved);
             config.ssh_secret_saved = prev.is_some_and(|p| p.ssh_secret_saved);
-            match password.as_deref() {
+            match password.as_deref().or(forget_password.then_some("")) {
                 Some("") => {
                     for k in store::password_keys(&config.id) {
                         self.set_secret(&k, None)?;
@@ -252,6 +261,7 @@ impl AppState {
         crate::search_cache::remove_conn(&self.store.dir(), &id);
         self.store.delete(&id)?;
         self.connecting.lock().unwrap().remove(&id);
+        self.command_passwords.lock().unwrap().remove(&id);
         forgot.map_err(|e| AppError::Msg(format!("The data source was removed, but its saved password couldn't be: {e}")))
     }
 
@@ -284,6 +294,8 @@ impl AppState {
     /// kept, the caller closes both. If `password` is None, use the saved password (only when it is the same server as the saved settings).
     async fn connect_form(&self, config: &ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<(Pool, Option<crate::tunnel::Tunnel>)> {
         let password = match password {
+            // The form's own command runs (the saved password isn't read)
+            _ if !config.password_command.trim().is_empty() => self.login_password(config).await?,
             Some(p) => Some(p),
             None if !config.id.is_empty() => self.saved_password_for(config)?,
             None => None,
@@ -483,7 +495,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: "a".into(), name: "a".into(), kind: crate::store::DbKind::Postgres, host: "127.0.0.1".into(), port: 1,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         let saved = st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
         let mut moved = saved.clone();
@@ -515,7 +527,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: String::new(), name: "trust".into(), kind: crate::store::DbKind::Postgres, host: "127.0.0.1".into(), port: 1,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         let saved = st.save_connection(cfg, None, None).await.unwrap();
         assert_eq!(saved.options.mcp.as_deref(), Some("off"));
@@ -617,7 +629,7 @@ mod tests {
         let mut cfg = ConnectionConfig {
             id: "prod".into(), name: "prod".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: true,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         cfg.options.confirm_changes = true;
         st.store.save(&cfg).unwrap();
@@ -641,7 +653,7 @@ mod tests {
             id: id.into(), name: id.into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, password_saved: false,
             ssh: Some(crate::store::SshConfig { enabled: true, host: "127.0.0.1".into(), port: 1, user: "me".into(), auth: Default::default(), key_path: String::new() }),
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         st.save_connection(mk("pw"), Some("secret".into()), None).await.unwrap();
         st.save_connection(mk("trust"), None, None).await.unwrap();
@@ -674,7 +686,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: "p".into(), name: "p".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
         // Another app turns on Read-only
@@ -701,7 +713,7 @@ mod tests {
         let mk = |id: &str, kind| ConnectionConfig {
             id: id.into(), name: id.into(), kind, host: "db.example".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         st.save_connection(mk("p", crate::store::DbKind::Postgres), Some("pw".into()), None).await.unwrap();
         // A pool that is open now (lazy: never connects)
@@ -751,7 +763,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: "r".into(), name: "r".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         Store::new(dir.clone()).save(&cfg).unwrap();
         // Create the key before the threads open the file
@@ -790,7 +802,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: "m".into(), name: "m".into(), kind: crate::store::DbKind::Mysql, host: "db.example".into(), port: 3306,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
         let file = dir.join("import.json");

@@ -38,6 +38,10 @@ export interface ConnectionConfig {
   ssl?: SslConfig | null;
   /** Redis connection mode */
   redis?: RedisMode | null;
+  /** A program whose output is the password at each login (RDS / Cloud SQL IAM tokens). Never exported */
+  passwordCommand?: string;
+  /** Seconds the command's output is used again (empty = every login) */
+  passwordReuseSecs?: number | null;
 }
 
 export interface SslConfig {

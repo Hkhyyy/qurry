@@ -131,6 +131,46 @@ impl Server {
 
 #[cfg(test)]
 mod tests {
+    /// A data source's password command (#177) runs at login, but the listing never shows it (it names programs and accounts)
+    #[tokio::test]
+    async fn the_listing_has_no_password_command() {
+        let mut s = super::super::tests::source("1", "IAM", Some("read"), false);
+        s.config.password_command = "/opt/homebrew/bin/aws rds generate-db-auth-token --hostname %HOSTNAME% --profile prod-admin".into();
+        s.config.password_reuse_secs = Some(600);
+        let (server, dir) = super::super::tests::server_with(&[s]);
+        let text = server.list_data_sources().await.unwrap().to_string();
+        assert!(text.contains("\"IAM\""), "{text}");
+        for w in ["passwordCommand", "password_command", "passwordReuseSecs", "generate-db-auth-token", "prod-admin"] {
+            assert!(!text.contains(w), "{w} in {text}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// No MCP tool writes data sources (connections.json): so none can set or change a password command, which runs a program
+    /// on this computer. Every source file of the server, outside its tests
+    #[test]
+    fn no_tool_saves_a_data_source() {
+        let files = [
+            ("main.rs", include_str!("../main.rs")),
+            ("mask.rs", include_str!("../mask.rs")),
+            ("tools/mod.rs", include_str!("mod.rs")),
+            ("tools/dba.rs", include_str!("dba.rs")),
+            ("tools/query.rs", include_str!("query.rs")),
+            ("tools/redis.rs", include_str!("redis.rs")),
+            ("tools/search.rs", include_str!("search.rs")),
+            ("tools/sources.rs", include_str!("sources.rs")),
+        ];
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let on_disk = std::fs::read_dir(&dir).unwrap().chain(std::fs::read_dir(dir.join("tools")).unwrap()).filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "rs")).count();
+        assert_eq!(on_disk, files.len(), "a new file in crates/mcp/src: add it to this list");
+        for (name, text) in files {
+            let code = text.split("#[cfg(test)]").next().unwrap();
+            for w in ["save_connection", "store.save", "store.update", "store.modify", "save_with", "import_apply", "set_connection_", "allow_plaintext("] {
+                assert!(!code.contains(w), "{name} calls {w}");
+            }
+        }
+    }
+
     #[test]
     fn uri_passwords_are_hidden() {
         assert_eq!(qurry_core::store::without_userinfo("mongodb+srv://app:s3cret@cluster0.x.net/?retryWrites=true"), "mongodb+srv://cluster0.x.net/?retryWrites=true");

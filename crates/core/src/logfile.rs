@@ -305,6 +305,12 @@ pub fn hide_word(w: &str, label: &'static str) {
     });
 }
 
+/// The word hide_word hid under `label` shows again (a password command's token another one replaced)
+pub fn unhide_word(w: &str, label: &'static str) {
+    let w = w.trim().to_ascii_lowercase();
+    with_hidden(|h| h.retain(|(x, l)| !(*x == w && *l == label)));
+}
+
 /// The hidden words (whole words, any case) → their label, and the database of a `<data source id>::<database>` target
 fn hidden(s: &str) -> String {
     let s = target_dbs(s);
@@ -819,6 +825,52 @@ mod tests {
 
     /// The tests that set the process's log file, one at a time (other tests' lines may land in it meanwhile)
     static SET: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// A password command (#177): the log says that it ran, how it ended and how long it took, never its command line or what it
+    /// printed (on success or failure)
+    #[tokio::test]
+    async fn log_has_no_password_command_output() {
+        let _one = SET.lock().await;
+        let t = tempfile::tempdir().unwrap();
+        init_at(&t.path().join("logs"), "gui");
+        let st = crate::open_state(Some(t.path().join("config"))).unwrap();
+        let (good, bad) = (t.path().join("good-token.sh"), t.path().join("bad-token.sh"));
+        std::fs::write(&good, "echo s3cret-token-xyz\n").unwrap();
+        std::fs::write(&bad, "echo s3cret-token-bad; echo denied >&2; exit 2\n").unwrap();
+        let mut c = acme("Acme IAM", "shop-db.acme.test", None);
+        c.password_command = format!("/bin/sh {}", good.display());
+        let c = st.save_connection(c, None, None).await.unwrap();
+        assert_eq!(st.login_password(&c).await.unwrap().as_deref(), Some("s3cret-token-xyz"));
+        assert!(st.connect(c.id.clone()).await.is_err(), "no server there");
+        let mut failing = c.clone();
+        failing.password_command = format!("/bin/sh {}", bad.display());
+        let failing = st.save_connection(failing, None, None).await.unwrap();
+        let e = st.connect(failing.id.clone()).await.unwrap_err().to_string();
+        assert!(e.contains("exit 2") && e.contains("denied") && !e.contains("s3cret"), "{e}");
+        *SINK.lock().unwrap() = None;
+        let text = std::fs::read_to_string(t.path().join("logs/qurry.log")).unwrap();
+        for w in ["s3cret", "token.sh", "/bin/sh"] {
+            assert!(!text.contains(w), "{w} in\n{text}");
+        }
+        for l in [format!("] password command of {} ok in ", c.id), format!("] password command of {} exit code 2 after ", c.id)] {
+            assert!(text.contains(&l), "{l} in\n{text}");
+        }
+    }
+
+    /// A data source's password command hides one token at a time: a new output replaces the one it hid before
+    #[tokio::test]
+    async fn a_new_password_command_output_replaces_the_hidden_one() {
+        let t = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(t.path().join("config"))).unwrap();
+        let (n, script) = (t.path().join("n"), t.path().join("token.sh"));
+        std::fs::write(&script, format!("echo x >> '{0}'\necho tok-$(/usr/bin/wc -l < '{0}' | /usr/bin/tr -d ' ')\n", n.display())).unwrap();
+        let mut c = acme("Acme IAM", "shop-db.acme.test", None);
+        c.password_command = format!("/bin/sh {}", script.display());
+        let c = st.save_connection(c, None, None).await.unwrap();
+        assert_eq!(st.login_password(&c).await.unwrap().as_deref(), Some("tok-1"));
+        assert_eq!(st.login_password(&c).await.unwrap().as_deref(), Some("tok-2"));
+        assert_eq!(hidden("failed with tok-1 and tok-2"), "failed with tok-1 and <password>");
+    }
 
     /// A GUI front-end error (log_frontend_error): message and stacks redacted and cut, at most FRONTEND_PER_MINUTE a minute, then
     /// one line, then again once the minute is over

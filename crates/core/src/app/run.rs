@@ -716,7 +716,7 @@ mod tests {
             let id = format!("{kind:?}");
             let cfg = ConnectionConfig {
                 id: id.clone(), name: id.clone(), kind, host: "127.0.0.1".into(), port, user: "u".into(), database: "d".into(), color: None, ssh: None,
-                password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: true, options: Default::default(), ssl: None, redis: None, ssm: None,
+                password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: true, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
             };
             st.save_connection(cfg, None, None).await.unwrap();
             let err = |r: AppResult<BatchResult>| r.expect_err("refused").to_string();

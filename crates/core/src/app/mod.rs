@@ -98,6 +98,9 @@ pub struct AppState {
     pub cut_grids: bool,
     /// Secrets key → password of a temporary data source (Store::temporary): kept in memory only, never in the secrets file
     temporary: std::sync::Mutex<HashMap<String, String>>,
+    /// Data source id → its password command's words, when it ran and what it printed (crate::password_command: reused for
+    /// password_reuse_secs). Memory only, like `temporary`
+    pub(crate) command_passwords: std::sync::Mutex<HashMap<String, crate::password_command::Ran>>,
     /// Tab id → the last use of its session that tx_reminders reminded about (once per stretch of the transaction sitting unused)
     reminded: std::sync::Mutex<HashMap<String, std::time::SystemTime>>,
     /// Notices that the Mac slept (AppState::wakes)
@@ -133,7 +136,7 @@ impl AppState {
     pub fn new(store: Store, secret_file: crate::secrets::SecretFile) -> Self {
         let history = crate::history::History::new(&store.dir());
         let audit = crate::audit::Audit::new(&store.dir());
-        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), connecting: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), lost_tx: Default::default(), running: Default::default(), tab_manual: Default::default(), more: Default::default(), runs: Default::default(), jobs: Default::default(), mcp: false, cut_grids: false, temporary: Default::default(), reminded: Default::default(), clock: Default::default(), housekept: Default::default(), reconnecting: Default::default() }
+        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), connecting: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), lost_tx: Default::default(), running: Default::default(), tab_manual: Default::default(), more: Default::default(), runs: Default::default(), jobs: Default::default(), mcp: false, cut_grids: false, temporary: Default::default(), command_passwords: Default::default(), reminded: Default::default(), clock: Default::default(), housekept: Default::default(), reconnecting: Default::default() }
     }
 }
 

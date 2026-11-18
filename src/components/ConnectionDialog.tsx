@@ -43,6 +43,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           id: edit.id, name: edit.name, kind: edit.kind, host: edit.host, port: edit.port, user: edit.user,
           database: edit.database, color: edit.color ?? null, ssh: edit.ssh ?? null, ssm: edit.ssm ?? null,
           scope: edit.scope, readOnly: edit.readOnly ?? false, options: edit.options ?? {}, ssl: edit.ssl ?? null, redis: edit.redis ?? null,
+          passwordCommand: edit.passwordCommand, passwordReuseSecs: edit.passwordReuseSecs,
         }
       : // New sources start hidden from MCP (turn it on in Options › MCP)
         { id: "", name: "", kind: "postgres", host: "localhost", port: 5432, user: "", database: "", color: null, ssh: null, options: { mcp: "off" } },
@@ -50,6 +51,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const [tab, setTab] = useState<"general" | "ssh" | "schemas" | "options">("general");
   const [password, setPassword] = useState<string | undefined>(undefined);
   const [sshSecret, setSshSecret] = useState<string | undefined>(undefined);
+  // With a password command the Password field is off: nothing typed there is sent (the saved password stays)
+  const loginPassword = cfg.passwordCommand?.trim() ? undefined : password;
   const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
   // The running test's id (cancelCall stops it, and with it its SSH / SSM tunnel); closing the dialog stops it too
   const [testing, setTesting] = useState<string | null>(null);
@@ -140,7 +143,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     let result: { ok: boolean; msg: string };
     try {
       // On the SSH tab, test only the SSH login; otherwise the DB connection through the tunnel (AWS SSM starts a session for it)
-      result = { ok: true, msg: sshTest ? await api.testSsh(c, sshSecret, id) : await api.testConnection(c, password, sshSecret, id) };
+      result = { ok: true, msg: sshTest ? await api.testSsh(c, sshSecret, id) : await api.testConnection(c, loginPassword, sshSecret, id) };
     } catch (e) {
       result = { ok: false, msg: String(e) };
     }
@@ -157,7 +160,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     try {
       // Save the shown MCP value as is (if left unset, it would turn on by itself after Production is turned off).
       // opt.mcpDbaReports is the chosen value even while its row is disabled: only the shown check is derived
-      const saved = await api.saveConnection({ ...cfg, name, options: { ...opt, mcp: mcpValue } }, password, sshSecret);
+      const saved = await api.saveConnection({ ...cfg, name, options: { ...opt, mcp: mcpValue } }, loginPassword, sshSecret);
       onSaved(saved);
     } catch (e) {
       setTest({ ok: false, msg: `Save failed: ${String(e)}` });
@@ -260,7 +263,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
       {tab === "schemas" && (
         <SchemasTab
           connId={edit?.id}
-          form={{ config: cfg, password, sshSecret }}
+          form={{ config: cfg, password: loginPassword, sshSecret }}
           cancelRef={cancelListing}
           onAllowPlaintext={() => setOpt("allowPlaintext", true)}
           kind={cfg.kind}

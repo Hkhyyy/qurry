@@ -40,6 +40,7 @@ pub mod plugin;
 pub mod migrate;
 pub use backend::mysql_db as mysql;
 pub mod notice;
+mod password_command;
 pub mod plan;
 pub mod rag;
 pub mod search_cache;

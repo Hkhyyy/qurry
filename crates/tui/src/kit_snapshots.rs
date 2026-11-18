@@ -1018,14 +1018,23 @@ async fn all_scenes() -> Vec<Value> {
     scenes.push(app_scene(&mut h, "Actions palette", "⌃k: 모든 명령과 단축키 (입력으로 찾기)", 120, 22));
     h.app.popup = None;
     h.app.conn_form(None);
-    scenes.push(app_scene(&mut h, "Data source form", "n (탐색기): 새 Data Source. Workspace · Color 칸은 ◂ ▸ 로 고른다", 120, 34));
+    scenes.push(app_scene(&mut h, "Data source form", "n (탐색기): 새 Data Source. Workspace · Color 칸은 ◂ ▸ 로 고른다", 120, 36));
     h.key("Up");
     scenes.push(app_scene(&mut h, "Data source form: 80×24", "In a window too short for every field the fields scroll to the focused one (here the last); the key hints stay and the border says which field it is", 80, 24));
     h.app.popup = None;
     let ssm = serde_json::from_value(json!({ "id": "ssm", "name": "[PROD] orders (SSM)", "kind": "postgres", "host": "orders.cluster-abc.ap-northeast-2.rds.amazonaws.com", "port": 5432, "user": "app", "database": "orders",
         "ssm": { "enabled": true, "profile": "prod", "target": "i-0123456789abcdef0" } })).unwrap();
     h.app.conn_form(Some(ssm));
-    scenes.push(app_scene(&mut h, "Data source form: AWS SSM", "Tunnel ◂ aws ssm ▸: AWS profile · region (empty: the profile's) · SSM target (instance id). Host / Port are the database as seen from the instance; no AWS secrets are stored (the aws CLI uses your AWS config or SSO login)", 120, 34));
+    scenes.push(app_scene(&mut h, "Data source form: AWS SSM", "Tunnel ◂ aws ssm ▸: AWS profile · region (empty: the profile's) · SSM target (instance id). Host / Port are the database as seen from the instance; no AWS secrets are stored (the aws CLI uses your AWS config or SSO login)", 120, 36));
+    h.app.popup = None;
+    // #177: the password comes from a program run at each login (an RDS IAM token); Password is off meanwhile
+    let iam = serde_json::from_value(json!({ "id": "iam", "name": "[PROD] orders (IAM)", "kind": "postgres", "host": "orders.cluster-abc.ap-northeast-2.rds.amazonaws.com", "port": 5432, "user": "app_iam", "database": "orders",
+        "passwordCommand": "/opt/homebrew/bin/aws rds generate-db-auth-token --hostname %HOSTNAME% --port %PORT% --username %USERNAME% --region ap-northeast-2", "passwordReuseSecs": 600 })).unwrap();
+    h.app.conn_form(Some(iam));
+    if let Some(Popup::ConnForm(f)) = &mut h.app.popup {
+        f.sel = f.fields.iter().position(|x| x.label == "Password command").unwrap();
+    }
+    scenes.push(app_scene(&mut h, "Data source form: password command", "Password command: a program (full path, never through a shell) whose output is the password at each login, %HOSTNAME% %PORT% %USERNAME% %DATABASE% replaced; Password is off (dim) while it is set. Password reuse: seconds its output is used again (empty: every login)", 120, 36));
     h.app.popup = None;
     // #131: whether AI tools may read a Production source's admin reports (MCP dba_report); disabled with why elsewhere
     let cases = [("off", true, "read", false, false), ("on", true, "read", true, false), ("not Production", false, "read", false, false), ("MCP Off", true, "off", false, false), ("off", true, "read", false, true), ("on", true, "read", true, true)];
@@ -1039,7 +1048,7 @@ async fn all_scenes() -> Vec<Value> {
             f.sel = if f.disabled("Admin reports").is_none() { at } else { at - 1 };
         }
         let l = if light { " (light)" } else { "" };
-        scenes.push(app_scene(&mut h, &format!("Data source form: admin reports, {name}{l}"), "Admin reports: AI tools may read this Production source's Database Admin reports (MCP dba_report), query values masked; off by default. Not Production (always readable) or MCP Off: disabled, dim", 120, 36));
+        scenes.push(app_scene(&mut h, &format!("Data source form: admin reports, {name}{l}"), "Admin reports: AI tools may read this Production source's Database Admin reports (MCP dba_report), query values masked; off by default. Not Production (always readable) or MCP Off: disabled, dim", 120, 38));
     }
     h.app.themes.theme = None;
     h.app.popup = None;
