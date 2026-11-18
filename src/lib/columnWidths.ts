@@ -35,7 +35,8 @@ export const widthKeys = (names: string[]) => sharedOr(names, (s) => s.columnKey
 /** Whose widths: a table tab's table (saved), or a console result's id (in memory) */
 export type WidthsOf = TableRef | string;
 
-const keyOf = (w: WidthsOf) => (typeof w === "string" ? `result:${w}` : JSON.stringify([w.source, w.database, w.schema, w.table]));
+/** The key a table's or a console result's grid settings are kept under in memory (widths here, the layout in columnLayout.ts) */
+export const keyOf = (w: WidthsOf) => (typeof w === "string" ? `result:${w}` : JSON.stringify([w.source, w.database, w.schema, w.table]));
 const cache = new Map<string, ColumnWidths>();
 /** Grids showing a table's widths; when the last one closes they are forgotten, so the table's next tab reads what is saved then */
 const users = new Map<string, number>();

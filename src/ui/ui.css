@@ -275,6 +275,9 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-popover-title { padding: var(--ui-sp-3) var(--ui-sp-4) var(--ui-sp-2); font-size: var(--ui-fs-sm); font-weight: 600; }
 .ui-popover > .ui-list { flex: 1; min-height: 0; padding: 0 var(--ui-sp-2) var(--ui-sp-2); }
 .ui-popover .popover-search { margin: 0 var(--ui-sp-3) var(--ui-sp-2); }
+/* CheckListPopover: the list keeps one height while the search filters it */
+.ui-checklist > .ui-list { flex: 0 1 auto; height: 264px; min-height: 0; }
+.ui-checklist .ui-popover-foot { display: flex; justify-content: flex-end; }
 .ui-popover-foot { flex: none; padding: var(--ui-sp-2) var(--ui-sp-4); font-size: var(--ui-fs-xs); color: var(--ui-text-muted); border-top: 1px solid var(--ui-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* List popup under a field (PopupList: FontPicker, ComboBox); its left · top · width are set from the field */
 .ui-popup-list { position: fixed; z-index: var(--ui-z-menu); max-height: 240px; display: flex; flex-direction: column; font-size: var(--ui-fs-md); color: var(--ui-text); background: var(--ui-surface); border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-md); box-shadow: var(--ui-shadow-pop); }

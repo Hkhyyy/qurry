@@ -13,15 +13,17 @@ const SELECTION_ITEMS: StatusItemId[] = ["notNull", "sum", "avg", "min", "max"];
 
 /** What the result grid shows in the status bar while focus is in it */
 export function useGridStatus({
-  colVirt, scrollRef, wrapRef, chart, transposed, rownumW, hasSel, sel, cur, wasmReady, forSelected, valueAt,
-  result, changes, added, dataIndex, edit, tcol, cols, p,
+  colVirt, scrollRef, wrapRef, chart, transposed, pinned, pinEdge, hasSel, sel, cur, wasmReady, forSelected, valueAt,
+  result, changes, added, dataIndex, view, hidden, edit, tcol, cols, p,
 }: {
   colVirt: Virtualizer<HTMLDivElement, Element>;
   scrollRef: RefObject<HTMLDivElement | null>;
   wrapRef: RefObject<HTMLDivElement | null>;
   chart: boolean;
   transposed: boolean;
-  rownumW: number;
+  /** How many display columns are pinned, and the right edge of the pinned strip (useColumnLayout) */
+  pinned: number;
+  pinEdge: number;
   hasSel: boolean;
   sel: Selection | null;
   cur: Pos | null;
@@ -32,6 +34,9 @@ export function useGridStatus({
   changes: Record<number, Record<number, Cell>>;
   added: NewRow[];
   dataIndex: (d: number) => number;
+  /** Display column → result column, and how many the layout hides (useColumnLayout) */
+  view: number[];
+  hidden: number;
   edit: EditTarget | undefined;
   tcol: (i: number) => string;
   cols: QueryResult["columns"];
@@ -42,7 +47,11 @@ export function useGridStatus({
   // sideways scrolling (the column virtualizer renders again on scroll); Chart and Transpose have neither ───
   const statusItems = useStatusItems();
   const offset = colVirt.scrollOffset ?? 0;
-  const range = scrollRef.current && !chart && !transposed ? shownColumns(colVirt.measurementsCache, offset + rownumW, offset + scrollRef.current.clientWidth) : null;
+  // The pinned columns are always on screen; the others count from the pinned strip's right edge (those under it don't show). The
+  // range takes the pinned ones in while the first unpinned column still shows next to them
+  const el = !chart && !transposed ? scrollRef.current : null;
+  const rest = el ? shownColumns(colVirt.measurementsCache.slice(pinned), offset + pinEdge, offset + el.clientWidth) : null;
+  const range = rest ? [rest[0] ? rest[0] + pinned : 0, rest[1] + pinned] : el && pinned ? [0, pinned - 1] : null;
   const multi = hasSel && !isSingle(sel);
   const posSpans = useMemo<GridStatus["pos"]>(() => (chart || transposed || !cur ? undefined : multi ? [spanOf(rowsOf(sel)), spanOf(selCols(sel))] : [spanOf([cur.r]), spanOf([cur.c])]), [sel, chart, transposed]);
   // Only while one of them is on: every selected cell's value goes to the module (at most qurry_shared::statusbar::MAX_CELLS)
@@ -62,7 +71,7 @@ export function useGridStatus({
   // Size: the current cell alone, and its table column's declared type when the grid's columns map to a table (a table tab, a console
   // result of one table or a join's columns of a table)
   // (not a not-yet-written DEFAULT: it has no value yet)
-  const sizeCell = !multi && cur && !chart && !transposed && statusItems.includes("size") ? { r: dataIndex(cur.r), c: cur.c } : null;
+  const sizeCell = !multi && cur && !chart && !transposed && statusItems.includes("size") ? { r: dataIndex(cur.r), c: view[cur.c] } : null;
   const sizeAt = sizeCell && valueAt(sizeCell.r, sizeCell.c) !== DEFAULT_TOKEN ? sizeCell : null;
   const sizeValue = sizeAt ? valueAt(sizeAt.r, sizeAt.c) : null;
   const joinCol = sizeAt ? p.editJoin?.columns[sizeAt.c] : undefined;
@@ -75,10 +84,11 @@ export function useGridStatus({
       kind,
       pos: posSpans,
       stats,
-      shown: range ? [range[0] + 1, range[1] + 1, cols.length] : undefined,
+      shown: range ? [range[0] + 1, range[1] + 1, view.length] : undefined,
+      hidden: chart || transposed ? 0 : hidden,
       cell: sizeAt ? { typeName: cols[sizeAt.c].typeName, value: sizeValue, column: colMeta && { dataType: colMeta.dataType, charset: colMeta.charset } } : undefined,
     }),
-    [kind, posSpans, stats, range?.[0], range?.[1], cols, sizeAt?.r, sizeAt?.c, sizeValue, colMeta],
+    [kind, posSpans, stats, range?.[0], range?.[1], view.length, hidden, chart, transposed, cols, sizeAt?.r, sizeAt?.c, sizeValue, colMeta],
   );
   useEffect(() => {
     const el = wrapRef.current;

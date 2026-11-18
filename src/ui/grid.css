@@ -26,6 +26,14 @@
 .cell.al-left { text-align: left; }
 .cell.al-right { text-align: right; }
 .cell.al-center { text-align: center; }
+/* Pinned columns (Pin Column): sticky in the rows, moved back by the scrolled distance in the header strip (GridHead sets --grid-x);
+   opaque, so the columns scrolled under them don't show through; the last one's edge line stays visible in every theme. Before the
+   cell states below, which paint over the base */
+.cell.pinned, .cell-edit.pinned { position: sticky; z-index: 1; background: var(--bg); }
+:where(.grid-row.odd) .cell.pinned { background: var(--c-222326); }
+.grid-header .cell.head.pinned { position: relative; left: 0; transform: translateX(var(--grid-x, 0px)); z-index: 2; }
+.cell.head.pinned { background: var(--panel); }
+.cell.pin-edge, .cell-edit.pin-edge { border-right: 2px solid var(--ui-grid-pin-edge); }
 .cell.sel { outline: 1px solid var(--accent); outline-offset: -1px; background: var(--sel); }
 .grid-row.added .cell:not(.rownum) { background: var(--grid-added); }
 .grid-row.deleted .cell:not(.rownum) { text-decoration: line-through; color: var(--danger); background: var(--grid-deleted); }
