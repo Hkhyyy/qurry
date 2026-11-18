@@ -398,7 +398,7 @@ impl App {
                 let db = n.db.clone().or(open).unwrap_or_else(|| self.default_db(&n.conn));
                 self.open_redis(&n.conn, db, None)
             }
-            NodeKind::Conn | NodeKind::Db if f4 => self.open_console(&n.conn, n.db.clone()),
+            NodeKind::Conn | NodeKind::Db | NodeKind::Schema if f4 => self.open_console(&n.conn, n.db.clone(), n.schema.clone()),
             NodeKind::Object(k) if k == "key" => self.open_redis(&n.conn, n.db.clone().unwrap(), n.name.clone()),
             NodeKind::Object(k) if n.is_relation() => self.open_table(&n.conn, n.db.clone().unwrap(), n.schema.clone().unwrap(), n.name.clone().unwrap(), k.clone()),
             NodeKind::Object(k) => {

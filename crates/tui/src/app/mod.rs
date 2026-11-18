@@ -19,6 +19,7 @@ use tui_textarea::TextArea;
 mod actions;
 mod completion;
 mod conns;
+mod console_schema;
 mod explorer;
 mod palette;
 mod redis;
@@ -78,6 +79,8 @@ pub struct Console {
     pub joined: Vec<reformat::Joined>,
     /// The text's SQL colors, highlighted again only when the text changes
     pub colors: SqlColors,
+    /// The schema the session was switched to (opened from a schema, or Switch Schema…); None: the default one
+    pub schema: Option<String>,
 }
 
 /// The console's statements (qurry_shared::sql::split_script, as ⌃↩ plans them) for the lines and source kind they were split for:
@@ -266,7 +269,7 @@ pub const SERVER_WARNING: &str = "WARNING: ";
 impl Console {
     /// A new console's state around its editor and session
     pub fn new(editor: TextArea<'static>, session: String, output: Vec<(bool, String)>, tx_manual: bool) -> Self {
-        Console { editor, session, results: Default::default(), stmts: Default::default(), output, running: false, tx_manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![], colors: Default::default() }
+        Console { editor, session, results: Default::default(), stmts: Default::default(), output, running: false, tx_manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![], colors: Default::default(), schema: None }
     }
 
     /// Result tabs follow the script (#151): after an edit they follow their statements, and the caret entering another statement
@@ -761,6 +764,7 @@ pub enum Action {
     SearchEverywhere,
     RecentTabs,
     ExecSettings,
+    SwitchSchema,
     ClearConsole,
     Ddl,
     EditData,

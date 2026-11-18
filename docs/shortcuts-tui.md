@@ -109,6 +109,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | — | Reset Column Widths (back to the computed widths) |
 | — | Explain Analyze (runs the statement: real times and row counts) |
 | — | Query Execution Settings (what ⌃Enter runs) |
+| — | Switch Schema… |
 | — | Clear Console (delete all text) |
 | — | Edit Data (open table) |
 | — | Revert Changes |

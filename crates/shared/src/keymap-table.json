@@ -172,6 +172,7 @@
   {"gui": "tree.remove", "title": "Remove Data Source / Drop Object", "guiDesc": "Remove data source / drop object (asks first)", "scope": "tree", "guiKeys": ["Delete", "Mod+Backspace"]},
   {"gui": "editor.explainAnalyze", "tui": "ExplainAnalyze", "title": "Explain Analyse", "tuiTitle": "Explain Analyze (runs the statement: real times and row counts)", "scope": "editor"},
   {"tui": "ExecSettings", "title": "Query Execution Settings (what ⌃Enter runs)"},
+  {"tui": "SwitchSchema", "title": "Switch Schema…"},
   {"tui": "ClearConsole", "title": "Clear Console (delete all text)"},
   {"tui": "EditData", "title": "Edit Data (open table)"},
   {"gui": "grid.revert", "tui": "Revert", "title": "Revert Selected", "tuiTitle": "Revert Changes", "scope": "grid", "guiKeys": ["Mod+Alt+Z"], "tuiPane": "grid", "tuiPaneKeys": ["Ctrl+Z"]},

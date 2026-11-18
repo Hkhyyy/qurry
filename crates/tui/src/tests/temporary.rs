@@ -30,7 +30,7 @@ async fn url_opens_a_connected_temporary_source_and_read_only_blocks_a_write() {
     assert!(row.contains("◉  TEMP · READ-ONLY  postgres://app@"), "{row}");
 
     // A write is refused before it reaches the server; a read runs
-    h.app.open_console(&id, None);
+    h.app.open_console(&id, None, None);
     h.type_str("update orders set paid = true where id = 1");
     h.key("F5");
     h.settle().await;

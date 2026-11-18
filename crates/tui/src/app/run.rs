@@ -21,7 +21,7 @@ fn error_span(sql: &str, at: Option<usize>, span: Span) -> Span {
 }
 
 /// Runs a console query on the session, or asks the test stand-in when there is one
-async fn console_query(st: &AppState, fake: Option<FakeDb>, target: &str, q: String, limit: Option<usize>, session: &str) -> Result<QueryResult, String> {
+pub(super) async fn console_query(st: &AppState, fake: Option<FakeDb>, target: &str, q: String, limit: Option<usize>, session: &str) -> Result<QueryResult, String> {
     match fake {
         Some(f) => f(&q),
         None => st.run_query(target.into(), q, limit, Some(session.into())).await.map_err(err),

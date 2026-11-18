@@ -40,7 +40,7 @@ impl App {
             self.status = "Open another tab to split".into();
             return;
         }
-        self.open_console(&conn, Some(db));
+        self.open_console(&conn, Some(db), None);
         let id = self.tabs[self.active].id;
         self.drop_tab(id, DropTarget::NewSplit(g, dir));
     }

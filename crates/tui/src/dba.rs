@@ -243,7 +243,7 @@ impl App {
     }
 
     fn dba_console(&mut self, conn: &str, db: String, q: String) {
-        self.open_console(conn, Some(db));
+        self.open_console(conn, Some(db), None);
         if let Some(Tab { kind: TabKind::Console(c), .. }) = self.tabs.get_mut(self.active) {
             c.editor.insert_str(q);
         }

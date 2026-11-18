@@ -722,16 +722,16 @@ async fn production_console_starts_in_manual_and_says_so_once() {
     h.app.reload_conns();
     h.settle().await;
     let told = |h: &Harness| console(h).output.iter().any(|(_, l)| l == qurry_shared::errors::PRODUCTION_MANUAL);
-    h.app.open_console("p", None);
+    h.app.open_console("p", None, None);
     assert!(console(&h).tx_manual && told(&h));
     assert_eq!(h.app.status, qurry_shared::errors::PRODUCTION_MANUAL);
-    h.app.open_console("p", None);
+    h.app.open_console("p", None, None);
     assert!(console(&h).tx_manual && !told(&h), "once");
     cfg.options.production_manual = Some(false);
     h.app.state.store.save(&cfg).unwrap();
     h.app.reload_conns();
     h.settle().await;
-    h.app.open_console("p", None);
+    h.app.open_console("p", None, None);
     assert!(!console(&h).tx_manual);
     // The reminder about a transaction left open goes into that console and the status line
     let session = console(&h).session.clone();
@@ -1260,4 +1260,90 @@ async fn rerun_after_a_failed_load_with_pending_edits_asks_first() {
     assert!(h.console_output().len() > before, "it ran");
     assert_eq!(console(&h).grid().unwrap().pending(), 0);
     assert!(console(&h).results.grid().is_some_and(|g| g.more_error.is_none()));
+}
+
+/// A console on data source "test" of `kind` with Switch schema `mode`; the statements it sends go to `record`
+async fn schema_console(kind: &str, mode: Option<&str>, record: crate::app::FakeDb) -> Harness {
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "test", "name": "T", "kind": kind, "host": "127.0.0.1", "port": 1, "user": "u", "database": "shop"
+    }))
+    .unwrap();
+    cfg.options.switch_schema = mode.map(String::from);
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.fake_db = Some(record);
+    h.console_tab();
+    h
+}
+
+fn schemas(names: &[(&str, bool)]) -> Vec<qurry_core::meta::SchemaInfo> {
+    names.iter().map(|(n, s)| qurry_core::meta::SchemaInfo { name: (*n).into(), is_system: *s }).collect()
+}
+
+/// Switch Schema… lists the console's schemas without the system ones, the current one marked; picking one sets the session's
+/// search_path and the title shows it (#195)
+#[tokio::test]
+async fn switch_schema_picks_a_postgres_schema() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.into());
+        fake(q)
+    }
+    let mut h = schema_console("postgres", None, record).await;
+    let id = h.app.tabs[h.app.active].id;
+    h.app.console_schema_choices(id, schemas(&[("pg_catalog", true), ("public", false), ("billing", false)]));
+    let Some(Popup::Palette(p)) = &h.app.popup else { panic!("no picker: {}", h.app.status) };
+    let items: Vec<_> = p.items.iter().map(|i| (i.label.as_str(), i.hint.as_str())).collect();
+    assert_eq!(items, [("public", "current"), ("billing", "")]);
+    h.key("Down");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["SET search_path TO billing, public"]);
+    assert_eq!(console(&h).schema.as_deref(), Some("billing"));
+    assert_eq!(h.app.status, "search_path = billing, public");
+    let s = h.screen(120, 16);
+    assert!(s.contains("postgres · billing · Tx: Auto"), "{s}");
+    // The next time the picked one is the current one
+    h.app.console_schema_choices(id, schemas(&[("public", false), ("billing", false)]));
+    let Some(Popup::Palette(p)) = &h.app.popup else { panic!("no picker") };
+    assert_eq!((p.sel, p.items[1].hint.as_str()), (1, "current"));
+}
+
+/// On MySQL a schema is a database: the picker lists them and picking one sends USE on the console's session
+#[tokio::test]
+async fn switch_schema_on_mysql_uses_the_database() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.into());
+        fake(q)
+    }
+    let mut h = schema_console("mysql", None, record).await;
+    let id = h.app.tabs[h.app.active].id;
+    h.app.tabs[h.app.active].db = "shop".into();
+    h.app.console_schema_choices(id, schemas(&[("mysql", true), ("shop", false), ("app_db", false)]));
+    let Some(Popup::Palette(p)) = &h.app.popup else { panic!("no picker: {}", h.app.status) };
+    let items: Vec<_> = p.items.iter().map(|i| (i.label.as_str(), i.hint.as_str())).collect();
+    assert_eq!(items, [("shop", "current"), ("app_db", "")]);
+    h.key("Down");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["USE app_db"]);
+    assert_eq!(console(&h).schema.as_deref(), Some("app_db"));
+    assert_eq!(h.app.status, "USE app_db");
+}
+
+/// Switch schema Disable: Switch Schema… says so and opens nothing; outside a console it says what it is for
+#[tokio::test]
+async fn switch_schema_disabled_or_outside_a_console() {
+    let mut h = schema_console("postgres", Some("disable"), fake).await;
+    h.app.run_action(crate::app::Action::SwitchSchema);
+    h.settle().await;
+    assert!(h.app.popup.is_none());
+    assert_eq!(h.app.status, "Schema switching is disabled for this data source");
+    let mut h = Harness::new().await;
+    h.app.run_action(crate::app::Action::SwitchSchema);
+    assert!(h.app.popup.is_none());
+    assert_eq!(h.app.status, "Switch Schema… is for a query console");
 }

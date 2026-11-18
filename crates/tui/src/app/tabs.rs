@@ -307,7 +307,7 @@ impl App {
         let (st, conn, db, target, schema, table) = (self.state.clone(), conn.clone(), db.clone(), target.clone(), tt.schema.clone(), tt.table.clone());
         self.spawn(async move { st.similar_rows_sql(target, schema, table, vc, pk).await.map_err(|e| e.to_string()) }, move |a, r| match r {
             Ok(sql) => {
-                a.open_console(&conn, Some(db));
+                a.open_console(&conn, Some(db), None);
                 if let Some(Tab { kind: TabKind::Console(c), .. }) = a.tabs.get_mut(a.active) {
                     c.editor.insert_str(sql);
                 }
@@ -318,7 +318,8 @@ impl App {
         });
     }
 
-    pub fn open_console(&mut self, conn: &str, db: Option<String>) {
+    /// schema: where it was opened from (a schema node, or an object in it), see console_opened_in
+    pub fn open_console(&mut self, conn: &str, db: Option<String>, schema: Option<String>) {
         let db = db.unwrap_or_else(|| self.default_db(conn));
         let name = self.conn(conn).map(|c| c.config.name.clone()).unwrap_or_default();
         let n = self.tabs.iter().filter(|t| t.conn == conn && matches!(t.kind, TabKind::Console(_))).count();
@@ -344,6 +345,9 @@ impl App {
                     a.status = e;
                 }
             });
+        }
+        if let Some(s) = schema {
+            self.console_opened_in(id, s);
         }
     }
 
