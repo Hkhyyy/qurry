@@ -268,8 +268,9 @@ impl App {
     }
 
     /// A notice to acknowledge. Over a popup that is open (the palette, a confirmation, the Production Log, another notice) it
-    /// doesn't replace it: closing the notice goes back there, as it was
+    /// doesn't replace it: closing the notice goes back there, as it was. A new notice is read from its first line
     pub fn notice(&mut self, title: String, text: String) {
+        self.popup_scroll = 0;
         self.popup = Some(match self.popup.take() {
             Some(back) => Popup::Note { title, text, back: Box::new(back) },
             None => Popup::Message { title, text },

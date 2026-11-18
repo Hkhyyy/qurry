@@ -12,7 +12,6 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
 
 pub struct Designer {
     pub target: String,
@@ -503,11 +502,14 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::styled(format!("  {m}"), Style::default().fg(DANGER)));
     }
     let hint = key_hints(&[("a", "column"), ("i", "index"), ("f", "FK"), ("↩", "edit"), ("d", "remove"), ("p", "PK"), ("n", "name"), ("c", "comment"), ("F5", if d.before.is_some() { "apply" } else { "create" }), ("o", "console"), ("Esc", "close")]);
-    let h = inner.height.saturating_sub(1);
-    // In a short window the selected row (the one marked ▸) stays in view
-    let at = lines.iter().position(|l| l.to_string().starts_with("▸ ")).unwrap_or(0) as u16;
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((at.saturating_sub(h.saturating_sub(1)), 0)), Rect { height: h, ..inner });
-    f.render_widget(Paragraph::new(hint), Rect { y: inner.y + h, height: 1, ..inner });
+    let body = keys_at_bottom(f, inner, hint);
+    // In a short window the selected row (the one marked ▸) stays in view, counted in wrapped rows as the scroll is; one taller
+    // than the body shows from its start
+    let scroll = lines.iter().position(|l| l.to_string().starts_with("▸ ")).map_or(0, |i| {
+        let (top, end) = (wrapped_height(&lines[..i], body.width), wrapped_height(&lines[..=i], body.width));
+        end.saturating_sub(body.height).min(top)
+    });
+    scrolled(f, body, lines, scroll);
 }
 
 // ───────── Opening ─────────
@@ -712,5 +714,21 @@ mod tests {
         let g = parse_fk("fk (a) -> t (id)", "public").unwrap();
         assert_eq!((g.ref_schema.as_str(), g.on_delete.as_str()), ("public", "NO ACTION"));
         assert!(parse_fk("fk (a) t (id)", "public").is_err());
+    }
+
+    /// #196: in a small window the designer keeps all its keys (wrapped) and the selected column in view, though the column
+    /// lines above it wrap
+    #[tokio::test]
+    async fn keeps_keys_and_selected_column_in_small_windows() {
+        let mut h = crate::testkit::Harness::new().await;
+        let col = |i: usize| ColumnDef { name: format!("col_{i:02}"), data_type: "integer".into(), default: Some(format!("nextval('orders_col_{i:02}_seq'::regclass)")), ..Default::default() };
+        let def = TableDef { schema: "public".into(), name: "orders".into(), columns: (1..=15).map(col).collect(), ..Default::default() };
+        let mut d = Designer { target: "c1".into(), conn: "c1".into(), kind: DbKind::Postgres, before: None, def, sel: 14, sql: Ok(vec![]), message: None };
+        d.refresh();
+        h.app.designer = Some(d);
+        for (w, ht) in [crate::ui::MIN_SIZE, (80, 24)] {
+            let s = h.screen(w, ht);
+            assert!(s.contains("New Table") && s.contains("▸ col_15") && s.contains("o console") && s.contains("Esc close"), "{w}×{ht}\n{s}");
+        }
     }
 }

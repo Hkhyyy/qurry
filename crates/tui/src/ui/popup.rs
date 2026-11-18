@@ -496,6 +496,16 @@ mod tests {
             h.key("Esc");
             assert!(h.app.popup.is_none() && h.app.popup_scroll == 0);
         }
+        // A notice that comes over a scrolled message is read from its first line
+        h.app.popup = Some(Popup::Message { title: "Couldn't connect".into(), text: text.clone() });
+        h.screen(80, 24);
+        for _ in 0..3 {
+            h.key("PgDn");
+        }
+        h.app.notice("Commit failed".into(), text.replace("line", "row"));
+        let s = h.screen(80, 24);
+        assert!(s.contains("Commit failed") && s.contains("row 1: "), "{s}");
+        h.app.popup = None;
         // One that fits shows no keys line, as before
         h.app.popup = Some(Popup::Message { title: "Saved".into(), text: "Saved to ~/qurry.csv".into() });
         assert!(!h.screen(80, 24).contains("scroll"));
