@@ -1347,3 +1347,23 @@ async fn switch_schema_disabled_or_outside_a_console() {
     assert!(h.app.popup.is_none());
     assert_eq!(h.app.status, "Switch Schema… is for a query console");
 }
+
+/// The title follows the session's transaction after a switch: the switch opens none (core runs it outside Manual mode's), and
+/// one the user already has open stays shown as pending (#195)
+#[tokio::test]
+async fn switch_schema_keeps_the_transaction_shown() {
+    fn open_tx(q: &str) -> Result<QueryResult, String> {
+        fake(q).map(|r| QueryResult { in_transaction: true, ..r })
+    }
+    let mut h = schema_console("postgres", None, open_tx).await;
+    let id = h.app.tabs[h.app.active].id;
+    h.app.switch_console_schema(id, "billing".into());
+    h.settle().await;
+    assert!(console(&h).in_tx);
+    assert!(h.screen(140, 16).contains("pending"));
+    h.app.fake_db = Some(fake);
+    h.app.switch_console_schema(id, "public".into());
+    h.settle().await;
+    assert!(!console(&h).in_tx);
+    assert!(!h.screen(140, 16).contains("pending"));
+}

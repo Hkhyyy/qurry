@@ -91,6 +91,12 @@ impl App {
         let (target, session, conn) = (t.target.clone(), c.session.clone(), t.conn.clone());
         let q = if self.kind_of(&conn) == DbKind::Mysql { qurry_shared::sql::use_sql(&schema) } else { qurry_shared::sql::search_path_sql(&schema) };
         let (st, fake) = (self.state.clone(), self.fake_db());
-        self.spawn(async move { console_query(&st, fake, &target, q, None, &session).await.map(|_| ()) }, done);
+        self.spawn(async move { console_query(&st, fake, &target, q, None, &session).await }, move |a, r| {
+            // The switch opens no transaction (it runs outside Manual mode's), but one already open stays shown
+            if let (Ok(res), Some(TabKind::Console(c))) = (&r, a.tab_mut(id).map(|t| &mut t.kind)) {
+                c.in_tx = res.in_transaction;
+            }
+            done(a, r.map(|_| ()))
+        });
     }
 }
