@@ -1,7 +1,7 @@
 //! Backend matrix: pins what each operation that goes through `Pool` returns on PostgreSQL, MySQL and Redis,
 //! so a refactor of the dispatch shows up as a failing assertion instead of a changed screen.
 //! Real-server tests are #[ignore]d and read the same env vars as CI:
-//!   QURRY_TEST_PG=host:port:user:db · QURRY_TEST_MY=host:port:user:password:db · QURRY_TEST_REDIS=host:port (default 127.0.0.1:16379)
+//!   QURRY_TEST_PG=host:port:user:db · QURRY_TEST_MY=host:port:user:password:db · QURRY_TEST_REDIS=host:port
 //! cargo test -p qurry-core --test backend_matrix -- --ignored
 use qurry_core::app::AppState;
 use qurry_core::db::{self, Pool};
@@ -22,23 +22,23 @@ fn cfg(kind: &str, host: &str, port: &str, user: &str, database: &str) -> Connec
 
 /// QURRY_TEST_PG=host:port:user:db
 fn pg_env() -> Option<ConnectionConfig> {
-    let e = std::env::var("QURRY_TEST_PG").ok()?;
+    let e = qurry_core::testenv::var("QURRY_TEST_PG")?;
     let p: Vec<&str> = e.split(':').collect();
     Some(cfg("postgres", p[0], p[1], p[2], p[3]))
 }
 
 /// QURRY_TEST_MY=host:port:user:password:db → (source, password)
 fn my_env() -> Option<(ConnectionConfig, String)> {
-    let e = std::env::var("QURRY_TEST_MY").ok()?;
+    let e = qurry_core::testenv::var("QURRY_TEST_MY")?;
     let p: Vec<&str> = e.split(':').collect();
     Some((cfg("mysql", p[0], p[1], p[2], p[4]), p[3].to_string()))
 }
 
 /// QURRY_TEST_REDIS=host:port, on its own DB (the redisdb tests use 0 and 3–8)
-fn redis_env(db: &str) -> ConnectionConfig {
-    let addr = std::env::var("QURRY_TEST_REDIS").unwrap_or_else(|_| "127.0.0.1:16379".into());
+fn redis_env(db: &str) -> Option<ConnectionConfig> {
+    let addr = qurry_core::testenv::var("QURRY_TEST_REDIS")?;
     let (host, port) = addr.rsplit_once(':').expect("QURRY_TEST_REDIS=host:port");
-    cfg("redis", host, port, "", db)
+    Some(cfg("redis", host, port, "", db))
 }
 
 /// An AppState whose config folder is removed when the test drops it,
@@ -892,7 +892,7 @@ async fn pg_explain_analyze_never_commits_pending_work() {
 #[tokio::test]
 #[ignore]
 async fn redis_connect_and_query() {
-    let c = redis_env("db12");
+    let Some(c) = redis_env("db12") else { return };
     let pool = db::connect(&c, None).await.unwrap();
     assert!(matches!(pool, Pool::Redis(_, 12)));
     let v = pool.server_version().await.unwrap();
@@ -914,7 +914,7 @@ async fn redis_connect_and_query() {
 #[tokio::test]
 #[ignore]
 async fn redis_metadata_and_tools() {
-    let c = redis_env("db11");
+    let Some(c) = redis_env("db11") else { return };
     let st = state(&c, None).await;
     q(&st, "FLUSHDB").await;
     q(&st, "SET qm:s hello").await;

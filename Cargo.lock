@@ -5002,6 +5002,7 @@ dependencies = [
  "minisign-verify",
  "percent-encoding",
  "quick-xml",
+ "qurry-core",
  "qurry-driver",
  "qurry-shared",
  "rand 0.10.3",

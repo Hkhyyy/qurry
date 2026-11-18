@@ -45,8 +45,8 @@ pub mod session;
 pub mod sql;
 pub mod ssm;
 pub mod ssh_config;
-#[cfg(test)]
-mod testenv;
+#[cfg(any(test, feature = "testenv"))]
+pub mod testenv;
 pub mod store;
 pub mod subset;
 pub mod transfer;

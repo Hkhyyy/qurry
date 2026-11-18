@@ -964,7 +964,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[ignore]
     async fn ssm_tunnel_end_to_end() {
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let Some(pg) = crate::testenv::pg().map(|s| s.cfg) else { return };
         let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
@@ -1030,7 +1030,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[ignore]
     async fn dead_ssm_tunnel_is_opened_again_once() {
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let Some(pg) = crate::testenv::pg().map(|s| s.cfg) else { return };
         let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
@@ -1164,7 +1164,7 @@ pub(crate) mod tests {
     #[ignore]
     async fn dead_ssm_console_recovers_or_says_why() {
         use crate::app::tests::age_session;
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let Some(pg) = crate::testenv::pg().map(|s| s.cfg) else { return };
         let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
@@ -1273,7 +1273,7 @@ pub(crate) mod tests {
     #[ignore]
     async fn dead_ssm_tunnel_tells_other_consoles_their_transaction_is_lost() {
         use crate::app::tests::age_session;
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let Some(pg) = crate::testenv::pg().map(|s| s.cfg) else { return };
         let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
@@ -1328,7 +1328,7 @@ pub(crate) mod tests {
     /// QURRY_TEST_MY=127.0.0.1:13306:root:dbtool:shop cargo test -p qurry-core slow_ssm_session_keeps_its_transaction_my -- --ignored
     async fn slow_ssm_session_keeps_its_transaction(kind: crate::store::DbKind) {
         use crate::app::tests::age_session;
-        let server = crate::testenv::server(kind).expect("QURRY_TEST_PG / QURRY_TEST_MY");
+        let Some(server) = crate::testenv::server(kind) else { return };
         let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
@@ -1411,7 +1411,7 @@ pub(crate) mod tests {
     /// QURRY_TEST_MY=… cargo test -p qurry-core reconnects_after_wake_my -- --ignored
     async fn reconnects_after_wake(kind: crate::store::DbKind) {
         use crate::app::tests::sleep_mac;
-        let server = crate::testenv::server(kind).expect("QURRY_TEST_PG / QURRY_TEST_MY");
+        let Some(server) = crate::testenv::server(kind) else { return };
         let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
@@ -1540,7 +1540,7 @@ pub(crate) mod tests {
     /// QURRY_TEST_PG=… cargo test -p qurry-core writes_and_disconnects_are_not_run_again_pg -- --ignored
     /// QURRY_TEST_MY=… cargo test -p qurry-core writes_and_disconnects_are_not_run_again_my -- --ignored
     async fn writes_and_disconnects_are_not_run_again(kind: crate::store::DbKind) {
-        let server = crate::testenv::server(kind).expect("QURRY_TEST_PG / QURRY_TEST_MY");
+        let Some(server) = crate::testenv::server(kind) else { return };
         let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
@@ -1611,7 +1611,7 @@ pub(crate) mod tests {
     #[ignore]
     async fn housekeeping_gives_up_a_cursor_that_doesnt_close() {
         use crate::app::housekeeping;
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG");
+        let Some(pg) = crate::testenv::pg() else { return };
         let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
@@ -1696,7 +1696,7 @@ pub(crate) mod tests {
     #[ignore]
     async fn table_detail_during_housekeeping_waits_one_tunnel_check() {
         use crate::app::housekeeping;
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG");
+        let Some(pg) = crate::testenv::pg() else { return };
         let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
@@ -1743,7 +1743,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[ignore]
     async fn housekeeping_checks_every_tunnel_at_once_after_a_wake() {
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG");
+        let Some(pg) = crate::testenv::pg() else { return };
         let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();

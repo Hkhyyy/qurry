@@ -1233,7 +1233,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn disconnect_while_connecting_keeps_no_pool() {
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let Some(pg) = crate::testenv::pg().map(|s| s.cfg) else { return };
         let upstream = format!("{}:{}", pg.host, pg.port);
         // A slow link: each connection starts forwarding after 1s
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
