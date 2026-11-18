@@ -6,6 +6,7 @@ import "../../lib/mock";
 import { monaco } from "../../lib/monaco";
 import App from "../../App";
 import { ResultTabsField, SettingsDialog, type SettingsPage } from "../../features/settings/SettingsDialog";
+import { askTextChoice } from "../../lib/dialogs";
 import { setFont } from "../../lib/prefs";
 import { saveCustomTheme, setThemeSync } from "../../lib/theme";
 import { dialectOf, type ConnectionView, type QueryResult, type SearchScope } from "../../lib/api";
@@ -32,6 +33,7 @@ import { TableEditor } from "../../components/TableEditor";
 import { TableStructureView } from "../../components/TableStructure";
 import { Switcher } from "../../components/Switcher";
 import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Transfer";
+import { TextDialog } from "../../components/TextDialog";
 import { UpdateDialog } from "../../components/UpdateDialog";
 import { WorkspaceBar } from "../../components/WorkspaceBar";
 import { StatusBar } from "../../features/settings/StatusBar";
@@ -40,6 +42,7 @@ import { ConfirmHost, Menu, TabItem, TabStrip, Text, Toasts } from "..";
 import { ReconnectToastView } from "../../components/ReconnectToasts";
 import type { ReconnectToast } from "../../lib/reconnect";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
+import { inSmallWindow } from "./SmallWindow";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
 const meta: Meta = { title: "GUI/5 Screens", parameters: { layout: "fullscreen" } };
@@ -1430,3 +1433,38 @@ export const ReconnectFailed = reconnectStory("failed, reason and Retry", "faile
 export const ReconnectFailedLight = reconnectStory("failed, reason and Retry", "failed", true);
 export const ReconnectCancelled = reconnectStory("cancelled", "cancelled", false);
 export const ReconnectCancelledLight = reconnectStory("cancelled", "cancelled", true);
+
+// ───────── Dialogs in a small window (#196) ─────────
+// Each dialog in an 800×500 window (1024×600 in Controls) with long content: the title and the footer's buttons stay in view and
+// only the body scrolls, also for the fixed-size dialogs
+// The theme is the toolbar's (not the story's), to see each one in every theme
+const small = (name: string, s: S): S => ({ ...s, ...inSmallWindow, globals: undefined, name: `Small window — ${name}` });
+export const SmallDataSourceSsmError = small("Data Source, long Test Connection error", EditDataSourceSsmError);
+export const SmallDataSourceOptions = small("Data Source, Options tab", AdminReportsOnDark);
+export const SmallSettingsDataGrid = small("Settings, Data grid", SettingsDataGrid);
+export const SmallSettingsKeymap = small("Settings, Keymap", SettingsKeymap);
+export const SmallKeymap = small("Keymap Reference", Keymap);
+export const SmallHistory = small("Query History, 60 queries", {
+  ...History,
+  beforeEach: () => {
+    (globalThis as any).__mockHistoryRows = 60;
+    return () => void delete (globalThis as any).__mockHistoryRows;
+  },
+});
+export const SmallExport = small("Export Data", Export);
+export const SmallGenerateData = small("Generate Test Data", GenerateData);
+export const SmallFindInData = small("Full-text Search", FindInData);
+export const SmallImport = small("Import Data", Import);
+export const SmallUpdate = small("Update, many versions", {
+  render: () => (
+    <UpdateDialog
+      info={{ current: "0.2.5", latest: { version: "0.3.5", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.3.5", notes: "", assets: [] }, changes: Array.from({ length: 10 }, (_, i) => ({ version: `0.3.${5 - (i % 6)}`, changes: ["[feat] Data tools, result chart and Production safety", "[fix] The explorer scrolls sideways", "[fix] A long Test Connection error stays inside the dialog"] })) } as never}
+      onClose={noop}
+    />
+  ),
+});
+export const SmallTextInput = small("Text input (askTextChoice)", { render: () => <OpenTextDialog /> });
+function OpenTextDialog() {
+  useEffect(() => void askTextChoice("Save as Snippet", "orders of one user", ["This data source", "Every data source", "This workspace"]), []);
+  return <TextDialog />;
+}

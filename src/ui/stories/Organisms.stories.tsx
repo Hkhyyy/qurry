@@ -44,6 +44,7 @@ import { ParamsDialog } from "../../components/ParamsDialog";
 import { withoutComments } from "../../lib/sqlSplit";
 import { connTabVars } from "../../lib/theme";
 import { TabIcon } from "../icons";
+import { inSmallWindow } from "./SmallWindow";
 
 /** Organisms: blocks made of molecules — toolbar · dialog · confirm dialog · menu · popover · list · table · form */
 const meta: Meta = { title: "GUI/3 Organisms" };
@@ -330,6 +331,36 @@ export const Parameters: S = {
       onDone={() => {}}
     />
   ),
+};
+
+// ───────── Dialogs in a small window (#196): the title and the buttons stay in view, the body scrolls ─────────
+export const SmallParameters: S = {
+  ...inSmallWindow,
+  name: "Small window — Parameters, 10 names",
+  render: () => (
+    <ParamsDialog
+      req={{ names: Array.from({ length: 10 }, (_, i) => `name_${i + 1}`), last: {}, sql: "select * from orders where " + Array.from({ length: 10 }, (_, i) => `c${i + 1} = :name_${i + 1}`).join(" and "), kind: "postgres" }}
+      onDone={() => {}}
+    />
+  ),
+};
+export const SmallConfirm: S = {
+  ...inSmallWindow,
+  name: "Small window — confirm, 40 statements",
+  render: () => (
+    <OpenConfirm
+      title="Production: [PROD] shop"
+      message="These statements change data. Run them?"
+      detail={Array.from({ length: 40 }, (_, i) => ({ text: `update orders set status = 'paid' where id = ${i + 1}`, value: "1 row", tone: "warn" as const }))}
+      okLabel="Run"
+      danger
+    />
+  ),
+};
+export const SmallConfirmLongMessage: S = {
+  ...inSmallWindow,
+  name: "Small window — message, 40 lines",
+  render: () => <OpenConfirm title="Couldn't connect" message={Array.from({ length: 40 }, (_, i) => `line ${i + 1}: connection refused (db.example.com:5432)`).join("\n")} cancelLabel={null} />,
 };
 
 // ───────── Editor tab bar: the active tab in each theme, split panes, many tabs ─────────
