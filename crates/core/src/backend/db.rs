@@ -93,6 +93,38 @@ pub fn plaintext_allowed(cfg: &ConnectionConfig, connect_host: &str) -> bool {
 /// Close idle connections after 1 minute (so connections opened in bulk while reading the tree or search index do not linger on production servers). Connections held by tabs are not idle and stay
 pub const POOL_IDLE: Duration = Duration::from_secs(60);
 
+/// Bytes of values a console page reads at most (#194): a page of wide rows stops early, with more to load, and the rest comes
+/// with the next page. #183 measured 500 rows × 28 KB = 14 MB per page, 48 s through a 280 KB/s tunnel
+pub const PAGE_BYTES: usize = 4 << 20;
+/// Rows of a page's first chunk, before any row size is known (next_chunk)
+const FIRST_CHUNK: usize = 64;
+
+/// Rows the next chunk of a console page asks for, given the rows and bytes (row_bytes) it has so far and the rows it still
+/// lacks: the first chunk FIRST_CHUNK, then the rows that fit what is left of PAGE_BYTES at the average row size so far. None:
+/// the page is full (no rows lacking, or no room for one more row of that size)
+pub(crate) fn next_chunk(rows: usize, bytes: usize, remaining: usize) -> Option<usize> {
+    if remaining == 0 {
+        return None;
+    }
+    if rows == 0 {
+        return Some(remaining.min(FIRST_CHUNK));
+    }
+    let fit = PAGE_BYTES.saturating_sub(bytes) / bytes.div_ceil(rows).max(1);
+    (fit > 0).then(|| fit.min(remaining))
+}
+
+/// A row's size for PAGE_BYTES: its decoded values' text, a string's bytes and any other value as its JSON text
+pub(crate) fn row_bytes(row: &[Value]) -> usize {
+    row.iter()
+        .map(|v| match v {
+            Value::String(s) => s.len(),
+            Value::Null => 4,
+            Value::Bool(b) => if *b { 4 } else { 5 },
+            other => other.to_string().len(),
+        })
+        .sum()
+}
+
 pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>) -> AppResult<Pool> {
     connect_via(cfg, password, None).await
 }
@@ -614,6 +646,44 @@ fn fallback(bytes: Option<&[u8]>, ty: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The first chunk is FIRST_CHUNK rows or fewer; then what fits the rest of PAGE_BYTES at the average row size; never a
+    /// chunk of 0 rows; full when no row of that size fits any more or no rows are lacking
+    #[test]
+    fn next_chunk_fits_the_budget() {
+        assert_eq!(next_chunk(0, 0, 500), Some(64));
+        assert_eq!(next_chunk(0, 0, 10), Some(10));
+        assert_eq!(next_chunk(0, 0, 0), None);
+        // 10 rows of 100 KB: 1 MB in, 3 MB left
+        assert_eq!(next_chunk(10, 10 * 100 * 1024, 490), Some(30));
+        assert_eq!(next_chunk(10, 10 * 100 * 1024, 7), Some(7), "no more than the rows lacking");
+        // One row bigger than the whole budget: the page is full after it
+        assert_eq!(next_chunk(1, PAGE_BYTES * 2, 499), None);
+        assert_eq!(next_chunk(136, 136 * 30 * 1024, 364), None, "16 KB left, rows of 30 KB");
+        for (rows, bytes) in [(1, 1), (64, PAGE_BYTES - 1), (3, 0), (100, PAGE_BYTES / 2)] {
+            assert_ne!(next_chunk(rows, bytes, 400), Some(0), "{rows} {bytes}");
+        }
+        // Rows of 40 bytes reach a page of 500 in two chunks; rows of 30 KB stop under the budget in a few
+        let page = |row: usize| {
+            let (mut rows, mut bytes, mut chunks) = (0, 0, 0);
+            while let Some(n) = next_chunk(rows, bytes, 500 - rows) {
+                (rows, bytes, chunks) = (rows + n, bytes + n * row, chunks + 1);
+            }
+            (rows, bytes, chunks)
+        };
+        assert_eq!(page(40), (500, 20_000, 2));
+        let (rows, bytes, chunks) = page(30 * 1024);
+        assert_eq!((rows, chunks), (136, 2));
+        assert!(bytes <= PAGE_BYTES, "{bytes}");
+    }
+
+    /// A row's bytes: strings by their bytes, other values by their JSON text
+    #[test]
+    fn row_bytes_of_mixed_values() {
+        let row = [Value::from("héllo"), Value::from(42), Value::from(-1.5), Value::Null, Value::from(true), Value::from(false), serde_json::json!({"a": [1, 2]})];
+        assert_eq!(row_bytes(&row), 6 + 2 + 4 + 4 + 4 + 5 + 11);
+        assert_eq!(row_bytes(&[]), 0);
+    }
 
     /// Remote servers with no SSL setting do not allow plain text (only this machine · SSH tunnels · explicit allow)
     #[test]

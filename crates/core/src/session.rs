@@ -1,5 +1,5 @@
 //! Each console tab gets its own dedicated connection (session).
-//! - SELECT-like statements fetch 500 rows at a time via a server cursor (DECLARE/FETCH) → "load more"
+//! - SELECT-like statements fetch 500 rows at a time (fewer when they reach db::PAGE_BYTES) via a server cursor (DECLARE/FETCH) → "load more"
 //! - The backend PID is known, so a running query can be cancelled with pg_cancel_backend
 use crate::backend::{Backend, dispatch};
 use crate::db::{pg_columns, pg_origins, pg_values, query_result, ColumnInfo, QueryResult};
@@ -641,7 +641,7 @@ impl PgSession {
         self.fetch(limit).await
     }
 
-    /// Fetch the next `limit` rows from the open cursor.
+    /// Fetch the next `limit` rows from the open cursor, fewer when their values reach db::PAGE_BYTES first.
     /// If the cursor was closed for being unused, reopen the same statement after the rows already read (OFFSET)
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
         if !self.cursor_open
@@ -661,7 +661,27 @@ impl PgSession {
         }
         self.cursor_used = std::time::SystemTime::now();
         let start = Instant::now();
-        let rows: Vec<PgRow> = match sqlx::query(&format!("FETCH {limit} FROM {CURSOR}")).persistent(false).fetch_all(&mut *self.conn).await {
+        // Chunks until `limit` rows are in or their values reach db::PAGE_BYTES (#194): a page stopped early has more to load
+        let (mut data, mut bytes, mut done) = (Vec::new(), 0, false);
+        while let Some(n) = crate::db::next_chunk(data.len(), bytes, limit - data.len()) {
+            let chunk = self.fetch_chunk(n).await?;
+            bytes += chunk.iter().map(|r| crate::db::row_bytes(r)).sum::<usize>();
+            done = chunk.len() < n;
+            data.extend(chunk);
+            if done {
+                break;
+            }
+        }
+        let cut = cut_cells(&mut data, &self.cut_cols, self.cut_at);
+        if done {
+            self.close_cursor().await;
+        }
+        Ok(QueryResult { cut, ..query_result(self.columns.clone(), data, 0, !done, start, true) })
+    }
+
+    /// The next `n` rows of the open cursor, decoded (the columns read from the first ones, or described when there are none)
+    async fn fetch_chunk(&mut self, n: usize) -> AppResult<Vec<Vec<Value>>> {
+        let rows: Vec<PgRow> = match sqlx::query(&format!("FETCH {n} FROM {CURSOR}")).persistent(false).fetch_all(&mut *self.conn).await {
             Ok(r) => r,
             Err(e) => {
                 self.rollback().await;
@@ -680,14 +700,8 @@ impl PgSession {
                 },
             };
         }
-        let done = rows.len() < limit;
         self.fetched += rows.len();
-        let mut data = pg_values(&mut self.conn, &self.columns, &rows, &mut self.zone).await;
-        let cut = cut_cells(&mut data, &self.cut_cols, self.cut_at);
-        if done {
-            self.close_cursor().await;
-        }
-        Ok(QueryResult { cut, ..query_result(self.columns.clone(), data, 0, !done, start, true) })
+        Ok(pg_values(&mut self.conn, &self.columns, &rows, &mut self.zone).await)
     }
 
     /// A read of whole values (AppState::fetch_values): under a savepoint while a transaction is open in the session (the user's, or
