@@ -653,7 +653,11 @@ impl App {
             _ => "r runs it again".into(),
         };
         let st = self.state.clone();
-        self.spawn(async move { st.fetch_more(session, Some(500)).await.map_err(err) }, move |a, r| {
+        #[cfg(test)]
+        let fake = self.fake_more;
+        #[cfg(not(test))]
+        let fake: Option<FakeDb> = None;
+        self.spawn(async move { match fake { Some(f) => f(&session), None => st.fetch_more(session, Some(500)).await.map_err(err) } }, move |a, r| {
             let Some(t) = a.tab_mut(id) else { return };
             let g = match &mut t.kind {
                 // The result tab asked for, shown or not

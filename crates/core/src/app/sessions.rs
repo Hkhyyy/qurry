@@ -494,6 +494,109 @@ mod tests {
         st.close_session("setup".into()).await.unwrap();
     }
 
+    /// Wide rows (#194): 200 rows of 100 KB with Page size 500 come in pages that stop at db::PAGE_BYTES, and loading more goes on
+    /// with no row missing or twice to the last; cut at 64, pages of 50 flag their cells (the load-mores too), fetch_values reads
+    /// them whole, and a Submit of an edited one writes the whole text. In Manual mode the read sees the tab's change; a read that
+    /// fails leaves the transaction open and the pages loading, in Manual and in Auto.
+    /// QURRY_TEST_PG=… QURRY_TEST_MY=… cargo test -p qurry-core page_budget -- --ignored
+    async fn page_budget_and_whole_values(kind: crate::store::DbKind) {
+        let Some(crate::testenv::Server { cfg, password }) = crate::testenv::server(kind) else { return };
+        let my = kind == crate::store::DbKind::Mysql;
+        let schema = if my { cfg.database.clone() } else { "public".into() };
+        let dir = tempfile::tempdir().unwrap();
+        let mut st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        st.save_connection(ConnectionConfig { id: "d".into(), name: "dev".into(), ..cfg }, password, None).await.unwrap();
+        st.cut_grids = true;
+        st.store.set_grid_cut_chars(0).unwrap();
+        let q = |sql: &str, limit: usize, tab: &str| st.run_query("d".into(), sql.into(), Some(limit), Some(tab.into()));
+        let fill = match my {
+            true => "insert into qurry_budget select n, repeat(md5(n), 3200) from (select a.d * 100 + b.d * 10 + c.d + 1 n from \
+                     (select 0 d union all select 1 union all select 2) a, \
+                     (select 0 d union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) b, \
+                     (select 0 d union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) c) x where n <= 200",
+            false => "insert into qurry_budget select g, repeat(md5(g::text), 3200) from generate_series(1, 200) g",
+        };
+        for sql in ["drop table if exists qurry_budget", if my { "create table qurry_budget (id int primary key, body longtext)" } else { "create table qurry_budget (id int primary key, body text)" }, fill] {
+            q(sql, 10, "setup").await.unwrap();
+        }
+        st.close_session("setup".into()).await.unwrap();
+        let id = |v: &Value| v.as_i64().unwrap();
+        let sql = "select id, body from qurry_budget order by id";
+        let r = q(sql, 500, "t").await.unwrap();
+        assert!(r.truncated && r.rows.len() < 200, "{} rows", r.rows.len());
+        let (mut ids, mut more, mut pages): (Vec<i64>, bool, usize) = (r.rows.iter().map(|x| id(&x[0])).collect(), true, 1);
+        while more {
+            let m = st.fetch_more("t".into(), Some(500)).await.unwrap();
+            ids.extend(m.rows.iter().map(|x| id(&x[0])));
+            (more, pages) = (m.truncated, pages + 1);
+            // A reconnect after a page that stopped early: the next one reopens after the rows read
+            if pages == 2 {
+                st.disconnect("d".into()).await.unwrap();
+            }
+        }
+        assert_eq!(ids, (1..=200).collect::<Vec<_>>(), "in {pages} pages");
+        assert!(pages >= 4, "{pages} pages of at most 4 MB");
+        st.close_session("t".into()).await.unwrap();
+
+        // Cut at 64: every body cell flagged, on the first page and on a load-more
+        st.store.set_grid_cut_chars(64).unwrap();
+        let pool = &st;
+        let body = move |i: usize| async move { pool.run_query("d".into(), format!("select body from qurry_budget where id = {i}"), None, None).await.unwrap().rows[0][0].clone() };
+        let (b3, b60) = (body(3).await, body(60).await);
+        assert_eq!(b3.as_str().unwrap().len(), 102_400, "the pool reads whole values");
+        let mcp = st.run_read_only("d".into(), "select body from qurry_budget where id = 3".into(), 500).await.unwrap();
+        assert_eq!((&mcp.rows[0][0], mcp.cut.is_empty()), (&b3, true), "MCP query reads whole values");
+        let c = q(sql, 50, "c").await.unwrap();
+        assert_eq!((c.rows.len(), c.truncated, c.cut.clone()), (50, true, (0..50).map(|r| [r, 1]).collect::<Vec<_>>()));
+        assert_eq!(c.rows[2][1].as_str().unwrap(), &b3.as_str().unwrap()[..64]);
+        let c2 = st.fetch_more("c".into(), Some(50)).await.unwrap();
+        assert_eq!((id(&c2.rows[0][0]), c2.cut.len()), (51, 50));
+        let values = |keys: &[&str], col: &str| FullValues { schema: schema.clone(), table: "qurry_budget".into(), key: vec!["id".into()], columns: vec![col.into()], rows: keys.iter().map(|k| vec![Some(k.to_string())]).collect() };
+        let got = st.fetch_values("d".into(), "c".into(), values(&["3", "60", "999"], "body")).await.unwrap();
+        assert_eq!(got, [Some(vec![b3.clone()]), Some(vec![b60]), None]);
+        // The grid's Submit of the edited whole value (result_edit writes it so)
+        let edited = format!("{}!", b3.as_str().unwrap());
+        let update = format!("UPDATE {}.qurry_budget SET body = {} WHERE id = 3", crate::sql::quote_ident(kind, &schema), crate::sql::literal(kind, Some(&edited)));
+        assert_eq!(st.submit_edits("d".into(), Some("c".into()), vec![update]).await.unwrap().rows, 1);
+        assert_eq!(body(3).await, Value::from(edited));
+        st.close_session("c".into()).await.unwrap();
+
+        // Manual: the tab's own change is what it reads; a read that fails leaves its transaction and its pages going (Auto too)
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        q("update qurry_budget set body = 'changed' where id = 5", 10, "m").await.unwrap();
+        let read = |tab: &str, col: &str| st.fetch_values("d".into(), tab.into(), values(&["5"], col));
+        assert_eq!(read("m", "body").await.unwrap(), [Some(vec![Value::from("changed")])]);
+        assert_eq!(read("other", "body").await.unwrap()[0].as_ref().unwrap()[0].as_str().unwrap().len(), 102_400, "not committed");
+        for tab in ["m", "auto"] {
+            let first = q(sql, 4, tab).await.unwrap();
+            assert!(first.truncated && first.cut.len() == 4, "{tab}");
+            assert!(read(tab, "no_such_column").await.is_err());
+            let more = st.fetch_more(tab.into(), Some(4)).await.unwrap();
+            assert_eq!(id(&more.rows[0][0]), 5, "{tab}: the pages go on");
+            assert_eq!(more.cut.len(), if tab == "m" { 3 } else { 4 }, "{tab}");
+        }
+        let mine = q("select body from qurry_budget where id = 5", 10, "m").await.unwrap();
+        assert_eq!((mine.in_transaction, mine.rows[0][0].clone()), (true, Value::from("changed")));
+        st.rollback_tx("m".into()).await.unwrap();
+        for t in ["m", "other", "auto"] {
+            st.close_session(t.into()).await.unwrap();
+        }
+        q("drop table qurry_budget", 10, "setup").await.unwrap();
+        st.close_session("setup".into()).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn page_budget_pg() {
+        page_budget_and_whole_values(crate::store::DbKind::Postgres).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn page_budget_mysql() {
+        page_budget_and_whole_values(crate::store::DbKind::Mysql).await;
+    }
+
     /// Auto-disconnect: close pools and sessions after the idle time. keep-alive keeps the session alive.
     #[tokio::test]
     #[ignore]

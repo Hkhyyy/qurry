@@ -1,5 +1,5 @@
 //! Each console tab gets its own dedicated connection (session).
-//! - SELECT-like statements fetch 500 rows at a time via a server cursor (DECLARE/FETCH) → "load more"
+//! - SELECT-like statements fetch 500 rows at a time (fewer when they reach db::PAGE_BYTES) via a server cursor (DECLARE/FETCH) → "load more"
 //! - The backend PID is known, so a running query can be cancelled with pg_cancel_backend
 use crate::backend::{Backend, dispatch};
 use crate::db::{pg_columns, pg_origins, pg_values, query_result, ColumnInfo, QueryResult};
@@ -20,8 +20,8 @@ pub const EXPLAIN_BEGIN: [&str; 2] = ["BEGIN", "ROLLBACK"];
 pub const EXPLAIN_SAVEPOINT: [&str; 2] = ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"];
 /// A result grid's edits in the console's transaction (Session::submit): set, undo when one fails, release
 const SUBMIT_SAVEPOINT: [&str; 3] = ["SAVEPOINT qurry_submit", "ROLLBACK TO SAVEPOINT qurry_submit", "RELEASE SAVEPOINT qurry_submit"];
-/// A read of whole values in the open transaction (PgSession::read_values): set, undo when it fails, release
-const VALUES_SAVEPOINT: [&str; 3] = ["SAVEPOINT qurry_values", "ROLLBACK TO SAVEPOINT qurry_values", "RELEASE SAVEPOINT qurry_values"];
+/// A read of whole values in the open transaction (PgSession::read_values, MySession::read_values): set, undo when it fails, release
+pub(crate) const VALUES_SAVEPOINT: [&str; 3] = ["SAVEPOINT qurry_values", "ROLLBACK TO SAVEPOINT qurry_values", "RELEASE SAVEPOINT qurry_values"];
 /// A COMMIT of a PostgreSQL transaction an earlier error aborted: the server rolled it back
 const ABORTED_COMMIT: &str =
     "Not committed: an earlier statement in this transaction failed, so PostgreSQL rolled back the whole transaction and none of its changes were saved. Run the changes again (without the failing statement).";
@@ -109,6 +109,12 @@ pub(crate) fn cut_projection(query: &str, columns: &[ColumnInfo], cut: usize) ->
     }
     let names = (1..=columns.len()).map(|i| format!("c{i}")).collect::<Vec<_>>().join(", ");
     Some((format!("SELECT {} FROM (\n{query}\n) AS qurry_page({names})", exprs.join(", ")), how))
+}
+
+/// db::row_bound's width of a PostgreSQL column read whole: numbers (not NUMERIC, any length), dates and times, UUID
+fn fixed_bytes(ty: &str) -> Option<usize> {
+    let fixed = ["BOOL", "INT2", "INT4", "INT8", "OID", "FLOAT4", "FLOAT8", "DATE", "TIME", "TIMETZ", "TIMESTAMP", "TIMESTAMPTZ", "UUID"];
+    fixed.contains(&ty.to_uppercase().as_str()).then_some(crate::db::FIXED_BYTES)
 }
 
 /// Cut the cells longer than `at` characters (left() counts characters, not bytes) and say which: [row, column]. A JSON cell
@@ -641,7 +647,7 @@ impl PgSession {
         self.fetch(limit).await
     }
 
-    /// Fetch the next `limit` rows from the open cursor.
+    /// Fetch the next `limit` rows from the open cursor, fewer when their values reach db::PAGE_BYTES first.
     /// If the cursor was closed for being unused, reopen the same statement after the rows already read (OFFSET)
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
         if !self.cursor_open
@@ -661,7 +667,29 @@ impl PgSession {
         }
         self.cursor_used = std::time::SystemTime::now();
         let start = Instant::now();
-        let rows: Vec<PgRow> = match sqlx::query(&format!("FETCH {limit} FROM {CURSOR}")).persistent(false).fetch_all(&mut *self.conn).await {
+        // Chunks until `limit` rows are in or their values reach db::PAGE_BYTES (#194): a page stopped early has more to load.
+        // One FETCH when the described columns bound the row size and the whole page fits at that size
+        let mut budget = crate::db::PageBudget::new(crate::db::row_bound(&self.columns, &self.cut_cols, self.cut_at, fixed_bytes));
+        let (mut data, mut done) = (Vec::new(), false);
+        while let Some(n) = budget.next(limit - data.len()) {
+            let chunk = self.fetch_chunk(n).await?;
+            budget.add(&chunk);
+            done = chunk.len() < n;
+            data.extend(chunk);
+            if done {
+                break;
+            }
+        }
+        let cut = cut_cells(&mut data, &self.cut_cols, self.cut_at);
+        if done {
+            self.close_cursor().await;
+        }
+        Ok(QueryResult { cut, ..query_result(self.columns.clone(), data, 0, !done, start, true) })
+    }
+
+    /// The next `n` rows of the open cursor, decoded (the columns read from the first ones, or described when there are none)
+    async fn fetch_chunk(&mut self, n: usize) -> AppResult<Vec<Vec<Value>>> {
+        let rows: Vec<PgRow> = match sqlx::query(&format!("FETCH {n} FROM {CURSOR}")).persistent(false).fetch_all(&mut *self.conn).await {
             Ok(r) => r,
             Err(e) => {
                 self.rollback().await;
@@ -680,14 +708,8 @@ impl PgSession {
                 },
             };
         }
-        let done = rows.len() < limit;
         self.fetched += rows.len();
-        let mut data = pg_values(&mut self.conn, &self.columns, &rows, &mut self.zone).await;
-        let cut = cut_cells(&mut data, &self.cut_cols, self.cut_at);
-        if done {
-            self.close_cursor().await;
-        }
-        Ok(QueryResult { cut, ..query_result(self.columns.clone(), data, 0, !done, start, true) })
+        Ok(pg_values(&mut self.conn, &self.columns, &rows, &mut self.zone).await)
     }
 
     /// A read of whole values (AppState::fetch_values): under a savepoint while a transaction is open in the session (the user's, or
@@ -853,18 +875,21 @@ impl Session {
             Err(e) => (Err(e), vec![]),
         }
     }
-    /// Characters of a long value a PostgreSQL cursor reads from now (store::grid_cut_chars), 0 = whole values. The others read
-    /// whole values
+    /// Characters of a long value a PostgreSQL cursor or a MySQL page reads from now (store::grid_cut_chars), 0 = whole values.
+    /// The others read whole values
     pub fn set_cut(&mut self, chars: usize) {
-        if let Session::Pg(s) = self {
-            s.cut = chars;
+        match self {
+            Session::Pg(s) => s.cut = chars,
+            Session::My(s) => s.set_cut(chars),
+            Session::Redis(_) | Session::Plugin(_) => {}
         }
     }
     /// A read of whole values in the session (AppState::fetch_values): its transaction's uncommitted changes too
     pub async fn read_values(&mut self, sql: &str) -> AppResult<QueryResult> {
         match self {
             Session::Pg(s) => s.read_values(sql).await,
-            _ => Err(AppError::Msg("Only PostgreSQL results have cut values".into())),
+            Session::My(s) => s.read_values(sql).await,
+            _ => Err(AppError::Msg("Only PostgreSQL and MySQL results have cut values".into())),
         }
     }
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {

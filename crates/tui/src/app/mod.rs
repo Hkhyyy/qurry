@@ -1055,6 +1055,9 @@ pub struct App {
     /// Tests only (testkit): answers console statements and the Production row counts instead of the database
     #[cfg(test)]
     pub fake_db: Option<FakeDb>,
+    /// Tests only: answers a load-more (App::fetch_more) instead of the core, given the tab's session id
+    #[cfg(test)]
+    pub fake_more: Option<FakeDb>,
     /// Tests only: every command run_action ran, in order (tests/actions.rs checks keys reach the right one)
     #[cfg(test)]
     pub ran: Vec<Action>,
@@ -1150,6 +1153,8 @@ impl App {
             too_small: false,
             #[cfg(test)]
             fake_db: None,
+            #[cfg(test)]
+            fake_more: None,
             #[cfg(test)]
             ran: vec![],
             import_home: qurry_core::import::home(),

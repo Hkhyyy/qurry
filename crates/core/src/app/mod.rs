@@ -92,7 +92,7 @@ pub struct AppState {
     /// MCP server: never reads passwords of Data Sources hidden from MCP (crate::store::McpAccess)
     pub mcp: bool,
     /// The app's grids handle cut cells (QueryResult::cut, the whole value read with fetch_values), so its consoles' PostgreSQL
-    /// results read long values cut (store::grid_cut_chars): the GUI and the TUI. Off (a grid that would edit a cut text as the
+    /// and MySQL results read long values cut (store::grid_cut_chars): the GUI and the TUI. Off (a grid that would edit a cut text as the
     /// whole value and write it back; tests), they read whole values. An app turns it on in the same change that makes its grid
     /// handle cut cells, never before
     pub cut_grids: bool,
@@ -125,7 +125,7 @@ impl AppState {
         c.wakes
     }
 
-    /// The cut a console's PostgreSQL cursor reads long values at (Session::set_cut): store::grid_cut_chars where the grids know
+    /// The cut a console's PostgreSQL cursor or MySQL page reads long values at (Session::set_cut): store::grid_cut_chars where the grids know
     /// cut cells (cut_grids), else 0. A read of settings.json: taken before the session's lock
     pub(crate) fn console_cut(&self) -> usize {
         if self.cut_grids { self.store.grid_cut_chars() } else { 0 }

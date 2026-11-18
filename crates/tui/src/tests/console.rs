@@ -1592,3 +1592,39 @@ async fn switch_schema_keeps_the_transaction_shown() {
     assert!(!console(&h).in_tx);
     assert!(!h.screen(140, 16).contains("pending"));
 }
+
+/// #194: a page of wide rows stops at the core's byte budget, so it can hold fewer rows than the page size and still have more
+/// (truncated): the grid offers loading more from `truncated`, not from the row count, and loads the next pages to the last
+#[tokio::test]
+async fn a_short_page_with_more_still_loads_the_next() {
+    fn page(from: i64, more: bool) -> Result<QueryResult, String> {
+        let rows = (from..from + 150).map(|i| vec![Value::from(i)]).collect();
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "id".into(), type_name: "int4".into() }], rows, rows_affected: 0, truncated: more, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![], cut: vec![] })
+    }
+    static LOADS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(|_| page(1, true));
+    h.app.fake_more = Some(|_| {
+        let n = LOADS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        page(151 + n * 150, n == 0)
+    });
+    h.console_with("select * from logs", 0, 0);
+    h.key("F5");
+    h.settle().await;
+    let ids = |h: &Harness| console(h).results.grid().unwrap().result.rows.iter().map(|r| r[0].as_i64().unwrap()).collect::<Vec<_>>();
+    let more = |h: &Harness| console(h).results.grid().unwrap().result.truncated;
+    assert_eq!((ids(&h).len(), more(&h)), (150, true));
+    for (rows, truncated) in [(300, true), (450, false)] {
+        let g = console_mut(&mut h).results.grid_mut().unwrap();
+        g.row = g.rows() - 1;
+        assert!(g.wants_more(), "a page of {} rows with more offers loading more", g.rows());
+        h.app.fetch_more();
+        h.settle().await;
+        assert_eq!((ids(&h).len(), more(&h)), (rows, truncated));
+        assert_eq!(h.app.status, format!("{rows}{} rows", if truncated { "+" } else { "" }));
+    }
+    assert_eq!(ids(&h), (1..=450).collect::<Vec<_>>(), "no gap, nothing twice");
+    let g = console_mut(&mut h).results.grid_mut().unwrap();
+    g.row = g.rows() - 1;
+    assert!(!g.wants_more(), "the last page");
+}

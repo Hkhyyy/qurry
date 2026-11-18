@@ -72,7 +72,7 @@ async fn main() -> std::io::Result<()> {
     qurry_core::QUIET.store(true, std::sync::atomic::Ordering::Relaxed);
     qurry_core::logfile::init("tui", dir.as_deref());
     let mut state = qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?;
-    // The grid handles cut cells (Grid::cut, App::fetch_full): PostgreSQL results read long values cut
+    // The grid handles cut cells (Grid::cut, App::fetch_full): PostgreSQL and MySQL results read long values cut
     state.cut_grids = true;
     let state = Arc::new(state);
     let start = temporary.map(|t| {
