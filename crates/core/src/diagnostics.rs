@@ -16,22 +16,23 @@ pub fn text(app: &str, app_version: &str, sources: &[ConnectionConfig], log: &Pa
     };
     let home = dirs::home_dir().map(|h| h.display().to_string()).filter(|h| h.len() > 1);
     // Paths and log lines: the home folder as ~, then redacted one line at a time (a quote left open is masked to the end of its
-    // line, not of the text)
+    // line, not of the text), then any host:port or user no data source hides (unhidden)
     let clean = |l: String| {
         let l = home.as_ref().map_or_else(|| l.clone(), |h| l.replace(h.as_str(), "~"));
-        crate::logfile::redact(&l).into_owned()
+        unhidden(&crate::logfile::redact(&l))
     };
     let mut out = vec![format!("Qurry {app} {app_version} · core {}", crate::VERSION), format!("OS: {os} ({})", std::env::consts::ARCH), String::new()];
     out.push("Driver plugins:".into());
     for name in DbKind::ALL.iter().filter_map(|k| k.driver()) {
         // No version is recorded at install, and a plugin is not launched here: the file's date tells which download it is
-        out.push(clean(match crate::plugin::driver_path(name) {
+        // Only the path is redacted: a data source named duckdb would turn the plugin's name into <name>
+        out.push(match crate::plugin::driver_path(name) {
             Some(p) => {
                 let date = std::fs::metadata(&p).and_then(|m| m.modified()).map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d").to_string());
-                format!("  {name}: installed, modified {} ({})", date.unwrap_or_else(|_| "?".into()), p.display())
+                format!("  {name}: installed, modified {} ({})", date.unwrap_or_else(|_| "?".into()), clean(p.display().to_string()))
             }
             None => format!("  {name}: not installed"),
-        }));
+        });
     }
     out.push(String::new());
     // Fixed words and numbers only, so not redacted: a user or database called postgres would turn `postgres: 1` into `<user>: 1`
@@ -39,6 +40,27 @@ pub fn text(app: &str, app_version: &str, sources: &[ConnectionConfig], log: &Pa
     out.push(String::new());
     out.extend(log_tail(log, log_lines).into_iter().map(clean));
     out.join("\n") + "\n"
+}
+
+/// A log line's hosts and users no data source hides (lines written before 0.3.4-beta.4 hid them, or of a data source since deleted
+/// or changed): `db.corp.internal:5432` and `10.0.0.7:3306` → `<host>:<port>`, `for user "alice"` → `for user "<user>"`, MySQL's
+/// `for user 'alice'@'10.0.0.7'` → `for user '<user>'@'<host>'`. Diagnostics only: the log file keeps its lines
+fn unhidden(l: &str) -> String {
+    use std::sync::LazyLock;
+    static HOST_PORT: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"\b(?:\d{1,3}(?:\.\d{1,3}){3}|(?:[A-Za-z0-9-]+\.)+([A-Za-z][A-Za-z0-9-]*)):\d{2,5}\b").unwrap());
+    static USER: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r#"(?i)\bfor user (?:"[^"]*"|'[^']*'(@'[^']*')?)"#).unwrap());
+    let l = HOST_PORT.replace_all(l, |c: &regex::Captures| match c.get(1).map(|t| t.as_str()) {
+        // A source location (src/app.rs:12) is not a host
+        Some("rs" | "ts" | "tsx" | "js" | "jsx" | "mjs") => c[0].to_string(),
+        _ => "<host>:<port>".to_string(),
+    });
+    USER.replace_all(&l, |c: &regex::Captures| match (c[0].as_bytes()[9], c.get(1)) {
+        (b'"', _) => r#"for user "<user>""#.to_string(),
+        (_, Some(_)) => "for user '<user>'@'<host>'".to_string(),
+        _ => "for user '<user>'".to_string(),
+    })
+    .into_owned()
 }
 
 /// How many data sources of each kind, and how many are Production, Read-only, behind an SSH tunnel or SSM: numbers only
@@ -139,6 +161,40 @@ mod tests {
             assert!(text.contains(w), "{w} not in\n{text}");
         }
         assert!(text.contains(std::env::consts::OS) && text.contains(std::env::consts::ARCH), "{text}");
+    }
+
+    /// Lines no data source hides (written before 0.3.4-beta.4, or of a data source since deleted): hosts with a port and users
+    /// are masked all the same; a source location and the log file's own lines are not. A data source named like a plugin leaves
+    /// the plugin's name readable
+    #[test]
+    fn masks_hosts_and_users_no_data_source_hides() {
+        let t = tempfile::tempdir().unwrap();
+        let log = t.path().join("qurry.log");
+        let lines = [
+            "t [gui 1] Can't connect to db.corp.internal:5432 (refused)",
+            "t [gui 1] error: password authentication failed for user \"alice\"",
+            "t [tui 1] Access denied for user 'bob'@'10.0.0.7' (using password: YES)",
+            "t [mcp 1] connect 10.0.0.8:3306 timed out",
+            "t [gui 1] panicked at crates/core/src/pool.rs:120:5",
+        ];
+        std::fs::write(&log, lines.join("\n") + "\n").unwrap();
+        let duckdb = cfg(serde_json::json!({ "id": "4", "name": "duckdb", "kind": "duckdb", "host": "", "port": 0, "user": "" }));
+        let text = text("gui", "1.0.0", &[duckdb], &log, 200);
+        println!("{text}");
+        for w in ["db.corp.internal", "alice", "bob", "10.0.0.7", "10.0.0.8"] {
+            assert!(!text.contains(w), "{w} in\n{text}");
+        }
+        for w in [
+            "Can't connect to <host>:<port> (refused)",
+            "for user \"<user>\"",
+            "for user '<user>'@'<host>' (using",
+            "connect <host>:<port> timed out",
+            "crates/core/src/pool.rs:120:5",
+            "\n  duckdb: ",
+        ] {
+            assert!(text.contains(w), "{w} not in\n{text}");
+        }
+        assert!(std::fs::read_to_string(&log).unwrap().contains("db.corp.internal:5432"), "the log file keeps its lines");
     }
 
     /// No log file yet: the log section says so. A longer log: only its last `log_lines` lines
