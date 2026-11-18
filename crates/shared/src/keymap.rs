@@ -444,6 +444,9 @@ mod tests {
             ("grid.colFit", "ColumnFit"),
             ("grid.colFitAll", "ColumnFitAll"),
             ("grid.colReset", "ColumnReset"),
+            ("grid.colHide", "ColumnHide"),
+            ("grid.colPin", "ColumnPinToggle"),
+            ("grid.columns", "Columns"),
         ];
         for (gui, tui) in pairs {
             assert_eq!(tui_command(tui).and_then(|c| c.gui.as_deref()), Some(gui), "{tui} should share a row with {gui}");

@@ -76,6 +76,9 @@ Data grid keys (change them with F1)
   <                              Narrow Column (the current one)
   >                              Widen Column (the current one)
   =                              Fit Column to its content (the rows loaded so far; again: back to the width before)
+  H                              Hide Column (the current one)
+  P                              Pin Column at the left (again: unpin)
+  C                              Columns… (show, hide and pin each column)
   ⌃z                             Revert Changes
   a / Insert                     Add Row
   d / Delete                     Delete Row

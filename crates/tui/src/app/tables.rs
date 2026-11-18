@@ -23,7 +23,7 @@ pub enum Resize {
 }
 
 /// The table a table tab shows, which its column widths are kept for (settings.json "columnWidths", shared with the GUI)
-fn table_ref(t: &Tab) -> Option<TableRef> {
+pub(super) fn table_ref(t: &Tab) -> Option<TableRef> {
     match &t.kind {
         TabKind::Table(tt) => Some(TableRef { source: t.conn.clone(), database: t.db.clone(), schema: tt.schema.clone(), table: tt.table.clone() }),
         _ => None,
@@ -106,7 +106,9 @@ impl App {
                 if fresh {
                     a.reload_conns();
                 }
-                let saved = a.tab_mut(id).and_then(|t| table_ref(t)).map(|r| a.state.store.column_widths(&r)).unwrap_or_default();
+                let table = a.tab_mut(id).and_then(|t| table_ref(t));
+                let saved = table.as_ref().map(|r| a.state.store.column_widths(r)).unwrap_or_default();
+                let saved_layout = table.as_ref().map(|r| a.state.store.column_layout(r)).unwrap_or_default();
                 let Some(t) = a.tab_mut(id) else { return };
                 let TabKind::Table(tt) = &mut t.kind else { return };
                 tt.running = false;
@@ -114,6 +116,11 @@ impl App {
                 // The widths the tab has (also ones a failed save kept, until it closes) with the saved ones on top (the GUI's changes)
                 let mut widths = tt.grid.as_ref().map(|g| g.user_widths.clone()).unwrap_or_default();
                 widths.extend(saved);
+                // The saved layout (the GUI's changes too); none saved: the tab's own, which a failed save kept
+                let layout = match tt.grid.as_ref() {
+                    Some(g) if saved_layout.is_empty() => g.layout.clone(),
+                    _ => saved_layout,
+                };
                 match r {
                     Ok(res) => {
                         let n = res.rows.len();
@@ -124,6 +131,7 @@ impl App {
                         g.more_session = Some(tt.session.clone());
                         g.row = row.min(n.saturating_sub(1));
                         g.col = col.min(g.cols().saturating_sub(1));
+                        g.set_layout(layout);
                         // Show in the header if ORDER BY is a single column ASC/DESC
                         g.sort = g.result.columns.iter().enumerate().find_map(|(i, c)| {
                             let q = sql::quote_ident(kind, &c.name);
@@ -142,6 +150,7 @@ impl App {
                             let empty = qurry_core::db::QueryResult { columns, rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![], cut: vec![] };
                             let mut g = Grid::new(empty);
                             g.set_user_widths(widths);
+                            g.set_layout(layout);
                             tt.grid = Some(g);
                         }
                         tt.error = Some(e.clone());

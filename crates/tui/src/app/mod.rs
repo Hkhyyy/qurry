@@ -17,6 +17,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tui_textarea::TextArea;
 
 mod actions;
+mod columns;
 mod completion;
 mod conns;
 mod explorer;
@@ -36,6 +37,7 @@ pub use actions::{title, ACTIONS};
 #[cfg(test)]
 pub use actions::{OPENER_FAILS, REPO_URL};
 pub use tables::Resize;
+pub use columns::COLUMNS;
 pub(crate) use tables::cut_note;
 pub(crate) use palette::{is_search, scope_name};
 #[cfg(test)]
@@ -597,6 +599,8 @@ pub enum PAction {
     AlignClass(qurry_core::format::ValueClass),
     /// Grid alignment: where a value class sits, picked
     Align(qurry_core::format::ValueClass, qurry_core::format::Align),
+    /// Columns…: a column shown or hidden (None: Show All)
+    Column(Option<usize>),
     /// Status bar items: one toggled (None: Restore defaults)
     StatusItem(Option<qurry_core::statusbar::Item>),
     /// Theme picked
@@ -778,6 +782,9 @@ pub enum Action {
     ColumnFit,
     ColumnFitAll,
     ColumnReset,
+    ColumnHide,
+    ColumnPinToggle,
+    Columns,
     FindSimilar,
     RagSearch,
     RagBuild,
