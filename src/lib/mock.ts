@@ -271,6 +271,13 @@ const endTx = (tabId: string) => {
   const { [tabId]: _, ...rest } = openTxs();
   sessionStorage.setItem(TX_KEY, JSON.stringify(rest));
 };
+/** The fields the core's ConnectionView adds (ConnectionConfig::starts_manual / production_starts_manual), as it computes them */
+const withManual = (c: any) => {
+  const o = c.options ?? {};
+  const manualWorks = c.kind === "postgres" || c.kind === "mysql";
+  const productionStartsManual = manualWorks && !o.txManual && !!o.confirmChanges && o.productionManual !== false;
+  return { ...c, startsManual: (manualWorks && !!o.txManual) || productionStartsManual, productionStartsManual };
+};
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
   // window.__mockRedis (set before load): { readOnly, production, managed } for [Redis] cache (managed: CONFIG refused, as on ElastiCache).
@@ -278,7 +285,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   list_connections: () =>
     structuredClone([...conns, ...((globalThis as any).__mockMoreConns ?? [])]).map((c: any) => {
       const r = (globalThis as any).__mockRedis;
-      return c.id === "rd" && r ? { ...c, readOnly: !!r.readOnly, options: { ...c.options, confirmChanges: !!r.production } } : c;
+      return withManual(c.id === "rd" && r ? { ...c, readOnly: !!r.readOnly, options: { ...c.options, confirmChanges: !!r.production } } : c);
     }),
   // window.__mockDbListFail: the account can't connect to a source's default database, so listing through the source itself fails.
   // window.__mockDbListDelay (ms): the list arrives that late (a select asked for it only on its first click would open without it)

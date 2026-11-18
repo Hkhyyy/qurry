@@ -232,7 +232,7 @@ impl ConnectionConfig {
     }
 
     /// Whether a new console starts in Manual transaction mode: the source's Transaction control, or Production with
-    /// production_manual on (the default). The GUI has the same rule (src/features/tabs/ops.ts startsManual)
+    /// production_manual on (the default). The GUI reads it from ConnectionView::starts_manual (src/features/tabs/ops.ts)
     pub fn starts_manual(&self) -> bool {
         (self.supports_manual() && self.options.tx_manual) || self.production_starts_manual()
     }

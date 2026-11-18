@@ -89,12 +89,12 @@ const buildTab = (
   };
 };
 
-/** Whether a new console starts in Manual transaction mode: the source's Transaction control, or Production with "start consoles in
- *  Manual" on, its default (#106). Only PostgreSQL and MySQL consoles can be in Manual (Redis and driver plugins refuse it). Core
- *  ConnectionConfig::starts_manual, the TUI's rule */
-const supportsManual = (c: ConnectionView) => c.kind === "postgres" || c.kind === "mysql";
-const productionStartsManual = (c: ConnectionView) => supportsManual(c) && !c.options?.txManual && !!c.options?.confirmChanges && c.options?.productionManual !== false;
-const startsManual = (c: ConnectionView) => (supportsManual(c) && !!c.options?.txManual) || productionStartsManual(c);
+/** Whether a new console starts in Manual transaction mode, and whether only because it is Production (#106): the core decides
+ *  (ConnectionView startsManual / productionStartsManual, from ConnectionConfig::starts_manual, the TUI's rule). A view without the
+ *  fields (a mock or a test; the app's own backend always sends them) is taken as Manual when it is Production, so a Production
+ *  console never starts in Auto for want of a field; a Redis or driver console the core can't put in Manual says so when it opens */
+const productionStartsManual = (c: ConnectionView) => c.productionStartsManual ?? !!c.options?.confirmChanges;
+const startsManual = (c: ConnectionView) => c.startsManual ?? !!c.options?.confirmChanges;
 /** Data sources whose console said it starts in Manual because it is Production: once per source while the app runs */
 const toldManual = new Set<string>();
 const productionManualNote = (connId: string): OutputLine[] => {

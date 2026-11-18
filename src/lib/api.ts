@@ -69,7 +69,7 @@ export interface ConnOptions {
   singleDb?: boolean;
   /** Production: modifying statements show the affected row count and ask for confirmation */
   confirmChanges?: boolean;
-  /** Production: consoles start in Manual transaction mode (unset = on; core ConnOptions::starts_manual) */
+  /** Production: consoles start in Manual transaction mode (unset = on; core ConnectionConfig::production_starts_manual) */
   productionManual?: boolean | null;
   /** Remote MySQL with SSL unset may connect in plain text if it can't do TLS */
   allowPlaintext?: boolean;
@@ -105,6 +105,10 @@ export interface SsmConfig {
 export interface ConnectionView extends ConnectionConfig {
   hasPassword: boolean;
   connected: boolean;
+  /** A new console starts in Manual transaction mode (core ConnectionConfig::starts_manual) */
+  startsManual?: boolean;
+  /** Manual only because it is Production: the console says so once (core ConnectionConfig::production_starts_manual) */
+  productionStartsManual?: boolean;
 }
 
 export interface ColumnInfo {
