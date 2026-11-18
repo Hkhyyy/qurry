@@ -116,7 +116,9 @@ async fn copy_diagnostics_saves_the_masked_text_and_says_where() {
     h.type_str("Copy Diagnostics");
     h.key("Enter");
     assert_eq!(h.app.ran.last(), Some(&Action::CopyDiagnostics));
-    let file = std::env::temp_dir().join("qurry-diagnostics.txt");
+    // The test's own file: the user's qurry-diagnostics.txt in the temp folder is never written
+    let file = h.app.diagnostics_file.clone();
+    assert!(file.starts_with(h.app.log_file.parent().unwrap().parent().unwrap()), "{}", file.display());
     assert_eq!(h.app.status, format!("Diagnostics copied · also saved to {}", file.display()));
     let text = std::fs::read_to_string(&file).unwrap();
     for w in ["acme prod", "db.acme.test", "alice", "shop", "s3cret"] {

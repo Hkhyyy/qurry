@@ -505,7 +505,7 @@ fn copy_diagnostics(app: &mut App) {
     };
     let text = qurry_core::diagnostics::text("tui", env!("CARGO_PKG_VERSION"), &sources, &app.log_file, 200);
     crate::input::copy(app, &text);
-    let file = std::env::temp_dir().join("qurry-diagnostics.txt");
+    let file = app.diagnostics_file.clone();
     // A new file each time: one left by someone else (a link) is removed, not written through
     let _ = std::fs::remove_file(&file);
     let mut o = std::fs::OpenOptions::new();

@@ -1038,6 +1038,8 @@ pub struct App {
     pub import_home: std::path::PathBuf,
     /// What Show Log reveals (qurry_core::logfile::path(); tests use a temporary one)
     pub log_file: std::path::PathBuf,
+    /// Where Copy Diagnostics also saves its text (qurry-diagnostics.txt in the temp folder; tests use a temporary one)
+    pub diagnostics_file: std::path::PathBuf,
 }
 
 /// Tests only (testkit): stands in for the database, answering each query by its text
@@ -1127,6 +1129,7 @@ impl App {
             ran: vec![],
             import_home: qurry_core::import::home(),
             log_file: qurry_core::logfile::path(),
+            diagnostics_file: std::env::temp_dir().join("qurry-diagnostics.txt"),
             next_id: 1,
             exec: Default::default(),
             ddl_structure: false,
