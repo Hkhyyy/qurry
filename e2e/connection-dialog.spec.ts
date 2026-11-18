@@ -362,3 +362,39 @@ test("Options › MCP: admin reports for AI tools ask on Production only, and MC
   await expect(dialog(page)).toHaveCount(0);
   expect((await saved()).mcpDbaReports).toBeUndefined();
 });
+
+test("General › Password command: turns Password off, is saved and shown again; a failing one shows its stderr, never its output", async ({ page }) => {
+  const props = async () => {
+    await treeNode(page, "[PROD] shop_app").click({ button: "right" });
+    await page.getByRole("menuitem", { name: /^Properties/ }).click();
+    return dialog(page);
+  };
+  let d = await props();
+  const command = d.getByRole("textbox", { name: "Password command" });
+  const reuse = d.getByRole("textbox", { name: "Reuse for seconds" });
+  const password = d.getByLabel("Password", { exact: true });
+  await expect(command).toHaveAttribute("placeholder", /^\/opt\/homebrew\/bin\/aws rds generate-db-auth-token --hostname %HOSTNAME%/);
+  await d.getByRole("button", { name: "About Password command" }).click();
+  await expect(page.getByRole("note", { name: "About Password command" })).toContainText("never through a shell");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("note")).toHaveCount(0);
+  await expect(password).toBeEnabled();
+
+  await command.fill("/bin/false --print mock-stdout-marker");
+  await expect(password).toBeDisabled();
+  await expect(password).toHaveAttribute("placeholder", "(from the command)");
+  await reuse.fill("6x00");
+  await expect(reuse).toHaveValue("600");
+  await d.getByRole("button", { name: "Test Connection" }).click();
+  await expect(d.getByText(/Password command failed \(exit 1\): mock stderr: token expired/)).toBeVisible();
+  await expect(d.getByText(/mock-stdout-marker/)).toHaveCount(0);
+
+  await command.fill("/opt/homebrew/bin/aws rds generate-db-auth-token --hostname %HOSTNAME% --port %PORT% --username %USERNAME%");
+  await d.getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__mockSaved)).toMatchObject({ passwordCommand: expect.stringContaining("generate-db-auth-token"), passwordReuseSecs: 600 });
+  d = await props();
+  await expect(d.getByRole("textbox", { name: "Password command" })).toHaveValue(/^\/opt\/homebrew\/bin\/aws rds generate-db-auth-token/);
+  await expect(d.getByRole("textbox", { name: "Reuse for seconds" })).toHaveValue("600");
+  await expect(d.getByLabel("Password", { exact: true })).toBeDisabled();
+});

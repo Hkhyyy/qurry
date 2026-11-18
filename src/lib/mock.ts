@@ -498,6 +498,9 @@ const handlers: Record<string, (a: any) => unknown> = {
   test_connection: async (a: any) => {
     const delay = (globalThis as any).__mockTestDelay;
     if (delay) await new Promise((r) => setTimeout(r, delay));
+    // A password command that fails: the core's error has its exit code and standard error, never what it printed (mock-stdout-marker)
+    const program = String(a.config.passwordCommand ?? "").trim().split(/\s+/)[0];
+    if (program === "/bin/false" || program.startsWith("fail")) throw "Password command failed (exit 1): mock stderr: token expired";
     if (a.config.host === lan.host && !a.config.options?.allowPlaintext) throw NEEDS_TLS;
     if (a.config.ssm?.enabled && a.config.ssm.target === "i-0000000000000dead") throw SSM_NO_PLUGIN;
     return a.config.ssm?.enabled && a.config.ssm.target === "i-00000000000000000"

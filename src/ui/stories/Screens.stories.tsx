@@ -224,6 +224,29 @@ export const NewDataSourceSchemasConnecting: S = {
   },
 };
 export const EditDataSource: S = { name: "Data Source — edit (SSH)", render: () => <ConnectionDialog edit={{ ...PROD, ssh: { enabled: true, host: "bastion.example.com", port: 22, user: "ec2-user", auth: "key", keyPath: "~/.ssh/id_ed25519" } } as ConnectionView} onClose={noop} onSaved={noop} /> };
+/** General tab with a password command (#177): the ⓘ says what it runs, Reuse for keeps its output 600 s, Password is off */
+const passwordCommand = (theme: "dark" | "light" | "hc"): S => ({
+  name: `Data Source — password command (${theme === "hc" ? "high contrast" : theme})`,
+  globals: { theme },
+  render: () => (
+    <ConnectionDialog
+      edit={
+        {
+          ...PROD,
+          host: "orders.cluster-abc.ap-northeast-2.rds.amazonaws.com",
+          user: "app_iam",
+          passwordCommand: "/opt/homebrew/bin/aws rds generate-db-auth-token --hostname %HOSTNAME% --port %PORT% --username %USERNAME% --region ap-northeast-2",
+          passwordReuseSecs: 600,
+        } as ConnectionView
+      }
+      onClose={noop}
+      onSaved={noop}
+    />
+  ),
+});
+export const PasswordCommandDark = passwordCommand("dark");
+export const PasswordCommandLight = passwordCommand("light");
+export const PasswordCommandHc = passwordCommand("hc");
 /** SSH/SSL tab with Tunnel = AWS SSM: profile · region · instance id. Test Connection answers "(via AWS SSM i-…)" */
 export const EditDataSourceSsm: S = {
   name: "Data Source — edit (AWS SSM)",
