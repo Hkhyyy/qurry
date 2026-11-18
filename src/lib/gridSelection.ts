@@ -46,6 +46,14 @@ export function toggle(sel: Selection | null, a: Pos, b: Pos = a): Selection {
 
 export const contains = (sel: Selection | null, r: number, c: number) => !!sel && sel.ranges.some((x) => inRect(x, r, c));
 
+/** `sel` in a grid of `n` columns (a column was just hidden): ranges cut at the last column, those wholly past it dropped, the cursor
+ *  and the anchor moved onto it; `sel` itself when it fits */
+export function fitCols(sel: Selection | null, n: number): Selection | null {
+  if (!sel || (sel.cur.c < n && sel.anchor.c < n && sel.ranges.every((x) => x.c1 < n))) return sel;
+  const fit = (p: Pos) => ({ ...p, c: Math.min(p.c, n - 1) });
+  return { ranges: sel.ranges.filter((x) => x.c0 < n).map((x) => ({ ...x, c1: Math.min(x.c1, n - 1) })), anchor: fit(sel.anchor), cur: fit(sel.cur) };
+}
+
 /** One cell selected (copy writes its raw value; Copy as IN List takes its whole column) */
 export const isSingle = (sel: Selection | null) => !!sel && sel.ranges.length === 1 && sel.ranges[0].r0 === sel.ranges[0].r1 && sel.ranges[0].c0 === sel.ranges[0].c1;
 

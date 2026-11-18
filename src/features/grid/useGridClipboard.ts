@@ -14,7 +14,7 @@ export const cutCopied = (n: number) =>
 
 /** The result grid's clipboard: Copy in the chosen Data Extractor, Copy as IN List, Paste */
 export function useGridClipboard({
-  edit, quoteIdent, sel, hasSel, extractor, valueAt, dataIndex, pkIdx, cols, D, rowCount, anyEdit, cur, join, cellOk, joinRows, cellReason, setAdded, setCell,
+  edit, quoteIdent, sel, hasSel, extractor, valueAt, dataIndex, view, pkIdx, cols, D, rowCount, anyEdit, cur, join, cellOk, joinRows, cellReason, setAdded, setCell,
   cutAt, canFetch, fetchCells,
 }: {
   edit: EditTarget | undefined;
@@ -24,6 +24,8 @@ export function useGridClipboard({
   extractor: Extractor;
   valueAt: (r: number, c: number) => Cell;
   dataIndex: (d: number) => number;
+  /** Display column → result column (useColumnLayout): a selection is copied and pasted in the shown columns, in their order */
+  view: number[];
   pkIdx: number[];
   cols: QueryResult["columns"];
   D: Dialect;
@@ -47,11 +49,12 @@ export function useGridClipboard({
   /** header = a column-name line at the top of CSV · TSV (Copy is values only — DataGrip; Copy with Headers includes it) */
   /** The cells of `s` in a format: rows and columns in grid order, the union of the ranges' columns (gridSelection.copyTable) */
   const extract = (s: Selection, fmt: Extractor, header = true): string => {
-    const t = copyTable<Cell>(s, (d, c) => valueAt(dataIndex(d), c), HOLE_TOKEN);
+    const t = copyTable<Cell>(s, (d, c) => valueAt(dataIndex(d), view[c]), HOLE_TOKEN);
     const rows = t.rows.map(dataIndex);
+    const tc = t.cols.map((c) => view[c]);
     // Key values are read only for SQL Updates (as before: other formats never touch the key columns)
     const keys = fmt === "SQL Updates" ? rows.map((r) => pkIdx.map((k): [string, Cell] => [cols[k].name, valueAt(r, k)])) : [];
-    return extractRows(fmt, { names: t.cols.map((c) => cols[c].name), types: t.cols.map((c) => cols[c].typeName), vals: t.vals, keys, tableRef, dialect: D, header });
+    return extractRows(fmt, { names: tc.map((c) => cols[c].name), types: tc.map((c) => cols[c].typeName), vals: t.vals, keys, tableRef, dialect: D, header });
   };
   /** The shared WASM writes the formats: without it (a WebView that refused WebAssembly) say why nothing is copied */
   const formatted = (make: () => string): string | undefined => {
@@ -63,7 +66,7 @@ export function useGridClipboard({
    *  ClipboardItem that waits for it: WebKit refuses a write after the click's moment) */
   const copyOf = (s: Selection, make: () => string | undefined, as: Parameters<typeof copied>[1]) => {
     const cells: [number, number][] = [];
-    forEachCell(s, (d, c) => void (cutAt(dataIndex(d), c) && cells.push([dataIndex(d), c])));
+    forEachCell(s, (d, c) => void (cutAt(dataIndex(d), view[c]) && cells.push([dataIndex(d), view[c]])));
     const done = (text: string | undefined) => (text !== undefined && copied(text, as), text);
     if (!cells.length) {
       const text = done(make());
@@ -87,7 +90,7 @@ export function useGridClipboard({
     const one = sel.ranges[0];
     const rawOne = isSingle(sel) && !header && (extractor === "CSV" || extractor === "TSV");
     // Paste reads this text back as its format (one copied row splits into cells); one raw value stays one value
-    copyOf(sel, () => (rawOne ? raw(valueAt(dataIndex(one.r0), one.c0)) : formatted(() => extract(sel, extractor, header))), rawOne ? "other" : extractor);
+    copyOf(sel, () => (rawOne ? raw(valueAt(dataIndex(one.r0), view[one.c0])) : formatted(() => extract(sel, extractor, header))), rawOne ? "other" : extractor);
   };
   /** Selected cells as ('a', 'b') (paste straight into WHERE x IN). If only one cell is selected, its whole column */
   const copyInList = () => {
@@ -105,9 +108,9 @@ export function useGridClipboard({
     const grid = pasteCells(await navigator.clipboard.readText());
     // A join: only into cells that can be edited, and no rows added
     if (join) {
-      const spots = grid.flatMap((cells, i) => cells.map((_, j) => [cur.r + i, cur.c + j]).filter(([, c]) => c < cols.length));
-      const bad = spots.find(([d, c]) => d >= rowCount || !cellOk(dataIndex(d), c));
-      if (bad) return setStatusNote(bad[0] >= rowCount ? joinRows : cellReason(dataIndex(bad[0]), bad[1]) || "Paste reaches a cell that can't be edited");
+      const spots = grid.flatMap((cells, i) => cells.map((_, j) => [cur.r + i, cur.c + j]).filter(([, c]) => c < view.length));
+      const bad = spots.find(([d, c]) => d >= rowCount || !cellOk(dataIndex(d), view[c]));
+      if (bad) return setStatusNote(bad[0] >= rowCount ? joinRows : cellReason(dataIndex(bad[0]), view[bad[1]]) || "Paste reaches a cell that can't be edited");
     }
     grid.forEach((cells, i) => {
       const d = cur.r + i;
@@ -115,10 +118,10 @@ export function useGridClipboard({
       if (r < 0) {
         const row: NewRow = cols.map(() => undefined);
         cells.forEach((v, j) => {
-          if (cur.c + j < cols.length) row[cur.c + j] = v;
+          if (cur.c + j < view.length) row[view[cur.c + j]] = v;
         });
         setAdded((a) => [...a, row]);
-      } else cells.forEach((v, j) => cur.c + j < cols.length && setCell(r, cur.c + j, v, true));
+      } else cells.forEach((v, j) => cur.c + j < view.length && setCell(r, view[cur.c + j], v, true));
     });
   };
   return { copySelection, copyInList, paste };

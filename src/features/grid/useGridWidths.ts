@@ -9,10 +9,9 @@ import { fracWidth, isTimeType, padFrac } from "../../lib/timeFrac";
 import { display } from "./shared";
 
 /** The result grid's column widths (computed, set by the user, fit, step, drag) and how each column shows its values */
-export function useGridWidths({ cols, em, rownumW, keyCols, pkIdx, join, result, firstRow, rowCount, valueAt, p }: {
+export function useGridWidths({ cols, em, keyCols, pkIdx, join, result, firstRow, rowCount, valueAt, p }: {
   cols: QueryResult["columns"];
   em: number;
-  rownumW: number;
   keyCols: number[];
   pkIdx: number[];
   join: JoinEdit | undefined;
@@ -42,7 +41,6 @@ export function useGridWidths({ cols, em, rownumW, keyCols, pkIdx, join, result,
   const setOf = (i: number): number | undefined => (Object.prototype.hasOwnProperty.call(setW, wkey[i]) ? setW[wkey[i]] : undefined);
   /** The one place a column's width comes from (layout, virtualization, scrolling): the user's, else the computed one */
   const widths = useMemo(() => computed.map((w, i) => { const s = setOf(i); return s === undefined ? w : toPx(s, em); }), [computed, setW, wkey, em]);
-  const total = rownumW + widths.reduce((a, b) => a + b, 0);
   // Time columns: align fractional-second digits within the column (values unchanged)
   const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows, wasmReady]);
   const shown = (v: Cell, ci: number) => (fracW[ci] && typeof v === "string" ? padFrac(v, fracW[ci]) : display(v));
@@ -99,5 +97,5 @@ export function useGridWidths({ cols, em, rownumW, keyCols, pkIdx, join, result,
     window.addEventListener("mouseup", up);
     document.body.classList.add("col-resizing");
   };
-  return { wasmReady, setW, widths, total, shown, classOf, aligns, jsonCol, fitColumn, resetWidths, toggleFit, fitAll, stepColumn, startResize };
+  return { wasmReady, setW, widths, shown, classOf, aligns, jsonCol, fitColumn, resetWidths, toggleFit, fitAll, stepColumn, startResize };
 }
