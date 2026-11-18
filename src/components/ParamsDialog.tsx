@@ -23,6 +23,7 @@ export function ParamsDialog({ req, onDone }: { req: Omit<ParamsRequest, "resolv
     <Modal
       title="Parameters"
       layer="dialog"
+      stickyBackdrop
       onClose={() => onDone(null)}
       headExtra={<InfoTip about="Parameters" info={["A value goes in as you type it, as plain text: type the quotes yourself ('paid', not paid).", "The values are remembered for this console.", "Not a parameter? Cancel, and put the :name in a string or a quoted name."]} />}
       onKeyDown={(e) => {

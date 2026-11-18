@@ -35,6 +35,10 @@ test("Run sends the substituted statement, Output echoes it, and the next run of
   await page.evaluate(() => ((window as any).__mockRan = []));
   await runAll(page);
   await params(page).getByRole("textbox").fill("42");
+  // A stray click outside the box keeps the dialog and the typed value
+  await page.mouse.click(5, 5);
+  await expect(params(page).getByRole("textbox")).toHaveValue("42");
+  await params(page).getByRole("textbox").focus();
   await page.keyboard.press("Enter");
   await expect(resultTabs(page)).toHaveText(["Output", /^1: users/]);
   const sent = "select * from users where id = 42 and name = ':notaparam' -- :c";
