@@ -821,6 +821,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   },
   save_keymap: () => null,
   show_log: () => null,
+  diagnostics: () => "Qurry gui 0.0.0-mock · core 0.0.0-mock\nOS: macos (aarch64)\n\nData sources: 2\n  postgres: 1\n  redis: 1\n",
   // The specs read what reached the log
   log_frontend_error: (a: any) => (((window as any).__mockLogged ??= []).push(a), null),
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
