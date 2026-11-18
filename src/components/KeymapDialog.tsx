@@ -35,18 +35,21 @@ export function KeymapDialog({ onClose, onEdit }: { onClose: () => void; onEdit:
       }
     >
       <SearchField className="keymap-search" autoFocus placeholder="Search actions or shortcuts" value={q} onChange={(e) => setQ(e.target.value)} />
+      {/* The columns sit inside the scroller: columns given a height would add more columns to the right, out of view */}
       <div className="keymap-body">
-        {sections.map((s) => (
-          <div key={s.title} className="keymap-section">
-            <SectionTitle className="keymap-title">{s.title}</SectionTitle>
-            {s.rows.map((r) => (
-              <div key={s.title + r[0] + r[1]} className={"keymap-row" + (r[0] === null && isCustom(r[1]) ? " custom" : "")}>
-                <Kbd className="keymap-keys">{keysOf(r)}</Kbd>
-                <span className="keymap-desc">{rowDesc(r)}</span>
-              </div>
-            ))}
-          </div>
-        ))}
+        <div className="keymap-cols">
+          {sections.map((s) => (
+            <div key={s.title} className="keymap-section">
+              <SectionTitle className="keymap-title">{s.title}</SectionTitle>
+              {s.rows.map((r) => (
+                <div key={s.title + r[0] + r[1]} className={"keymap-row" + (r[0] === null && isCustom(r[1]) ? " custom" : "")}>
+                  <Kbd className="keymap-keys">{keysOf(r)}</Kbd>
+                  <span className="keymap-desc">{rowDesc(r)}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
         {!sections.length && <EmptyState>Nothing found</EmptyState>}
       </div>
     </Modal>

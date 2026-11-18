@@ -36,10 +36,21 @@ function useDrag(box: RefObject<HTMLElement | null>) {
     return { left: r.left - offRef.current.x, top: r.top - offRef.current.y, width: r.width, height: r.height };
   };
   const view = () => ({ width: window.innerWidth, height: window.innerHeight });
+  // Back inside when the browser window shrinks or the box grows (a moved dialog whose content then got longer)
   useEffect(() => {
-    const onResize = () => box.current && setOff((o) => clampDrag(o, base(), view()));
+    const onResize = () =>
+      box.current &&
+      setOff((o) => {
+        const c = clampDrag(o, base(), view());
+        return c.x === o.x && c.y === o.y ? o : c;
+      });
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    const ro = new ResizeObserver(onResize);
+    if (box.current) ro.observe(box.current);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      ro.disconnect();
+    };
   }, []);
   const grab = (t: EventTarget) => !(t as Element).closest(NOT_A_HANDLE);
   const handle = {
