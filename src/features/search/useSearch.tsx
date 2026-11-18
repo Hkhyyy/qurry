@@ -22,6 +22,14 @@ import { useWorkspacesStore } from "../workspaces/store";
 import type { useWorkspaces } from "../workspaces/useWorkspaces";
 import { setSearchScope, useSearchScope } from "./scope";
 
+/** Help › Copy Diagnostics and Find Action: the backend's redacted text onto the clipboard */
+export const copyDiagnostics = (setStatus: (s: string) => void) =>
+  api
+    .diagnostics()
+    .then((t) => navigator.clipboard.writeText(t))
+    .then(() => setStatus("Diagnostics copied"))
+    .catch((e) => setStatus(`Couldn't copy diagnostics (${e}). Try again, or attach the log file instead: Help › Show Log`));
+
 type Deps = {
   conns: ConnectionView[];
   setStatus: (s: string) => void;
@@ -153,6 +161,7 @@ export function useSearch({
       { name: "Keymap Reference", ...cmd("keymap"), group: "Help", run: () => setKeymapOpen(true) },
       { name: "Edit Keymap…", ...cmd("keymap.edit"), group: "Help", run: () => setSettingsOpen("keymap") },
       { name: "Show Log", ...cmd("showLog"), group: "Help", run: () => api.showLog().catch((e) => setStatus(String(e))) },
+      { name: "Copy Diagnostics", ...cmd("copyDiagnostics"), group: "Help", run: () => copyDiagnostics(setStatus) },
       // Every built-in and custom theme; Dark, Light and High contrast have a command a key can be bound to
       ...allThemes(getThemeSettings()).map((th) => ({ name: `Theme: ${th.name}`, ...({ dark: cmd("theme.dark"), light: cmd("theme.light"), hc: cmd("theme.hc") } as Record<string, object>)[th.id], group: "Appearance", run: () => pickTheme(th.id) })),
       { name: "Theme: Sync with OS", ...cmd("theme.system"), group: "Appearance", run: () => pickTheme(SYSTEM) },

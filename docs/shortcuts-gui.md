@@ -178,6 +178,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 |---|---|
 | `—` | Edit Keymap… |
 | `—` | Show Log |
+| `—` | Copy Diagnostics |
 | `—` | Export Data Sources… |
 | `—` | Import Data Sources… |
 | `—` | Theme: Dark |

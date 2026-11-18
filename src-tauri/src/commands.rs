@@ -964,6 +964,13 @@ pub fn show_log() -> AppResult<()> {
     opened.map_err(|e| crate::error::AppError::Msg(format!("Couldn't open the log ({e}). Open it from Finder: {}", file.display())))
 }
 
+/// Help › Copy Diagnostics and Find Action: the text the front end puts on the clipboard (qurry_core::diagnostics, never names,
+/// hosts or secrets)
+#[tauri::command]
+pub fn diagnostics(state: State<'_, AppState>) -> AppResult<String> {
+    Ok(qurry_core::diagnostics::text("gui", env!("CARGO_PKG_VERSION"), &state.store.list()?, &qurry_core::logfile::path(), 200))
+}
+
 /// A front-end error (an error boundary's, window error, unhandledrejection) into qurry.log: message and stacks only, redacted,
 /// cut short and rate limited (qurry_core::logfile::frontend_error)
 #[tauri::command]

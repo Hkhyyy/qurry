@@ -93,6 +93,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | Key | Action |
 |---|---|
 | — | Show Log |
+| — | Copy Diagnostics |
 | — | Import Data Sources… (DataGrip, IntelliJ, DBeaver, a Qurry export) |
 | — | Data Source Properties… |
 | — | New Data Source… |

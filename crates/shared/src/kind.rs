@@ -21,6 +21,12 @@ pub enum DbKind {
 }
 
 impl DbKind {
+    /// Every kind, built-in ones first
+    pub const ALL: [DbKind; 12] = [
+        DbKind::Postgres, DbKind::Mysql, DbKind::Redis, DbKind::Sqlite, DbKind::Mssql, DbKind::Clickhouse,
+        DbKind::Duckdb, DbKind::Mongodb, DbKind::Oracle, DbKind::Qdrant, DbKind::Chroma, DbKind::Milvus,
+    ];
+
     /// Driver plugin name (None for the built-in PG·MySQL·Redis)
     pub fn driver(self) -> Option<&'static str> {
         match self {
@@ -135,10 +141,6 @@ pub fn redis_db_index(name: &str) -> i64 {
 mod tests {
     use super::*;
 
-    const ALL: [DbKind; 12] = [
-        DbKind::Postgres, DbKind::Mysql, DbKind::Redis, DbKind::Sqlite, DbKind::Mssql, DbKind::Clickhouse,
-        DbKind::Duckdb, DbKind::Mongodb, DbKind::Oracle, DbKind::Qdrant, DbKind::Chroma, DbKind::Milvus,
-    ];
     /// (blank Database, Database " app ") → default db; a match, so a new kind doesn't compile without its row
     fn expected(k: DbKind) -> (&'static str, &'static str) {
         match k {
@@ -155,7 +157,7 @@ mod tests {
 
     #[test]
     fn default_db_per_kind() {
-        for k in ALL {
+        for k in DbKind::ALL {
             let (blank, set) = expected(k);
             assert_eq!(default_db(k, ""), blank, "{k:?} blank");
             assert_eq!(default_db(k, "  "), blank, "{k:?} spaces");
@@ -169,7 +171,7 @@ mod tests {
 
     #[test]
     fn default_port_per_kind() {
-        let ports: Vec<(DbKind, u16)> = ALL.iter().map(|&k| (k, k.default_port())).collect();
+        let ports: Vec<(DbKind, u16)> = DbKind::ALL.iter().map(|&k| (k, k.default_port())).collect();
         assert_eq!(
             ports,
             [

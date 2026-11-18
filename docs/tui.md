@@ -47,6 +47,8 @@ When the line is too narrow, the screen's keys go first, then the common keys bu
 
 **⌃k › Show Log** reveals the log file in Finder (on Linux it opens its folder) and puts its path on the status line ([where it is and what it holds](getting-started.md#where-qurry-keeps-your-settings)). Over SSH nothing opens on your screen; read that path there (`tail -f`). The GUI's is **Help › Show Log**.
 
+**⌃k › Copy Diagnostics** copies what a bug report needs and also saves it to `qurry-diagnostics.txt` in the temp folder (0600; the status line says where): over SSH the terminal may not pass the copy on, the file is there. It holds the versions, the OS, the installed driver plugins, how many data sources of each kind (and how many are Production, Read-only, behind an SSH tunnel or SSM) and the log's last 200 lines, never data source names, hosts, users, databases or secrets ([what exactly](getting-started.md#where-qurry-keeps-your-settings)). The GUI's is **Help › Copy Diagnostics**.
+
 ## Colors
 
 The TUI picks one color mode when it starts, from these environment variables (the first that applies wins):

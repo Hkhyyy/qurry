@@ -115,4 +115,5 @@ InstallUpdate	Update Qurry & Restart (download the latest release)	—
 OpenGitHub	Open GitHub	—
 Help	Keymap	F1
 ShowLog	Show Log	—
+CopyDiagnostics	Copy Diagnostics	—
 Quit	Quit	⌃q

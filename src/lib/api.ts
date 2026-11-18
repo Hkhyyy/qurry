@@ -282,6 +282,8 @@ export const api = {
   installUpdate: () => invoke<void>("install_update"),
   /** Help › Show Log: reveals the log file in Finder (its folder until the file exists) */
   showLog: () => invoke<void>("show_log"),
+  /** Help › Copy Diagnostics: versions, OS, driver plugins, data source counts and the log's end, redacted (no names, hosts or secrets) */
+  diagnostics: () => invoke<string>("diagnostics"),
   /** A front-end error into qurry.log (message and stacks only; the backend redacts, cuts and rate limits it) */
   logFrontendError: (e: { source: "boundary" | "error" | "unhandledrejection"; message: string; stack?: string; componentStack?: string }) => invoke<void>("log_frontend_error", e),
   /** Open tabs·splits (restored on restart) */

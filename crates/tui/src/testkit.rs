@@ -34,6 +34,7 @@ impl Harness {
         // Import Data Sources never reads the real DataGrip / DBeaver settings in a test
         app.import_home = dir.join("home");
         app.log_file = dir.join("logs/qurry.log");
+        app.diagnostics_file = dir.join("qurry-diagnostics.txt");
         let mut h = Harness { app, rx, _dir: TempDir(dir) };
         h.settle().await;
         h
