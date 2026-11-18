@@ -86,7 +86,7 @@ Before 0.3.4 a run replaced the console's unpinned result tabs. To clear them yo
 | Setting | What it does | Shared with the TUI |
 |---|---|---|
 | Alignment | Where cells sit in result grids, per kind of value (below) | Yes (TUI **⌃k › Grid Alignment…**) |
-| Long values | Where long text, JSON and XML values are cut in PostgreSQL results: 4,096 characters by default, 0 = never ([below](#long-values)) | Yes (TUI **⌃k › Grid Long Values…**) |
+| Long values | Where long text, JSON and XML values are cut in PostgreSQL and MySQL results: 4,096 characters by default, 0 = never ([below](#long-values)) | Yes (TUI **⌃k › Grid Long Values…**) |
 | Status bar | Which items the status bar shows for the focused grid: Position, Shown columns, Not null, Sum, Avg, Min, Max, Size ([below](#status-bar-items)) | Yes (TUI **⌃k › Status Bar Items…**) |
 
 ### Alignment in result grids
@@ -124,7 +124,7 @@ To hide or pin columns, right-click a column header: **Hide Column**; **Pin Colu
 
 ### Long values
 
-A page of rows with large JSON or text documents can be megabytes, and through an SSH tunnel it takes long to arrive. So in PostgreSQL console results and table data, a text, JSON or XML value longer than **Long values** (4,096 characters by default) comes cut: the grid shows its start, ending with a dim `…`, and hovering it says where it was cut. 0 never cuts. Other types (arrays, numbers, dates …) and other databases always come whole.
+A page of rows with large JSON or text documents can be megabytes, and through an SSH tunnel it takes long to arrive. So in PostgreSQL and MySQL console results and table data, a text, JSON or XML value longer than **Long values** (4,096 characters by default) comes cut: the grid shows its start, ending with a dim `…`, and hovering it says where it was cut. 0 never cuts. Other types (arrays, binary, numbers, dates …) and other databases always come whole. A page also stops early once its values reach 4 MB: it then holds fewer than 500 rows, and the rest loads with the next page as you scroll on.
 
 The whole value is read when you need it, by the result's primary key: the **Value Editor** (`⇧↩`) shows it, copy copies it, and an edit starts from it (a cut value is never written back). That works when the result comes from one table and includes its whole primary key, as for [editing a result](getting-started.md#gui). Without a key (a join's columns, computed columns, `GROUP BY`, a table without a primary key) a cut value stays cut and read-only: copy copies the cut text and the status bar says so. To see such a value whole, raise the limit (or set 0) and run again.
 

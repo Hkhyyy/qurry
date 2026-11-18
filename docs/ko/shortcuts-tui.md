@@ -166,7 +166,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | — | Keyword Case… (UPPER or lower SQL keywords as you type and in Reformat Code; shared with the GUI) |
 | — | Result Tabs… |
 | — | Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI) |
-| — | Grid Long Values… (where long text, JSON and XML values are cut in PostgreSQL results, 0 = never; shared with the GUI) |
+| — | Grid Long Values… (where long text, JSON and XML values are cut in PostgreSQL and MySQL results, 0 = never; shared with the GUI) |
 | — | Status Bar Items… (what the status line shows for a grid: position, shown columns, Sum, Size …; shared with the GUI) |
 | — | Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background) |
 | — | Check for Updates |
@@ -260,7 +260,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `r` | Reload (table data) |
 | `y  ⌘c` | Copy cell value (a selected range or marked rows: as TSV, pastes into spreadsheets as cells) |
 | `⌘v` | Paste into cells from the selected one (TSV or CSV fills several, an empty field is NULL; extra lines add rows; table data) |
-| `…  (dim, at a value's end)` | Cut at ⌃k › Grid Long Values… (PostgreSQL): v, Enter and y read the whole value by the primary key |
+| `…  (dim, at a value's end)` | Cut at ⌃k › Grid Long Values… (PostgreSQL, MySQL): v, Enter and y read the whole value by the primary key |
 | `Esc` | Back (query results: to the editor) |
 
 ## DDL / routine view

@@ -117,7 +117,7 @@ The terminal draws the TUI's text, so its font and size are the terminal's: Qurr
 
 ## Long values
 
-In PostgreSQL results a long text, JSON or XML value comes cut, ending with a dim `…`. The value panel (`v`), `Enter` and `y` / `Y` read the whole value by the result's primary key; without a key it stays cut and read-only. **⌃k › Grid Long Values…** sets where values are cut (4,096 characters by default, 0 = never), the same setting as the GUI's ([Settings › Long values](settings.md#long-values)).
+In PostgreSQL and MySQL results a long text, JSON or XML value comes cut, ending with a dim `…`. The value panel (`v`), `Enter` and `y` / `Y` read the whole value by the result's primary key; without a key it stays cut and read-only. **⌃k › Grid Long Values…** sets where values are cut (4,096 characters by default, 0 = never), the same setting as the GUI's ([Settings › Long values](settings.md#long-values)).
 
 ## Hidden and pinned columns
 

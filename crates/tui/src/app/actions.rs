@@ -311,7 +311,7 @@ fn grid_long_values(app: &mut App) {
         };
     });
     if let Some(Popup::Input { body, .. }) = &mut app.popup {
-        *body = "Text, JSON, XML and array values longer than this come cut in PostgreSQL console and table results, ending with a dim …. v, ↩ and y read the whole value by the primary key; a result without one keeps the cut text.".into();
+        *body = "Text, JSON, XML and array values longer than this come cut in PostgreSQL and MySQL console and table results, ending with a dim …. v, ↩ and y read the whole value by the primary key; a result without one keeps the cut text.".into();
     }
 }
 
