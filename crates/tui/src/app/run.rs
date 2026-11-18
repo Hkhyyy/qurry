@@ -242,7 +242,8 @@ impl App {
             && !prod_ok
             && !explain
         {
-            let writes: Vec<String> = stmts.iter().filter(|s| !qurry_core::guard::is_read(s, kind)).cloned().collect();
+            // The GUI's rule (qurry_shared::production): a write keyword only inside a string or a comment doesn't make a read a write
+            let writes: Vec<String> = qurry_shared::production::asked_statements(&stmts, kind, explain).into_iter().map(String::from).collect();
             if !writes.is_empty() {
                 let st = self.state.clone();
                 let fake = self.fake_db();
@@ -267,12 +268,9 @@ impl App {
                             .iter()
                             .map(|(s, n)| {
                                 let head: String = sql::without_comments(s, kind).chars().take(70).collect();
-                                let n = match n {
-                                    Ok(Some(n)) => format!("{} row{}", crate::transfer::thousands(*n as u64), if *n == 1 { "" } else { "s" }),
-                                    Ok(None) if qurry_core::guard::is_ddl(s, kind) => "schema change".into(),
-                                    Ok(None) => "can't count this statement".into(),
-                                    Err(e) => format!("can't count: {}", e.to_string().lines().next().unwrap_or("")),
-                                };
+                                // The GUI's words; the dialog colors the line by its number (kit::organisms::confirm_lines)
+                                let count = n.as_ref().map(|n| n.map(|n| n.max(0) as u64)).map_err(|e| e.to_string());
+                                let (n, _) = qurry_shared::production::impact_line(s, kind, count);
                                 format!("  {head}\n    → {n}")
                             })
                             .collect();

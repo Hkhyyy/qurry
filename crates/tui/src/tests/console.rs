@@ -249,7 +249,7 @@ async fn production_confirm_lists_commented_statements_by_their_sql() {
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
     assert_eq!(
         text,
-        "Production data source \"PROD\" — this changes data:\n\n  CREATE TABLE public.orders ( id integer NOT NULL )\n    → schema change\n  INSERT INTO public.orders VALUES (1)\n    → can't count this statement\n\nRun it?"
+        "Production data source \"PROD\" — this changes data:\n\n  CREATE TABLE public.orders ( id integer NOT NULL )\n    → schema change\n  INSERT INTO public.orders VALUES (1)\n    → can't count\n\nRun it?"
     );
     let Some(Popup::Confirm { opened: Some(t), .. }) = &mut h.app.popup else { panic!("not a quiet confirm") };
     *t -= crate::app::App::TLS_ASK_GRACE;
@@ -264,6 +264,46 @@ async fn production_confirm_lists_commented_statements_by_their_sql() {
     let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!("not a console") };
     let place = qurry_core::sql::split_script(&sql, qurry_core::store::DbKind::Postgres).iter().position(|&(s, _)| sql[s..].trim_start().starts_with(select));
     assert_eq!(c.results.tabs.iter().map(|t| (t.stmt, t.title.as_str())).collect::<Vec<_>>(), [(place, "Name: list")]);
+}
+
+/// Production confirmation on a real PostgreSQL (QURRY_TEST_PG=host:port:user:db): the server counts the rows (SELECT count(*), nothing
+/// changes), lists only the writes in qurry_shared::production's words, and a no runs nothing
+#[tokio::test]
+#[ignore]
+async fn production_confirm_counts_on_a_real_server() {
+    let e = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG");
+    let p: Vec<&str> = e.split(':').collect();
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "PROD", "kind": "postgres", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[3]
+    }))
+    .unwrap();
+    cfg.options.confirm_changes = true;
+    h.app.state.save_connection(cfg, Some("pw".into()), None).await.unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    let sql = "select 'delete' as action;\nupdate pg_am set amname = amname where amname = 'heap';\ndelete from pg_am where false;\ncreate table qurry_never (a int);\ninsert into qurry_never values (1);\ndelete from qurry_missing where id = 1;";
+    let id = h.app.restore_console("p", p[3].into(), "console".into(), sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    h.key("F5");
+    for _ in 0..100 {
+        h.settle().await;
+        if h.app.popup.is_some() {
+            break;
+        }
+    }
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    let (head, rest) = text.split_once("  delete from qurry_missing where id = 1\n    → can't count: ").expect(text);
+    assert_eq!(
+        head,
+        "Production data source \"PROD\" — this changes data:\n\n  update pg_am set amname = amname where amname = 'heap'\n    → 1 row\n  delete from pg_am where false\n    → 0 rows\n  create table qurry_never (a int)\n    → schema change\n  insert into qurry_never values (1)\n    → can't count\n"
+    );
+    assert!(rest.contains("qurry_missing") && rest.ends_with("\n\nRun it?"), "{rest}");
+    h.key("Esc");
+    assert!(h.console_output().is_empty(), "a no runs nothing");
+    let _ = h.app.state.disconnect("p".into()).await;
 }
 
 /// Explain Analyze of a changing statement on PostgreSQL: BEGIN, the EXPLAIN and ROLLBACK all go through the same session (the fake here)
