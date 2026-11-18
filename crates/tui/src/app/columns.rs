@@ -77,7 +77,11 @@ impl App {
     fn save_layout(&mut self, table: Option<TableRef>) {
         let Some(table) = table else { return };
         let Some(layout) = self.grid_mut().map(|g| g.layout.clone()) else { return };
-        if let Err(e) = self.state.store.set_column_layout(&table, &layout) {
+        let r = self.state.store.set_column_layout(&table, &layout);
+        if let Some(g) = self.grid_mut() {
+            g.layout_unsaved = r.is_err();
+        }
+        if let Err(e) = r {
             self.status = format!("Couldn't save the column layout ({e}). It applies until the tab closes; Columns… › Show All in the actions palette ({}) shows every column again.", self.keys.label(Action::Palette));
         }
     }

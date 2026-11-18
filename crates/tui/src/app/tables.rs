@@ -116,10 +116,10 @@ impl App {
                 // The widths the tab has (also ones a failed save kept, until it closes) with the saved ones on top (the GUI's changes)
                 let mut widths = tt.grid.as_ref().map(|g| g.user_widths.clone()).unwrap_or_default();
                 widths.extend(saved);
-                // The saved layout (the GUI's changes too); none saved: the tab's own, which a failed save kept
-                let layout = match tt.grid.as_ref() {
-                    Some(g) if saved_layout.is_empty() => g.layout.clone(),
-                    _ => saved_layout,
+                // The saved layout (the GUI's changes too, a reset among them); the tab's own only while saving it failed
+                let (layout, unsaved) = match tt.grid.as_ref() {
+                    Some(g) if g.layout_unsaved => (g.layout.clone(), true),
+                    _ => (saved_layout, false),
                 };
                 match r {
                     Ok(res) => {
@@ -132,6 +132,7 @@ impl App {
                         g.row = row.min(n.saturating_sub(1));
                         g.col = col.min(g.cols().saturating_sub(1));
                         g.set_layout(layout);
+                        g.layout_unsaved = unsaved;
                         // Show in the header if ORDER BY is a single column ASC/DESC
                         g.sort = g.result.columns.iter().enumerate().find_map(|(i, c)| {
                             let q = sql::quote_ident(kind, &c.name);
@@ -151,6 +152,7 @@ impl App {
                             let mut g = Grid::new(empty);
                             g.set_user_widths(widths);
                             g.set_layout(layout);
+                            g.layout_unsaved = unsaved;
                             tt.grid = Some(g);
                         }
                         tt.error = Some(e.clone());

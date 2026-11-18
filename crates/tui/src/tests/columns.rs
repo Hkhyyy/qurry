@@ -298,6 +298,104 @@ async fn saved_layout_applies_when_the_table_loads() {
     assert!(h.screen(170, 12).contains("1 hidden"));
 }
 
+/// Pinned columns that fill the grid leave room for the cursor's column: past them it is still drawn (the pinned ones scroll away
+/// while it is there, as DataGrip's frozen area does), and they come back with the cursor
+#[tokio::test]
+async fn cursor_column_shows_when_pinned_ones_fill_the_grid() {
+    let mut h = Harness::new().await;
+    h.table_tab("orders", &["id", "memo", "note", "status", "total"], &[&["486", MEMO, "-", "paid", "12000"]], &["id"]);
+    h.app.focus = Focus::Grid;
+    h.key("Right");
+    h.key("Shift+P");
+    h.key("Right");
+    h.key("Shift+P");
+    assert_eq!(grid(&h).view.view, [1, 0, 2, 3, 4], "memo, id pinned");
+    h.key("End");
+    for w in [80, 60] {
+        let s = h.screen(w, 12);
+        assert!(header(&s).contains("total"), "the cursor's column at {w}:\n{s}");
+        assert!(!header(&s).contains("║"), "the pinned ones scrolled away:\n{s}");
+    }
+    h.key("Home");
+    let s = h.screen(80, 12);
+    assert!(header(&s).contains("memo") && header(&s).contains("║"), "pinned again on a pinned column:\n{s}");
+}
+
+/// A DBA report's auto-refresh keeps its hidden and pinned columns (it runs again on its own)
+#[tokio::test]
+async fn dba_refresh_keeps_the_column_layout() {
+    use qurry_core::db::{ColumnInfo, QueryResult};
+    let mut h = Harness::new().await;
+    let res = || QueryResult {
+        columns: ["pid", "state", "query"].iter().map(|n| ColumnInfo { name: (*n).into(), type_name: "TEXT".into() }).collect(),
+        rows: vec![vec!["10".into(), "active".into(), "select 1".into()]],
+        rows_affected: 0,
+        truncated: false,
+        elapsed_ms: 0,
+        has_result_set: true,
+        in_transaction: false,
+        warning: None,
+        editable: None,
+        notices: vec![],
+        cut: vec![],
+    };
+    let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
+    let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res())), loaded: None, error: None, running: false, run: 0, auto: true };
+    let id = h.app.push_tab("test", "postgres".into(), "Sessions".into(), TabKind::Dba(d));
+    h.app.focus = Focus::Grid;
+    h.key("End");
+    h.key("Shift+H");
+    h.key("Right");
+    h.key("Shift+P");
+    for _ in 0..2 {
+        h.app.dba_apply(id, 0, Ok(res()));
+        let g = h.app.grid_mut().unwrap();
+        assert_eq!((g.view.view.clone(), g.view.pinned), (vec![1, 0], 1), "query hidden, state pinned");
+    }
+}
+
+/// A layout the GUI reset (Show All removes the table's entry) is what the tab's reload shows; the tab's own stays only while
+/// saving it failed
+#[tokio::test]
+async fn reload_takes_the_saved_layout_unless_saving_failed() {
+    let mut h = Harness::new().await;
+    let id = wide_orders(&mut h);
+    h.key("Right");
+    h.key("Shift+H");
+    assert_eq!(Store::new(h.app.state.store.dir()).column_layout(&orders()).hidden, ["order_no"]);
+    Store::new(h.app.state.store.dir()).set_column_layout(&orders(), &Default::default()).unwrap();
+    h.app.reload_table(id);
+    h.settle().await;
+    assert_eq!(grid(&h).view.hidden, 0, "the GUI's reset");
+
+    // A folder where the settings file was: saving fails
+    std::fs::remove_file(h.app.state.store.dir().join("settings.json")).unwrap();
+    std::fs::create_dir_all(h.app.state.store.dir().join("settings.json")).unwrap();
+    h.key("Shift+H");
+    assert!(h.app.status.starts_with("Couldn't save the column layout"), "{}", h.app.status);
+    h.app.reload_table(id);
+    h.settle().await;
+    assert_eq!(grid(&h).view.hidden, 1, "kept while unsaved");
+}
+
+/// A saved layout that hides every column shows them all and is kept so: H then hides the cursor's column
+#[tokio::test]
+async fn layout_hiding_every_column_shows_them_and_hide_works() {
+    let mut h = Harness::new().await;
+    let id = h.table_tab("orders", &["id", "memo"], &[&["486", "a"]], &["id"]);
+    h.app.focus = Focus::Grid;
+    let all = qurry_core::format::ColumnLayout { hidden: vec!["id".into(), "memo".into()], pinned: vec![] };
+    Store::new(h.app.state.store.dir()).set_column_layout(&orders(), &all).unwrap();
+    h.app.reload_table(id);
+    h.settle().await;
+    assert_eq!(grid(&h).view.view, [0, 1]);
+    assert!(grid(&h).layout.hidden.is_empty());
+    h.key("Right");
+    h.key("Shift+H");
+    assert_eq!(grid(&h).view.view, [0], "memo hidden");
+    assert_eq!(Store::new(h.app.state.store.dir()).column_layout(&orders()).hidden, ["memo"]);
+}
+
 /// A copy skips hidden columns: a range across one, and a marked row; the IN list of a range too
 #[tokio::test]
 async fn copied_selection_skips_the_hidden_column() {

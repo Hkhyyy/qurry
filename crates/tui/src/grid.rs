@@ -68,6 +68,8 @@ pub struct Grid {
     pub unread: Option<((usize, usize), String)>,
     /// Hidden and pinned columns (a table tab's saved one, settings.json "columnLayout"; a console result's until it runs again)
     pub layout: ColumnLayout,
+    /// Saving `layout` failed (App::save_layout): a table tab's reload keeps it rather than the saved one
+    pub layout_unsaved: bool,
     /// `layout` over this result's columns (set_layout)
     pub view: ColumnView,
 }
@@ -175,7 +177,7 @@ static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), before_fit: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), shown: None, orig: vec![], cut: BTreeSet::new(), reading: false, unread: None, layout: ColumnLayout::default(), view: ColumnView { view: vec![], pinned: 0, hidden: 0 } };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], user_widths: ColumnWidths::new(), before_fit: ColumnWidths::new(), frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), shown: None, orig: vec![], cut: BTreeSet::new(), reading: false, unread: None, layout: ColumnLayout::default(), layout_unsaved: false, view: ColumnView { view: vec![], pinned: 0, hidden: 0 } };
         g.set_layout(ColumnLayout::default());
         g.cut = g.result.cut.iter().map(|&[r, c]| (r, c)).collect();
         g.compute_widths();
@@ -379,9 +381,11 @@ impl Grid {
         let at = self.pos(self.col).unwrap_or(0);
         self.layout = layout;
         self.view = column_view(&self.width_keys(), &self.layout);
-        // A saved layout that hides every column (the GUI's, or one from columns renamed since) shows them all instead
+        // A saved layout that hides every column (the GUI's, or one from columns renamed since) shows them all instead, and is kept
+        // so (later hides start from what is shown)
         if self.view.view.is_empty() {
-            self.view = column_view(&self.width_keys(), &ColumnLayout { hidden: vec![], pinned: self.layout.pinned.clone() });
+            self.layout.hidden.clear();
+            self.view = column_view(&self.width_keys(), &self.layout);
         }
         if self.pos(self.col).is_none() && !self.view.view.is_empty() {
             self.col = self.view.view[at.min(self.visible_cols() - 1)];
@@ -758,12 +762,16 @@ impl Grid {
     }
 
     /// Horizontal scroll in `avail` cells: the pinned columns first, always, then the scrollable ones from `col_off`, keeping the
-    /// cursor's column in view. Returns the drawn columns, their widths (a last one that doesn't fit is cut to the rest) and how many
-    /// of them are whole
-    fn place_cols(&mut self, avail: u16) -> (Vec<usize>, Vec<u16>, usize) {
+    /// cursor's column in view. Returns the drawn columns, their widths (a last one that doesn't fit is cut to the rest), how many
+    /// of them are whole and how many are pinned ones
+    fn place_cols(&mut self, avail: u16) -> (Vec<usize>, Vec<u16>, usize, usize) {
         let (n, pinned) = (self.visible_cols(), self.view.pinned);
         let dw: Vec<u16> = self.view.view.iter().map(|&c| self.widths[c]).collect();
         let room = avail.saturating_sub(dw[..pinned].iter().map(|w| w + 1).sum());
+        let cur = self.cur_pos();
+        // Pinned columns that leave no room for the cursor's (whole, or at least half the width) scroll away with the others while it
+        // is there, as DataGrip's frozen area does: the cursor's column is always drawn
+        let pins = if cur >= pinned && room <= dw[cur].min((avail / 2).max(3)) { 0 } else { pinned };
         // So the right side isn't empty when scrolled to the end: don't scroll past the first column at which the last column reaches the right edge
         self.max_off = {
             let mut off = n;
@@ -775,15 +783,15 @@ impl Grid {
             off.min(n - 1).max(pinned)
         };
         self.col_off = self.col_off.clamp(pinned, self.max_off);
-        let cur = self.cur_pos();
         if cur >= pinned {
+            let room = if pins == 0 { avail } else { room };
             self.col_off = self.col_off.min(cur);
             while self.col_off < cur && dw[self.col_off..=cur].iter().map(|w| w + 1).sum::<u16>() > room {
                 self.col_off += 1;
             }
         }
         let (mut cols, mut shown_w, mut used, mut full) = (vec![], vec![], 0u16, 0usize);
-        for p in (0..pinned).chain(self.col_off..n) {
+        for p in (0..pins).chain(self.col_off..n) {
             let (c, w) = (self.view.view[p], dw[p]);
             if used + w + 1 > avail && !cols.is_empty() {
                 let rest = avail.saturating_sub(used + 1);
@@ -798,7 +806,7 @@ impl Grid {
             shown_w.push(w);
             full += 1;
         }
-        (cols, shown_w, full)
+        (cols, shown_w, full, pins)
     }
 
     /// `aligns` = App::align (settings.json "gridAlign", shared with the GUI)
@@ -834,7 +842,7 @@ impl Grid {
             self.row_off = self.row + 1 - body_h;
         }
         let num_w = (self.rows().max(1).to_string().len() + 1) as u16;
-        let (cols, shown_w, full) = self.place_cols(inner.width.saturating_sub(num_w + 1));
+        let (cols, shown_w, full, pins) = self.place_cols(inner.width.saturating_sub(num_w + 1));
         // Record positions for click hit-testing
         self.body = Rect { x: inner.x, y: inner.y + 1, width: inner.width, height: inner.height - 1 };
         self.header = Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 };
@@ -948,7 +956,7 @@ impl Grid {
         // Underline runs to the end of the last column (including a cut one)
         let last = self.col_x.last().map(|c| c.2).max(seps.last().map(|x| x + 1)).unwrap_or(inner.x);
         // The line after the pinned columns is double: what stays when scrolling (shows in NO_COLOR too; not the focused border's ┃)
-        let pin_edge = self.view.pinned.checked_sub(1).filter(|&p| p < full).map(|p| self.col_x[p].2);
+        let pin_edge = pins.checked_sub(1).filter(|&p| p < full).map(|p| self.col_x[p].2);
         let rows_end = (inner.y + 1 + shown_rows).min(inner.bottom());
         for y in inner.y..rows_end {
             for x in inner.x..inner.right().min(last) {
@@ -964,8 +972,8 @@ impl Grid {
         // In display positions over the shown columns (hidden ones not counted); the pinned ones count as shown from 1 until scrolled
         self.hbar = Rect::default();
         let (n, pinned) = (self.visible_cols(), self.view.pinned);
-        let scrolled = full.saturating_sub(pinned).max(1);
-        let first = if self.col_off == pinned { 1 } else { self.col_off + 1 };
+        let scrolled = full.saturating_sub(pins).max(1);
+        let first = if self.col_off == pinned && pins == pinned { 1 } else { self.col_off + 1 };
         let last = (self.col_off + scrolled).min(n);
         self.shown = Some((first, last, n));
         if let Some(text) = qurry_shared::format::shown_cols(first, last, n) {
