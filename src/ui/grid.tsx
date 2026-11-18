@@ -9,12 +9,18 @@ import "./grid.css";
 
 type Mouse = (e: MouseEvent) => void;
 
+/** A pinned column's cell: it stays `left` px from the row's left edge while the grid scrolls sideways; `edge` on the last pinned
+ *  column draws the line the scrolled columns pass under */
+export type Pin = { left: number; edge?: boolean };
+const pinClass = (pin?: Pin) => pin && cx("pinned", pin.edge && "pin-edge");
+
 /**
  * Header strip above the grid's scroller (body). It sits outside the scroller, so vertical scrolling can't move it (a sticky
  * header inside the scroller could lag WKWebView's async scrolling and show rows above it); it only follows the body's
  * scrollLeft. Wheel over it scrolls the body; a click keeps the focus on the body, so keyboard navigation keeps working.
  * corner: the row-number column's header, beside the scrolled strip, not in it: a sticky cell in a box scrolled by script
- * didn't stay put in the app's WKWebView, so the column headers sat one row-number width left of their columns
+ * didn't stay put in the app's WKWebView, so the column headers sat one row-number width left of their columns. For the same reason
+ * pinned header cells aren't sticky: they move back by the scrolled distance (--grid-x, set with scrollLeft)
  */
 export function GridHead({ body, corner, children }: { body: RefObject<HTMLElement | null>; corner?: ReactNode; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -23,7 +29,9 @@ export function GridHead({ body, corner, children }: { body: RefObject<HTMLEleme
     const el = body.current;
     if (!el) return;
     const sync = () => {
-      if (ref.current) ref.current.scrollLeft = el.scrollLeft;
+      if (!ref.current) return;
+      ref.current.scrollLeft = el.scrollLeft;
+      ref.current.style.setProperty("--grid-x", `${ref.current.scrollLeft}px`);
     };
     sync();
     el.addEventListener("scroll", sync, { passive: true });
@@ -56,7 +64,8 @@ export const GridHeaderRow = ({ width, height, children }: { width: number; heig
 /**
  * Header cell: 🔑 name type ……… sort button (↑ ↓ · order number if several).
  * sort = current sort (if none, ⇅ only on hover). With onResize the right edge is a resize handle: drag it to resize,
- * double-click it to fit (onFit). readOnly = why the column can't be edited in a grid whose other columns can (a join's)
+ * double-click it to fit (onFit). readOnly = why the column can't be edited in a grid whose other columns can (a join's).
+ * pin: a pinned column (its `left` isn't used: the header strip moves it, GridHead)
  */
 export function GridHeaderCell({
   name,
@@ -64,6 +73,7 @@ export function GridHeaderCell({
   pk,
   readOnly,
   width,
+  pin,
   colSelected,
   sort,
   onMouseDown,
@@ -77,6 +87,7 @@ export function GridHeaderCell({
   pk?: boolean;
   readOnly?: string;
   width: number;
+  pin?: Pin;
   colSelected?: boolean;
   sort?: { dir: "asc" | "desc"; order?: number };
   onMouseDown?: Mouse;
@@ -86,7 +97,7 @@ export function GridHeaderCell({
   onFit?: () => void;
 }) {
   return (
-    <div className={cx("cell head", sort && "sorted", colSelected && "col-sel", readOnly && "read-only")} style={{ width }} title={readOnly ? `${name} : ${type}\n${readOnly}` : `${name} : ${type}`} aria-description={readOnly} role="columnheader" onMouseDown={onMouseDown} onContextMenu={onContextMenu}>
+    <div className={cx("cell head", pinClass(pin), sort && "sorted", colSelected && "col-sel", readOnly && "read-only")} style={{ width }} title={readOnly ? `${name} : ${type}\n${readOnly}` : `${name} : ${type}`} aria-description={readOnly} role="columnheader" onMouseDown={onMouseDown} onContextMenu={onContextMenu}>
       {pk && <span className="pk-mark">🔑</span>}
       {readOnly && <span className="ro-mark" aria-hidden>🔒</span>}
       <span className="col-name">{name}</span>
@@ -138,6 +149,7 @@ export function GridCell({
   match,
   title,
   cut,
+  pin,
   onMouseDown,
   onMouseEnter,
   onDoubleClick,
@@ -158,6 +170,8 @@ export function GridCell({
   match?: boolean;
   /** The value is cut (Settings › Long values): its hover text. The cell ends with a dim … that stays in view however narrow */
   cut?: string;
+  /** A pinned column's cell (sticky at its left) */
+  pin?: Pin;
   onMouseDown?: Mouse;
   onMouseEnter?: () => void;
   onDoubleClick?: Mouse;
@@ -165,8 +179,8 @@ export function GridCell({
 }) {
   return (
     <div
-      className={cx("cell", kind, align && `al-${align}`, selected && "sel", active && "active", changed && "changed", match && "match", cut && "cut")}
-      style={{ width }}
+      className={cx("cell", pinClass(pin), kind, align && `al-${align}`, selected && "sel", active && "active", changed && "changed", match && "match", cut && "cut")}
+      style={{ width, left: pin?.left }}
       title={cut ?? title}
       role="gridcell"
       aria-selected={selected}
@@ -226,6 +240,7 @@ export function CellEditor({
   more,
   children,
   style,
+  pin,
 }: {
   width: number;
   value: string;
@@ -236,11 +251,13 @@ export function CellEditor({
   more?: { title: string; onClick: () => void };
   children?: ReactNode;
   style?: CSSProperties;
+  /** Editing a pinned column's cell: it stays where the cell is */
+  pin?: Pin;
 }) {
   return (
     <span
-      className="cell-edit"
-      style={{ width, ...style }}
+      className={cx("cell-edit", pinClass(pin))}
+      style={{ width, left: pin?.left, ...style }}
       onBlur={(e: FocusEvent<HTMLSpanElement>) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node)) onBlurOut();
       }}

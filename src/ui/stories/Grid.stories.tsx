@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { ReactNode, useRef } from "react";
-import { CellEditor, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, JsonText, RowNumberCell } from "..";
+import { ReactNode, useEffect, useRef, useState } from "react";
+import { CellEditor, CheckListPopover, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, JsonText, Menu, RowNumberCell } from "..";
 import type { Cell } from "../../lib/api";
 import { alignTable, CELL_KIND, cellClasses } from "../../lib/gridAlign";
 import { jsonCell } from "../../lib/jsonSpans";
@@ -290,3 +290,86 @@ export const CutValues: StoryObj = {
     </div>
   ),
 };
+
+/** Hidden and pinned columns (the column header's menu, Columns…; settings.json "columnLayout" for a table tab). `id` and `user_name`
+ *  are pinned: they stay at the left while the grid is scrolled right, and the line after `user_name` is where the others pass under.
+ *  `email` is hidden: gone from the header and the rows, unchecked in Columns…, where Show All brings every column back */
+const LAYOUT_COLS = [
+  ["id", "int8"], ["user_name", "varchar"], ["email", "varchar"], ["amount", "numeric"], ["status", "varchar"], ["paid_at", "timestamptz"],
+  ["city", "varchar"], ["memo", "text"], ["coupon", "varchar"], ["refunded", "bool"],
+] as const;
+const LW = 112;
+function HiddenPinned() {
+  const [hidden, setHidden] = useState<string[]>(["email"]);
+  const [pinned, setPinned] = useState<string[]>(["id", "user_name"]);
+  const names: string[] = LAYOUT_COLS.map(([n]) => n);
+  const view = [...pinned, ...names.filter((n) => !pinned.includes(n))].filter((n) => !hidden.includes(n));
+  const typeOf = (n: string) => LAYOUT_COLS[names.indexOf(n)][1];
+  const width = W[0] + view.length * LW;
+  const pin = (d: number) => (d < pinned.length ? { left: W[0] + d * LW, edge: d === pinned.length - 1 } : undefined);
+  const body = useRef<HTMLDivElement>(null);
+  // Scrolled right, as after a look at the far columns: the pinned ones are still at the left
+  useEffect(() => void body.current?.scrollTo({ left: 260 }), []);
+  const menuOn = "city";
+  return (
+    <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+      {/* transform: the menu and the popover (position: fixed) are placed in their own box, not the window */}
+      <div style={{ position: "relative", width: 600, height: 420, transform: "translateZ(0)" }}>
+        <div style={{ position: "relative", width: 600, height: 300, border: "1px solid var(--ui-border)" }}>
+          <div className="grid-wrap">
+            <GridHead body={body} corner={<GridHeaderRow width={W[0]} height={26}><RowNumberCell width={W[0]} title="Select all" /></GridHeaderRow>}>
+              <GridHeaderRow width={width - W[0]} height={26}>
+                {view.map((n, d) => (
+                  <GridHeaderCell key={n} name={n} type={typeOf(n)} pk={n === "id"} width={LW} pin={pin(d)} colSelected={n === menuOn} onSortClick={() => {}} />
+                ))}
+              </GridHeaderRow>
+            </GridHead>
+            <div className="grid-scroll" ref={body} tabIndex={0}>
+              <div style={{ width, height: ROW * 8, position: "relative" }}>
+                {Array.from({ length: 8 }, (_, r) => (
+                  <GridRow key={r} top={r * ROW} height={ROW} width={width} odd={r % 2 === 1}>
+                    <RowNumberCell width={W[0]}>{r + 1}</RowNumberCell>
+                    {view.map((n, d) => {
+                      const num = n === "id" || n === "amount";
+                      return (
+                        <GridCell key={n} width={LW} pin={pin(d)} kind={num ? "num" : undefined} align={num ? "right" : undefined} selected={n === menuOn} active={r === 2 && n === "user_name"}>
+                          {n === "id" ? r + 1 : n === "amount" ? `${(r + 1) * 1250}.00` : `${n}_${r + 1}`}
+                        </GridCell>
+                      );
+                    })}
+                  </GridRow>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+        <Menu
+          at={{ x: 330, y: 40 }}
+          onClose={() => {}}
+          items={[
+            { label: "Hide Column", action: () => setHidden((h) => [...h, menuOn]) },
+            { label: "Pin Column", action: () => setPinned((p) => [...p, menuOn]) },
+            { label: "Columns…", action: () => {} },
+            { separator: true },
+            { label: "Fit Column", shortcut: "double-click the edge", action: () => {} },
+            { label: "Fit All Columns", action: () => {} },
+            { label: "Reset Widths", shortcut: "computed widths", action: () => {}, disabled: true },
+            { separator: true },
+            { label: "Narrow Column", shortcut: "⌃⌥←", action: () => {} },
+            { label: "Widen Column", shortcut: "⌃⌥→", action: () => {} },
+          ]}
+        />
+      </div>
+      <div style={{ position: "relative", width: 360, height: 420, transform: "translateZ(0)" }}>
+        <CheckListPopover
+          title="Columns…"
+          items={LAYOUT_COLS.map(([n, t]) => ({ key: n, label: n, hint: t, mark: pinned.includes(n) ? "pinned" : undefined, checked: !hidden.includes(n) }))}
+          onToggle={(k, on) => setHidden((h) => (on ? h.filter((x) => x !== k) : [...h, k]))}
+          action={{ label: "Show All", onClick: () => setHidden([]), disabled: !hidden.length }}
+          onClose={() => {}}
+        />
+      </div>
+    </div>
+  );
+}
+export const HiddenAndPinned: StoryObj = { name: "Hidden and pinned columns", render: () => <HiddenPinned /> };

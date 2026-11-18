@@ -5,7 +5,7 @@
 import { Children, CSSProperties, FocusEvent, HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent, ReactNode, Ref, RefObject, TdHTMLAttributes, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, Checkbox, IconButton, Spacer, TextInput } from "./atoms";
 import { cx } from "./cx";
-import { DetailRow, EmptyState, ListItem, MenuItem, MenuLabel, MenuSeparator, SectionTitle } from "./molecules";
+import { DetailRow, EmptyState, ListItem, MenuItem, MenuLabel, MenuSeparator, SearchField, SectionTitle } from "./molecules";
 import { clampDrag, listKey, matchOptions, placePopup } from "./popup";
 
 // ───────── Toolbar ─────────
@@ -160,6 +160,73 @@ export function List({ children, empty, boxed, className, listRef, style }: { ch
 }
 /** Group heading inside a list (Actions · Files · Database) */
 export const ListGroup = SectionTitle;
+
+/** One row of a CheckListPopover: its label (what the search matches), a hint after it and a mark at the right */
+export type CheckItem = { key: string; label: string; hint?: string; mark?: string; checked: boolean };
+
+/**
+ * A popover over a backdrop with a search field and one checkbox per item (the result grid's Columns…). Typing filters by label;
+ * ↑↓ move, ↩ toggles the highlighted row, a click toggles a row, ⎋ or a click outside closes. `action`: a button in the footer
+ * (Show All). The list keeps its height while filtering, so the popover doesn't jump
+ */
+export function CheckListPopover({ title, items, onToggle, action, onClose }: {
+  title: string;
+  items: CheckItem[];
+  onToggle: (key: string, checked: boolean) => void;
+  action?: { label: string; onClick: () => void; disabled?: boolean };
+  onClose: () => void;
+}) {
+  const [q, setQ] = useState("");
+  const [active, setActive] = useState(0);
+  const shown = items.filter((it) => it.label.toLowerCase().includes(q.trim().toLowerCase()));
+  const at = Math.min(active, Math.max(shown.length - 1, 0));
+  const toggle = (it: CheckItem) => onToggle(it.key, !it.checked);
+  return (
+    <Overlay variant="clear" onClose={onClose} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), onClose())}>
+      <Popover
+        className="ui-checklist"
+        width={320}
+        title={title}
+        head={
+          <SearchField
+            className="popover-search"
+            autoFocus
+            value={q}
+            placeholder="Search"
+            aria-label={`Search ${title.replace(/…$/, "").toLowerCase()}`}
+            onChange={(e) => (setQ(e.target.value), setActive(0))}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              const k = listKey(e.key, at, shown.length);
+              if (k === null) return;
+              e.preventDefault();
+              if (k === "close") onClose();
+              else if (k === "pick") toggle(shown[at]);
+              else setActive(k);
+            }}
+          />
+        }
+        foot={action && <Button size="sm" onClick={action.onClick} disabled={action.disabled}>{action.label}</Button>}
+      >
+        <List empty="Nothing found">
+          {shown.map((it, i) => (
+            <ListItem
+              key={it.key}
+              selected={i === at}
+              leading={<Checkbox checked={it.checked} onChange={() => toggle(it)} title={it.label} />}
+              title={it.label}
+              hint={it.hint}
+              trailing={it.mark}
+              mono
+              onMouseEnter={() => setActive(i)}
+              onClick={(e) => !(e.target as HTMLElement).closest("label") && toggle(it)}
+            />
+          ))}
+        </List>
+      </Popover>
+    </Overlay>
+  );
+}
 
 /**
  * List popup under a field — the one drop-down list of the combo boxes (FontPicker, ComboBox). Fixed right under `anchor` and
