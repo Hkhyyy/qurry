@@ -308,6 +308,9 @@ const api = {
   /** A statement as the confirm dialogs show it: comments left out as the server reads them, whitespace collapsed */
   withoutComments: (sql: string, kind: DbKind): string => wasm.withoutComments(sql, kind),
   statementAt: (text: string, offset: number, kind: DbKind): string | undefined => wasm.statementAt(text, offset, kind),
+  /** Every `:name` user parameter in code (qurry_shared::params::find_params) */
+  findParams: (sql: string, kind: DbKind): { name: string; start: number; end: number }[] => wasm.findParams(sql, kind),
+  substituteParams: (sql: string, kind: DbKind, values: Record<string, string>): string => wasm.substituteParams(sql, kind, values),
   /** Reformat Code: the selection (selStart < selEnd) or the statement at the caret; text[start, end) becomes `text`, undefined when nothing changes */
   reformat: (text: string, selStart: number, selEnd: number, caret: number, kind: DbKind, keywordCase: KeywordCase): { start: number; end: number; text: string } | undefined =>
     wasm.reformat(text, selStart, selEnd, caret, kind, keywordCase),
