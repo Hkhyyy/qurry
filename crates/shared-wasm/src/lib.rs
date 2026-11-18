@@ -659,6 +659,12 @@ pub fn column_keys(names: JsValue) -> Result<JsValue, JsError> {
     to(&qurry_shared::format::column_keys(v.iter().map(String::as_str)))
 }
 
+/// The order a grid shows its columns in under a layout ({hidden, pinned} by column key): {view: display → result index, pinned, hidden}
+#[wasm_bindgen(js_name = columnView)]
+pub fn column_view(keys: JsValue, layout: JsValue) -> Result<JsValue, JsError> {
+    to(&qurry_shared::format::column_view(&from::<Vec<String>>(keys)?, &qurry_shared::format::column_layout(&from(layout)?)))
+}
+
 #[derive(Serialize)]
 struct Reformatted {
     start: usize,

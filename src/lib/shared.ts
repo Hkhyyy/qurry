@@ -4,7 +4,7 @@
 import { useSyncExternalStore } from "react";
 import init, * as wasm from "../wasm/pkg/qurry_shared_wasm";
 import wasmUrl from "../wasm/pkg/qurry_shared_wasm_bg.wasm?url";
-import type { Cell, CompletionTable, DbKind, JoinEdit, QueryResult, RedisReply, ResultEditTarget } from "./api";
+import type { Cell, ColumnLayout, CompletionTable, DbKind, JoinEdit, QueryResult, RedisReply, ResultEditTarget } from "./api";
 import type { ExecPlan, ExecSettings, Stmt } from "./execPlan";
 import type { Extractor } from "./extract";
 import type { Segment } from "./sqlSplit";
@@ -116,8 +116,17 @@ export interface GridStatus {
   stats?: SelectionStats;
   /** The current cell when it is the only one; column: its table column's declared type, when known */
   cell?: { typeName: string; value: Cell; column?: { dataType: string; charset?: string | null } };
-  /** Shown columns: first, last, total (1-based) */
+  /** Shown columns: first, last, total (1-based) of the columns not hidden */
   shown?: [number, number, number];
+  /** How many columns the layout hides (ColumnView.hidden); absent: none */
+  hidden?: number;
+}
+/** The order a grid shows its columns in (qurry_shared::format::ColumnView): display position → result column index, the first
+ *  `pinned` of them pinned, `hidden` of the result's columns left out */
+export interface ColumnView {
+  view: number[];
+  pinned: number;
+  hidden: number;
 }
 /** One part of the status bar: a muted label and its value */
 export interface StatusSegment {
@@ -337,6 +346,8 @@ const api = {
   textWidth: (values: string[]): number => wasm.textWidth(values),
   /** The keys a result's columns keep their set widths under: the name, `id#2` for a repeated one (qurry_shared::format::column_keys) */
   columnKeys: (names: string[]): string[] => wasm.columnKeys(names),
+  /** The order a result with column `keys` shows under a layout (qurry_shared::format::column_view) */
+  columnView: (keys: string[], layout: ColumnLayout): ColumnView => wasm.columnView(keys, layout),
   valueClass: (typeName: string, value: Cell): ValueClass => wasm.valueClass(typeName, value),
   /** The Value Editor panel's text for a cell: JSON (json / jsonb, or a JSON object or array) pretty-printed (qurry_shared::value) */
   panelText: (typeName: string, value: string): { json: boolean; text: string } => wasm.panelText(typeName, value),
