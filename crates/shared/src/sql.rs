@@ -34,6 +34,16 @@ pub fn quote_ident(kind: DbKind, s: &str) -> String {
     }
 }
 
+/// A PostgreSQL console's schema (the console's schema picker, and a console opened from a schema): `public` stays on the path
+pub fn search_path_sql(schema: &str) -> String {
+    format!("SET search_path TO {}, public", quote_ident(DbKind::Postgres, schema))
+}
+
+/// A MySQL console's schema, which is a database there
+pub fn use_sql(schema: &str) -> String {
+    format!("USE {}", quote_ident(DbKind::Mysql, schema))
+}
+
 /// Whether it is a pgvector column (vector(3) · halfvec · sparsevec)
 pub fn is_vector_type(t: &str) -> bool {
     let t = t.trim().to_lowercase();
@@ -634,6 +644,15 @@ fn trimmed(text: &str, s: usize, e: usize) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_switch_statements_quote_the_name() {
+        assert_eq!(search_path_sql("billing"), "SET search_path TO billing, public");
+        assert_eq!(search_path_sql("Billing"), "SET search_path TO \"Billing\", public");
+        assert_eq!(search_path_sql("a\"b"), "SET search_path TO \"a\"\"b\", public");
+        assert_eq!(use_sql("shop"), "USE shop");
+        assert_eq!(use_sql("my`db"), "USE `my``db`");
+    }
 
     #[test]
     fn subqueries_around_the_caret() {

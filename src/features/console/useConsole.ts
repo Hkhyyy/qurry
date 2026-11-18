@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { analyzePlan, api, auditLog, ConnectionView, defaultDbOf, dialectOf, DbKind, meta, previewImpact, QueryResult, searchPathSql, targetId } from "../../lib/api";
+import { analyzePlan, api, auditLog, ConnectionView, defaultDbOf, dialectOf, DbKind, meta, previewImpact, QueryResult, searchPathSql, targetId, useSql } from "../../lib/api";
 import { ask, notice } from "../../lib/dialogs";
 import { pushHistory } from "../../components/HistoryDialog";
 import type { OutputLine } from "../../components/ConsolePane";
@@ -92,7 +92,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
       const c = conns.find((x) => x.id === tab.connId);
       if (c?.kind === "mysql") {
         // In MySQL, schema = database
-        await api.runQuery(tab.target, `USE ${dialectOf("mysql").q(schema)}`, tab.id);
+        await api.runQuery(tab.target, useSql(schema), tab.id);
         patch(tab.id, { schema });
         setStatus(`USE ${schema}`);
         return;
