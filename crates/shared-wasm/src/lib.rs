@@ -350,6 +350,30 @@ pub fn sql_literal(kind: JsValue, value: Option<String>) -> Result<String, JsErr
     Ok(qurry_shared::sql::literal(parse_kind(kind)?, value.as_deref()))
 }
 
+/// A `:name` user parameter (qurry_shared::params::Param), UTF-16 range from the `:` to the end of the name
+#[derive(Serialize)]
+struct JsParam {
+    name: String,
+    start: usize,
+    end: usize,
+}
+
+/// Every `:name` in the console's code, in text order (qurry_shared::params::find_params)
+#[wasm_bindgen(js_name = findParams)]
+pub fn find_params(sql: &str, kind: JsValue) -> Result<JsValue, JsError> {
+    let v = qurry_shared::params::find_params(sql, parse_kind(kind)?);
+    let r = utf16_ranges(sql, &v.iter().map(|p| (p.start, p.end)).collect::<Vec<_>>());
+    let out: Vec<JsParam> = v.into_iter().zip(r).map(|(p, [start, end])| JsParam { name: p.name, start, end }).collect();
+    Ok(serde_wasm_bindgen::to_value(&out)?)
+}
+
+/// `sql` with each `:name` replaced by its value as typed; `values` a { name: value } object (qurry_shared::params::substitute)
+#[wasm_bindgen(js_name = substituteParams)]
+pub fn substitute_params(sql: &str, kind: JsValue, values: JsValue) -> Result<String, JsError> {
+    let values: BTreeMap<String, String> = serde_wasm_bindgen::from_value(values)?;
+    Ok(qurry_shared::params::substitute(sql, parse_kind(kind)?, &values))
+}
+
 /// Statement at the caret (a UTF-16 offset, as in a JS string), trimmed; undefined if the text has none
 #[wasm_bindgen(js_name = statementAt)]
 pub fn statement_at(text: &str, offset: usize, kind: JsValue) -> Result<Option<String>, JsError> {
@@ -992,6 +1016,15 @@ mod tests {
         let offs = [0, 9, 11, 12, 13, 15, caret, 10_000, 3];
         let pairs: Vec<(usize, usize)> = offs.windows(2).map(|w| (w[0], w[1])).collect();
         assert_eq!(byte_ranges(t, &pairs), pairs.iter().map(|&(a, b)| (byte_offset(t, a), byte_offset(t, b))).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn param_ranges_cross_as_utf16() {
+        let t = "select '😀', :이름";
+        let v = qurry_shared::params::find_params(t, DbKind::Postgres);
+        let r = utf16_ranges(t, &v.iter().map(|p| (p.start, p.end)).collect::<Vec<_>>());
+        let units: Vec<u16> = t.encode_utf16().collect();
+        assert_eq!(String::from_utf16(&units[r[0][0]..r[0][1]]).unwrap(), ":이름");
     }
 
     fn index() -> complete::Meta {

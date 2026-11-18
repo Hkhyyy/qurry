@@ -19,6 +19,7 @@ pub mod keytree;
 pub mod kind;
 pub mod labels;
 pub mod pairs;
+pub mod params;
 pub mod production;
 pub mod redis_cmd;
 pub mod scope;
