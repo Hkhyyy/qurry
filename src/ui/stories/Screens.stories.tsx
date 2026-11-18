@@ -1458,7 +1458,7 @@ export const SmallImport = small("Import Data", Import);
 export const SmallUpdate = small("Update, many versions", {
   render: () => (
     <UpdateDialog
-      info={{ current: "0.2.5", latest: { version: "0.3.5", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.3.5", notes: "", assets: [] }, changes: Array.from({ length: 10 }, (_, i) => ({ version: `0.3.${5 - (i % 6)}`, changes: ["[feat] Data tools, result chart and Production safety", "[fix] The explorer scrolls sideways", "[fix] A long Test Connection error stays inside the dialog"] })) } as never}
+      info={{ current: "0.2.5", latest: { version: "0.3.9", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.3.9", notes: "", assets: [] }, changes: Array.from({ length: 10 }, (_, i) => ({ version: `0.3.${9 - i}`, changes: ["[feat] Data tools, result chart and Production safety", "[fix] The explorer scrolls sideways", "[fix] A long Test Connection error stays inside the dialog"] })) } as never}
       onClose={noop}
     />
   ),
