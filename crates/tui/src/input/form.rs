@@ -211,6 +211,44 @@ mod tests {
         }
     }
 
+    /// Password command (#177): its two rows come right after Password; a command turns Password off (dim, ↓ skips it), a reuse
+    /// that isn't a number is the form's message, and Enter saves both into connections.json
+    #[tokio::test]
+    async fn conn_form_password_command() {
+        let mut h = Harness::new().await;
+        admin_form(&mut h, serde_json::json!({}));
+        let labels: Vec<&str> = form(&mut h).fields.iter().map(|f| f.label).collect();
+        let at = labels.iter().position(|l| *l == "Password").unwrap();
+        assert_eq!(labels[at + 1..at + 3], ["Password command", "Password reuse"]);
+        assert!(stops(&mut h).contains(&"Password") && form(&mut h).disabled("Password").is_none());
+        while sel_label(&mut h) != "Password command" {
+            h.key("Down");
+        }
+        h.type_str("/bin/echo tok");
+        assert_eq!(form(&mut h).disabled("Password"), Some(false));
+        assert!(!stops(&mut h).contains(&"Password"));
+        let buf = h.buffer(120, 40);
+        let line = |y: u16| (0..120).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
+        let y = (0..40).find(|&y| line(y).contains("Password") && !line(y).contains("Password command") && !line(y).contains("Password reuse")).unwrap();
+        let x = (0..120).find(|&x| buf[(x, y)].symbol() == "P").unwrap();
+        assert!(buf[(x, y)].modifier.contains(ratatui::style::Modifier::DIM), "Password is dim: {}", line(y));
+        while sel_label(&mut h) != "Password reuse" {
+            h.key("Down");
+        }
+        h.type_str("10m");
+        h.key("Enter");
+        let msg = form(&mut h).message.clone().unwrap().1;
+        assert!(msg.contains("Password reuse must be a number of seconds"), "{msg}");
+        h.key("Backspace");
+        h.key("Enter");
+        h.settle().await;
+        assert!(h.app.popup.is_none(), "saved");
+        let file = std::fs::read_to_string(h.app.state.store.dir().join("connections.json")).unwrap();
+        let saved: Vec<serde_json::Value> = serde_json::from_str(&file).unwrap();
+        let src = saved.iter().find(|c| c["id"] == "p1").unwrap();
+        assert_eq!((src["passwordCommand"].as_str(), src["passwordReuseSecs"].as_u64()), (Some("/bin/echo tok"), Some(10)), "{file}");
+    }
+
     /// Turning Production on in the form enables the row; turning MCP Off disables it again
     #[tokio::test]
     async fn conn_form_admin_reports_follows_production_and_mcp() {

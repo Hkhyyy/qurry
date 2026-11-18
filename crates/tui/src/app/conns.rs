@@ -188,6 +188,9 @@ impl App {
                 f("Port", c.port.to_string(), FieldKind::Text),
                 f("User", c.user.clone(), FieldKind::Text),
                 f("Password", saved(c.password_saved), FieldKind::Secret),
+                // A program whose output is the password at each login (#177); Password is off while it is set (ConnForm::disabled)
+                f("Password command", c.password_command.clone(), FieldKind::Text),
+                f("Password reuse", c.password_reuse_secs.map(|s| s.to_string()).unwrap_or_default(), FieldKind::Text),
                 f("Database", c.database.clone(), FieldKind::Text),
                 f("Read-only", if c.read_only { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("Production", if c.options.confirm_changes { "on" } else { "off" }.into(), FieldKind::Toggle),
@@ -251,6 +254,11 @@ impl App {
         c.port = v("Port").trim().parse().map_err(|_| "Port must be a number".to_string())?;
         c.user = v("User").trim().into();
         c.database = v("Database").trim().into();
+        c.password_command = v("Password command").trim().into();
+        c.password_reuse_secs = match v("Password reuse").trim() {
+            "" => None,
+            s => Some(s.parse().map_err(|_| "Password reuse must be a number of seconds (empty: run the command at every login)".to_string())?),
+        };
         c.name = if v("Name").trim().is_empty() { format!("{}@{}", c.user, c.host) } else { v("Name").trim().into() };
         c.read_only = v("Read-only") == "on";
         c.options.confirm_changes = v("Production") == "on";
@@ -281,7 +289,9 @@ impl App {
         c.ssl = Some(SslConfig { enabled: v("SSL") == "on", mode: v("SSL mode"), ca_file: v("CA file").trim().into(), cert_file: v("Client cert").trim().into(), key_file: v("Client key").trim().into() });
         c.redis = if c.kind == DbKind::Redis { Some(RedisMode { mode: v("Redis mode"), sentinel_master: v("Sentinel master").trim().into(), nodes: v("Redis nodes").trim().into() }) } else { None };
         let secret = |s: String| if s == "<saved>" { None } else { Some(s) };
-        Ok((c, secret(v("Password")), secret(v("SSH secret"))))
+        // With a password command the Password field is off: the saved password stays as it is
+        let password = if c.password_command.is_empty() { secret(v("Password")) } else { None };
+        Ok((c, password, secret(v("SSH secret"))))
     }
 
     /// Master key for the password file: config folder ↔ OS keychain (asks, then moves. Runs separately since a keychain popup may appear)
