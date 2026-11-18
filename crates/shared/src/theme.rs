@@ -250,6 +250,9 @@ mod tests {
         for t in &table().themes {
             let w = warnings(&t.colors);
             assert!(w.is_empty(), "{} ({}): {w:?}", t.name, t.id);
+            // Comments stay dimmer than code (#162)
+            let c = &t.colors;
+            assert!(contrast(&c["text"], &c["bg"]) > contrast(&c["comment"], &c["bg"]), "{}: comment as bright as text", t.id);
         }
     }
 
@@ -260,7 +263,7 @@ mod tests {
         colors.insert("onAccent".into(), "#3574f0".into());
         let w = warnings(&colors);
         assert_eq!(w.iter().map(|w| w.token.as_str()).collect::<Vec<_>>(), ["onAccent", "comment"]);
-        assert!(w[1].ratio < 3.0 && w[1].min == 3.0 && w[1].fg == "comment" && w[1].bg == "panel2", "{w:?}");
+        assert!(w[1].ratio < 4.5 && w[1].min == 4.5 && w[1].fg == "comment" && w[1].bg == "panel2", "{w:?}");
         // Checked on every surface a color is drawn on, not only the editor's background: Dracula's published comment blue as dim
         // text is fine on the background but not on odd rows or the selection (the warning names the worst)
         let mut colors = builtin("dracula").unwrap().colors.clone();
