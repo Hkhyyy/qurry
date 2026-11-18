@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn system_databases_per_kind() {
-        let lists: Vec<(DbKind, &[&str])> = ALL.iter().map(|&k| (k, system_databases(k))).collect();
+        let lists: Vec<(DbKind, &[&str])> = DbKind::ALL.iter().map(|&k| (k, system_databases(k))).collect();
         let none: &[&str] = &[];
         assert_eq!(
             lists,

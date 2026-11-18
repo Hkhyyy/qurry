@@ -271,21 +271,18 @@ async fn production_confirm_lists_commented_statements_by_their_sql() {
 #[tokio::test]
 #[ignore]
 async fn production_confirm_counts_on_a_real_server() {
-    let e = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG");
-    // The core's testenv format (it is test-only there): the password is the rest of the line
-    let p: Vec<&str> = e.splitn(5, ':').collect();
+    let Some(pg) = qurry_core::testenv::pg() else { return };
     let mut h = Harness::new().await;
-    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
-        "id": "p", "name": "PROD", "kind": "postgres", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[3]
-    }))
-    .unwrap();
+    let mut cfg = pg.cfg;
+    (cfg.id, cfg.name) = ("p".into(), "PROD".into());
     cfg.options.confirm_changes = true;
-    h.app.state.save_connection(cfg, p.get(4).map(|s| s.to_string()), None).await.unwrap();
+    let database = cfg.database.clone();
+    h.app.state.save_connection(cfg, pg.password, None).await.unwrap();
     h.app.reload_conns();
     h.settle().await;
     h.app.exec.inside = qurry_core::exec::Inside::Whole;
     let sql = "select 'delete' as action;\nupdate pg_am set amname = amname where amname = 'heap';\ndelete from pg_am where false;\ncreate table qurry_never (a int);\ninsert into qurry_never values (1);\ndelete from qurry_missing where id = 1;";
-    let id = h.app.restore_console("p", p[3].into(), "console".into(), sql).unwrap();
+    let id = h.app.restore_console("p", database, "console".into(), sql).unwrap();
     let i = h.app.tab_index(id).unwrap();
     h.app.activate(i);
     h.key("F5");
