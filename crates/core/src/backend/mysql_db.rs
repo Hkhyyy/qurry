@@ -15,8 +15,6 @@ use sqlx::pool::PoolConnection;
 use sqlx::{Column, Either, Executor, MySql, Row, TypeInfo, ValueRef};
 use std::time::Instant;
 
-pub const SYSTEM_DBS: [&str; 4] = ["information_schema", "performance_schema", "mysql", "sys"];
-
 pub fn ident(s: &str) -> String {
     format!("`{}`", s.replace('`', "``"))
 }
@@ -643,7 +641,7 @@ pub async fn list_databases(p: &MySqlPool) -> AppResult<Vec<String>> {
 
 pub async fn list_schemas(p: &MySqlPool) -> AppResult<Vec<SchemaInfo>> {
     let db: Option<String> = sqlx::query_scalar("select cast(database() as char)").fetch_one(p).await?;
-    Ok(db.map(|name| SchemaInfo { is_system: SYSTEM_DBS.contains(&name.as_str()), name }).into_iter().collect())
+    Ok(db.map(|name| SchemaInfo { is_system: qurry_shared::kind::system_databases(crate::store::DbKind::Mysql).contains(&name.as_str()), name }).into_iter().collect())
 }
 
 pub async fn list_objects(p: &MySqlPool, schema: &str) -> AppResult<SchemaObjects> {

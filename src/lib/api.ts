@@ -734,9 +734,11 @@ export function dbVisible(scope: Scope | undefined, db: string, defaultDb: strin
 export const defaultDbOf = (c: Pick<ConnectionView, "database" | "kind">) =>
   sharedOr(c.database || (c.kind === "postgres" ? "postgres" : ""), (s) => s.defaultDb(c.kind, c.database ?? ""));
 
-const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
+/** A database the server keeps for itself (qurry_shared::kind::system_databases). Before the module has loaded, or if it failed,
+ *  none is: the tree and pickers call this while they draw, which must not throw */
+export const systemDatabases = (kind: DbKind): string[] => sharedOr([], (s) => s.systemDatabases(kind));
 /** A system database the explorer hides unless asked (MySQL's system schemas) */
-export const isSystemDb = (kind: DbKind, d: string) => kind === "mysql" && MY_SYS.includes(d);
+export const isSystemDb = (kind: DbKind, d: string) => kind === "mysql" && systemDatabases(kind).includes(d);
 /** A database the explorer lists: one fixed database, or the shown-database scope (MySQL system schemas only with showSystem) */
 export const dbShown = (c: ConnectionView, d: string, defaultDb: string, showSystem = false) =>
   c.options?.singleDb ? d === defaultDb : (showSystem || !isSystemDb(c.kind, d) || d === defaultDb) && dbVisible(c.scope, d, defaultDb);

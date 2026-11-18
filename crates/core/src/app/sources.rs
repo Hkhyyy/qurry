@@ -93,15 +93,7 @@ pub struct ConnectionView {
 
 /// DBs shown in the tree (scope from the Data Source › Schemas tab, system DBs hidden). Shared by GUI, TUI and the search cache
 pub fn visible_dbs(cfg: &ConnectionConfig, dbs: Vec<String>, def: &str) -> Vec<String> {
-    let hidden: &[&str] = match cfg.kind {
-        store::DbKind::Postgres => &["template0", "template1", "rdsadmin"],
-        store::DbKind::Mysql => &crate::mysql::SYSTEM_DBS,
-        store::DbKind::Redis => &[],
-        store::DbKind::Mssql => &["master", "tempdb", "model", "msdb"],
-        store::DbKind::Mongodb => &["admin", "config", "local"],
-        store::DbKind::Clickhouse => &["system", "information_schema", "INFORMATION_SCHEMA"],
-        _ => &[],
-    };
+    let hidden = qurry_shared::kind::system_databases(cfg.kind);
     let scoped = cfg.scope.databases.as_ref().map(|d| !d.is_empty()).unwrap_or(false);
     dbs.into_iter()
         .filter(|d| scoped || d == def || !hidden.contains(&d.as_str()))

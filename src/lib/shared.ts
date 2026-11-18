@@ -281,6 +281,8 @@ const api = {
   defaultDb: (kind: DbKind, database: string): string => wasm.defaultDb(kind, database),
   /** A new data source's port for the kind, 0 for file DBs (qurry_shared::kind::DbKind::default_port) */
   defaultPort: (kind: DbKind): number => wasm.defaultPort(kind),
+  /** Databases the server keeps for itself (qurry_shared::kind::system_databases) */
+  systemDatabases: (kind: DbKind): string[] => wasm.systemDatabases(kind),
   isRead: (sql: string, kind: DbKind): boolean => wasm.isRead(sql, kind),
   isDdl: (sql: string, kind: DbKind): boolean => wasm.isDdl(sql, kind),
   explainAnalyzeAsk: (sql: string, kind: DbKind): string | undefined => wasm.explainAnalyzeAsk(sql, kind),
