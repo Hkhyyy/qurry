@@ -276,9 +276,12 @@ pub fn hide(cfg: &crate::store::ConnectionConfig) {
     if let Some(s) = &cfg.ssh {
         hide_word(&s.host, "<ssh host>");
         hide_word(&s.user, "<ssh user>");
-        // The key's file name: error text and paths in other words quote it (`/Users/x/.ssh/id_work: no such file`)
-        if let Some(f) = Path::new(&s.key_path).file_name() {
-            hide_word(&f.to_string_lossy(), "<ssh key>");
+        // The key's file name: error text and paths in other words quote it (`/Users/x/.ssh/id_work: no such file`). Only a name
+        // that looks like a key's (id_…, ….pem, ….key, ….ppk): a key called github or prod would hide that word in every line
+        if let Some(f) = Path::new(&s.key_path).file_name().map(|f| f.to_string_lossy().to_ascii_lowercase())
+            && (f.starts_with("id_") || [".pem", ".key", ".ppk"].iter().any(|e| f.ends_with(e)))
+        {
+            hide_word(&f, "<ssh key>");
         }
     }
     if let Some(s) = &cfg.ssm {
@@ -716,6 +719,18 @@ mod tests {
             assert!(text.lines().any(|l| l.contains(&format!("] {what} {id}"))), "{what} {id} in\n{text}");
         }
         assert!(text.lines().any(|l| l.contains(&format!("] SSH tunnel of {} failed after ", tunneled.id))), "{text}");
+    }
+
+    /// An SSH key's file name is hidden only when it looks like a key's: a key called github leaves github.com readable
+    #[test]
+    fn hides_key_like_file_names_only() {
+        for key in ["~/.ssh/id_work", "~/keys/Acme-Ops.pem", "~/.ssh/github"] {
+            let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "k", "name": "", "kind": "postgres", "host": "",
+                "port": 5432, "user": "", "ssh": { "enabled": true, "host": "", "user": "", "auth": "key", "keyPath": key } }))
+            .unwrap();
+            hide(&cfg);
+        }
+        assert_eq!(redact("no such file /x/.ssh/id_work, /x/keys/acme-ops.pem; checked github.com"), "no such file /x/.ssh/<ssh key>, /x/keys/<ssh key>; checked github.com");
     }
 
     fn lines(dir: &Path, name: &str) -> Vec<String> {
