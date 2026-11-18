@@ -329,7 +329,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let Some(Popup::Find(bar)) = &mut app.popup else { return };
     f.render_widget(Clear, rect);
     let accent = crate::kit::ACCENT;
-    let block = Block::default().borders(Borders::ALL).border_type(BorderType::Thick).border_style(Style::default().fg(accent)).title(" Find / Replace · Tab switch · Esc close ");
+    let block = Block::default().borders(Borders::ALL).border_type(BorderType::Thick).border_style(Style::default().fg(accent)).title(crate::kit::fit_hints("Find / Replace · Tab switch · Esc close", rect.width.saturating_sub(2)));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let [l0, l1] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
@@ -343,7 +343,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
     let toggles = Line::from(vec![Span::styled(".*", on(o.regex)), Span::raw(" "), Span::styled("Cc", on(o.case)), Span::raw(" "), Span::styled("W", on(o.word)), Span::raw(" ")]);
     for (line, ta, focused, label) in [(l0, &mut bar.find, !bar.on_replace, "Find "), (l1, &mut bar.replace, bar.on_replace, "Repl ")] {
-        let [lab, field, right] = Layout::horizontal([Constraint::Length(5), Constraint::Min(8), Constraint::Length(28)]).areas(line);
+        let [lab, field, right] = Layout::horizontal([Constraint::Length(5), Constraint::Min(8), Constraint::Length(28.min(line.width.saturating_sub(13)))]).areas(line);
         f.render_widget(Paragraph::new(label).style(Style::default().fg(if focused { Color::White } else { Color::DarkGray })), lab);
         ta.set_cursor_style(if focused { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() });
         f.render_widget(&*ta, field);

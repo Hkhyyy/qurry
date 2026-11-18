@@ -504,7 +504,9 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     }
     let hint = key_hints(&[("a", "column"), ("i", "index"), ("f", "FK"), ("↩", "edit"), ("d", "remove"), ("p", "PK"), ("n", "name"), ("c", "comment"), ("F5", if d.before.is_some() { "apply" } else { "create" }), ("o", "console"), ("Esc", "close")]);
     let h = inner.height.saturating_sub(1);
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), Rect { height: h, ..inner });
+    // In a short window the selected row (the one marked ▸) stays in view
+    let at = lines.iter().position(|l| l.to_string().starts_with("▸ ")).unwrap_or(0) as u16;
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((at.saturating_sub(h.saturating_sub(1)), 0)), Rect { height: h, ..inner });
     f.render_widget(Paragraph::new(hint), Rect { y: inner.y + h, height: 1, ..inner });
 }
 
