@@ -305,9 +305,10 @@ impl App {
         let Some(row) = g.result.rows.get(g.row) else { return };
         let pk: Vec<(String, Option<String>)> = tt.pk.iter().map(|k| (k.clone(), cols.iter().position(|c| &c.name == k).and_then(|i| row.get(i)).filter(|v| !v.is_null()).map(crate::grid::cell_text))).collect();
         let (st, conn, db, target, schema, table) = (self.state.clone(), conn.clone(), db.clone(), target.clone(), tt.schema.clone(), tt.table.clone());
+        let in_schema = schema.clone();
         self.spawn(async move { st.similar_rows_sql(target, schema, table, vc, pk).await.map_err(|e| e.to_string()) }, move |a, r| match r {
             Ok(sql) => {
-                a.open_console(&conn, Some(db), None);
+                a.open_console(&conn, Some(db), Some(in_schema));
                 if let Some(Tab { kind: TabKind::Console(c), .. }) = a.tabs.get_mut(a.active) {
                     c.editor.insert_str(sql);
                 }

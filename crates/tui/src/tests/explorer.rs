@@ -314,3 +314,33 @@ async fn a_failed_schema_switch_on_open_says_how_to_pick_one() {
     assert_eq!(c.schema, None);
     assert_eq!(h.app.status, "ERROR: permission denied — the console is in the default schema (⌃k › Switch Schema… picks one)");
 }
+
+/// The table designer's `o` opens its SQL in a console in the designed table's schema, as the GUI's object editor does
+#[tokio::test]
+async fn designer_console_opens_in_the_tables_schema() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<qurry_core::db::QueryResult, String> {
+        SEEN.lock().unwrap().push(q.into());
+        Ok(qurry_core::db::QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: false, in_transaction: false, warning: None, editable: None, notices: vec![], cut: vec![] })
+    }
+    let mut h = explorer().await;
+    h.app.fake_db = Some(record);
+    let mut billing = h.app.tree.children["pg|shop"][0].clone();
+    (billing.key, billing.label, billing.schema) = ("pg|shop|billing".into(), "billing".into(), Some("billing".into()));
+    h.app.tree.children.get_mut("pg|shop").unwrap().push(billing);
+    for k in ["pg", "pg|shop"] {
+        h.app.tree.expanded.insert(k.into());
+    }
+    assert!(h.app.tree.select_key("pg|shop|billing"));
+    h.app.new_table();
+    h.app.popup = None;
+    let d = h.app.designer.as_mut().expect("designer");
+    d.def.name = "invoice".into();
+    d.refresh();
+    h.key("o");
+    h.settle().await;
+    let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!("no console") };
+    assert!(c.editor.lines().join("\n").contains("billing.invoice"), "{:?}", c.editor.lines());
+    assert_eq!(c.schema.as_deref(), Some("billing"));
+    assert_eq!(*SEEN.lock().unwrap(), ["SET search_path TO billing, public"]);
+}
