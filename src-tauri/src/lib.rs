@@ -237,6 +237,8 @@ pub fn run() {
             commands::column_widths,
             commands::set_column_widths,
             commands::reset_column_widths,
+            commands::column_layout,
+            commands::set_column_layout,
             fonts::font_families,
             fonts::custom_fonts,
             fonts::add_font_file,

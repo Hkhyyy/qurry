@@ -1,6 +1,6 @@
 //! Display formatting shared by the result grids: fractional seconds aligned within a time column, digit grouping,
 //! the value class of a cell and its alignment (Settings › Appearance › Data grid › Alignment in grid; overrides kept in settings.json),
-//! the colors of a JSON cell, the widths a user gave columns (resize). And the SQL editors' formatting, the same in the GUI console
+//! the colors of a JSON cell, the widths a user gave columns (resize) and the columns they hid and pinned. And the SQL editors' formatting, the same in the GUI console
 //! (WASM) and the TUI editor: Reformat Code and the keyword case setting (as you type and in Reformat Code).
 
 use serde::{Deserialize, Serialize};
@@ -306,6 +306,59 @@ pub fn column_widths(v: &Value) -> ColumnWidths {
     m.iter().filter_map(|(k, w)| Some((k.clone(), column_width(w.as_i64()?, 0)))).collect()
 }
 
+/// The columns a user hid and pinned in a table tab's grid (GUI and TUI; settings.json "columnLayout"), by the keys widths are kept
+/// under (`column_keys`). Pinned columns come first, in the order they were pinned. The default hides and pins nothing
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColumnLayout {
+    #[serde(default)]
+    pub hidden: Vec<String>,
+    #[serde(default)]
+    pub pinned: Vec<String>,
+}
+
+impl ColumnLayout {
+    /// Hides and pins nothing (its settings.json entry goes)
+    pub fn is_empty(&self) -> bool {
+        self.hidden.is_empty() && self.pinned.is_empty()
+    }
+}
+
+/// Reads a saved layout (a settings.json "columnLayout" entry): a "hidden" or "pinned" that isn't a list is empty, entries that
+/// aren't text are skipped
+pub fn column_layout(v: &Value) -> ColumnLayout {
+    let keys = |k: &str| v.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|x| Some(x.as_str()?.to_string())).collect()).unwrap_or_default();
+    ColumnLayout { hidden: keys("hidden"), pinned: keys("pinned") }
+}
+
+/// The order a grid shows a result's columns in under a layout
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ColumnView {
+    /// Display position → the column's index in the result: the pinned ones in pinned order, then the rest in result order, hidden
+    /// ones left out
+    pub view: Vec<usize>,
+    /// How many of `view` are pinned (its first ones)
+    pub pinned: usize,
+    /// How many of the result's columns are hidden
+    pub hidden: usize,
+}
+
+/// `layout` over a result whose columns have `keys` (`column_keys`). A key the result doesn't have (a column renamed or dropped since)
+/// is ignored; a column both hidden and pinned is hidden; one pinned twice is pinned once
+pub fn column_view(keys: &[String], layout: &ColumnLayout) -> ColumnView {
+    let index = |k: &String| keys.iter().position(|x| x == k);
+    let hidden: std::collections::BTreeSet<usize> = layout.hidden.iter().filter_map(index).collect();
+    let mut view: Vec<usize> = vec![];
+    for i in layout.pinned.iter().filter_map(index) {
+        if !hidden.contains(&i) && !view.contains(&i) {
+            view.push(i);
+        }
+    }
+    let pinned = view.len();
+    let rest: Vec<usize> = (0..keys.len()).filter(|i| !hidden.contains(i) && !view.contains(i)).collect();
+    view.extend(rest);
+    ColumnView { view, pinned, hidden: hidden.len() }
+}
+
 /// Settings.json "keywordCase" (GUI Settings › Appearance › Console › Keyword case, TUI ⌃K › Keyword Case…): the letter case SQL keywords
 /// get as you type and in Reformat Code. Off leaves typing alone, and Reformat Code writes keywords in upper case as before 0.3.2
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -513,6 +566,59 @@ mod tests {
         let saved = serde_json::json!({ "memo": 53, "tiny": 1, "wide": 5000, "odd": "12", "half": 1.5 });
         assert_eq!(column_widths(&saved), ColumnWidths::from([("memo".into(), 53), ("tiny".into(), COLUMN_WIDTH_MIN), ("wide".into(), COLUMN_WIDTH_MAX)]));
         assert!(column_widths(&serde_json::json!([1])).is_empty());
+    }
+
+    fn keys(names: &[&str]) -> Vec<String> {
+        column_keys(names.iter().copied())
+    }
+
+    fn layout(hidden: &[&str], pinned: &[&str]) -> ColumnLayout {
+        ColumnLayout { hidden: hidden.iter().map(|s| s.to_string()).collect(), pinned: pinned.iter().map(|s| s.to_string()).collect() }
+    }
+
+    #[test]
+    fn column_view_default_is_the_result_order() {
+        assert_eq!(column_view(&keys(&["id", "name", "memo"]), &ColumnLayout::default()), ColumnView { view: vec![0, 1, 2], pinned: 0, hidden: 0 });
+        assert_eq!(column_view(&[], &layout(&["id"], &["id"])), ColumnView { view: vec![], pinned: 0, hidden: 0 });
+    }
+
+    #[test]
+    fn column_view_hides_a_middle_column() {
+        assert_eq!(column_view(&keys(&["id", "name", "memo"]), &layout(&["name"], &[])), ColumnView { view: vec![0, 2], pinned: 0, hidden: 1 });
+    }
+
+    #[test]
+    fn column_view_pins_in_pinned_order() {
+        let k = keys(&["id", "name", "memo", "total"]);
+        assert_eq!(column_view(&k, &layout(&[], &["total", "name"])), ColumnView { view: vec![3, 1, 0, 2], pinned: 2, hidden: 0 });
+        assert_eq!(column_view(&k, &layout(&[], &["name", "name"])), ColumnView { view: vec![1, 0, 2, 3], pinned: 1, hidden: 0 }, "pinned twice: once");
+    }
+
+    #[test]
+    fn column_view_ignores_unknown_names() {
+        let k = keys(&["id", "name"]);
+        assert_eq!(column_view(&k, &layout(&["renamed"], &["dropped", "name"])), ColumnView { view: vec![1, 0], pinned: 1, hidden: 0 });
+    }
+
+    #[test]
+    fn column_view_keys_repeated_names_by_occurrence() {
+        // A join's two id columns: id is the first, id#2 the second
+        let k = keys(&["id", "name", "id"]);
+        assert_eq!(column_view(&k, &layout(&["id"], &["id#2"])), ColumnView { view: vec![2, 1], pinned: 1, hidden: 1 });
+    }
+
+    #[test]
+    fn column_view_hidden_and_pinned_is_hidden() {
+        let k = keys(&["id", "name", "memo"]);
+        assert_eq!(column_view(&k, &layout(&["memo"], &["memo", "name"])), ColumnView { view: vec![1, 0], pinned: 1, hidden: 1 });
+    }
+
+    #[test]
+    fn column_layout_reads_text_lists_only() {
+        let saved = serde_json::json!({ "source": "pg", "hidden": ["memo", 3, "note"], "pinned": "id" });
+        assert_eq!(column_layout(&saved), layout(&["memo", "note"], &[]));
+        assert_eq!(column_layout(&serde_json::json!([1])), ColumnLayout::default());
+        assert!(ColumnLayout::default().is_empty() && !layout(&[], &["id"]).is_empty());
     }
 
     #[test]

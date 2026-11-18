@@ -169,6 +169,8 @@ const statusItems = (): string[] => JSON.parse(localStorage.getItem("mock-status
 const columnWidths = (): Record<string, Record<string, number>> => JSON.parse(localStorage.getItem("mock-columnWidths") ?? "{}");
 const widthsKey = (t: any) => JSON.stringify([t.source, t.database, t.schema, t.table]);
 const saveWidths = (all: Record<string, Record<string, number>>) => localStorage.setItem("mock-columnWidths", JSON.stringify(all));
+/** settings.json "columnLayout": table (as widthsKey) → its hidden and pinned columns (kept and read as columnWidths) */
+const columnLayouts = (): Record<string, { hidden: string[]; pinned: string[] }> => JSON.parse(localStorage.getItem("mock-columnLayout") ?? "{}");
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
 let updateChecked = false;
 /** A delayed load-more in flight (__mockFetchMoreDelay): cancel_query makes it fail as the server does */
@@ -953,6 +955,16 @@ const handlers: Record<string, (a: any) => unknown> = {
     const all = columnWidths();
     delete all[widthsKey(a.table)];
     saveWidths(all);
+  },
+  column_layout: (a: any) => columnLayouts()[widthsKey(a.table)] ?? { hidden: [], pinned: [] },
+  // As the core: replaces the table's layout, nothing hidden or pinned removes it. window.__mockChannelSaveFails: the file can't be written
+  set_column_layout: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    const all = columnLayouts();
+    const { hidden = [], pinned = [] } = a.layout;
+    if (hidden.length || pinned.length) all[widthsKey(a.table)] = { hidden, pinned };
+    else delete all[widthsKey(a.table)];
+    localStorage.setItem("mock-columnLayout", JSON.stringify(all));
   },
   // window.__mockChannelSaveFails: the settings file can't be written
   set_update_channel: (a: any) => {

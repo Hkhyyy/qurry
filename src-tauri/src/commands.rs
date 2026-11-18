@@ -955,6 +955,17 @@ pub fn reset_column_widths(state: State<'_, AppState>, table: qurry_core::store:
     state.store.reset_column_widths(&table)
 }
 
+/// A table tab's hidden and pinned columns (settings.json "columnLayout", shared with the TUI)
+#[tauri::command]
+pub fn column_layout(state: State<'_, AppState>, table: qurry_core::store::TableRef) -> qurry_core::format::ColumnLayout {
+    state.store.column_layout(&table)
+}
+
+#[tauri::command]
+pub fn set_column_layout(state: State<'_, AppState>, table: qurry_core::store::TableRef, layout: qurry_core::format::ColumnLayout) -> AppResult<()> {
+    state.store.set_column_layout(&table, &layout)
+}
+
 /// Help › Show Log and Find Action: reveals the log file in Finder, or opens its folder until the file exists
 #[tauri::command]
 pub fn show_log() -> AppResult<()> {

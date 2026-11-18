@@ -400,7 +400,7 @@ struct Access {
     allow_plaintext: bool,
 }
 
-/// The table a table tab shows, which its column widths are kept for (settings.json "columnWidths"): data source id, database
+/// The table a table tab shows, which its column widths and layout are kept for (settings.json "columnWidths", "columnLayout"): data source id, database
 /// (empty: the source's default, which the store names), schema, table
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TableRef {
@@ -411,7 +411,7 @@ pub struct TableRef {
 }
 
 impl TableRef {
-    /// A saved "columnWidths" entry is this table's
+    /// A saved "columnWidths" or "columnLayout" entry is this table's
     fn is(&self, e: &serde_json::Value) -> bool {
         let f = |k: &str| e.get(k).and_then(|v| v.as_str());
         f("source") == Some(&self.source) && f("database") == Some(&self.database) && f("schema") == Some(&self.schema) && f("table") == Some(&self.table)
@@ -899,12 +899,32 @@ impl Store {
         Ok(self.status_bar_items())
     }
 
-    /// The settings.json "columnWidths" entries: one per table that has set widths
-    fn column_width_entries(&self) -> Vec<serde_json::Value> {
-        match self.settings().remove("columnWidths") {
+    /// The entries of a per-table settings.json list ("columnWidths", "columnLayout"): one per table that has some
+    fn table_entries(&self, key: &str) -> Vec<serde_json::Value> {
+        match self.settings().remove(key) {
             Some(serde_json::Value::Array(v)) => v,
             _ => vec![],
         }
+    }
+
+    /// The entry of `t` in a per-table list, found as saved
+    fn table_entry(&self, key: &str, t: &TableRef) -> Option<serde_json::Value> {
+        let t = self.table_ref(t);
+        self.table_entries(key).into_iter().find(|e| t.is(e))
+    }
+
+    /// Replaces `t`'s entry in a per-table list with `fields` (an object) and the table's names, or removes it when None
+    fn save_table_entry(&self, key: &str, t: &TableRef, fields: Option<serde_json::Value>) -> AppResult<()> {
+        let t = self.table_ref(t);
+        let mut all = self.table_entries(key);
+        all.retain(|e| !t.is(e));
+        if let Some(serde_json::Value::Object(mut e)) = fields {
+            for (k, v) in [("source", &t.source), ("database", &t.database), ("schema", &t.schema), ("table", &t.table)] {
+                e.insert(k.into(), v.as_str().into());
+            }
+            all.push(e.into());
+        }
+        self.set_setting(key, all.into())
     }
 
     /// `t` with its database named: a tab on the source's default database may name none (the GUI's), or the default (the TUI's)
@@ -917,8 +937,7 @@ impl Store {
 
     /// The widths a user gave a table tab's columns (GUI and TUI), empty when none; the others keep their computed widths
     pub fn column_widths(&self, t: &TableRef) -> crate::format::ColumnWidths {
-        let t = self.table_ref(t);
-        self.column_width_entries().iter().find(|e| t.is(e)).and_then(|e| e.get("widths")).map(crate::format::column_widths).unwrap_or_default()
+        self.table_entry("columnWidths", t).and_then(|e| e.get("widths").map(crate::format::column_widths)).unwrap_or_default()
     }
 
     /// Set some of a table's column widths, on what the file holds now (the GUI and the TUI may both have changed it); returns what is saved.
@@ -942,13 +961,18 @@ impl Store {
     }
 
     fn save_column_widths(&self, t: &TableRef, widths: &crate::format::ColumnWidths) -> AppResult<()> {
-        let t = self.table_ref(t);
-        let mut all = self.column_width_entries();
-        all.retain(|e| !t.is(e));
-        if !widths.is_empty() {
-            all.push(serde_json::json!({ "source": t.source, "database": t.database, "schema": t.schema, "table": t.table, "widths": widths }));
-        }
-        self.set_setting("columnWidths", all.into())
+        self.save_table_entry("columnWidths", t, (!widths.is_empty()).then(|| serde_json::json!({ "widths": widths })))
+    }
+
+    /// The columns a user hid and pinned in a table tab (GUI and TUI; settings.json "columnLayout"), the default when none.
+    /// Reset Widths leaves it alone
+    pub fn column_layout(&self, t: &TableRef) -> crate::format::ColumnLayout {
+        self.table_entry("columnLayout", t).map(|e| crate::format::column_layout(&e)).unwrap_or_default()
+    }
+
+    /// Replaces a table's hidden and pinned columns; the default layout removes its entry
+    pub fn set_column_layout(&self, t: &TableRef, l: &crate::format::ColumnLayout) -> AppResult<()> {
+        self.save_table_entry("columnLayout", t, (!l.is_empty()).then(|| serde_json::json!({ "hidden": l.hidden, "pinned": l.pinned })))
     }
 
     /// The theme settings the GUI and the TUI share: "theme" (a theme id or "system"), "themeSync" and "customThemes". Before
@@ -1307,6 +1331,46 @@ mod tests {
         assert!(store.column_widths(&t("orders")).is_empty());
         store.set_column_widths(&t("orders"), &ColumnWidths::from([("id".into(), 6)])).unwrap();
         assert_eq!(store.column_widths(&t("orders")).len(), 1);
+    }
+
+    /// Hidden and pinned columns per table: none until set, other tables and databases untouched, the other app reads it, Reset
+    /// Widths leaves it, the default layout removes the entry
+    #[test]
+    fn column_layout_setting() {
+        use crate::format::{ColumnLayout, ColumnWidths};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let t = |table: &str| TableRef { source: "pg".into(), database: "shop".into(), schema: "public".into(), table: table.into() };
+        let l = |hidden: &[&str], pinned: &[&str]| ColumnLayout { hidden: hidden.iter().map(|s| s.to_string()).collect(), pinned: pinned.iter().map(|s| s.to_string()).collect() };
+        assert_eq!(store.column_layout(&t("orders")), ColumnLayout::default());
+        store.set_update_channel(crate::update::Channel::Beta).unwrap();
+        store.set_column_layout(&t("orders"), &l(&["memo"], &["order_no", "id"])).unwrap();
+        store.set_column_layout(&t("users"), &l(&[], &["name"])).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), l(&["memo"], &["order_no", "id"]));
+        // The other app (the TUI) reads it, and its change replaces the table's layout
+        let other = Store::new(dir.path().join("cfg"));
+        assert_eq!(other.column_layout(&t("orders")), l(&["memo"], &["order_no", "id"]));
+        other.set_column_layout(&t("orders"), &l(&["memo", "note"], &[])).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), l(&["memo", "note"], &[]));
+        assert_eq!(store.column_layout(&t("users")), l(&[], &["name"]), "another table keeps its own");
+        assert_eq!(store.column_layout(&TableRef { database: "postgres".into(), ..t("orders") }), ColumnLayout::default(), "another database's table of the same name");
+        // Widths and their Reset don't touch it
+        store.set_column_widths(&t("orders"), &ColumnWidths::from([("memo".into(), 20)])).unwrap();
+        store.reset_column_widths(&t("orders")).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), l(&["memo", "note"], &[]));
+        // The default layout removes the entry
+        store.set_column_layout(&t("orders"), &ColumnLayout::default()).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), ColumnLayout::default());
+        let file = fs::read_to_string(dir.path().join("cfg/settings.json")).unwrap();
+        assert!(!file.contains("\"orders\""), "{file}");
+        assert_eq!(store.update_channel(), crate::update::Channel::Beta);
+        // A file an older or broken app wrote: what can't be read is skipped
+        fs::write(dir.path().join("cfg/settings.json"), r#"{"columnLayout": [3, {"source": "pg", "database": "shop", "schema": "public", "table": "orders", "hidden": "memo", "pinned": ["id", 2]}]}"#).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), l(&[], &["id"]));
+        fs::write(dir.path().join("cfg/settings.json"), r#"{"columnLayout": {"not": "a list"}}"#).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), ColumnLayout::default());
+        store.set_column_layout(&t("orders"), &l(&["memo"], &[])).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), l(&["memo"], &[]));
     }
 
     #[test]
