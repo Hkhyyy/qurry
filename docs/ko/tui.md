@@ -47,6 +47,10 @@ URL 에 없는 부분은 `psql` · `mysql` · `redis-cli` 처럼 환경에서 �
 
 코드 안에 `:name` 이 있는 문장은 실행 전에 값을 묻습니다 ([무엇이 파라미터인지](getting-started.md#사용자-파라미터)). `⌃↩` 나 `F5` 를 누르면 **Parameters** 가 열립니다: 이름마다 나오는 순서대로 칸이 하나씩 있고 이 콘솔에서 지난번에 준 값이 들어 있으며, 그 아래에 이름을 표시한 문장이 나옵니다. `Tab` / `⇧Tab` 이나 `↑` `↓` 로 칸을 옮기고, 어느 칸에서든 `Enter` 로 실행하며, `Esc` 는 아무것도 실행하지 않습니다 (`Cancelled: nothing ran`). 값은 입력한 그대로 들어가니 따옴표는 직접 씁니다 (`'paid'`). 값은 콘솔을 닫을 때까지 남고 워크스페이스에는 저장하지 않습니다. 에디터는 `:name` 을 그대로 두고, Output · History · 읽기 전용 검사 · Production 확인 · 위험한 문장 확인은 모두 값이 들어간 문장을 받습니다. 파라미터처럼 보일 뿐인 글이면 `Esc` 를 누르고 문자열이나 따옴표 이름 안에 넣습니다.
 
+## 콘솔 스키마
+
+PostgreSQL 스키마에서 연 콘솔 (스키마에서 F4, 또는 스키마나 그 안의 테이블을 고른 채 `⌃l`) 은 그 스키마에서 시작합니다: 세션의 `search_path` 를 그 스키마, 다음 `public` 으로 두고, 콘솔 제목에 스키마가 보입니다 (`shop · billing · Tx: Auto`). GUI 와 같습니다. **⌃k › Switch Schema…** 는 Data Source 의 다른 스키마를 고릅니다 (시스템 스키마는 빼고, 지금 스키마에 표시). MySQL 에서는 스키마가 데이터베이스이므로 `USE` 를 보냅니다. Data Source 의 Switch schema 옵션 (Options 탭) 이 정합니다: Auto 는 둘 다, Manual 은 스키마에서 연 콘솔도 기본 스키마에 두고 Switch Schema… 는 그대로 쓰며, Disable 은 둘 다 끄고 Switch Schema… 가 그렇다고 알립니다. 바꾸기에 실패하면 상태 줄에 이유가 나오고 콘솔은 기본 스키마에 남습니다.
+
 ## 로그 파일
 
 **⌃k › Show Log** 는 Finder 에서 로그 파일을 보여 주고 (Linux 에서는 그 폴더를 엽니다) 상태 줄에 경로를 띄웁니다 ([위치와 담기는 것](getting-started.md#설정이-저장되는-곳)). SSH 로 접속했을 때는 내 화면에 아무것도 열리지 않으니 그 경로를 그쪽에서 읽으세요 (`tail -f`). GUI 에서는 **Help › Show Log** 입니다.

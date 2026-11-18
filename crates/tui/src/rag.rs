@@ -60,7 +60,7 @@ impl App {
                         Ok(res) => {
                             let (conn, db) = qurry_core::app::split_target(&idx.source);
                             let (conn, db) = (conn.to_string(), db.map(String::from));
-                            a.open_console(&conn, db);
+                            a.open_console(&conn, db, None);
                             let cap = a.result_tabs;
                             if let Some(Tab { kind: TabKind::Console(c), .. }) = a.tabs.get_mut(a.active) {
                                 c.editor.insert_str(format!("-- AI Search ({}): {q}", idx.name));

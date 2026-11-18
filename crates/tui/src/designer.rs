@@ -373,8 +373,9 @@ pub fn key(app: &mut App, k: KeyEvent) {
                 && !sql.is_empty()
             {
                 let (conn, db) = (d.conn.clone(), qurry_core::app::split_target(&d.target).1.map(String::from));
+                let schema = Some(d.def.schema.clone()).filter(|s| !s.is_empty());
                 app.designer = None;
-                app.open_console(&conn, db);
+                app.open_console(&conn, db, schema);
                 if let Some(crate::app::Tab { kind: crate::app::TabKind::Console(c), .. }) = app.tabs.get_mut(app.active) {
                     c.editor.insert_str(sql.iter().map(|s| format!("{s};")).collect::<Vec<_>>().join("\n\n"));
                 }

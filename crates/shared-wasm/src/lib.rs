@@ -374,6 +374,18 @@ pub fn substitute_params(sql: &str, kind: JsValue, values: JsValue) -> Result<St
     Ok(qurry_shared::params::substitute(sql, parse_kind(kind)?, &values))
 }
 
+/// A PostgreSQL console's schema switch (qurry_shared::sql::search_path_sql)
+#[wasm_bindgen(js_name = searchPathSql)]
+pub fn search_path_sql(schema: &str) -> String {
+    qurry_shared::sql::search_path_sql(schema)
+}
+
+/// A MySQL console's schema switch (qurry_shared::sql::use_sql)
+#[wasm_bindgen(js_name = useSql)]
+pub fn use_sql(schema: &str) -> String {
+    qurry_shared::sql::use_sql(schema)
+}
+
 /// Statement at the caret (a UTF-16 offset, as in a JS string), trimmed; undefined if the text has none
 #[wasm_bindgen(js_name = statementAt)]
 pub fn statement_at(text: &str, offset: usize, kind: JsValue) -> Result<Option<String>, JsError> {

@@ -8,6 +8,7 @@ TxToggle	Toggle Transaction Mode (Auto/Manual)	⌥t
 Commit	Commit	⌥c
 Rollback	Roll Back	⌥r
 ExecSettings	Query Execution Settings (what ⌃Enter runs)	—
+SwitchSchema	Switch Schema…	—
 ClearConsole	Clear Console (delete all text)	⌘A ⌫ (console)
 SearchEverywhere	Search Everywhere (objects · columns · tabs · actions)	⌃p
 GoToObject	Go to Database Object	⌃o

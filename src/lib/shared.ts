@@ -376,6 +376,9 @@ const api = {
   highlight: (text: string, kind: DbKind): HighlightSpan[] => wasm.highlight(text, kind),
   /** null → NULL */
   sqlLiteral: (kind: DbKind, value: string | null): string => wasm.sqlLiteral(kind, value),
+  /** A console's schema switch: PostgreSQL's search_path (public stays on it), MySQL's USE */
+  searchPathSql: (schema: string): string => wasm.searchPathSql(schema),
+  useSql: (schema: string): string => wasm.useSql(schema),
   inList: (rows: Cell[][], types: string[], kind: DbKind, opts: ExtractOptions): string => wasm.inList(rows, types, kind, opts),
   extractRows: (fmt: Extractor, rows: ExtractRowsInput, kind: DbKind, opts: ExtractOptions): string => wasm.extractRows(fmt, rows, kind, opts),
   pasteCells: (text: string, format: "auto" | "CSV" | "TSV"): (string | null)[][] => wasm.pasteCells(text, format),

@@ -252,9 +252,6 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `—` | Fit Column to its content (the rows loaded so far; also: double-click the header's right edge, again to put it back) |
 | `—` | Fit All Columns |
 | `—` | Reset Widths (back to the computed widths) |
-| `—` | Hide Column |
-| `—` | Pin Column |
-| `—` | Columns… |
 | `—` | Commit |
 | `—` | Roll Back |
 | `—` | Explain Analyse |

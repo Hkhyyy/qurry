@@ -221,12 +221,19 @@ pub(crate) fn changes_session(sql: &str, kind: crate::store::DbKind) -> bool {
     crate::sql::split_statements(sql, kind).into_iter().any(|(a, b)| {
         let one = &sql[a..b];
         let s = strip_comments_lead(one);
-        let mut words = s.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty());
-        let (first, second) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
+        let first = s.split(|c: char| !c.is_alphanumeric() && c != '_').find(|w| !w.is_empty()).unwrap_or("");
         let tx = ["begin", "start", "commit", "rollback", "end", "abort", "savepoint", "release"].contains(&first);
-        let schema = (first == "use" && words.next().is_none()) || (["set", "reset"].contains(&first) && second == "search_path");
-        !first.is_empty() && !tx && !schema && (sets_session(one, kind) || !crate::guard::is_read(one, kind))
+        !first.is_empty() && !tx && !picks_schema(one) && (sets_session(one, kind) || !crate::guard::is_read(one, kind))
     })
+}
+
+/// One statement that only picks the schema (SET / RESET search_path, USE): Session::reopen sets it again, and Manual mode runs it
+/// outside the transaction (PgSession::run_inner), so a Roll back doesn't undo it
+fn picks_schema(sql: &str) -> bool {
+    let s = strip_comments_lead(sql);
+    let mut words = s.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty());
+    let (first, second) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
+    (first == "use" && words.next().is_none()) || (["set", "reset"].contains(&first) && second == "search_path")
 }
 
 /// A read that takes no row locks (guard::is_read: no side-effect call either), and no transaction statement or SET: on Production
@@ -431,7 +438,8 @@ impl PgSession {
         self.idle_closed = false;
         self.origins.clear();
         let start = Instant::now();
-        if self.manual && !self.in_tx && !read_first && !strip_comments_lead(sql).starts_with("begin") {
+        // A schema switch stays out of Manual mode's transaction (picks_schema; `sql` is one statement here)
+        if self.manual && !self.in_tx && !read_first && !strip_comments_lead(sql).starts_with("begin") && !picks_schema(sql) {
             self.conn.execute("BEGIN").await?;
             self.in_tx = true;
         }
@@ -1107,6 +1115,26 @@ mod tests {
         let n: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_auto_t").fetch_one(&p).await.unwrap();
         assert_eq!(n, 2, "row 2 insert was rolled back, rows 1 and 3 remain");
         sqlx::query("drop table public.dbtool_tx_auto_t").execute(&p).await.unwrap();
+    }
+
+    /// Manual mode: a schema switch opens no transaction, so a Roll back of the next one keeps it (#195)
+    #[tokio::test]
+    #[ignore]
+    async fn manual_schema_switch_stays_out_of_the_transaction() {
+        let Some(p) = pool().await else { return };
+        sqlx::query("create schema if not exists qurry_switch_s").execute(&p).await.unwrap();
+        let mut s = PgSession::open(&p).await.unwrap();
+        s.set_manual(true).await.unwrap();
+        let r = s.run(&qurry_shared::sql::search_path_sql("qurry_switch_s"), 500).await.unwrap();
+        assert!(!r.in_transaction && !s.in_tx);
+        assert!(s.run("select 1", 500).await.unwrap().in_transaction, "the next statement opens the transaction");
+        s.rollback_tx().await.unwrap();
+        assert_eq!(s.run("select current_schema()", 500).await.unwrap().rows[0][0], Value::from("qurry_switch_s"));
+        // Another SET still opens it
+        assert!(s.run("set statement_timeout = 0", 500).await.unwrap().in_transaction);
+        s.rollback_tx().await.unwrap();
+        s.set_manual(false).await.unwrap();
+        sqlx::query("drop schema qurry_switch_s").execute(&p).await.unwrap();
     }
 
     /// SET / RESET / USE anywhere in the text change the session (a new connection doesn't have them); reads and SET-looking names don't

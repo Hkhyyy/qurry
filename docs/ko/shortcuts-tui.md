@@ -114,6 +114,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | — | Columns… (show, hide and pin each column) |
 | — | Explain Analyze (runs the statement: real times and row counts) |
 | — | Query Execution Settings (what ⌃Enter runs) |
+| — | Switch Schema… |
 | — | Clear Console (delete all text) |
 | — | Edit Data (open table) |
 | — | Revert Changes |

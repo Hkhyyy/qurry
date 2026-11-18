@@ -30,6 +30,8 @@ pub enum Flow {
     DbaDb(u64),
     /// Pick the database a Redis tab shows (tab id)
     RedisDb(u64),
+    /// Pick a console's schema (tab id)
+    ConsoleSchema(u64),
     /// Copy part of production data (crate::datatools): pick child steps · destination Data Source (source target id, source Data Source, condition)
     CopyDepth(Box<(String, String, qurry_core::subset::SubsetSpec)>),
     CopyMask(Box<(String, String, qurry_core::subset::SubsetSpec)>),
@@ -118,6 +120,7 @@ impl App {
             Some(Flow::ErdDb(conn)) => self.erd_run(conn, value, None),
             Some(Flow::DbaDb(id)) => self.dba_switch_db(id, value),
             Some(Flow::RedisDb(id)) => self.redis_switch_db(id, value),
+            Some(Flow::ConsoleSchema(id)) => self.switch_console_schema(id, value),
             Some(Flow::CopyDepth(b)) => self.copy_rows_mask(*b, value),
             Some(Flow::CopyMask(b)) => self.copy_rows_target(*b, value),
             Some(Flow::CopyTarget(b)) => self.copy_rows_preview(*b, value),
@@ -144,7 +147,7 @@ impl App {
                         if !drops.is_empty() {
                             sql += &format!("\n-- ── Drops (data is lost) — uncomment to run ──\n{drops}");
                         }
-                        a.open_console(&conn, Some(db));
+                        a.open_console(&conn, Some(db), None);
                         if let Some(Tab { kind: TabKind::Console(c), .. }) = a.tabs.get_mut(a.active) {
                             c.editor.insert_str(sql);
                         }
@@ -162,7 +165,7 @@ impl App {
                     Ok(d) => {
                         let summary = format!("{} same · {} different · {} only in source · {} only in target{}", d.same, d.different, d.only_source, d.only_target, if d.truncated { " (first 200,000 rows)" } else { "" });
                         if !d.sql.is_empty() {
-                            a.open_console(&conn, Some(db));
+                            a.open_console(&conn, Some(db), None);
                             if let Some(Tab { kind: TabKind::Console(c), .. }) = a.tabs.get_mut(a.active) {
                                 c.editor.insert_str(format!("-- {ss}.{st_} → {schema}.{st_}: {summary}\n\n{}", d.sql));
                             }

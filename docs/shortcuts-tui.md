@@ -112,6 +112,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | — | Columns… (show, hide and pin each column) |
 | — | Explain Analyze (runs the statement: real times and row counts) |
 | — | Query Execution Settings (what ⌃Enter runs) |
+| — | Switch Schema… |
 | — | Clear Console (delete all text) |
 | — | Edit Data (open table) |
 | — | Revert Changes |

@@ -131,7 +131,7 @@ impl App {
             self.status = "That data source no longer exists".into();
             return;
         }
-        self.open_console(&conn, db);
+        self.open_console(&conn, db, None);
         if let Some(Tab { kind: TabKind::Console(c), .. }) = self.tabs.get_mut(self.active) {
             c.editor.insert_str(undo);
             self.focus = crate::app::Focus::Editor;
@@ -145,7 +145,7 @@ impl App {
         if !matches!(self.tabs.get(self.active).map(|t| &t.kind), Some(TabKind::Console(_))) {
             let Some(t) = self.tabs.get(self.active) else { return };
             let (conn, db) = (t.conn.clone(), t.db.clone());
-            self.open_console(&conn, Some(db));
+            self.open_console(&conn, Some(db), None);
         }
         if let Some(Tab { kind: TabKind::Console(c), .. }) = self.tabs.get_mut(self.active) {
             c.editor.insert_str(sql);

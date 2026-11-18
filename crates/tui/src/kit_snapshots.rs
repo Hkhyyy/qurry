@@ -420,6 +420,16 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     scenes.push(app_scene(h, "Console: Execute chooser", "F5 inside one of several statements asks what to run; the editor highlights the text the selected option runs (↑↓ · Enter · Esc closes without running)", 120, 22));
     h.key("Esc");
     h.app.close_tab_now(h.app.active);
+    // ⌃k › Switch Schema… on a console opened in a schema (#195): the title shows it, the list marks it current
+    let id = h.console_with("select * from invoice;", 0, 22);
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.schema = Some("billing".into());
+    }
+    let schema = |n: &str, system: bool| qurry_core::meta::SchemaInfo { name: n.into(), is_system: system };
+    h.app.console_schema_choices(id, vec![schema("pg_catalog", true), schema("public", false), schema("billing", false), schema("audit", false)]);
+    scenes.push(app_scene(h, "Console: Switch Schema", "⌃k › Switch Schema…: the console's schemas without the system ones, the current one marked; Enter sets search_path on the console's session and the title shows it", 120, 22));
+    h.key("Esc");
+    h.app.close_tab_now(h.app.active);
     // Completion from the shared engine: FK joins, the signature hint line, unknown names underlined with their fixes (⌥↩)
     let meta = || {
         use qurry_core::complete::{CompletionTable, ForeignKey, Meta};

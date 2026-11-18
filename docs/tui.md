@@ -47,6 +47,10 @@ When the line is too narrow, the screen's keys go first, then the common keys bu
 
 A statement with `:name` in code ([which ones count](getting-started.md#user-parameters)) asks before it runs: `⌃↩` or `F5` opens **Parameters**, a field per name in order with the value you gave last time in this console, and the statements under it with the names marked. `Tab` / `⇧Tab` or `↑` `↓` move between the fields, `Enter` runs from any of them, `Esc` runs nothing (`Cancelled: nothing ran`). A value goes in as typed, so type the quotes yourself (`'paid'`). The values stay with the console until it is closed (not saved with the workspace). The editor keeps `:name`; Output, History, the read-only check, the Production confirmation and the dangerous-statement ask all get the statement with the values in. Text that only looks like a parameter: `Esc`, then put it in a string or a quoted name.
 
+## Console schema
+
+A console opened from a PostgreSQL schema (F4 on it, or `⌃l` with the schema or a table in it selected) starts in that schema: its session's `search_path` is set to it, then `public`, and the console's title shows it (`shop · billing · Tx: Auto`), as in the GUI. **⌃k › Switch Schema…** picks another of the data source's schemas (system schemas left out, the current one marked); on MySQL, where a schema is a database, it sends `USE`. The data source's Switch schema option (Options tab) decides: Auto does both, Manual keeps a console opened from a schema in the default one while Switch Schema… still works, Disable turns both off and Switch Schema… says so. If the switch fails, the status line says why and the console stays in the default schema.
+
 ## Log file
 
 **⌃k › Show Log** reveals the log file in Finder (on Linux it opens its folder) and puts its path on the status line ([where it is and what it holds](getting-started.md#where-qurry-keeps-your-settings)). Over SSH nothing opens on your screen; read that path there (`tail -f`). The GUI's is **Help › Show Log**.
