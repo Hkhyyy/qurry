@@ -707,23 +707,15 @@ impl MySession {
 
     /// Up to `limit` rows of `sql` after `offset`, in chunks of `SELECT <cut_list> FROM (<sql>) … LIMIT n OFFSET o` until `limit`
     /// rows are in or their values reach db::PAGE_BYTES (db::PageBudget): one chunk, so one run of the statement, when the
-    /// described columns bound the row size and the whole page fits at that size. Several chunks of a wrappable read in Auto
-    /// mode read one snapshot, in a read-only transaction of their own (begin_read): another session's change between them
-    /// would lose or repeat rows. truncated: the last chunk was full
+    /// described columns bound the row size and the whole page fits at that size. Several chunks get no transaction of their own:
+    /// in Auto mode START TRANSACTION would release the user's LOCK TABLES, so another session's change between chunks can lose
+    /// or repeat a row, as it can between pages. truncated: the last chunk was full
     async fn read_page(&mut self, sql: &str, offset: usize, limit: usize) -> AppResult<QueryResult> {
         let start = Instant::now();
         let mut budget = crate::db::PageBudget::new(self.row_bound);
-        let own = !self.manual && !self.in_tx && budget.next(limit) != Some(limit) && wrappable(sql) && self.begin_read().await;
         let (mut columns, mut rows, mut done) = (Vec::new(), Vec::new(), false);
-        let mut r = Ok(());
         while let Some(n) = budget.next(limit - rows.len()) {
-            let chunk = match run_on(&mut self.conn, &page_sql(sql, &self.cut_list, n, offset + rows.len()), n).await {
-                Ok(c) => c,
-                Err(e) => {
-                    r = Err(e);
-                    break;
-                }
-            };
+            let chunk = run_on(&mut self.conn, &page_sql(sql, &self.cut_list, n, offset + rows.len()), n).await?;
             if columns.is_empty() {
                 columns = chunk.columns;
             }
@@ -734,10 +726,6 @@ impl MySession {
                 break;
             }
         }
-        if own {
-            self.end_read().await;
-        }
-        r?;
         let cut = cut_cells(&mut rows, &self.cut_cols, self.cut_at);
         Ok(QueryResult { cut, ..query_result(columns, rows, 0, !done, start, true) })
     }
@@ -1440,7 +1428,7 @@ mod tests {
         assert_eq!(selects().await - before, 1, "the load-more too");
         s.set_cut(0);
         assert_eq!(runs(&mut s, "select id, t from qurry_once order by id").await, (500, true, 3), "text read whole: 64, 128, 308");
-        assert_eq!((s.in_tx, s.tx_open().await), (false, Some(false)), "the page's snapshot is over");
+        assert_eq!((s.in_tx, s.tx_open().await), (false, Some(false)), "a page opens no transaction");
         s.run("drop table qurry_once", 10).await.unwrap();
     }
 
