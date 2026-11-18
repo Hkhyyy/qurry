@@ -16,7 +16,7 @@ describe("theme contrast (WASM)", () => {
     const w = shared().themeWarnings(colors);
     expect(w.map((x) => x.token)).toEqual(expect.arrayContaining(["text", "comment", "sel"]));
     const c = w.find((x) => x.token === "comment")!;
-    expect([c.fg, c.bg, c.min, c.ratio < 3]).toEqual(["comment", "panel2", 3, true]);
+    expect([c.fg, c.bg, c.min, c.ratio < 4.5]).toEqual(["comment", "panel2", 4.5, true]);
   });
   it("checks a color on the surfaces it is drawn on, not only the background", () => {
     const dracula = TABLE.themes.find((t) => t.id === "dracula")!.colors;

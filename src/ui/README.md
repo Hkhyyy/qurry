@@ -28,7 +28,7 @@ Colors are theme tokens: every theme's values are in `crates/shared/src/themes.j
 | Text | `--ui-text` · `--ui-text-muted` · `--ui-text-on-accent` | #dfe1e5 · #8b8f95 · #fff | Body · descriptions · on the accent color |
 | Colors | `--ui-accent` · `--ui-danger` · `--ui-warn` · `--ui-ok` | #3574f0 · #f75464 · #e5a64b · #5fb865 | Primary button · danger · warning · success |
 | JSON | `--ui-json-key` · `-string` · `-number` · `-keyword` · `-punct` | #c77dbb · #6aab73 · #2aacb8 · #cf8e6d · #8b8f95 | JSON cells in result grids (the TUI uses the same values) |
-| SQL | `--c-cf8e6d` · `--c-56a8f5` · `--c-number` · `--ui-json-string` · `--c-comment` | #cf8e6d · #56a8f5 · #2aacb8 · #6aab73 · #7a7e85 | Keyword · function · number · string · comment in `HighlightInput` (the table tab's WHERE / ORDER BY; the console's Monaco theme and the TUI use the same values) |
+| SQL | `--c-cf8e6d` · `--c-56a8f5` · `--c-number` · `--ui-json-string` · `--c-comment` | #cf8e6d · #56a8f5 · #2aacb8 · #6aab73 · #8c9096 | Keyword · function · number · string · comment in `HighlightInput` (the table tab's WHERE / ORDER BY; the console's Monaco theme and the TUI use the same values) |
 | Spacing | `--ui-sp-1` … `--ui-sp-6` | 2 · 4 · 8 · 12 · 16 · 24px | Padding, gap and margin use only these |
 | Radius | `--ui-radius-sm` / `-md` / `-lg` | 4 · 6 · 10px | Buttons / menus · lists / dialogs |
 | Font size | `--ui-fs-xs` / `-sm` / `-md` / `-lg` | 11 · 12 · 13 · 14px | Badges / secondary / body / titles |

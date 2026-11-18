@@ -715,9 +715,9 @@ mod tests {
                 assert!(contrast(lt(t, false), bg) >= 3.0, "{t:?} on {bg:?}: {}", contrast(lt(t, false), bg));
             }
         }
-        // SQL comments are only drawn in the WHERE / ORDER BY input (a popup), never on a selection; 3:1 as the GUI's comment
+        // SQL comments are only drawn in the WHERE / ORDER BY input (a popup), never on a selection; 4.5:1 as the GUI's comment
         for bg in [white, lt(POPUP_BG, true)] {
-            assert!(contrast(lt(SQL_COMMENT, false), bg) >= 3.0, "SQL_COMMENT on {bg:?}");
+            assert!(contrast(lt(SQL_COMMENT, false), bg) >= 4.5, "SQL_COMMENT on {bg:?}");
         }
         // Light surfaces and selections, each one apart from the others
         let bgs = [SEL, SEL_BLUR, SURFACE, POPUP_BG, CELL_EDITED, CELL_RANGE, DROP].map(|c| lt(c, true));
