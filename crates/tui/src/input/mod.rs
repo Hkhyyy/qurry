@@ -104,6 +104,9 @@ fn paste(app: &mut App, s: String) {
                 f.value.push_str(&one());
             }
         }
+        Some(Popup::Params { fields, sel, .. }) => {
+            fields[*sel].1.insert_str(one());
+        }
         Some(_) => {}
         None => match app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
             Some(TabKind::Console(c)) if app.focus == Focus::Editor => {

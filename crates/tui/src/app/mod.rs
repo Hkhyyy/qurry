@@ -78,6 +78,8 @@ pub struct Console {
     pub joined: Vec<reformat::Joined>,
     /// The text's SQL colors, highlighted again only when the text changes
     pub colors: SqlColors,
+    /// The values last given to its `:name` parameters (#173), offered again on the next run; not saved with the workspace
+    pub params: std::collections::BTreeMap<String, String>,
 }
 
 /// The console's statements (qurry_shared::sql::split_script, as ⌃↩ plans them) for the lines and source kind they were split for:
@@ -266,7 +268,7 @@ pub const SERVER_WARNING: &str = "WARNING: ";
 impl Console {
     /// A new console's state around its editor and session
     pub fn new(editor: TextArea<'static>, session: String, output: Vec<(bool, String)>, tx_manual: bool) -> Self {
-        Console { editor, session, results: Default::default(), stmts: Default::default(), output, running: false, tx_manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![], colors: Default::default() }
+        Console { editor, session, results: Default::default(), stmts: Default::default(), output, running: false, tx_manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![], colors: Default::default(), params: Default::default() }
     }
 
     /// Result tabs follow the script (#151): after an edit they follow their statements, and the caret entering another statement
@@ -705,6 +707,8 @@ impl ConnForm {
 
 /// Input's on_ok: called with the entered text
 pub type OnInput = Box<dyn FnOnce(&mut App, String)>;
+/// The Parameters popup's Enter: each name with its value
+pub type OnParams = Box<dyn FnOnce(&mut App, std::collections::BTreeMap<String, String>)>;
 
 // One popup is open at a time, so its size doesn't add up; boxing the bigger ones would only add derefs at every use
 #[allow(clippy::large_enum_variant)]
@@ -733,6 +737,9 @@ pub enum Popup {
     Find(crate::find::FindBar),
     /// Import Data Sources' confirm: a checkbox per added row (Space), y / Enter imports the checked ones
     ImportPick(crate::import::ImportPick),
+    /// A console run's `:name` parameters (#173): a field per name in order, `sel` the focused one; `preview` is the statements
+    /// that have them, drawn in `kind`'s colors. Enter gives on_ok every value, Esc runs nothing
+    Params { fields: Vec<(String, TextArea<'static>)>, sel: usize, preview: String, kind: DbKind, on_ok: OnParams },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

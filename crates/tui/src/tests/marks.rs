@@ -176,6 +176,25 @@ async fn run_error_underlines_the_servers_spot() {
     assert!(h.console_output().iter().any(|l| l.contains("relation \"boom\" does not exist")), "{:?}", h.console_output());
 }
 
+/// #173: the server's spot in a statement run with a parameter's value is underlined while it is before the value (the editor's
+/// text is the same up to there); past it the editor's text isn't what ran, so the whole statement is
+#[tokio::test]
+async fn run_error_with_params_marks_the_spot_only_before_a_value() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(positioned);
+    h.console_with("select x from boom where id = :id", 0, 0);
+    h.key("F5");
+    h.type_str("12345");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(underlined(&mut h), ["boom"]);
+    h.console_with("select x from t where id = :id or x in (select a from boom)", 0, 0);
+    h.key("F5");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(underlined(&mut h), ["select x from t where id = :id or x in (select a from boom)"]);
+}
+
 /// No position from the server: the whole statement is underlined; the next run clears it before it starts
 #[tokio::test]
 async fn run_error_without_a_position_marks_the_statement() {

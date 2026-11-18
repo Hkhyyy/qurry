@@ -350,7 +350,27 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
             }
             app.popup = Some(Popup::ConnForm(form));
         }
+        p @ Popup::Params { .. } => params_key(app, p, k),
     }
+}
+
+/// The Parameters popup (#173): Tab / ↓ the next field, ⇧Tab / ↑ the one before (around), Enter runs with every value from any
+/// field, Esc runs nothing; other keys edit the focused field
+fn params_key(app: &mut App, p: Popup, k: KeyEvent) {
+    let Popup::Params { mut fields, mut sel, preview, kind, on_ok } = p else { return };
+    let n = fields.len();
+    match k.code {
+        KeyCode::Esc => return app.status = "Cancelled: nothing ran".into(),
+        KeyCode::Enter => return on_ok(app, fields.into_iter().map(|(name, input)| (name, input.lines().join(""))).collect()),
+        KeyCode::Tab | KeyCode::Down => sel = (sel + 1) % n,
+        KeyCode::BackTab | KeyCode::Up => sel = (sel + n - 1) % n,
+        // A value is one line (⌃M would add a second one the field doesn't show)
+        KeyCode::Char('m') if k.modifiers.contains(KeyModifiers::CONTROL) => {}
+        _ => {
+            fields[sel].1.input(k);
+        }
+    }
+    app.popup = Some(Popup::Params { fields, sel, preview, kind, on_ok });
 }
 
 #[cfg(test)]

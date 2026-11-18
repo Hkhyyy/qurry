@@ -226,7 +226,62 @@ pub(super) fn draw_popup(f: &mut Frame, app: &mut App) {
             f.render_widget(List::new(items).block(panel(hint, true)), list);
         }
         Popup::ConnForm(form) => draw_conn_form(f, area, form),
+        Popup::Params { fields, sel, preview, kind, .. } => draw_params(f, area, fields, *sel, preview, *kind),
     }
+}
+
+/// Lines of the statements the Parameters popup shows under its fields
+const PARAMS_PREVIEW: usize = 6;
+
+/// Parameters (#173): a `:name` field per parameter (the data source form's field rows), the focused one with its caret; the
+/// statements under them in the console's colors with the names marked, their first lines; the keys at the bottom. Its size
+/// comes from the names and the statements, so typing never moves it; in a short window the fields keep the focused one in view
+fn draw_params(f: &mut Frame, area: Rect, fields: &[(String, tui_textarea::TextArea<'static>)], sel: usize, preview: &str, kind: qurry_shared::DbKind) {
+    let lines: Vec<&str> = preview.lines().collect();
+    let shown = lines.len().min(PARAMS_PREVIEW) + usize::from(lines.len() > PARAMS_PREVIEW);
+    let r = centered(area, 72, (fields.len() + 1 + shown + 1 + 1) as u16 + 2);
+    let inner = popup(f, r, " Parameters ");
+    let label_w = fields.iter().map(|(n, _)| n.chars().count() + 2).max().unwrap_or(0).min(16);
+    // The value's room right of its label: the focused one scrolls to keep its caret in view
+    let room = (inner.width as usize).saturating_sub(label_w + 2).max(1);
+    let rows: Vec<Line> = fields
+        .iter()
+        .enumerate()
+        .map(|(i, (name, input))| {
+            // A name longer than the label column ends in … (the statement below shows it whole)
+            let label = format!(":{name}");
+            let label = if label.chars().count() <= label_w { label } else { label.chars().take(label_w - 2).collect::<String>() + "…" };
+            let value = input.lines().first().cloned().unwrap_or_default();
+            if i != sel {
+                return Line::from(field_row(&label, label_w, value, false));
+            }
+            let caret = input.cursor().1;
+            let before: String = value.chars().take(caret).skip(caret.saturating_sub(room - 1)).collect();
+            let after: String = value.chars().skip(caret).collect();
+            Line::from(field_row(&label, label_w, format!("{before}▏{after}"), true))
+        })
+        .collect();
+    // The names marked where they are, line by line (found once in the whole text: a string or comment can span lines)
+    let mut marks = qurry_shared::params::find_params(preview, kind).into_iter().map(|p| (p.start, p.end)).peekable();
+    let mut code = vec![];
+    let mut at = 0;
+    for l in lines.iter().take(PARAMS_PREVIEW) {
+        let mut own = vec![];
+        while let Some((a, b)) = marks.next_if(|m| m.0 < at + l.len()) {
+            own.push((a - at, b.min(at + l.len()) - at));
+        }
+        code.push(sql_line_marked(l, kind, &own));
+        at += l.len() + 1;
+    }
+    if lines.len() > PARAMS_PREVIEW {
+        code.push(Line::styled("⋯", Style::default().fg(DIM)));
+    }
+    let hint = key_hints(&[("Enter", "run"), ("Tab ⇧Tab ↑↓", "move"), ("Esc", "cancel")]);
+    let [body, _, sql, _, keys] = Layout::vertical([Constraint::Length(rows.len() as u16), Constraint::Length(1), Constraint::Min(0), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    let top = (sel + 1).saturating_sub(body.height as usize) as u16;
+    f.render_widget(Paragraph::new(rows).scroll((top, 0)), body);
+    f.render_widget(Paragraph::new(code), Rect { x: sql.x + 2, width: sql.width.saturating_sub(2), ..sql });
+    f.render_widget(Paragraph::new(hint), keys);
 }
 
 /// tui-textarea's horizontal scroll after a frame: the first column stays until the caret leaves the view (its next_scroll_top)

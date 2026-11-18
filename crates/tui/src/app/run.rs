@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 
 /// Where each planned statement is in the editor: `text` is what was planned, starting at editor position `origin` (row, char column)
 fn stmt_spans(stmts: &[qurry_core::exec::Stmt], text: &str, origin: (usize, usize)) -> Vec<Span> {
@@ -6,9 +7,10 @@ fn stmt_spans(stmts: &[qurry_core::exec::Stmt], text: &str, origin: (usize, usiz
 }
 
 /// A failed statement's error in the editor: the word at the server's spot (`at`, a byte offset into the statement's text `sql`;
-/// one character if it isn't on a word), else the whole statement (`span`)
-fn error_span(sql: &str, at: Option<usize>, span: Span) -> Span {
-    let Some(at) = at else { return span };
+/// one character if it isn't on a word), else the whole statement (`span`). The spot is used only where the editor's text, `lines`,
+/// is what ran (editor_at), and comes back with the mark
+fn error_span(sql: &str, at: Option<usize>, span: Span, lines: &[String]) -> (Span, Option<usize>) {
+    let Some(at) = editor_at(at, sql, lines, span.0) else { return (span, None) };
     let end = sql.trim_end();
     // Past the statement's end (MySQL's near ''): its last character
     let at = match end.char_indices().last() {
@@ -17,7 +19,20 @@ fn error_span(sql: &str, at: Option<usize>, span: Span) -> Span {
     };
     let from = editor_pos(sql, at, span.0);
     let word = sql[at..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
-    (from, (from.0, from.1 + word.max(1)))
+    ((from, (from.0, from.1 + word.max(1))), Some(at))
+}
+
+/// The server's spot (`at`, in the statement run, `sql`) while that text is still the editor's from `from` through the word there:
+/// past a parameter's value (#173) it isn't, and the whole statement is marked
+fn editor_at(at: Option<usize>, sql: &str, lines: &[String], from: (usize, usize)) -> Option<usize> {
+    let text = lines.join("\n");
+    let ed = &text[byte_offset(lines, from.0, from.1)..];
+    at.filter(|&p| {
+        let rest = sql.get(p..).unwrap_or("");
+        let word: usize = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').map(char::len_utf8).sum();
+        let end = (p + word.max(rest.chars().next().map_or(0, char::len_utf8))).min(sql.len());
+        sql.get(..end).is_some_and(|a| ed.get(..end) == Some(a))
+    })
 }
 
 /// Runs a console query on the session, or asks the test stand-in when there is one
@@ -157,6 +172,15 @@ impl App {
     /// all of one (its `;` or not), a planned range when it runs to the statement's end (the notes above it may be left out; a
     /// subquery is not the statement)
     pub fn run_marked(&mut self, stmts: Vec<String>, spans: Vec<Span>, explain: bool, confirmed: bool) {
+        let (at, planned) = (spans.clone(), stmts.clone());
+        if !self.ask_params(&stmts, move |a, run| a.mark_and_run(run, &planned, at, explain, confirmed)) {
+            self.mark_and_run(stmts.clone(), &stmts, spans, explain, confirmed)
+        }
+    }
+
+    /// run_marked once the statements are final (`stmts`): their marks and result places, then the checks and the run. Result tabs
+    /// follow the statements as they read in the editor (`planned`, any `:name` left in)
+    fn mark_and_run(&mut self, stmts: Vec<String>, planned: &[String], spans: Vec<Span>, explain: bool, confirmed: bool) {
         let Some(t) = self.tabs.get(self.active) else { return };
         let kind = self.kind_of(&t.conn);
         if let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind)
@@ -168,7 +192,7 @@ impl App {
             let whole = c.editor.selection_range().is_some();
             c.results.pending = spans
                 .iter()
-                .zip(&stmts)
+                .zip(planned)
                 .map(|(&((r0, c0), (r1, c1)), sql)| {
                     let (a, b) = (byte_offset(lines, r0, c0), byte_offset(lines, r1, c1));
                     let own = |&(s, e): &(usize, usize)| result_tabs::bare(&text[if whole { s } else { a }..e]) == result_tabs::bare(&text[a..b]);
@@ -184,7 +208,7 @@ impl App {
 
     /// Statements that aren't in the editor (a result tab's statement run again after its edits are submitted): each result where
     /// `at[i]` says (missing: a tab of its own). confirmed = whether a dangerous statement (UPDATE/DELETE without WHERE, DROP,
-    /// TRUNCATE) was confirmed
+    /// TRUNCATE) was confirmed. They run as they are: a result tab's statement is the one that ran, values already in (#173)
     pub fn run_stmts(&mut self, stmts: Vec<String>, at: Vec<result_tabs::RunAt>, explain: bool, confirmed: bool) {
         if let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind)
             && !c.running
@@ -193,6 +217,51 @@ impl App {
             c.results.pending = at;
         }
         self.run_stmts_checked(stmts, explain, confirmed, confirmed)
+    }
+
+    /// #173: statements with `:name` in code ask for the values first (Popup::Params, with the console's last ones) and the result
+    /// is true; Enter hands `then` the statements with the values put in, in the console that asked, so every check after it (the
+    /// dangerous-statement ask, Production, read-only in core) and History see the final SQL. Asked once: a value with `:x` in it
+    /// isn't asked for again. False: nothing to ask, run as they are
+    fn ask_params(&mut self, stmts: &[String], then: impl FnOnce(&mut App, Vec<String>) + 'static) -> bool {
+        let Some(t) = self.tabs.get(self.active) else { return false };
+        let (kind, id) = (self.kind_of(&t.conn), t.id);
+        let TabKind::Console(c) = &t.kind else { return false };
+        let (mut names, mut preview) = (Vec::<String>::new(), vec![]);
+        for s in stmts {
+            let found = qurry_shared::params::names(s, kind);
+            if !found.is_empty() {
+                preview.push(s.trim());
+            }
+            names.extend(found.into_iter().filter(|n| !names.contains(n)).collect::<Vec<_>>());
+        }
+        if c.running || names.is_empty() {
+            return false;
+        }
+        let fields = names
+            .into_iter()
+            .map(|n| {
+                let mut input = TextArea::new(vec![c.params.get(&n).cloned().unwrap_or_default()]);
+                input.move_cursor(tui_textarea::CursorMove::End);
+                (n, input)
+            })
+            .collect();
+        let (preview, stmts) = (preview.join("\n"), stmts.to_vec());
+        // Explain Analyze (analyze_next is set only while execute asks): still so when Enter runs the statements
+        let analyze = self.analyze_next;
+        let on_ok = move |a: &mut App, values: BTreeMap<String, String>| {
+            Self::in_console(id, move |a| {
+                if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                    c.params.extend(values.clone());
+                }
+                a.analyze_next = analyze;
+                then(a, stmts.iter().map(|s| qurry_shared::params::substitute(s, kind, &values)).collect());
+                a.analyze_next = false;
+            })(a)
+        };
+        self.popup = Some(Popup::Params { fields, sel: 0, preview, kind, on_ok: Box::new(on_ok) });
+        self.status = "Values go in as typed · not a parameter? Esc and quote it".into();
+        true
     }
 
     /// on_yes of a confirm that runs statements: they run in the console that asked (tab id), shown again, never in whichever tab
@@ -456,7 +525,8 @@ impl App {
                                 g.more_session = Some(c.session.clone());
                                 let title = result_tabs::title(&s, i + 1);
                                 let at = places.get(i);
-                                last = Some(c.results.ran(cap, at.and_then(|x| x.stmt), at.and_then(|x| x.into), s.clone(), title, g));
+                                let follow = at.map_or_else(|| s.clone(), |x| x.sql.clone());
+                                last = Some(c.results.ran(cap, at.and_then(|x| x.stmt), at.and_then(|x| x.into), follow, s.clone(), title, g));
                             } else {
                                 let msg = format!("{} row(s) affected in {} ms", res.rows_affected, res.elapsed_ms);
                                 c.log(false, msg.clone());
@@ -486,7 +556,7 @@ impl App {
                             // Marked in the editor where it ran from (not if the text changed meanwhile); the status line says where
                             match spans.get(i).filter(|_| c.editor.lines() == lines0) {
                                 Some(&span) => {
-                                    let span = error_span(&s, at, span);
+                                    let (span, at) = error_span(&s, at, span, &lines0);
                                     c.run_error = Some(RunError { span, lines: lines0.clone() });
                                     let ((row, col), _) = span;
                                     status = match at {
@@ -541,10 +611,10 @@ impl App {
         let id = tab.id;
         let TabKind::Console(c) = &tab.kind else { return false };
         let Some(t) = c.results.shown_tab().filter(|t| t.grid.more_error.is_some()) else { return false };
-        let at = result_tabs::RunAt { stmt: t.stmt, sql: t.sql.clone(), into: Some(t.id) };
+        let (at, run) = (result_tabs::RunAt { stmt: t.stmt, sql: t.sql.clone(), into: Some(t.id) }, t.ran.clone());
         let n: usize = c.results.tabs.iter().map(|t| t.grid.pending()).sum();
         if n == 0 {
-            self.run_stmts(vec![at.sql.clone()], vec![at], false, false);
+            self.run_stmts(vec![run], vec![at], false, false);
             return true;
         }
         self.popup = Some(Popup::Confirm {
@@ -555,7 +625,7 @@ impl App {
                 if let Some(TabKind::Console(c)) = a.tabs.get_mut(a.active).map(|t| &mut t.kind) {
                     c.results.tabs.iter_mut().for_each(|t| t.grid.revert());
                 }
-                a.run_stmts(vec![at.sql.clone()], vec![at], false, false)
+                a.run_stmts(vec![run], vec![at], false, false)
             }),
         });
         true

@@ -1261,3 +1261,228 @@ async fn rerun_after_a_failed_load_with_pending_edits_asks_first() {
     assert_eq!(console(&h).grid().unwrap().pending(), 0);
     assert!(console(&h).results.grid().is_some_and(|g| g.more_error.is_none()));
 }
+
+/// The Parameters popup's names, and the value of each field
+fn params_fields(h: &Harness) -> Vec<(String, String)> {
+    let Some(Popup::Params { fields, .. }) = &h.app.popup else { panic!("no Parameters popup: {}", h.app.status) };
+    fields.iter().map(|(n, t)| (n.clone(), t.lines().join(""))).collect()
+}
+
+/// #173: `:id` in code asks before the run (not the `:x` in a string); Esc runs nothing and marks nothing; Enter runs the statement
+/// with the value as typed, Output echoes it, the editor keeps `:id`, and the next run offers the value again
+#[tokio::test]
+async fn params_ask_before_the_run_and_run_the_final_sql() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    let sql = "select * from t where id = :id and s = ':x'";
+    h.console_with(sql, 0, 0);
+    h.key("Ctrl+Enter");
+    assert_eq!(params_fields(&h), [("id".to_string(), String::new())]);
+    let s = h.screen(100, 30);
+    assert!(s.contains(" Parameters ") && s.contains(":id ▏") && s.contains(sql), "{s}");
+    h.key("Esc");
+    assert!(h.app.popup.is_none());
+    assert_eq!(h.app.status, "Cancelled: nothing ran");
+    h.settle().await;
+    assert!(SEEN.lock().unwrap().is_empty(), "nothing ran");
+    assert_eq!(console(&h).marks.at(0), None, "no mark");
+    assert!(h.console_output().is_empty());
+
+    h.key("Ctrl+Enter");
+    h.type_str("42");
+    h.key("Enter");
+    h.settle().await;
+    let ran = "select * from t where id = 42 and s = ':x'";
+    assert_eq!(*SEEN.lock().unwrap(), [ran]);
+    assert_eq!(h.console_output()[0], format!("> {ran}"));
+    assert_eq!(console(&h).marks.at(0), Some(crate::app::MarkState::Ok));
+    assert_eq!(h.console_text(), sql, "the editor keeps its text");
+    h.key("Ctrl+Enter");
+    assert_eq!(params_fields(&h), [("id".to_string(), "42".to_string())], "the last value is offered");
+    h.key("Esc");
+}
+
+/// Tab and ↑↓ move between the fields (around), and Enter runs from any of them with every value; a cast is not a parameter
+#[tokio::test]
+async fn params_fields_move_and_casts_dont_ask() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    h.console_with("select x::int from t", 0, 0);
+    h.key("Ctrl+Enter");
+    assert!(h.app.popup.is_none(), "x::int doesn't ask");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["select x::int from t"]);
+    SEEN.lock().unwrap().clear();
+
+    h.console_with("select * from t where a = :a and b = :b or a = :a", 0, 0);
+    h.key("Ctrl+Enter");
+    assert_eq!(params_fields(&h).iter().map(|f| f.0.as_str()).collect::<Vec<_>>(), ["a", "b"], "each name once, in order");
+    h.type_str("1");
+    h.key("Tab");
+    h.type_str("'b'");
+    h.key("Down");
+    let Some(Popup::Params { sel, .. }) = &h.app.popup else { panic!() };
+    assert_eq!(*sel, 0, "around to the first");
+    h.key("Up");
+    h.paste("x");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["select * from t where a = 1 and b = 'b'x or a = 1"]);
+}
+
+/// On a Production source the confirmation lists the statement with its value; on a read-only source core refuses the write as
+/// it would refuse it typed out
+#[tokio::test]
+async fn params_checks_see_the_final_sql() {
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+    }))
+    .unwrap();
+    cfg.options.confirm_changes = true;
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.fake_db = Some(fake);
+    let sql = "delete from t where id = :id";
+    let id = h.app.restore_console("p", "d".into(), "console".into(), sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    h.key("Ctrl+Enter");
+    h.type_str("7");
+    h.key("Enter");
+    h.settle().await;
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    assert!(text.contains("delete from t where id = 7") && !text.contains(":id"), "{text}");
+    h.key("Esc");
+    assert!(h.console_output().is_empty(), "nothing runs before the answer");
+
+    fn read_only(q: &str) -> Result<QueryResult, String> {
+        match qurry_core::guard::read_only_violation(q, qurry_core::store::DbKind::Postgres, false) {
+            Some(why) => Err(why),
+            None => fake(q),
+        }
+    }
+    h.app.fake_db = Some(read_only);
+    h.console_with(sql, 0, 0);
+    h.key("Ctrl+Enter");
+    h.type_str("7");
+    h.key("Enter");
+    h.settle().await;
+    let ran = "delete from t where id = 7";
+    let why = qurry_core::guard::read_only_violation(ran, qurry_core::store::DbKind::Postgres, false).unwrap();
+    assert_eq!(h.console_output(), [format!("> {ran}"), why]);
+}
+
+/// #173 on a real PostgreSQL (QURRY_TEST_PG=host:port:user:db[:password]): the value goes in as typed and the server answers the
+/// final statement, in the console's own session (its temp table)
+#[tokio::test]
+#[ignore]
+async fn params_substitute_on_a_real_server() {
+    let Some(pg) = qurry_core::testenv::pg() else { return };
+    let mut h = Harness::new().await;
+    let mut cfg = pg.cfg;
+    (cfg.id, cfg.name) = ("pg".into(), "PG".into());
+    let database = cfg.database.clone();
+    h.app.state.save_connection(cfg, pg.password, None).await.unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    let sql = "create temp table qurry_params (id int, s text);\ninsert into qurry_params values (1, 'one'), (42, 'forty-two');\nselect s from qurry_params where id = :id and s <> ':id'";
+    let id = h.app.restore_console("pg", database, "console".into(), sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    h.key("Ctrl+Enter");
+    assert_eq!(params_fields(&h), [("id".to_string(), String::new())]);
+    h.type_str("42");
+    h.key("Enter");
+    for _ in 0..100 {
+        h.settle().await;
+        if !console(&h).running {
+            break;
+        }
+    }
+    let out = h.console_output();
+    assert!(out.contains(&"PG> select s from qurry_params where id = 42 and s <> ':id'".to_string()), "{out:?}");
+    let g = console(&h).grid().unwrap_or_else(|| panic!("no result: {out:?}"));
+    assert_eq!(g.result.rows, [vec![serde_json::json!("forty-two")]]);
+    let _ = h.app.state.disconnect("pg".into()).await;
+}
+
+/// The Parameters popup at the smallest window: the focused field and the keys stay on screen with many names, a long value
+/// shows its caret's end, a long name ends in …
+#[tokio::test]
+async fn params_popup_fits_the_smallest_window() {
+    let mut h = Harness::new().await;
+    let names: Vec<String> = (1..=8).map(|i| format!(":p{i}")).collect();
+    h.console_with(&format!("select {}, :a_very_long_parameter_name_here, :created_before", names.join(", ")), 0, 0);
+    h.key("Ctrl+Enter");
+    for _ in 0..7 {
+        h.key("Tab");
+    }
+    h.type_str(&"x".repeat(60));
+    h.type_str("END");
+    let (w, ht) = crate::ui::MIN_SIZE;
+    let s = h.screen(w, ht);
+    assert!(s.contains(":p8") && s.contains("END▏") && s.contains("Esc"), "{s}");
+    h.key("Tab");
+    let s = h.screen(100, 30);
+    assert!(s.contains(" :a_very_long_p… ▏"), "{s}");
+    h.key("Tab");
+    let s = h.screen(100, 30);
+    assert!(s.contains(":created_before ▏"), "a name that fits is whole: {s}");
+}
+
+/// #173: Explain Analyze of a statement with `:name` is still Explain Analyze once the values are typed: BEGIN, the EXPLAIN with
+/// ANALYZE and ROLLBACK
+#[tokio::test]
+async fn params_keep_explain_analyze() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    h.console_with("delete from t where a = :a", 0, 0);
+    h.app.analyze_next = true;
+    h.app.execute(true);
+    h.app.analyze_next = false;
+    h.type_str("1");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["BEGIN", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) delete from t where a = 1", "ROLLBACK"]);
+    assert!(!h.app.analyze_next);
+}
+
+/// A Parameters value is one line: ⌃M adds nothing, so what the field shows is what runs
+#[tokio::test]
+async fn params_value_is_one_line() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    h.console_with("select * from t where id = :id", 0, 0);
+    h.key("Ctrl+Enter");
+    h.type_str("4");
+    h.key("Ctrl+m");
+    h.type_str("2");
+    let Some(Popup::Params { fields, .. }) = &h.app.popup else { panic!() };
+    assert_eq!(fields[0].1.lines(), ["42"]);
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["select * from t where id = 42"]);
+}
