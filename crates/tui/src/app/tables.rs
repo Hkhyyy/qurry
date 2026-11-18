@@ -488,8 +488,8 @@ impl App {
                             // The console still shows that result: run its statement again, into its tab (a newer result stays as it is)
                             Some(TabKind::Console(c)) => {
                                 if let Some(t) = c.results.shown_tab().filter(|t| t.grid.id == gid) {
-                                    let at = result_tabs::RunAt { stmt: t.stmt, sql: t.sql.clone(), into: Some(t.id) };
-                                    Self::in_console(id, move |a| a.run_stmts(vec![at.sql.clone()], vec![at], false, false))(a);
+                                    let (at, run) = (result_tabs::RunAt { stmt: t.stmt, sql: t.sql.clone(), into: Some(t.id) }, t.ran.clone());
+                                    Self::in_console(id, move |a| a.run_stmts(vec![run], vec![at], false, false))(a);
                                 }
                             }
                             _ => {}

@@ -1425,7 +1425,7 @@ async fn params_substitute_on_a_real_server() {
 async fn params_popup_fits_the_smallest_window() {
     let mut h = Harness::new().await;
     let names: Vec<String> = (1..=8).map(|i| format!(":p{i}")).collect();
-    h.console_with(&format!("select {}, :a_very_long_parameter_name_here", names.join(", ")), 0, 0);
+    h.console_with(&format!("select {}, :a_very_long_parameter_name_here, :created_before", names.join(", ")), 0, 0);
     h.key("Ctrl+Enter");
     for _ in 0..7 {
         h.key("Tab");
@@ -1438,4 +1438,51 @@ async fn params_popup_fits_the_smallest_window() {
     h.key("Tab");
     let s = h.screen(100, 30);
     assert!(s.contains(" :a_very_long_p… ▏"), "{s}");
+    h.key("Tab");
+    let s = h.screen(100, 30);
+    assert!(s.contains(":created_before ▏"), "a name that fits is whole: {s}");
+}
+
+/// #173: Explain Analyze of a statement with `:name` is still Explain Analyze once the values are typed: BEGIN, the EXPLAIN with
+/// ANALYZE and ROLLBACK
+#[tokio::test]
+async fn params_keep_explain_analyze() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    h.console_with("delete from t where a = :a", 0, 0);
+    h.app.analyze_next = true;
+    h.app.execute(true);
+    h.app.analyze_next = false;
+    h.type_str("1");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["BEGIN", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) delete from t where a = 1", "ROLLBACK"]);
+    assert!(!h.app.analyze_next);
+}
+
+/// A Parameters value is one line: ⌃M adds nothing, so what the field shows is what runs
+#[tokio::test]
+async fn params_value_is_one_line() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    h.console_with("select * from t where id = :id", 0, 0);
+    h.key("Ctrl+Enter");
+    h.type_str("4");
+    h.key("Ctrl+m");
+    h.type_str("2");
+    let Some(Popup::Params { fields, .. }) = &h.app.popup else { panic!() };
+    assert_eq!(fields[0].1.lines(), ["42"]);
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["select * from t where id = 42"]);
 }

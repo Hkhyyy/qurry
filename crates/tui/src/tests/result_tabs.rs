@@ -325,3 +325,28 @@ async fn edits_in_a_result_tab_not_shown_are_asked_about_before_a_run() {
     h.settle().await;
     assert_eq!(console(&h).results.tabs.iter().map(|t| t.grid.pending()).sum::<usize>(), 0);
 }
+
+/// #173: a parameterised statement's tab follows the statement as the editor reads it (`:id`, not the value it ran with), so a
+/// statement typed right above it keeps the tab on its own; its rerun is the statement that ran
+#[tokio::test]
+async fn a_parameterised_statements_tab_follows_it_through_edits() {
+    let mut h = open("select * from customers;\nselect * from orders where id = :id;").await;
+    h.key("Down");
+    h.key("F5");
+    h.type_str("42");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(tabs(&h).0, ["2: orders"]);
+    let t = &console(&h).results.tabs[0];
+    assert!(t.sql.contains("id = :id") && t.ran.contains("id = 42"), "{} / {}", t.sql, t.ran);
+
+    h.key("Up");
+    h.key("End");
+    h.key("Enter");
+    h.type_str("select 2");
+    h.type_str(";");
+    assert_eq!(console(&h).results.tabs.iter().map(|t| (t.stmt, t.num)).collect::<Vec<_>>(), [(Some(2), 3)]);
+    h.key("F5");
+    h.settle().await;
+    assert_eq!(tabs(&h).0, ["3: orders", "2: Result 1"], "select 2 gets a tab of its own");
+}

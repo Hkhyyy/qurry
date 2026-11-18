@@ -364,6 +364,8 @@ fn params_key(app: &mut App, p: Popup, k: KeyEvent) {
         KeyCode::Enter => return on_ok(app, fields.into_iter().map(|(name, input)| (name, input.lines().join(""))).collect()),
         KeyCode::Tab | KeyCode::Down => sel = (sel + 1) % n,
         KeyCode::BackTab | KeyCode::Up => sel = (sel + n - 1) % n,
+        // A value is one line (⌃M would add a second one the field doesn't show)
+        KeyCode::Char('m') if k.modifiers.contains(KeyModifiers::CONTROL) => {}
         _ => {
             fields[sel].1.input(k);
         }

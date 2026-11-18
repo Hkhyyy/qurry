@@ -250,7 +250,7 @@ fn draw_params(f: &mut Frame, area: Rect, fields: &[(String, tui_textarea::TextA
         .map(|(i, (name, input))| {
             // A name longer than the label column ends in … (the statement below shows it whole)
             let label = format!(":{name}");
-            let label = if label.chars().count() < label_w { label } else { label.chars().take(label_w - 2).collect::<String>() + "…" };
+            let label = if label.chars().count() <= label_w { label } else { label.chars().take(label_w - 2).collect::<String>() + "…" };
             let value = input.lines().first().cloned().unwrap_or_default();
             if i != sel {
                 return Line::from(field_row(&label, label_w, value, false));

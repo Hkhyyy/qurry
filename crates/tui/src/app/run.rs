@@ -172,14 +172,15 @@ impl App {
     /// all of one (its `;` or not), a planned range when it runs to the statement's end (the notes above it may be left out; a
     /// subquery is not the statement)
     pub fn run_marked(&mut self, stmts: Vec<String>, spans: Vec<Span>, explain: bool, confirmed: bool) {
-        let at = spans.clone();
-        if !self.ask_params(&stmts, move |a, stmts| a.mark_and_run(stmts, at, explain, confirmed)) {
-            self.mark_and_run(stmts, spans, explain, confirmed)
+        let (at, planned) = (spans.clone(), stmts.clone());
+        if !self.ask_params(&stmts, move |a, run| a.mark_and_run(run, &planned, at, explain, confirmed)) {
+            self.mark_and_run(stmts.clone(), &stmts, spans, explain, confirmed)
         }
     }
 
-    /// run_marked once the statements are final: their marks and result places, then the checks and the run
-    fn mark_and_run(&mut self, stmts: Vec<String>, spans: Vec<Span>, explain: bool, confirmed: bool) {
+    /// run_marked once the statements are final (`stmts`): their marks and result places, then the checks and the run. Result tabs
+    /// follow the statements as they read in the editor (`planned`, any `:name` left in)
+    fn mark_and_run(&mut self, stmts: Vec<String>, planned: &[String], spans: Vec<Span>, explain: bool, confirmed: bool) {
         let Some(t) = self.tabs.get(self.active) else { return };
         let kind = self.kind_of(&t.conn);
         if let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind)
@@ -191,7 +192,7 @@ impl App {
             let whole = c.editor.selection_range().is_some();
             c.results.pending = spans
                 .iter()
-                .zip(&stmts)
+                .zip(planned)
                 .map(|(&((r0, c0), (r1, c1)), sql)| {
                     let (a, b) = (byte_offset(lines, r0, c0), byte_offset(lines, r1, c1));
                     let own = |&(s, e): &(usize, usize)| result_tabs::bare(&text[if whole { s } else { a }..e]) == result_tabs::bare(&text[a..b]);
@@ -207,16 +208,8 @@ impl App {
 
     /// Statements that aren't in the editor (a result tab's statement run again after its edits are submitted): each result where
     /// `at[i]` says (missing: a tab of its own). confirmed = whether a dangerous statement (UPDATE/DELETE without WHERE, DROP,
-    /// TRUNCATE) was confirmed
+    /// TRUNCATE) was confirmed. They run as they are: a result tab's statement is the one that ran, values already in (#173)
     pub fn run_stmts(&mut self, stmts: Vec<String>, at: Vec<result_tabs::RunAt>, explain: bool, confirmed: bool) {
-        let places = at.clone();
-        if !self.ask_params(&stmts, move |a, stmts| a.run_stmts_now(stmts, places, explain, confirmed)) {
-            self.run_stmts_now(stmts, at, explain, confirmed)
-        }
-    }
-
-    /// run_stmts once the statements are final
-    fn run_stmts_now(&mut self, stmts: Vec<String>, at: Vec<result_tabs::RunAt>, explain: bool, confirmed: bool) {
         if let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind)
             && !c.running
         {
@@ -254,12 +247,16 @@ impl App {
             })
             .collect();
         let (preview, stmts) = (preview.join("\n"), stmts.to_vec());
+        // Explain Analyze (analyze_next is set only while execute asks): still so when Enter runs the statements
+        let analyze = self.analyze_next;
         let on_ok = move |a: &mut App, values: BTreeMap<String, String>| {
             Self::in_console(id, move |a| {
                 if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
                     c.params.extend(values.clone());
                 }
-                then(a, stmts.iter().map(|s| qurry_shared::params::substitute(s, kind, &values)).collect())
+                a.analyze_next = analyze;
+                then(a, stmts.iter().map(|s| qurry_shared::params::substitute(s, kind, &values)).collect());
+                a.analyze_next = false;
             })(a)
         };
         self.popup = Some(Popup::Params { fields, sel: 0, preview, kind, on_ok: Box::new(on_ok) });
@@ -528,7 +525,8 @@ impl App {
                                 g.more_session = Some(c.session.clone());
                                 let title = result_tabs::title(&s, i + 1);
                                 let at = places.get(i);
-                                last = Some(c.results.ran(cap, at.and_then(|x| x.stmt), at.and_then(|x| x.into), s.clone(), title, g));
+                                let follow = at.map_or_else(|| s.clone(), |x| x.sql.clone());
+                                last = Some(c.results.ran(cap, at.and_then(|x| x.stmt), at.and_then(|x| x.into), follow, s.clone(), title, g));
                             } else {
                                 let msg = format!("{} row(s) affected in {} ms", res.rows_affected, res.elapsed_ms);
                                 c.log(false, msg.clone());
@@ -613,10 +611,10 @@ impl App {
         let id = tab.id;
         let TabKind::Console(c) = &tab.kind else { return false };
         let Some(t) = c.results.shown_tab().filter(|t| t.grid.more_error.is_some()) else { return false };
-        let at = result_tabs::RunAt { stmt: t.stmt, sql: t.sql.clone(), into: Some(t.id) };
+        let (at, run) = (result_tabs::RunAt { stmt: t.stmt, sql: t.sql.clone(), into: Some(t.id) }, t.ran.clone());
         let n: usize = c.results.tabs.iter().map(|t| t.grid.pending()).sum();
         if n == 0 {
-            self.run_stmts(vec![at.sql.clone()], vec![at], false, false);
+            self.run_stmts(vec![run], vec![at], false, false);
             return true;
         }
         self.popup = Some(Popup::Confirm {
@@ -627,7 +625,7 @@ impl App {
                 if let Some(TabKind::Console(c)) = a.tabs.get_mut(a.active).map(|t| &mut t.kind) {
                     c.results.tabs.iter_mut().for_each(|t| t.grid.revert());
                 }
-                a.run_stmts(vec![at.sql.clone()], vec![at], false, false)
+                a.run_stmts(vec![run], vec![at], false, false)
             }),
         });
         true
