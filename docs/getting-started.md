@@ -50,6 +50,10 @@ Start `qurry-tui` in a terminal. (Keys below are written as on macOS; on Linux `
 4. **Open and edit a table.** `Enter` on a table opens its rows. `Enter` / `F2` edits a cell, `a` adds a row, `d` marks a row deleted, and `⌃s` saves. `v` shows the current cell's whole value in a panel beside the grid (JSON pretty-printed) that follows the cursor; `v` or `⌃w` closes it. On PostgreSQL a long text, JSON or XML value arrives cut, ending with a dim `…`, and `v` shows it whole ([Long values](settings.md#long-values)). A console result from one table with its primary key is edited the same way, a join per table (`a` / `d` don't add or delete rows there); for any other result or column, an edit key says in the status line why it can't be edited. A Submit that fails because the key's sequence is behind says so in its notice, with the `setval` SQL to run.
 5. **Not sure what to press?** `⌃p` searches tables, columns, tabs and actions; `⌃k` lists every action with its key; `F1` shows the keymap. The status bar always shows the keys for what you are looking at.
 
+### User parameters
+
+A console statement can hold user parameters: `:name` in code, as in `select * from orders where id = :id and status = :status`. Strings, quoted names, comments and dollar quotes are left alone, as are PostgreSQL casts (`x::int`), assignments (`:=`), MySQL variables (`@v`, `@@sql_mode`), ClickHouse's `{p:UInt8}` and array slices (`a[1:3]`). When you run a statement that has them, Qurry asks for each name once; **Cancel** runs nothing. The values are remembered for that console, so the next run offers them again. A value goes in as you typed it, as plain text: type the quotes yourself (`'paid'`, not `paid`). The read-only check, the Production confirmation and the dangerous-statement ask all see the SQL with the values in. The MCP server has no parameters: an AI writes its SQL itself.
+
 ### Data sources are shared
 
 The GUI, the TUI and the MCP server read the same data sources and passwords, so a connection made in one shows up in the others.
