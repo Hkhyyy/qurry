@@ -700,13 +700,15 @@ const handlers: Record<string, (a: any) => unknown> = {
   ],
   apply_migrations: () => ["3"],
   save_migration: (a: any) => `${a.dir}/V4__x.sql`,
-  // Kept for the session, newest first; the core masks passwords (AUTH …) as history::redact does
+  // Kept for the session, newest first; the core masks passwords (AUTH …) as history::redact does. window.__mockHistoryRows
+  // (stories): that many more queries after these, for a long list
   history_add: (a: any) => void historyAdded.unshift({ id: `ha${historyAdded.length}`, connId: a.connId, database: a.database ?? undefined, sql: String(a.sql).replace(/^(\s*auth\s+).*$/i, "$1***"), ts: Date.now() }),
   history_list: (a: any) =>
     [
       ...historyAdded,
       { id: "h1", connId: "dev", sql: "SELECT client_ip, count(*) FROM logs.user_activity_log GROUP BY 1 ORDER BY 2 DESC LIMIT 20", ts: Date.now() - 60000 },
       { id: "h2", connId: "dev", sql: "select * from users where id = 42", ts: Date.now() - 3600000 },
+      ...Array.from({ length: (globalThis as any).__mockHistoryRows ?? 0 }, (_, i) => ({ id: `hm${i}`, connId: "dev", sql: `select * from orders where user_id = ${i + 1} order by created_at desc`, ts: Date.now() - 7200000 - i * 60000 })),
     ].filter((h) => !a?.connId || h.connId === a.connId),
   history_delete: () => null,
   fake_preview: () => ({

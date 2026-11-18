@@ -76,6 +76,7 @@ export function HistoryDialog({ connId, kind, title, initialTab = "history", onP
       size="xl"
       className="history"
       fixed
+      bodyClassName="fill"
       onClose={onClose}
       onKeyDown={(e) => {
         if (e.key === "ArrowDown") setIdx((i) => Math.min(i + 1, list.length - 1));

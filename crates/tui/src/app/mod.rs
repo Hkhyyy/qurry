@@ -918,6 +918,8 @@ pub struct Hits {
     pub result_tabs: Vec<(ratatui::layout::Rect, Option<usize>)>,
     /// The open confirm's question or warnings didn't fit the window: y / Enter don't answer it
     pub confirm_unseen: bool,
+    /// Rows of a scrolled Message / Note's text on screen (PgUp PgDn move by this)
+    pub popup_page: u16,
 }
 
 /// Tabs·split of a workspace other than the current one (tab objects kept as is: console sessions·transactions·results survive)
@@ -967,6 +969,8 @@ pub struct App {
     pub focus: Focus,
     pub explorer: bool,
     pub popup: Option<Popup>,
+    /// How far a Message / Note too long for the window is scrolled (0 when none is open)
+    pub popup_scroll: u16,
     /// Confirms an async result opened while the user works in another popup (a form, a palette): the next one opens when that closes
     pub(crate) waiting: Vec<Popup>,
     pub status: String,
@@ -1111,6 +1115,7 @@ impl App {
             focus: Focus::Tree,
             explorer: true,
             popup: None,
+            popup_scroll: 0,
             waiting: vec![],
             status: "Ready — not sure? ⌃p searches everything · F1 keymap".into(),
             quit: false,

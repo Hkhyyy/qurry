@@ -117,6 +117,8 @@ fn draw_screen(f: &mut Frame, app: &mut App) {
     }
     if app.popup.is_some() {
         draw_popup(f, app);
+    } else {
+        app.popup_scroll = 0;
     }
 }
 

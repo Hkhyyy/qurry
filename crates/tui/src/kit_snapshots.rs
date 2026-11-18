@@ -714,6 +714,18 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         p.toggle();
     }
     scenes.push(app_scene(h, "Import Data Sources — confirm", "One row per source: what is added and mapped (SSH, SSL, Read-only), password on connect or a warning, skipped ones with the reason; Space leaves a row out, y / Enter imports the checked ones", 120, 40));
+    // #196: the same in an 80×24 terminal, and a long message and confirm: the title and the keys stay, the rest scrolls or is cut
+    if let Some(Popup::ImportPick(p)) = &mut h.app.popup {
+        p.move_by(3);
+    }
+    scenes.push(app_scene(h, "Import Data Sources — confirm, 80×24", "In a small terminal the rows scroll to the selected one; the question and the keys stay", 80, 24));
+    let text = (1..=60).map(|i| format!("line {i}: connection refused (db.example.com:5432)")).collect::<Vec<_>>().join("\n");
+    h.app.popup = Some(Popup::Message { title: "Couldn't connect".into(), text });
+    h.app.popup_scroll = 20;
+    scenes.push(app_scene(h, "Long message, 80×24", "A message taller than the window: ↑↓ PgUp PgDn scroll it, the title and the keys stay", 80, 24));
+    let stmts = (1..=40).map(|i| format!("  update orders set status = 'paid' where id = {i}\n     → 1 row")).collect::<Vec<_>>().join("\n");
+    h.app.popup = Some(Popup::Confirm { opened: None, sql: Some(qurry_core::store::DbKind::Postgres), text: format!("These statements change data on \"[DEV] shop\":\n\n{stmts}\n\nRun them?"), on_yes: Box::new(|_| {}) });
+    scenes.push(app_scene(h, "Long confirm, 80×24", "A confirm of 40 statements: the ones that don't fit are counted with the rows they change; the question and y / Enter stay", 80, 24));
     h.app.popup = None;
     // Explain Analyze of several statements that need a look: each with its own reason, danger border
     let asks: Vec<(String, String)> = ["select nextval('payment_id_seq')", "delete from payment"]

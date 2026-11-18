@@ -76,23 +76,7 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
             }
             app.popup = Some(Popup::Help { sel, scroll, record, message });
         }
-        Popup::Message { .. } => {
-            if !matches!(k.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1)) {
-                app.popup = Some(popup);
-            }
-        }
-        // Closing it goes back to what it was opened from. A question under it comes up quiet, so a second press meant for the
-        // notice (or typing that goes on) doesn't answer it
-        Popup::Note { title, text, back } => {
-            app.popup = match k.code {
-                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1) => Some(match *back {
-                    Popup::Confirm { text, sql, on_yes, .. } => Popup::Confirm { text, sql, on_yes, opened: Some(Instant::now()) },
-                    Popup::AllowPlaintext { text, on_yes, .. } => Popup::AllowPlaintext { text, on_yes, opened: Instant::now() },
-                    back => back,
-                }),
-                _ => Some(Popup::Note { title, text, back }),
-            };
-        }
+        p @ (Popup::Message { .. } | Popup::Note { .. }) => message_key(app, p, k),
         // n / Esc always cancel. A confirm that came up on its own (`opened`) takes y / Enter only after a pause, like AllowPlaintext below
         Popup::Confirm { text, sql, on_yes, opened } => match k.code {
             KeyCode::Char('n') | KeyCode::Esc => {}
@@ -363,6 +347,35 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
         }
         p @ Popup::Params { .. } => params_key(app, p, k),
     }
+}
+
+/// A Message or Note: Esc / Enter / q / F1 close it, ↑↓ PgUp PgDn Home End scroll a text taller than the window (the draw keeps
+/// the scroll in range). A Note closing goes back to what it was opened from; a question under it comes up quiet, so a second
+/// press meant for the notice (or typing that goes on) doesn't answer it
+fn message_key(app: &mut App, p: Popup, k: KeyEvent) {
+    let page = app.hits.popup_page.max(1);
+    let s = app.popup_scroll;
+    app.popup_scroll = match k.code {
+        KeyCode::Down | KeyCode::Char('j') => s.saturating_add(1),
+        KeyCode::Up | KeyCode::Char('k') => s.saturating_sub(1),
+        KeyCode::PageDown | KeyCode::Char(' ') => s.saturating_add(page),
+        KeyCode::PageUp => s.saturating_sub(page),
+        KeyCode::Home => 0,
+        KeyCode::End => u16::MAX,
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1) => {
+            app.popup_scroll = 0;
+            if let Popup::Note { back, .. } = p {
+                app.popup = Some(match *back {
+                    Popup::Confirm { text, sql, on_yes, .. } => Popup::Confirm { text, sql, on_yes, opened: Some(Instant::now()) },
+                    Popup::AllowPlaintext { text, on_yes, .. } => Popup::AllowPlaintext { text, on_yes, opened: Instant::now() },
+                    back => back,
+                });
+            }
+            return;
+        }
+        _ => s,
+    };
+    app.popup = Some(p);
 }
 
 /// The Parameters popup (#173): Tab / ↓ the next field, ⇧Tab / ↑ the one before (around), Enter runs with every value from any

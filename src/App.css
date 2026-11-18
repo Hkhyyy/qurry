@@ -431,7 +431,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .plan-table td.num { text-align: right; color: var(--c-2aacb8); }
 .plan-table tr.on td { background: var(--c-2e436e); }
 .hist-filter { margin-bottom: var(--ui-sp-3); }
-.hist-body { display: flex; gap: var(--ui-sp-3); height: 380px; }
+.hist-body { display: flex; gap: var(--ui-sp-3); flex: 0 1 380px; min-height: 0; }
 .hist-body .hist-list { flex: 1.2; min-width: 0; }
 .hist-body .hist-preview { flex: 1; min-width: 0; }
 .audit-detail { display: flex; flex-direction: column; gap: var(--ui-sp-2); overflow: auto; }
@@ -640,9 +640,10 @@ html, body, #root, * { overscroll-behavior: none; }
 /* Keep the title on one line even at narrow widths */
 .explorer-head, .explorer-title, .panel-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .explorer-title { flex: 1; min-width: 0; }
-.ui-modal.keymap { max-height: 82vh; }
+.ui-modal.keymap { max-height: min(82vh, 100%); }
 .keymap-search { flex: none; margin-bottom: var(--ui-sp-3); }
-.keymap-body { overflow: auto; flex: 1; min-height: 0; columns: 2 340px; column-gap: 24px; }
+.keymap-body { overflow: auto; flex: 1; min-height: 0; }
+.keymap-cols { columns: 2 340px; column-gap: 24px; }
 .keymap-section { break-inside: avoid; margin-bottom: 12px; }
 .keymap-title { font-weight: 600; font-size: 12px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 3px; margin-bottom: 4px; }
 .keymap-row { display: flex; gap: 10px; font-size: 12px; padding: 2px 0; }

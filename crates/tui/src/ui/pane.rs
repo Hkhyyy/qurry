@@ -40,8 +40,9 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, fo
             let [ed, res] = Layout::vertical([Constraint::Percentage(pct), Constraint::Percentage(100 - pct)]).areas(body);
             // The find bar takes a spot above the editor (so it doesn't cover text)
             let (find_bar, ed) = if finding {
-                let [b, e] = Layout::vertical([Constraint::Length(4), Constraint::Min(3)]).areas(ed);
-                (b, e)
+                // Whole in a short window too (over the editor's lines then)
+                let bh = 4.min(ed.height);
+                (Rect { height: bh, ..ed }, Rect { y: ed.y + bh, height: ed.height - bh, ..ed })
             } else {
                 (Rect::default(), ed)
             };
