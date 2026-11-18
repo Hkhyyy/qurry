@@ -43,6 +43,10 @@ URL 에 없는 부분은 `psql` · `mysql` · `redis-cli` 처럼 환경에서 �
 
 줄이 좁으면 화면의 키가 먼저 빠지고, 그다음 `⌃k actions` 를 뺀 공통 키, 그다음 항목 (컬럼 한도, Max, Min, Avg, Sum, Not null, Size, Shown columns), 마지막으로 `⌃k actions` 가 빠집니다. Position 은 남습니다. 상태 글은 항목이 없을 때처럼 줄의 절반까지 차지합니다. 그러면 항목이 빠져야 할 때만 3 분의 1 까지 양보하고 `…` 로 잘립니다. 실행 중이거나 내보내기 · 가져오기 중인 줄은 항목 때문에 잘리지 않습니다.
 
+## 콘솔 스키마
+
+PostgreSQL 스키마에서 연 콘솔 (스키마에서 F4, 또는 스키마나 그 안의 테이블을 고른 채 `⌃l`) 은 그 스키마에서 시작합니다: 세션의 `search_path` 를 그 스키마, 다음 `public` 으로 두고, 콘솔 제목에 스키마가 보입니다 (`shop · billing · Tx: Auto`). GUI 와 같습니다. **⌃k › Switch Schema…** 는 Data Source 의 다른 스키마를 고릅니다 (시스템 스키마는 빼고, 지금 스키마에 표시). MySQL 에서는 스키마가 데이터베이스이므로 `USE` 를 보냅니다. Data Source 의 Switch schema 옵션 (Options 탭) 이 정합니다: Auto 는 둘 다, Manual 은 스키마에서 연 콘솔도 기본 스키마에 두고 Switch Schema… 는 그대로 쓰며, Disable 은 둘 다 끄고 Switch Schema… 가 그렇다고 알립니다. 바꾸기에 실패하면 상태 줄에 이유가 나오고 콘솔은 기본 스키마에 남습니다.
+
 ## 로그 파일
 
 **⌃k › Show Log** 는 Finder 에서 로그 파일을 보여 주고 (Linux 에서는 그 폴더를 엽니다) 상태 줄에 경로를 띄웁니다 ([위치와 담기는 것](getting-started.md#설정이-저장되는-곳)). SSH 로 접속했을 때는 내 화면에 아무것도 열리지 않으니 그 경로를 그쪽에서 읽으세요 (`tail -f`). GUI 에서는 **Help › Show Log** 입니다.

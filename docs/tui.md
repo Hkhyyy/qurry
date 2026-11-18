@@ -43,6 +43,10 @@ The selection the items read is the marked rows (`m`) in the cursor's column, or
 
 When the line is too narrow, the screen's keys go first, then the common keys but `⌃k actions`, then the items (the column limit, Max, Min, Avg, Sum, Not null, Size, Shown columns), then `⌃k actions`; Position stays. The status text keeps up to half the line, as without items; only when an item would otherwise go does it give way down to a third (cut with `…`). A run's or a transfer's line is never cut to make room for items.
 
+## Console schema
+
+A console opened from a PostgreSQL schema (F4 on it, or `⌃l` with the schema or a table in it selected) starts in that schema: its session's `search_path` is set to it, then `public`, and the console's title shows it (`shop · billing · Tx: Auto`), as in the GUI. **⌃k › Switch Schema…** picks another of the data source's schemas (system schemas left out, the current one marked); on MySQL, where a schema is a database, it sends `USE`. The data source's Switch schema option (Options tab) decides: Auto does both, Manual keeps a console opened from a schema in the default one while Switch Schema… still works, Disable turns both off and Switch Schema… says so. If the switch fails, the status line says why and the console stays in the default schema.
+
 ## Log file
 
 **⌃k › Show Log** reveals the log file in Finder (on Linux it opens its folder) and puts its path on the status line ([where it is and what it holds](getting-started.md#where-qurry-keeps-your-settings)). Over SSH nothing opens on your screen; read that path there (`tail -f`). The GUI's is **Help › Show Log**.
