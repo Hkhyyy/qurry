@@ -24,6 +24,10 @@ export const ScreenParameters = { ...by("Parameters"), name: "Screen · Paramete
 export const ScreenColumnLayout = { ...by("Column layout"), name: "Screen · Column layout (pinned and hidden)" };
 export const ScreenColumns = { ...by("Columns…"), name: "Screen · Columns…" };
 export const ScreenConsoleSwitchSchema = { ...by("Console: Switch Schema"), name: "Screen · Console: Switch Schema" };
+export const ScreenPasswordCommand = { ...by("Data source form: password command"), name: "Screen · Data source form: password command" };
+export const SmallLongConfirm = { ...by("Long confirm, 80×24"), name: "Small · Long confirm (80×24)" };
+export const SmallLongMessage = { ...by("Long message, 80×24"), name: "Small · Long message (80×24)" };
+export const SmallImportConfirm = { ...by("Import Data Sources — confirm, 80×24"), name: "Small · Import Data Sources confirm (80×24)" };
 export const ScreenActionsPalette = { ...by("Actions palette"), name: "Screen · Actions palette" };
 export const ScreenDataSourceForm = { ...by("Data source form"), name: "Screen · Data source form" };
 // #131: Admin reports (MCP dba_report) for Production sources; disabled with why on other sources and with MCP Off
