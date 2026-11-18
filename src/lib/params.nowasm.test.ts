@@ -9,7 +9,8 @@ describe("params without the WASM module", () => {
     expect(findParams("select :a", "postgres")).toEqual([]);
   });
 
-  it("substitutes as plain text, longer names first", () => {
-    expect(substituteParams("select :a, :ab, :c", "postgres", { a: "1", ab: "2" })).toBe("select 1, 2, :c");
+  it("substitutes nothing, so casts, strings and longer names stay", () => {
+    const sql = "select x::a, ':a', :ab";
+    expect(substituteParams(sql, "postgres", { a: "1" })).toBe(sql);
   });
 });

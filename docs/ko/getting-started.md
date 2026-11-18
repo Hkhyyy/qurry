@@ -52,7 +52,7 @@ stable 릴리스는 버전 태그로 나오고, `main` 이 바뀔 때마다 beta
 
 ### 사용자 파라미터
 
-콘솔 문장에는 사용자 파라미터를 쓸 수 있습니다: `select * from orders where id = :id and status = :status` 처럼 코드 안의 `:name` 입니다. 문자열 · 따옴표 이름 · 주석 · 달러 인용은 건드리지 않고, PostgreSQL 캐스트 (`x::int`), 대입 (`:=`), MySQL 변수 (`@v`, `@@sql_mode`), ClickHouse 의 `{p:UInt8}`, 배열 슬라이스 (`a[1:3]`) 도 파라미터가 아닙니다. 파라미터가 있는 문장을 실행하면 Qurry 가 이름마다 한 번씩 값을 묻고, **Cancel** 하면 아무것도 실행하지 않습니다. 값은 그 콘솔에 기억되어 다음 실행에 다시 나옵니다. 값은 입력한 그대로 텍스트로 들어가니 따옴표는 직접 씁니다 (`paid` 가 아니라 `'paid'`). 읽기 전용 검사, Production 확인, 위험한 문장 확인은 모두 값이 들어간 SQL 을 봅니다. MCP 서버에는 파라미터가 없습니다: AI 는 SQL 을 직접 씁니다.
+콘솔 문장에는 사용자 파라미터를 쓸 수 있습니다: `select * from orders where id = :id and status = :status` 처럼 코드 안의 `:name` 입니다. 문자열 · 따옴표 이름 · 주석 · 달러 인용은 건드리지 않고, PostgreSQL 캐스트 (`x::int`), 대입 (`:=`), MySQL 변수 (`@v`, `@@sql_mode`), ClickHouse 의 `{p:UInt8}`, Oracle 트리거의 `:new.id` / `:old.id`, 배열 슬라이스 (`a[1:3]`) 도 파라미터가 아닙니다. 파라미터가 있는 문장을 실행하면 Qurry 가 이름마다 한 번씩 값을 묻고, **Cancel** 하면 아무것도 실행하지 않습니다. 값은 그 콘솔에 기억되어 다음 실행에 다시 나옵니다. 값은 입력한 그대로 텍스트로 들어가니 따옴표는 직접 씁니다 (`paid` 가 아니라 `'paid'`). 읽기 전용 검사, Production 확인, 위험한 문장 확인은 모두 값이 들어간 SQL 을 봅니다. MCP 서버에는 파라미터가 없습니다: AI 는 SQL 을 직접 씁니다.
 
 ### Data Source 는 함께 씁니다
 

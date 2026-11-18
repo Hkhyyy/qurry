@@ -52,7 +52,7 @@ Start `qurry-tui` in a terminal. (Keys below are written as on macOS; on Linux `
 
 ### User parameters
 
-A console statement can hold user parameters: `:name` in code, as in `select * from orders where id = :id and status = :status`. Strings, quoted names, comments and dollar quotes are left alone, as are PostgreSQL casts (`x::int`), assignments (`:=`), MySQL variables (`@v`, `@@sql_mode`), ClickHouse's `{p:UInt8}` and array slices (`a[1:3]`). When you run a statement that has them, Qurry asks for each name once; **Cancel** runs nothing. The values are remembered for that console, so the next run offers them again. A value goes in as you typed it, as plain text: type the quotes yourself (`'paid'`, not `paid`). The read-only check, the Production confirmation and the dangerous-statement ask all see the SQL with the values in. The MCP server has no parameters: an AI writes its SQL itself.
+A console statement can hold user parameters: `:name` in code, as in `select * from orders where id = :id and status = :status`. Strings, quoted names, comments and dollar quotes are left alone, as are PostgreSQL casts (`x::int`), assignments (`:=`), MySQL variables (`@v`, `@@sql_mode`), ClickHouse's `{p:UInt8}`, Oracle triggers' `:new.id` / `:old.id` and array slices (`a[1:3]`). When you run a statement that has them, Qurry asks for each name once; **Cancel** runs nothing. The values are remembered for that console, so the next run offers them again. A value goes in as you typed it, as plain text: type the quotes yourself (`'paid'`, not `paid`). The read-only check, the Production confirmation and the dangerous-statement ask all see the SQL with the values in. The MCP server has no parameters: an AI writes its SQL itself.
 
 ### Data sources are shared
 

@@ -17,7 +17,5 @@ export function findParams(sql: string, kind: DbKind): Param[] {
 
 /** `sql` with each `:name` replaced by its value as typed (the user writes the quotes); a name without a value stays as is */
 export function substituteParams(sql: string, kind: DbKind, values: Record<string, string>): string {
-  // Without the module: plain text, longer names first so `:ab` isn't read as `:a` + "b"
-  const plain = () => Object.keys(values).sort((a, b) => b.length - a.length).reduce((t, n) => t.split(`:${n}`).join(values[n]), sql);
-  return sharedOr<string | undefined>(undefined, (s) => s.substituteParams(sql, kind, values)) ?? plain();
+  return sharedOr(sql, (s) => s.substituteParams(sql, kind, values));
 }

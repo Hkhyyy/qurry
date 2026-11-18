@@ -1,5 +1,7 @@
 //! User parameters in console SQL (#173): `:name` in code, asked for before a run and put in as typed (no quoting, as DataGrip).
-//! Read with scope::lex, so strings, quoted names, comments and dollar quotes are never scanned. Both apps substitute before
+//! Only code is read, with the server's rules for its kind (sql.rs), so strings, quoted names, comments and dollar quotes are
+//! never scanned (ClickHouse `\'` and `# `, SQL Server / SQLite `[names]` included). Oracle triggers' `:new.x` / `:old.x` stay.
+//! Both apps substitute before
 //! any check (read-only, Production, dangerous statements), so those see the final SQL. MCP doesn't: an AI writes its SQL itself.
 use crate::DbKind;
 use crate::scope::{K, lex};
@@ -19,6 +21,9 @@ pub fn find_params(sql: &str, kind: DbKind) -> Vec<Param> {
         return vec![];
     }
     let name_byte = |c: char| crate::complete::is_word(c) || c == '$';
+    // Non-code blanked first: scope::lex only knows PostgreSQL and MySQL quoting. Offsets are the same in both texts
+    let code = crate::sql::blank_non_code(sql, kind);
+    let sql = code.as_str();
     let toks = lex(sql, kind == DbKind::Mysql);
     let mut out = vec![];
     for w in toks.windows(2) {
@@ -31,7 +36,9 @@ pub fn find_params(sql: &str, kind: DbKind) -> Vec<Param> {
         // `=` or one `:` after the name (`:a:=`, `:a:b`); `::` is a cast of the value (`:id::int`)
         let after = &sql[name.e..];
         let assigns = after.starts_with('=') || (after.starts_with(':') && !after.starts_with("::"));
-        if !glued && !assigns {
+        // Oracle trigger bodies: `:new.id`, `:old.id` are the row, not something to ask for
+        let row = kind == DbKind::Oracle && after.starts_with('.') && ["new", "old"].iter().any(|r| sql[name.s..name.e].eq_ignore_ascii_case(r));
+        if !glued && !assigns && !row {
             out.push(Param { name: sql[name.s..name.e].to_string(), start: colon.s, end: name.e });
         }
     }
@@ -135,6 +142,36 @@ mod tests {
     #[test]
     fn clickhouse_query_parameters_are_not_user_parameters() {
         assert!(found("select {p:UInt8}, {name:String}", DbKind::Clickhouse).is_empty());
+    }
+
+    #[test]
+    fn clickhouse_backslash_strings_and_hash_comments_are_not_scanned() {
+        const CH: DbKind = DbKind::Clickhouse;
+        assert!(found(r"select 'it\'s :a', 1", CH).is_empty());
+        assert!(found("select 1 # :a\n, 2", CH).is_empty());
+        assert_eq!(found(r"select 'x\'', :b", CH), [":b"]);
+    }
+
+    #[test]
+    fn bracket_names_are_not_scanned() {
+        for kind in [DbKind::Mssql, DbKind::Sqlite] {
+            assert!(found("select [x :y] from t", kind).is_empty(), "{kind:?}");
+            assert_eq!(found("select [a]] :b], :c", kind), [":c"], "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn oracle_trigger_rows_are_not_parameters() {
+        const OR: DbKind = DbKind::Oracle;
+        assert!(found("create trigger t before insert on x for each row begin :new.id := :OLD.id; end;", OR).is_empty());
+        assert_eq!(found("select :new, :old_id from t where a = :b", OR), [":new", ":old_id", ":b"]);
+        assert_eq!(found("select :new.id", PG), [":new"]);
+    }
+
+    #[test]
+    fn non_ascii_strings_keep_offsets() {
+        let sql = "select '이름 :x', :id";
+        assert_eq!(find_params(sql, PG), vec![Param { name: "id".into(), start: 20, end: 23 }]);
     }
 
     #[test]
