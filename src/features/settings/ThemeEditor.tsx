@@ -55,7 +55,7 @@ function TokenRow({ t, value, edited, warning, onHot, onChange, onReset }: { t: 
           {edited && <span className="theme-edited" title="Changed from the base theme" />}
         </div>
         {warning && (
-          <div className="theme-warn" title={`${LABEL[warning.fg]} on ${LABEL[warning.bg]}: needs ${warning.min}:1`}>
+          <div className="theme-warn" title={`${LABEL[warning.fg]} on ${LABEL[warning.bg]}: needs ${warning.min}:1. Pick a color further from it in lightness, or ↺ reset to the base theme's`}>
             ⚠ {warning.ratio.toFixed(1)}:1 on {LABEL[other!].split(",")[0]}
           </div>
         )}
