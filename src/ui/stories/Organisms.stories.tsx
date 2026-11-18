@@ -40,6 +40,7 @@ import {
   Toolbar,
   ToolbarSep,
 } from "..";
+import { ParamsDialog } from "../../components/ParamsDialog";
 import { withoutComments } from "../../lib/sqlSplit";
 import { connTabVars } from "../../lib/theme";
 import { TabIcon } from "../icons";
@@ -312,6 +313,23 @@ export const ConfirmTerminate: S = {
 export const ConfirmChoice: S = {
   parameters: { layout: "fullscreen" },
   render: () => <OpenConfirm title="Switch to Auto" message="This console has uncommitted changes." okLabel="Commit and Switch" cancelLabel="Stay in Manual" />,
+};
+/** Run a statement with user parameters (#173, askParams): a field per name in order, the last values offered again, the first one
+ *  focused; the statement below with the names marked (':notaparam' in a string, the -- :c comment and ::int casts are not asked).
+ *  Enter in any field runs, Esc cancels */
+export const Parameters: S = {
+  parameters: { layout: "fullscreen" },
+  render: () => (
+    <ParamsDialog
+      req={{
+        names: ["user_id", "status"],
+        last: { user_id: "42" },
+        sql: "select * from orders\nwhere user_id = :user_id and status = :status\n  and note <> ':notaparam' -- :c\n  and total::int > 0",
+        kind: "postgres",
+      }}
+      onDone={() => {}}
+    />
+  ),
 };
 
 // ───────── Editor tab bar: the active tab in each theme, split panes, many tabs ─────────

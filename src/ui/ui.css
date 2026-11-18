@@ -309,6 +309,8 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-hl-number { color: var(--c-number); }
 .ui-hl-string { color: var(--ui-json-string); }
 .ui-hl-comment { color: var(--c-comment); font-style: italic; }
+/* A user parameter (:name): the text's own color on an accent tint, so it reads in every theme */
+.ui-hl-param { color: var(--ui-text); background: color-mix(in srgb, var(--ui-accent) 28%, transparent); border-radius: 2px; }
 .ui-tabs.size-sm { gap: var(--ui-sp-1); margin-bottom: 0; border-bottom: none; }
 .ui-tabs.size-sm .ui-tab { padding: var(--ui-sp-2) var(--ui-sp-3) var(--ui-sp-2); }
 

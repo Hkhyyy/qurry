@@ -6,6 +6,7 @@ import { CopyRowsDialog, GenerateDataDialog } from "../../components/DataTools";
 import { HistoryDialog } from "../../components/HistoryDialog";
 import { KeymapDialog } from "../../components/KeymapDialog";
 import { NewObjectDialog, TableDesigner } from "../../components/ObjectEditors";
+import { ParamsHost } from "../../components/ParamsDialog";
 import { ProductionLog } from "../../components/ProductionLog";
 import { schemaChanged } from "../../components/SchemaTree";
 import { SqlBlock } from "../../components/SqlBlock";
@@ -151,6 +152,7 @@ export function Dialogs({ conns, setStatus, openConsole, startBackup, startExpor
       )}
       {importReq && <ImportDialog target={importReq.target} schema={importReq.schema} table={importReq.table} onImport={startImport} onClose={() => setImportReq(null)} />}
       <TextDialog />
+      <ParamsHost />
       <ConfirmHost />
       {updateOpen && update?.latest && <UpdateDialog info={update} onClose={() => setUpdateOpen(false)} beforeInstall={readyToQuit} />}
       {keymapOpen && <KeymapDialog onClose={() => setKeymapOpen(false)} onEdit={() => (setKeymapOpen(false), setSettingsOpen("keymap"))} />}

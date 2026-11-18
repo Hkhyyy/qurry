@@ -748,6 +748,7 @@ html, body, #root, * { overscroll-behavior: none; }
 .ws-foot .ui-icon-btn { width: 30px; height: 30px; }
 .ws-add.ui-icon-btn { width: 30px; height: 30px; border: 1px dashed var(--ui-border); border-radius: 8px; }
 .text-dialog-choices { margin-top: var(--ui-sp-4); }
+.params-preview { margin-top: var(--ui-sp-4); max-height: 160px; }
 .ws-explorer { height: 100%; }
 
 .tree-node .node-icon.rd-type { width: auto; }
