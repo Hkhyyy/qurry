@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::{PAction, COLUMNS};
 
 /// A yes pressed during a quiet confirm's pause (TLS_ASK_GRACE) doesn't count: say so instead of ignoring it
 const TOO_SOON: &str = "Wait a moment, then answer (n / Esc cancels)";
@@ -246,8 +247,18 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                 KeyCode::Up => p.sel = p.sel.saturating_sub(1),
                 KeyCode::PageDown => p.sel = (p.sel + 15).min(n.saturating_sub(1)),
                 KeyCode::PageUp => p.sel = p.sel.saturating_sub(15),
-                // A checklist (⌃k › Status Bar Items…): Space toggles as Enter does, unless a filter is being typed
-                KeyCode::Enter | KeyCode::Char(' ') if k.code == KeyCode::Enter || (p.input.lines().concat().is_empty() && p.items.iter().all(|i| matches!(i.action, crate::app::PAction::StatusItem(_)))) => {
+                // Columns…: ⇥ pins or unpins the row's column
+                KeyCode::Tab if p.title == COLUMNS => {
+                    if let Some(PAction::Column(c)) = App::palette_matches(&p).get(p.sel).map(|x| x.action.clone()) {
+                        app.popup = Some(Popup::Palette(p));
+                        return app.pick_column(c, true);
+                    }
+                }
+                // A checklist (⌃k › Status Bar Items…): Space toggles as Enter does, unless a filter is being typed. In Columns… always
+                // (column names have no spaces to type)
+                KeyCode::Enter | KeyCode::Char(' ')
+                    if k.code == KeyCode::Enter || p.title == COLUMNS || (p.input.lines().concat().is_empty() && p.items.iter().all(|i| matches!(i.action, PAction::StatusItem(_)))) =>
+                {
                     if let Some(it) = App::palette_matches(&p).get(p.sel).map(|x| (*x).clone()) {
                         // Shown while it runs, as on a click: an item can come back to it (Production Log's note)
                         app.popup = Some(Popup::Palette(p));

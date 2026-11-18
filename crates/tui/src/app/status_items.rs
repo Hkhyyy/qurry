@@ -69,9 +69,9 @@ impl App {
         let Some(g) = grid else { return vec![] };
         let (target, kind) = (tab.target.clone(), self.kind_of(&tab.conn));
         let mut cache = self.stats_cache;
-        let mut s = Status { kind: Some(kind), shown: g.shown, ..Default::default() };
+        let mut s = Status { kind: Some(kind), shown: g.shown, hidden: g.view.hidden, ..Default::default() };
         if g.rows() > 0 && g.cols() > 0 {
-            let (rows, cols) = selection(g);
+            let (rows, cols) = g.status_cells();
             let (r, c) = (Span::of(rows.iter().copied()), Span::of(cols.iter().copied()));
             s.pos = r.zip(c);
             if rows.len() * cols.len() > 1 {
@@ -147,21 +147,4 @@ impl App {
 pub fn loaded(cols: Vec<qurry_core::meta::ColumnMeta>) -> TableCols {
     let filled = cols.iter().filter(|c| c.auto_increment).map(|c| c.name.clone()).collect();
     TableCols::Loaded(cols.into_iter().map(|c| (c.name, ColumnType { data_type: c.data_type, charset: c.charset })).collect(), filled)
-}
-
-/// The selected rows and columns (in grid order): the marked rows (and a range's rows) in the cursor's column, else the range, else the
-/// cursor's cell
-fn selection(g: &Grid) -> (Vec<usize>, Vec<usize>) {
-    let rect = g.sel_rect();
-    if !g.marked.is_empty() {
-        let mut rows = g.marked.clone();
-        if let Some((r0, _, r1, _)) = rect {
-            rows.extend(r0..=r1);
-        }
-        return (rows.into_iter().filter(|&r| r < g.rows()).collect(), vec![g.col]);
-    }
-    match rect {
-        Some((r0, c0, r1, c1)) => ((r0..=r1).collect(), (c0..=c1).collect()),
-        None => (vec![g.row], vec![g.col]),
-    }
 }

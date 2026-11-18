@@ -218,6 +218,8 @@ pub(super) fn draw_popup(f: &mut Frame, app: &mut App) {
                 let again = if p.title == "Search Everywhere" { crate::app::Action::SearchEverywhere } else { crate::app::Action::GoToObject };
                 let again = app.keys.keys(again).first().map(|k| disp(k)).unwrap_or_else(|| "—".into());
                 format!(" Enter open · {ddl} DDL · {again} scope · Esc ")
+            } else if p.title == crate::app::COLUMNS {
+                " ↑↓ move · Space show/hide · ⇥ pin · Esc close ".into()
             } else if check {
                 " ↑↓ move · Space toggle · Esc close ".into()
             } else {

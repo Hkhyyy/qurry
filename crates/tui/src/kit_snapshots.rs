@@ -569,6 +569,29 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.run_action(crate::app::Action::ColumnReset);
     h.app.status.clear();
     h.app.close_tab_now(h.app.active);
+    // Column layout (#178): H hides, P pins at the left, C Columns…; saved per table in settings.json "columnLayout" (shared with the GUI)
+    let rows: [&[&str]; 4] = [
+        &["486", "O-20261101", "paid", "12000", "call first", "2026-11-01 09:12", "2026-11-01 09:30", "card"],
+        &["487", "O-20261102", "sent", "800", "gift wrap", "2026-11-02 10:40", "2026-11-03 08:00", "card"],
+        &["488", "O-20261103", "paid", "45000", "-", "2026-11-03 14:05", "2026-11-03 14:05", "transfer"],
+        &["489", "O-20261104", "refunded", "3200", "wrong size", "2026-11-04 08:30", "2026-11-05 11:20", "card"],
+    ];
+    h.table_tab("orders", &["idx", "order_no", "status", "total", "memo", "created_at", "updated_at", "paid_by"], &rows, &["idx"]);
+    h.app.focus = crate::app::Focus::Grid;
+    h.key("Right");
+    h.key("Shift+P");
+    h.key("Right");
+    h.key("Right");
+    h.key("Shift+P");
+    h.key("End");
+    h.key("Shift+H");
+    h.key("End");
+    h.app.status.clear();
+    scenes.push(app_scene(h, "Column layout", "order_no and status pinned at the left (P) stay while the grid scrolls right; paid_by hidden (H), so the status line says 1 hidden; C opens Columns…", 100, 12));
+    h.key("Shift+C");
+    scenes.push(app_scene(h, "Columns…", "C (⌃k › Columns…): every column with its box; Space shows or hides, ⇥ pins, typing filters; Show All brings the hidden ones back", 100, 16));
+    h.app.popup = None;
+    h.app.close_tab_now(h.app.active);
     h.app.focus = crate::app::Focus::Editor;
     // JSON colors (the GUI's tokenizer, qurry_shared::format::json_spans): one line per cell, only what fits is read
     let id = h.console_with("select id, payload from webhook_event;", 1, 10);

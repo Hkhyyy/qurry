@@ -16,6 +16,11 @@ fn status_hints(app: &App) -> (Hints, Hints) {
         let k: Vec<String> = [A::ColumnNarrower, A::ColumnWider, A::ColumnFit].into_iter().filter_map(|a| grid(a, "").map(|(k, _)| k)).collect();
         (!k.is_empty()).then(|| (k.join(" "), "width"))
     };
+    // Column layout: hide · pin · Columns… (H P C) in one hint
+    let layout = || {
+        let k: Vec<String> = [A::ColumnHide, A::ColumnPinToggle, A::Columns].into_iter().filter_map(|a| grid(a, "").map(|(k, _)| k)).collect();
+        (!k.is_empty()).then(|| (k.join(" "), "columns"))
+    };
     let (ctx, glob) = match app.focus {
         Focus::Tree => (
             vec![fixed("Enter", "open"), fixed("F4", "console"), tree(A::ManageSchemas, "schemas"), fixed("/", "filter"), tree(A::NewDataSource, "new"), tree(A::EditDataSource, "edit"), tree(A::WsMoveConn, "workspace"), tree(A::Refresh, "refresh"), cmd(A::Ddl, "DDL")],
@@ -28,7 +33,7 @@ fn status_hints(app: &App) -> (Hints, Hints) {
         Focus::Grid => (
             match app.tabs.get(app.active).map(|t| &t.kind) {
                 Some(TabKind::Table(_)) => vec![
-                    fixed("Enter", "edit"), grid(A::ValueEditor, "value"), widths(), grid(A::AddRow, "add"), grid(A::DeleteRow, "delete"), grid(A::SetNull, "NULL"), cmd(A::Submit, "submit"), grid(A::Revert, "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), grid(A::ExportCsv, "export"),
+                    fixed("Enter", "edit"), grid(A::ValueEditor, "value"), widths(), grid(A::AddRow, "add"), grid(A::DeleteRow, "delete"), grid(A::SetNull, "NULL"), cmd(A::Submit, "submit"), grid(A::Revert, "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), grid(A::ExportCsv, "export"), layout(),
                 ],
                 Some(TabKind::Redis(r)) if r.focus_value => vec![fixed("e", "edit"), fixed("a", "add"), fixed("x", "delete"), fixed("Esc", "keys")],
                 Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("d", "database"), fixed("/", "filter"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
@@ -49,7 +54,7 @@ fn status_hints(app: &App) -> (Hints, Hints) {
                     v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy"), fixed("d", "database")]);
                     v
                 }
-                _ => vec![fixed("s", "sort"), fixed("y", "copy"), grid(A::ValueEditor, "value"), widths(), grid(A::ExportCsv, "export"), fixed("Esc", "editor")],
+                _ => vec![fixed("s", "sort"), fixed("y", "copy"), grid(A::ValueEditor, "value"), widths(), grid(A::ExportCsv, "export"), fixed("Esc", "editor"), layout()],
             },
             vec![cmd(A::NewConsole, "console"), cmd(A::RecentTabs, "tabs"), cmd(A::SearchEverywhere, "search"), cmd(A::Palette, "actions")],
         ),

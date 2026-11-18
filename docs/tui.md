@@ -115,6 +115,10 @@ The terminal draws the TUI's text, so its font and size are the terminal's: Qurr
 
 In PostgreSQL results a long text, JSON or XML value comes cut, ending with a dim `…`. The value panel (`v`), `Enter` and `y` / `Y` read the whole value by the result's primary key; without a key it stays cut and read-only. **⌃k › Grid Long Values…** sets where values are cut (4,096 characters by default, 0 = never), the same setting as the GUI's ([Settings › Long values](settings.md#long-values)).
 
+## Hidden and pinned columns
+
+In a table tab or a result grid, `H` hides the current column and `P` pins it at the left (again: unpins it); pinned columns stay in view while the grid scrolls, after a double line `║` (when they leave no room for the current column, they scroll away until the cursor is back on one). `C` opens **Columns…** (also **⌃k › Columns…**): every column with its box, `Space` / `Enter` shows or hides one, `⇥` pins it, typing filters, and **Show All** brings back every hidden column. The status line says how many are hidden (`cols 3–8 of 14 · 1 hidden`). A table tab's layout is kept for its table in settings.json `"columnLayout"`, which the GUI reads and writes too; a console result keeps it until it runs again, a Database Admin report while it refreshes. The keys are in F1 › Data grid keys.
+
 ## Small windows
 
 The layout is drawn down to **40 × 10** cells. 80 × 24 and larger is comfortable; in a small window, hide the explorer with `⌥0` or narrow it with `⌥[`.
