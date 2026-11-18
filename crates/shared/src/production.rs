@@ -9,7 +9,7 @@ use serde::Serialize;
 
 /// The statements the Production confirmation lists: those that change data (`guard::is_read` is false, so a write keyword only
 /// inside a string or a comment doesn't count). Empty for Explain: it asks its own question
-pub fn asked_statements<'a>(stmts: &'a [String], kind: DbKind, explain: bool) -> Vec<&'a str> {
+pub fn asked_statements(stmts: &[String], kind: DbKind, explain: bool) -> Vec<&str> {
     if explain {
         return vec![];
     }
