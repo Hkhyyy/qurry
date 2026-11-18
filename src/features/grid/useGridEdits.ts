@@ -132,11 +132,10 @@ export function useGridEdits({
 
   const addRow = () => {
     if (!canEdit) return;
+    // Selected in the same update as the row: a key pressed right after (Revert Selected, Delete Row) acts on the new row
     setAdded((a) => [...a, cols.map(() => undefined)]);
-    setTimeout(() => {
-      virt.scrollToIndex(rowCount);
-      selectCell({ r: rowCount, c: 0 }, false);
-    });
+    selectCell({ r: rowCount, c: 0 }, false);
+    setTimeout(() => virt.scrollToIndex(rowCount));
   };
   const cloneRow = async () => {
     if (!canEdit || !active) return;
