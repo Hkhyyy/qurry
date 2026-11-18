@@ -855,6 +855,7 @@ pub enum Action {
     OpenGitHub,
     Help,
     ShowLog,
+    CopyDiagnostics,
     Quit,
 }
 

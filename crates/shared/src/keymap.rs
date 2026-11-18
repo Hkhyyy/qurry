@@ -414,6 +414,7 @@ mod tests {
             ("snippet.save", "SaveSnippet"),
             ("prodLog", "ProductionLog"),
             ("showLog", "ShowLog"),
+            ("copyDiagnostics", "CopyDiagnostics"),
             ("tree.erd", "ShowDiagram"),
             ("tree.backup", "BackupDb"),
             ("tree.restore", "RestoreDb"),

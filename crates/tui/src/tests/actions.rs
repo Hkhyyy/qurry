@@ -102,6 +102,32 @@ async fn show_log_puts_the_path_on_the_status_line() {
     assert!(h.screen(120, 30).contains("Show Log: "), "the path is on the status line");
 }
 
+/// ⌃k › Copy Diagnostics saves the masked text to the temp folder and says where on the status line (the clipboard is OSC 52 in a test)
+#[tokio::test]
+async fn copy_diagnostics_saves_the_masked_text_and_says_where() {
+    let mut h = Harness::new().await;
+    let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "d1", "name": "acme prod", "kind": "postgres",
+        "host": "db.acme.test", "port": 5432, "user": "alice", "database": "shop", "options": { "confirmChanges": true } }))
+    .unwrap();
+    h.app.state.store.save(&cfg).unwrap();
+    std::fs::create_dir_all(h.app.log_file.parent().unwrap()).unwrap();
+    std::fs::write(&h.app.log_file, "t [tui 1] connect postgres://alice:s3cret@db.acme.test/shop failed\nt [tui 1] the last line\n").unwrap();
+    h.key("Ctrl+K");
+    h.type_str("Copy Diagnostics");
+    h.key("Enter");
+    assert_eq!(h.app.ran.last(), Some(&Action::CopyDiagnostics));
+    let file = std::env::temp_dir().join("qurry-diagnostics.txt");
+    assert_eq!(h.app.status, format!("Diagnostics copied · also saved to {}", file.display()));
+    let text = std::fs::read_to_string(&file).unwrap();
+    for w in ["acme prod", "db.acme.test", "alice", "shop", "s3cret"] {
+        assert!(!text.contains(w), "{w} in\n{text}");
+    }
+    assert!(text.contains(&format!("Qurry tui {} · core ", env!("CARGO_PKG_VERSION"))) && text.contains("postgres: 1") && text.contains("Production: 1"), "{text}");
+    assert!(text.contains("the last line"), "{text}");
+    #[cfg(unix)]
+    assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&file).unwrap().permissions()) & 0o777, 0o600);
+}
+
 /// ⌃k › Open GitHub puts the address on the status line whether the browser started or not (SSH: no browser); nothing is launched
 #[tokio::test]
 async fn open_github_puts_the_address_on_the_status_line() {

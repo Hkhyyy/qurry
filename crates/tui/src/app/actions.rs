@@ -138,6 +138,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::OpenGitHub, hint: "", run: open_github },
     ActionDef { action: Action::Help, hint: "", run: |app| app.popup = Some(Popup::Help { sel: 0, scroll: 0, record: None, message: None }) },
     ActionDef { action: Action::ShowLog, hint: "", run: show_log },
+    ActionDef { action: Action::CopyDiagnostics, hint: "", run: copy_diagnostics },
     ActionDef { action: Action::Quit, hint: "", run: quit },
 ];
 
@@ -493,6 +494,28 @@ fn show_log(app: &mut App) {
         Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
         Err(e) => app.status = format!("Show Log: couldn't open it ({e}). Open it yourself: {}", file.display()),
     }
+}
+
+/// Copies qurry_core::diagnostics (no names, hosts or secrets) and also saves it to qurry-diagnostics.txt in the temp folder, the
+/// user's only (0600): over SSH a terminal may not pass the clipboard (OSC 52) on, the file is there
+fn copy_diagnostics(app: &mut App) {
+    let sources = match app.state.store.list() {
+        Ok(s) => s,
+        Err(e) => return app.status = format!("Couldn't copy diagnostics: the data sources can't be read ({e}). Attach the log file instead: ⌃k › Show Log"),
+    };
+    let text = qurry_core::diagnostics::text("tui", env!("CARGO_PKG_VERSION"), &sources, &app.log_file, 200);
+    crate::input::copy(app, &text);
+    let file = std::env::temp_dir().join("qurry-diagnostics.txt");
+    // A new file each time: one left by someone else (a link) is removed, not written through
+    let _ = std::fs::remove_file(&file);
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    app.status = match o.open(&file).and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes())) {
+        Ok(()) => format!("Diagnostics copied · also saved to {}", file.display()),
+        Err(e) => format!("Diagnostics copied, but couldn't save {} ({e}). Paste from the clipboard, or delete that file and try again", file.display()),
+    };
 }
 
 /// The project page ⌃k › Open GitHub opens (the GUI's Settings › Updates › Open GitHub)
