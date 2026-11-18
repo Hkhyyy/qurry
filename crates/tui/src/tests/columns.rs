@@ -86,7 +86,7 @@ async fn console_result_widths_are_not_saved() {
 #[tokio::test]
 #[ignore]
 async fn pg_table_tab_widths_are_shared_with_the_gui() {
-    let e = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG");
+    let Some(e) = qurry_core::testenv::var("QURRY_TEST_PG") else { return };
     let p: Vec<&str> = e.split(':').collect();
     let mut h = Harness::new().await;
     let cfg = serde_json::from_value(serde_json::json!({ "id": "test", "name": "pg", "kind": "postgres", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[3] })).unwrap();

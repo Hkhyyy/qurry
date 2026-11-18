@@ -24,3 +24,7 @@ unicode-width = "0.2"
 minisign-verify = "0.3"
 base64 = "0.23"
 sha2 = "0.11"
+
+[dev-dependencies]
+# qurry_core::testenv: the real-server tests read QURRY_TEST_* the way core's do, and say when they skip
+qurry-core = { workspace = true, features = ["testenv"] }
