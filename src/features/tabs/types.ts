@@ -56,6 +56,8 @@ interface Tab {
   txIdle?: string;
   /** Console: the run in progress, each statement's place followed through edits (lib/resultTabs) */
   pending?: RunStmt[];
+  /** Console: the last value of each user parameter (:name), offered again on the next run; not saved with the workspace */
+  params?: Record<string, string>;
   /** Result tab with an open server cursor (target for loading more) */
   cursorEntry?: string;
   /** Pin Tab */

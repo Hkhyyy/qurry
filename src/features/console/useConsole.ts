@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { analyzePlan, api, auditLog, ConnectionView, defaultDbOf, dialectOf, DbKind, meta, previewImpact, QueryResult, searchPathSql, targetId } from "../../lib/api";
-import { ask, notice } from "../../lib/dialogs";
+import { ask, askParams, notice } from "../../lib/dialogs";
+import { findParams, substituteParams } from "../../lib/params";
 import { pushHistory } from "../../components/HistoryDialog";
 import type { OutputLine } from "../../components/ConsolePane";
 import { ran, type Content, type RunStmt } from "../../lib/resultTabs";
@@ -157,13 +158,23 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
    *  statements (running, then done or failed; none for those after a failure) */
   const executeConsole = async (tabId: string, run: RunStmt[], explain?: "plan" | "analyze", mark?: MarkStmt) => {
     const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId);
-    const stmts = run.map((r) => r.sql);
+    let stmts = run.map((r) => r.sql);
     if (!tab || !stmts.length) return;
     // The script may be edited until the results come (while rows are counted, while it runs): their places follow it (edited)
     updTab(tabId, (t) => ({ ...t, pending: run }));
     const drop = () => updTab(tabId, (t) => ({ ...t, pending: undefined }));
     const c = conns.find((x) => x.id === tab.connId);
     const kind = c?.kind ?? "postgres";
+    // User parameters (:name, lib/params): asked once, then every check below, the run, History and Output see the final SQL (the
+    // editor keeps its text); Cancel runs nothing. The values are the console's, offered again next time
+    const found = stmts.map((s) => findParams(s, kind));
+    const names = [...new Set(found.flat().map((p) => p.name))];
+    if (names.length) {
+      const values = await askParams(names, tab.params ?? {}, stmts.filter((_, i) => found[i].length).join("\n"), kind);
+      if (!values) return drop();
+      updTab(tabId, (t) => ({ ...t, params: { ...t.params, ...values } }));
+      stmts = stmts.map((s) => substituteParams(s, kind, values));
+    }
     // Confirm dangerous statements (UPDATE/DELETE without WHERE, DROP, TRUNCATE — same rules as the core guard). Not for Explain:
     // Explain Analyse asks its own question below, with this reason when there is one (one dialog, as in the TUI)
     if (!explain) {
@@ -292,9 +303,11 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
         }
       } catch (e) {
         log(tabId, "error", String(e));
-        // The server's spot, in the statement's own text (Explain sent it after its EXPLAIN …)
+        // The server's spot, in the statement's own text (Explain sent it after its EXPLAIN …); past a parameter's value it no longer
+        // matches the editor's text, so only the statement is marked
         const pos = sharedOr(undefined, (s) => s.errorPosition(String(e), sql));
-        mark?.(i, { state: "error", out, ts, text: sharedOr(String(e), (s) => s.withoutPosition(String(e))), at: pos !== undefined && pos >= pre ? pos - pre : undefined });
+        const at = pos !== undefined && pos >= pre && pos - pre < (found[i][0]?.start ?? Infinity) ? pos - pre : undefined;
+        mark?.(i, { state: "error", out, ts, text: sharedOr(String(e), (s) => s.withoutPosition(String(e))), at });
         if (committed > 0) log(tabId, "error", `Note: ${committed} earlier statement${committed > 1 ? "s" : ""} of this run ${committed > 1 ? "were" : "was"} already committed (Auto mode) and ${committed > 1 ? "were" : "was"} not rolled back`);
         // Even on error a transaction may be open (e.g. first statement fails in Manual) → sync the Commit/Roll back buttons
         syncTx(tabId);
