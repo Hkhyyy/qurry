@@ -654,7 +654,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_remote_requires_tls() {
-        let s = crate::testenv::my_from("QURRY_TEST_MY_NOTLS").expect("QURRY_TEST_MY_NOTLS");
+        let Some(s) = crate::testenv::my_from("QURRY_TEST_MY_NOTLS") else { return };
         opt_in_then_connect(ConnectionConfig { host: "127.1".into(), ..s.cfg }, s.password.as_deref().unwrap_or_default()).await;
     }
 

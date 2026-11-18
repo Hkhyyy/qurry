@@ -606,7 +606,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn dba_database_picker_when_the_database_refuses() {
-        let e = std::env::var("QURRY_TEST_PG_REFUSED").expect("QURRY_TEST_PG_REFUSED");
+        let Some(e) = qurry_core::testenv::var("QURRY_TEST_PG_REFUSED") else { return };
         let p: Vec<&str> = e.split(':').collect();
         let mut h = Harness::new().await;
         let cfg = serde_json::from_value(serde_json::json!({ "id": "pg", "name": "pg", "kind": "postgres", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": "" })).unwrap();

@@ -491,7 +491,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn real_redis_answers_the_tunnel_check() {
-        let addr = std::env::var("QURRY_TEST_REDIS").expect("QURRY_TEST_REDIS=host:port");
+        let Some(addr) = crate::testenv::var("QURRY_TEST_REDIS") else { return };
         let port: u16 = addr.rsplit(':').next().unwrap().parse().unwrap();
         let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "r", "kind": "redis", "host": "127.0.0.1", "port": port, "user": "" })).unwrap();
         let t = std::time::Instant::now();
@@ -662,7 +662,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn shared_ssh_tunnel_survives_a_failed_db_and_reopens_after_the_session_ends() {
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let Some(pg) = crate::testenv::pg().map(|s| s.cfg) else { return };
         let to: std::net::SocketAddr = format!("{}:{}", pg.host, pg.port).parse().unwrap();
         let kh = tempfile::NamedTempFile::new().unwrap();
         unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", kh.path()) };
@@ -903,7 +903,7 @@ mod tests {
     async fn dead_ssh_tunnel_is_opened_again_once() {
         use std::sync::atomic::Ordering::SeqCst;
         use std::time::{Duration, Instant};
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let Some(pg) = crate::testenv::pg().map(|s| s.cfg) else { return };
         let kh = tempfile::NamedTempFile::new().unwrap();
         unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", kh.path()) };
         let (port, logins, sessions) = sshd(format!("{}:{}", pg.host, pg.port).parse().unwrap(), kh.path()).await;
@@ -968,7 +968,7 @@ mod tests {
     async fn ssh_tunnel_reconnects_after_wake() {
         use std::sync::atomic::Ordering::SeqCst;
         use std::time::{Duration, Instant};
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let Some(pg) = crate::testenv::pg().map(|s| s.cfg) else { return };
         let kh = tempfile::NamedTempFile::new().unwrap();
         unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", kh.path()) };
         let (port, logins, sessions) = sshd(format!("{}:{}", pg.host, pg.port).parse().unwrap(), kh.path()).await;

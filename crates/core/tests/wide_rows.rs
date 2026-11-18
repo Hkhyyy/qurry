@@ -84,7 +84,7 @@ fn max_rss_mb() -> f64 {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn wide_rows_through_a_slow_link() {
-    let Ok(env) = std::env::var("QURRY_TEST_PG") else { return };
+    let Some(env) = qurry_core::testenv::var("QURRY_TEST_PG") else { return };
     let mut p = env.splitn(5, ':');
     let (host, port, user, db, password) = (p.next().unwrap(), p.next().unwrap(), p.next().unwrap(), p.next().unwrap(), p.next().map(String::from));
     // The table, filled once on a direct connection

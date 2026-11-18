@@ -49,5 +49,11 @@ percent-encoding = "2.3"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[features]
+# crate::testenv for the TUI and MCP tests (their dev-dependency turns it on; release builds stay without it)
+testenv = []
+
 [dev-dependencies]
 tempfile = "3"
+# Itself with crate::testenv, for the integration tests in tests/
+qurry-core = { path = ".", features = ["testenv"] }

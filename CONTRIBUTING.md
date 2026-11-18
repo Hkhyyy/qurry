@@ -77,6 +77,8 @@ export QURRY_TEST_REDIS=127.0.0.1:16379                    # host:port
 cargo test -p qurry-core -- --ignored --skip ssl --skip tls --skip sentinel --skip cluster --skip ssh_tunnel
 ```
 
+An ignored test whose server variable is unset passes without running and prints `skipped: QURRY_TEST_PG is unset (host:port:user:db[:password])` (visible with `--nocapture`); set the variable to run it.
+
 MySQL takes about half a minute to accept connections after it starts. The Redis tests empty databases 0, 3–8, 11 and 12 (`FLUSHDB`), so don't point `QURRY_TEST_REDIS` at a Redis you care about. Remove the containers when you are done:
 
 ```bash

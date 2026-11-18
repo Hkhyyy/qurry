@@ -103,7 +103,7 @@ mod tests {
     #[ignore]
     async fn query_recovers_from_a_dead_ssm_tunnel() {
         use std::os::unix::fs::PermissionsExt;
-        let pg = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG=host:port:user:db");
+        let Some(pg) = qurry_core::testenv::var("QURRY_TEST_PG") else { return };
         let pg: Vec<&str> = pg.split(':').collect();
         let dir = std::env::temp_dir().join(format!("qurry-mcp-ssm-{}-{}", std::process::id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()));
         let bin = dir.join("bin");

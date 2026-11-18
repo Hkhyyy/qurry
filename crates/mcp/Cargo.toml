@@ -13,3 +13,7 @@ qurry-core = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+# qurry_core::testenv: the real-server tests read QURRY_TEST_* the way core's do, and say when they skip
+qurry-core = { workspace = true, features = ["testenv"] }
