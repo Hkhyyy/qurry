@@ -351,6 +351,13 @@ mod tests {
         let plan = other.import_plan(&file, t.path()).unwrap();
         other.import_apply(&plan, &[]).await.unwrap();
         assert!(other.store.list().unwrap().iter().all(|c| c.password_command.is_empty()));
+        // A server that takes any password (CI's PostgreSQL runs with trust auth) never refuses the old output: nothing to run again
+        let mut probe = server.cfg.clone();
+        (probe.user, probe.database) = ("qurry_pwcmd".into(), "postgres".into());
+        if pg && crate::db::connect(&probe, Some("not-the-password")).await.is_ok() {
+            println!("skipped: the password change part of password_command_logs_in_pg needs a server that checks passwords (this one has trust auth)");
+            return;
+        }
 
         sql(if pg { "alter role qurry_pwcmd password 'Pw-two-2'" } else { "alter user 'qurry_pwcmd'@'%' identified by 'Pw-two-2'" }).await.unwrap();
         std::fs::write(&password, "Pw-two-2\n").unwrap();

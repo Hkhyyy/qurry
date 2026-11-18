@@ -1391,14 +1391,19 @@ mod tests {
     }
 
     /// A page runs its statement once when the described columns bound the row size to fit db::PAGE_BYTES (#194 review: a
-    /// GROUP BY ran twice per page): numbers and dates, and text cut at 64; text read whole (cut 0) runs in chunks, in a
-    /// read-only transaction of their own that is over after the page. QURRY_TEST_MY=… cargo test -p qurry-core mysql_page_runs -- --ignored
+    /// GROUP BY ran twice per page): numbers and dates, and text cut at 64; text read whole (cut 0) runs in chunks, and the page
+    /// leaves no transaction open. MySQL 8.0 and later (the setup uses WITH RECURSIVE).
+    /// QURRY_TEST_MY=… cargo test -p qurry-core mysql_page_runs -- --ignored
     #[tokio::test]
     #[ignore]
     async fn mysql_page_runs_once_when_bounded() {
         let Some((cfg, pw)) = server() else { return };
         let Pool::My(p) = crate::db::connect(&cfg, Some(pw.as_str())).await.expect("connect") else { unreachable!() };
         let mut s = MySession::open(&p).await.unwrap();
+        if crate::testenv::mysql_older_than(&mut s.conn, [8, 0, 0]).await {
+            println!("skipped: mysql_page_runs_once_when_bounded needs MySQL 8.0 (WITH RECURSIVE)");
+            return;
+        }
         for q in [
             "drop table if exists qurry_once",
             "create table qurry_once (id int primary key, n decimal(10, 2), d datetime, t text)",
