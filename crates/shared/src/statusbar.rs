@@ -322,7 +322,8 @@ pub struct ColumnType {
 }
 
 /// What a focused grid tells the status bar. `pos`: the selected rows and columns, or the current cell; `stats`: when 2+ cells are
-/// selected; `cell`: the current cell when it is the only one; `shown`: the shown columns (first, last, total), 1-based
+/// selected; `cell`: the current cell when it is the only one; `shown`: the shown columns (first, last, total), 1-based, of the columns
+/// not hidden; `hidden`: how many columns the grid's layout hides (format::ColumnView)
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
@@ -331,6 +332,8 @@ pub struct Status {
     pub stats: Option<Stats>,
     pub cell: Option<Cell>,
     pub shown: Option<(usize, usize, usize)>,
+    #[serde(default)]
+    pub hidden: usize,
 }
 
 /// The segments to show, left to right, for the items on: the selection's, the cell's, the grid's (Position last, in the corner)
@@ -358,8 +361,16 @@ pub fn segments(on: &[Item], s: &Status) -> Vec<Segment> {
             add(Part::Limit, Some(&ty), text);
         }
     }
-    if let Some(text) = s.shown.filter(|_| on.contains(&Item::ShownColumns)).and_then(|(f, l, t)| format::shown_cols(f, l, t)) {
-        add(Part::ShownColumns, None, text);
+    if on.contains(&Item::ShownColumns) {
+        let cols = s.shown.and_then(|(f, l, t)| format::shown_cols(f, l, t));
+        let hidden = (s.hidden > 0).then(|| format!("{} hidden", num(s.hidden as f64)));
+        let text = match (cols, hidden) {
+            (Some(c), Some(h)) => Some(format!("{c} · {h}")),
+            (c, h) => c.or(h),
+        };
+        if let Some(text) = text {
+            add(Part::ShownColumns, None, text);
+        }
     }
     if let Some((r, c)) = s.pos.filter(|_| on.contains(&Item::Position)) {
         add(Part::Position, None, position(r, c));
@@ -517,5 +528,19 @@ mod tests {
         assert!(segments(&DEFAULTS, &s).is_empty());
         let s = Status { shown: Some((3, 8, 14)), ..Default::default() };
         assert_eq!(segments(&DEFAULTS, &s)[0].value, "cols 3–8 of 14");
+    }
+
+    /// Shown columns adds the hidden count, nothing at 0; with every shown column in view, the count alone
+    #[test]
+    fn shown_columns_hidden_count() {
+        let text = |shown, hidden| segments(&DEFAULTS, &Status { shown, hidden, ..Default::default() }).into_iter().map(|g| g.value).collect::<Vec<_>>();
+        assert_eq!(text(Some((3, 8, 14)), 0), ["cols 3–8 of 14"]);
+        assert_eq!(text(Some((3, 8, 14)), 1), ["cols 3–8 of 14 · 1 hidden"]);
+        assert_eq!(text(Some((3, 8, 14)), 2), ["cols 3–8 of 14 · 2 hidden"]);
+        assert_eq!(text(Some((1, 5, 5)), 2), ["2 hidden"]);
+        assert!(text(Some((1, 5, 5)), 0).is_empty());
+        assert!(segments(&[Item::Position], &Status { shown: Some((3, 8, 14)), hidden: 2, ..Default::default() }).is_empty(), "turned off");
+        let s: Status = serde_json::from_value(json!({ "shown": [3, 8, 14] })).unwrap();
+        assert_eq!(s.hidden, 0, "a caller that doesn't send it");
     }
 }
