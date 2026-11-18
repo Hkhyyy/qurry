@@ -49,8 +49,8 @@ pub struct QueryResult {
     /// What the server said while it ran (PostgreSQL NOTICE / WARNING / INFO), in order, capped (crate::notice). A console run only
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices: Vec<crate::notice::Notice>,
-    /// Cells cut at gridCutChars, [row, column] of this page: a PostgreSQL console's cursor read them so (session::cut_projection);
-    /// AppState::fetch_values reads the whole value
+    /// Cells cut at gridCutChars, [row, column] of this page: a PostgreSQL or MySQL console read them so (session::cut_projection,
+    /// mysql::cut_projection); AppState::fetch_values reads the whole value
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cut: Vec<[usize; 2]>,
 }

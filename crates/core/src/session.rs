@@ -20,8 +20,8 @@ pub const EXPLAIN_BEGIN: [&str; 2] = ["BEGIN", "ROLLBACK"];
 pub const EXPLAIN_SAVEPOINT: [&str; 2] = ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"];
 /// A result grid's edits in the console's transaction (Session::submit): set, undo when one fails, release
 const SUBMIT_SAVEPOINT: [&str; 3] = ["SAVEPOINT qurry_submit", "ROLLBACK TO SAVEPOINT qurry_submit", "RELEASE SAVEPOINT qurry_submit"];
-/// A read of whole values in the open transaction (PgSession::read_values): set, undo when it fails, release
-const VALUES_SAVEPOINT: [&str; 3] = ["SAVEPOINT qurry_values", "ROLLBACK TO SAVEPOINT qurry_values", "RELEASE SAVEPOINT qurry_values"];
+/// A read of whole values in the open transaction (PgSession::read_values, MySession::read_values): set, undo when it fails, release
+pub(crate) const VALUES_SAVEPOINT: [&str; 3] = ["SAVEPOINT qurry_values", "ROLLBACK TO SAVEPOINT qurry_values", "RELEASE SAVEPOINT qurry_values"];
 /// A COMMIT of a PostgreSQL transaction an earlier error aborted: the server rolled it back
 const ABORTED_COMMIT: &str =
     "Not committed: an earlier statement in this transaction failed, so PostgreSQL rolled back the whole transaction and none of its changes were saved. Run the changes again (without the failing statement).";
@@ -867,18 +867,21 @@ impl Session {
             Err(e) => (Err(e), vec![]),
         }
     }
-    /// Characters of a long value a PostgreSQL cursor reads from now (store::grid_cut_chars), 0 = whole values. The others read
-    /// whole values
+    /// Characters of a long value a PostgreSQL cursor or a MySQL page reads from now (store::grid_cut_chars), 0 = whole values.
+    /// The others read whole values
     pub fn set_cut(&mut self, chars: usize) {
-        if let Session::Pg(s) = self {
-            s.cut = chars;
+        match self {
+            Session::Pg(s) => s.cut = chars,
+            Session::My(s) => s.set_cut(chars),
+            Session::Redis(_) | Session::Plugin(_) => {}
         }
     }
     /// A read of whole values in the session (AppState::fetch_values): its transaction's uncommitted changes too
     pub async fn read_values(&mut self, sql: &str) -> AppResult<QueryResult> {
         match self {
             Session::Pg(s) => s.read_values(sql).await,
-            _ => Err(AppError::Msg("Only PostgreSQL results have cut values".into())),
+            Session::My(s) => s.read_values(sql).await,
+            _ => Err(AppError::Msg("Only PostgreSQL and MySQL results have cut values".into())),
         }
     }
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
