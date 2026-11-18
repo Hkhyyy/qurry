@@ -1,6 +1,6 @@
 import { connBg, connStripe } from "../lib/theme";
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redis, dbShown, defaultDbOf, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
+import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redis, dbShown, defaultDbOf, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, systemDatabases, TableDetail, targetId } from "../lib/api";
 import { ScopePopup } from "./ScopePopup";
 import { Button, Notice, TreeRow } from "../ui";
 import { invalidateCompletion } from "../lib/completion";
@@ -228,7 +228,9 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
         setDbs({ state: "ok", data });
         // Connected: fill the search cache so Search Everywhere finds things next time without connecting
         if (conn.kind !== "redis") meta.warmSearchCache(conn.id).catch(() => {});
-        const others = data.filter((d) => !["postgres", "rdsadmin", "template0", "template1"].includes(d));
+        // postgres counts as one of the server's own here: a cluster with one database of the user's opens that one
+        const pinned = ["postgres", ...systemDatabases("postgres")];
+        const others = data.filter((d) => !pinned.includes(d));
         const auto = conn.database ? defaultDb : others.length === 1 ? others[0] : others.length === 0 ? defaultDb : null;
         if (auto) setOpenDbs((s) => new Set(s).add(auto));
       },

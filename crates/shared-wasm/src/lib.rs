@@ -39,6 +39,12 @@ pub fn default_port(kind: JsValue) -> Result<u16, JsError> {
     Ok(parse_kind(kind)?.default_port())
 }
 
+/// Databases the server keeps for itself (qurry_shared::kind::system_databases)
+#[wasm_bindgen(js_name = systemDatabases)]
+pub fn system_databases(kind: JsValue) -> Result<Vec<String>, JsError> {
+    Ok(qurry_shared::kind::system_databases(parse_kind(kind)?).iter().map(|d| d.to_string()).collect())
+}
+
 /// UI only, not a security check (the backend enforces read-only): the statement doesn't change data
 #[wasm_bindgen(js_name = isRead)]
 pub fn is_read(sql: &str, kind: JsValue) -> Result<bool, JsError> {
