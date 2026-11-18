@@ -111,6 +111,12 @@ pub(crate) fn cut_projection(query: &str, columns: &[ColumnInfo], cut: usize) ->
     Some((format!("SELECT {} FROM (\n{query}\n) AS qurry_page({names})", exprs.join(", ")), how))
 }
 
+/// db::row_bound's width of a PostgreSQL column read whole: numbers (not NUMERIC, any length), dates and times, UUID
+fn fixed_bytes(ty: &str) -> Option<usize> {
+    let fixed = ["BOOL", "INT2", "INT4", "INT8", "OID", "FLOAT4", "FLOAT8", "DATE", "TIME", "TIMETZ", "TIMESTAMP", "TIMESTAMPTZ", "UUID"];
+    fixed.contains(&ty.to_uppercase().as_str()).then_some(crate::db::FIXED_BYTES)
+}
+
 /// Cut the cells longer than `at` characters (left() counts characters, not bytes) and say which: [row, column]. A JSON cell
 /// that isn't cut decodes as the whole value does
 pub(crate) fn cut_cells(rows: &mut [Vec<Value>], how: &[CutAs], at: usize) -> Vec<[usize; 2]> {
@@ -661,11 +667,13 @@ impl PgSession {
         }
         self.cursor_used = std::time::SystemTime::now();
         let start = Instant::now();
-        // Chunks until `limit` rows are in or their values reach db::PAGE_BYTES (#194): a page stopped early has more to load
-        let (mut data, mut bytes, mut done) = (Vec::new(), 0, false);
-        while let Some(n) = crate::db::next_chunk(data.len(), bytes, limit - data.len()) {
+        // Chunks until `limit` rows are in or their values reach db::PAGE_BYTES (#194): a page stopped early has more to load.
+        // One FETCH when the described columns bound the row size and the whole page fits at that size
+        let mut budget = crate::db::PageBudget::new(crate::db::row_bound(&self.columns, &self.cut_cols, self.cut_at, fixed_bytes));
+        let (mut data, mut done) = (Vec::new(), false);
+        while let Some(n) = budget.next(limit - data.len()) {
             let chunk = self.fetch_chunk(n).await?;
-            bytes += chunk.iter().map(|r| crate::db::row_bytes(r)).sum::<usize>();
+            budget.add(&chunk);
             done = chunk.len() < n;
             data.extend(chunk);
             if done {

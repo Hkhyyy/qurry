@@ -96,21 +96,68 @@ pub const POOL_IDLE: Duration = Duration::from_secs(60);
 /// Bytes of values a console page reads at most (#194): a page of wide rows stops early, with more to load, and the rest comes
 /// with the next page. #183 measured 500 rows × 28 KB = 14 MB per page, 48 s through a 280 KB/s tunnel
 pub const PAGE_BYTES: usize = 4 << 20;
-/// Rows of a page's first chunk, before any row size is known (next_chunk)
+/// Rows of a page's first chunk when no bound on the row size is known (PageBudget::next)
 const FIRST_CHUNK: usize = 64;
+/// row_bytes of a value whose text is at most a number's or a date's: DECIMAL(65, 30) with its sign and point is the longest
+pub(crate) const FIXED_BYTES: usize = 68;
+/// row_bytes of a binary value: its first 64 bytes in hex after 0x, and … (db::pg_value, mysql::value)
+const BINARY_BYTES: usize = 2 + 128 + '…'.len_utf8();
 
-/// Rows the next chunk of a console page asks for, given the rows and bytes (row_bytes) it has so far and the rows it still
-/// lacks: the first chunk FIRST_CHUNK, then the rows that fit what is left of PAGE_BYTES at the average row size so far. None:
-/// the page is full (no rows lacking, or no room for one more row of that size)
-pub(crate) fn next_chunk(rows: usize, bytes: usize, remaining: usize) -> Option<usize> {
-    if remaining == 0 {
+/// What a console page has read so far against PAGE_BYTES, to size its next chunk (next)
+pub(crate) struct PageBudget {
+    /// row_bytes of the widest row the statement can give (row_bound), when known
+    bound: Option<usize>,
+    rows: usize,
+    bytes: usize,
+    largest: usize,
+}
+
+impl PageBudget {
+    pub(crate) fn new(bound: Option<usize>) -> Self {
+        Self { bound, rows: 0, bytes: 0, largest: 0 }
+    }
+
+    /// Rows the next chunk asks for, given the rows the page still lacks. The first: all of them when even rows of the widest
+    /// size fit PAGE_BYTES (one chunk: one run of a MySQL page), else as many as fit at that size, or FIRST_CHUNK when it isn't
+    /// known. Then what fits the rest of PAGE_BYTES at the widest row read so far, at most twice the rows read so far: a run of
+    /// much wider rows after narrow ones takes the page past PAGE_BYTES by one chunk at most. None: the page is full
+    pub(crate) fn next(&self, remaining: usize) -> Option<usize> {
+        if remaining == 0 {
+            return None;
+        }
+        if self.rows == 0 {
+            return Some(remaining.min(self.bound.map_or(FIRST_CHUNK, |b| (PAGE_BYTES / b.max(1)).max(1))));
+        }
+        let fit = PAGE_BYTES.saturating_sub(self.bytes) / self.largest.max(1);
+        (fit > 0).then(|| fit.min(2 * self.rows).min(remaining))
+    }
+
+    /// Count a chunk's rows
+    pub(crate) fn add(&mut self, rows: &[Vec<Value>]) {
+        for r in rows {
+            let b = row_bytes(r);
+            (self.rows, self.bytes, self.largest) = (self.rows + 1, self.bytes + b, self.largest.max(b));
+        }
+    }
+}
+
+/// row_bytes of the widest row a page reads its columns with (`how`, cut at `cut`): a cut text (cut + 1 characters of up to 4
+/// bytes), a binary value (BINARY_BYTES), a column read whole by `fixed` (a number's or date's FIXED_BYTES by its type name).
+/// None: a column can be any size (text read whole, cut 0, arrays, unknown types), or the columns aren't known
+pub(crate) fn row_bound(columns: &[ColumnInfo], how: &[crate::session::CutAs], cut: usize, fixed: fn(&str) -> Option<usize>) -> Option<usize> {
+    use crate::session::CutAs;
+    if columns.is_empty() {
         return None;
     }
-    if rows == 0 {
-        return Some(remaining.min(FIRST_CHUNK));
-    }
-    let fit = PAGE_BYTES.saturating_sub(bytes) / bytes.div_ceil(rows).max(1);
-    (fit > 0).then(|| fit.min(remaining))
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| match how.get(i).copied().unwrap_or(CutAs::Whole) {
+            CutAs::Text | CutAs::Json => Some((cut + 1) * 4),
+            CutAs::Bytes => Some(BINARY_BYTES),
+            CutAs::Whole => fixed(&c.type_name),
+        })
+        .sum()
 }
 
 /// A row's size for PAGE_BYTES: its decoded values' text, a string's bytes and any other value as its JSON text
@@ -647,34 +694,78 @@ fn fallback(bytes: Option<&[u8]>, ty: &str) -> Value {
 mod tests {
     use super::*;
 
-    /// The first chunk is FIRST_CHUNK rows or fewer; then what fits the rest of PAGE_BYTES at the average row size; never a
-    /// chunk of 0 rows; full when no row of that size fits any more or no rows are lacking
-    #[test]
-    fn next_chunk_fits_the_budget() {
-        assert_eq!(next_chunk(0, 0, 500), Some(64));
-        assert_eq!(next_chunk(0, 0, 10), Some(10));
-        assert_eq!(next_chunk(0, 0, 0), None);
-        // 10 rows of 100 KB: 1 MB in, 3 MB left
-        assert_eq!(next_chunk(10, 10 * 100 * 1024, 490), Some(30));
-        assert_eq!(next_chunk(10, 10 * 100 * 1024, 7), Some(7), "no more than the rows lacking");
-        // One row bigger than the whole budget: the page is full after it
-        assert_eq!(next_chunk(1, PAGE_BYTES * 2, 499), None);
-        assert_eq!(next_chunk(136, 136 * 30 * 1024, 364), None, "16 KB left, rows of 30 KB");
-        for (rows, bytes) in [(1, 1), (64, PAGE_BYTES - 1), (3, 0), (100, PAGE_BYTES / 2)] {
-            assert_ne!(next_chunk(rows, bytes, 400), Some(0), "{rows} {bytes}");
+    /// A page read chunk by chunk through PageBudget, from rows of the sizes `size(i)` (row i of the result): its rows, bytes and chunks
+    fn page(bound: Option<usize>, limit: usize, size: impl Fn(usize) -> usize) -> (usize, usize, usize) {
+        let mut b = PageBudget::new(bound);
+        let (mut rows, mut chunks) = (0, 0);
+        while let Some(n) = b.next(limit - rows) {
+            assert_ne!(n, 0);
+            let chunk: Vec<Vec<Value>> = (rows..rows + n).map(|i| vec![Value::from("x".repeat(size(i)))]).collect();
+            b.add(&chunk);
+            (rows, chunks) = (rows + n, chunks + 1);
         }
-        // Rows of 40 bytes reach a page of 500 in two chunks; rows of 30 KB stop under the budget in a few
-        let page = |row: usize| {
-            let (mut rows, mut bytes, mut chunks) = (0, 0, 0);
-            while let Some(n) = next_chunk(rows, bytes, 500 - rows) {
-                (rows, bytes, chunks) = (rows + n, bytes + n * row, chunks + 1);
-            }
-            (rows, bytes, chunks)
-        };
-        assert_eq!(page(40), (500, 20_000, 2));
-        let (rows, bytes, chunks) = page(30 * 1024);
-        assert_eq!((rows, chunks), (136, 2));
+        (rows, b.bytes, chunks)
+    }
+
+    /// Without a bound: FIRST_CHUNK rows first, then what fits the rest of PAGE_BYTES at the widest row so far, at most twice the
+    /// rows so far; never a chunk of 0 rows; full when no row that wide fits any more or no rows are lacking
+    #[test]
+    fn page_budget_chunks() {
+        let b = PageBudget::new(None);
+        assert_eq!((b.next(500), b.next(10), b.next(0)), (Some(64), Some(10), None));
+        assert_eq!(page(None, 500, |_| 40), (500, 20_000, 3), "64, 128, 308");
+        assert_eq!(page(None, 10, |_| 40), (10, 400, 1));
+        let (rows, bytes, chunks) = page(None, 500, |_| 30 * 1024);
+        assert_eq!((rows, chunks), (136, 2), "64, then the 72 that fit");
         assert!(bytes <= PAGE_BYTES, "{bytes}");
+        // One row bigger than the whole budget: the page is full after it
+        let mut b = PageBudget::new(None);
+        b.add(&[vec![Value::from("x".repeat(PAGE_BYTES + 1))]]);
+        assert_eq!(b.next(499), None);
+    }
+
+    /// Narrow rows, then wide ones (#194 review: 64 rows of 40 bytes, then 100 KB): the chunk after the narrow rows is at most
+    /// twice them, so the page passes PAGE_BYTES by that one chunk, not by the rest of the page (it was 43 MB sized by the
+    /// average row); once a wide row was read, the chunks fit what is left
+    #[test]
+    fn page_budget_mixed_rows() {
+        let (rows, bytes, chunks) = page(None, 500, |i| if i < 64 { 40 } else { 100 * 1024 });
+        assert_eq!((rows, chunks), (192, 2));
+        assert_eq!(bytes, 64 * 40 + 128 * 100 * 1024);
+        // Once a wide row was read, the chunks fit what is left: 64 narrow rows, 128 of 10 KB, then 281 that fit
+        let (rows, bytes, chunks) = page(None, 500, |i| if i < 64 { 40 } else { 10 * 1024 });
+        assert_eq!((rows, chunks), (473, 3));
+        assert!(bytes <= PAGE_BYTES, "{bytes}");
+        let (rows, bytes, _) = page(None, 2000, |i| if i % 100 == 99 { 200 * 1024 } else { 1024 });
+        assert!(rows < 2000 && bytes <= PAGE_BYTES, "{rows} {bytes}");
+    }
+
+    /// With a bound on the row size: the whole page in one chunk when it fits PAGE_BYTES at that size, else the rows that do fit
+    /// it first (at least one)
+    #[test]
+    fn page_budget_bounded() {
+        assert_eq!(page(Some(100), 500, |_| 100), (500, 50_000, 1), "one chunk: one run of a MySQL page");
+        assert_eq!(PageBudget::new(Some(PAGE_BYTES / 500)).next(500), Some(500));
+        assert_eq!(PageBudget::new(Some(PAGE_BYTES / 500 + 1)).next(500), Some(499));
+        assert_eq!(PageBudget::new(Some(PAGE_BYTES * 2)).next(500), Some(1));
+        // Rows of a cut text at 4096 (16 KB at most): 255 first, then sized by the rows read
+        let (rows, bytes, chunks) = page(Some(4097 * 4), 500, |_| 4097);
+        assert_eq!((rows, chunks), (500, 2));
+        assert!(bytes <= PAGE_BYTES);
+    }
+
+    /// The widest row by how each column is read: cut text and JSON 4 bytes a character, binary 64 bytes in hex, the rest by
+    /// `fixed`; None when one column can be any size
+    #[test]
+    fn row_bound_by_columns() {
+        use crate::session::CutAs::*;
+        let cols = |n: usize| (0..n).map(|i| ColumnInfo { name: format!("c{i}"), type_name: if i == 0 { "INT".into() } else { "TEXT".into() } }).collect::<Vec<_>>();
+        let fixed = |t: &str| (t == "INT").then_some(FIXED_BYTES);
+        assert_eq!(row_bound(&cols(4), &[Whole, Text, Json, Bytes], 64, fixed), Some(FIXED_BYTES + 65 * 4 * 2 + BINARY_BYTES));
+        assert_eq!(row_bound(&cols(1), &[], 64, fixed), Some(FIXED_BYTES), "nothing cut: all whole");
+        assert_eq!(row_bound(&cols(2), &[], 0, fixed), None, "text read whole");
+        assert_eq!(row_bound(&[], &[], 64, fixed), None, "not described");
+        assert_eq!(BINARY_BYTES, "0x".len() + 128 + "…".len());
     }
 
     /// A row's bytes: strings by their bytes, other values by their JSON text
