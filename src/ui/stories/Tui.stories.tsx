@@ -21,6 +21,9 @@ export const ScreenExplorerMarked = { ...by("Explorer: marked nodes"), name: "Sc
 export const ScreenExplorerDropMarked = { ...by("Explorer: drop marked objects"), name: "Screen · Explorer: drop marked objects" };
 export const ScreenProductionConfirm = { ...by("Production confirm"), name: "Screen · Production confirm" };
 export const ScreenParameters = { ...by("Parameters"), name: "Screen · Parameters (:name in a console run)" };
+export const ScreenColumnLayout = { ...by("Column layout"), name: "Screen · Column layout (pinned and hidden)" };
+export const ScreenColumns = { ...by("Columns…"), name: "Screen · Columns…" };
+export const ScreenConsoleSwitchSchema = { ...by("Console: Switch Schema"), name: "Screen · Console: Switch Schema" };
 export const ScreenActionsPalette = { ...by("Actions palette"), name: "Screen · Actions palette" };
 export const ScreenDataSourceForm = { ...by("Data source form"), name: "Screen · Data source form" };
 // #131: Admin reports (MCP dba_report) for Production sources; disabled with why on other sources and with MCP Off
