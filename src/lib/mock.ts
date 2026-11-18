@@ -175,6 +175,14 @@ const columnLayouts = (): Record<string, { hidden: string[]; pinned: string[] }>
 let updateChecked = false;
 /** A delayed load-more in flight (__mockFetchMoreDelay): cancel_query makes it fail as the server does */
 let cancelMore: (() => void) | null = null;
+// A table of wide rows (#194): the core stops a page at its byte budget, so a page of logs_demo has 150 rows, fewer than Page
+// size, and still more to load (truncated) until the third. Tab id → the id its next page starts at
+const logsNext = new Map<string, number>();
+const logsPage = (tabId: string, from: number) => {
+  if (from + 150 <= 450) logsNext.set(tabId, from + 150);
+  else logsNext.delete(tabId);
+  return { ...result, rows: result.rows.slice(0, 150).map((r, i) => [from + i, ...r.slice(1)]), truncated: from + 150 <= 450 };
+};
 /** The last id save_connection gave a new data source (never reused, also after a delete) */
 let newIds = 0;
 /** Test Connections waiting for cancel_call, by test id */
@@ -457,6 +465,8 @@ const handlers: Record<string, (a: any) => unknown> = {
         ? { ...result, columns: [], rows: [], rowsAffected: 0, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true, notices: [{ level: "NOTICE", message: "role app_owner isn't a member, owner change skipped" }, { level: "WARNING", message: "table shop.orders has no primary key" }, { level: "", message: "… 3 more" }] }
       : /^\s*(insert|update|delete)/i.test(a.sql)
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
+        : /\blogs_demo\b/i.test(a.sql)
+          ? { ...logsPage(a.tabId, 1), inTransaction: (globalThis as any).__mockManual === true }
         : /\bwide_demo\b/i.test(a.sql)
           ? { ...wide, inTransaction: (globalThis as any).__mockManual === true }
           : /\bcjk_demo\b/i.test(a.sql)
@@ -559,10 +569,12 @@ const handlers: Record<string, (a: any) => unknown> = {
     return c;
   },
   // e2e sets __mockFetchMoreError for a load-more the core refuses or that fails (e.g. after the data source reconnected)
-  fetch_more: () => {
+  fetch_more: (a: any) => {
     const g = globalThis as any;
     g.__mockFetchMoreCalls = (g.__mockFetchMoreCalls ?? 0) + 1;
     if (g.__mockFetchMoreError) throw g.__mockFetchMoreError;
+    const next = logsNext.get(a.tabId);
+    if (next) return logsPage(a.tabId, next);
     const more = { ...result, rows: result.rows.slice(0, 120).map((r) => [Number(r[0]) + 500, ...r.slice(1)]), truncated: false };
     // __mockFetchMoreDelay (ms): an answer that arrives after the tab ran again, or fails as the server's does when cancelled meanwhile
     if (!g.__mockFetchMoreDelay) return more;
