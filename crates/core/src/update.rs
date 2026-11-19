@@ -332,8 +332,8 @@ mod tests {
     /// Only the changes from the release notes (What's Changed in GitHub's auto notes: title (#PR))
     #[test]
     fn changes_from_release_notes() {
-        let body = "## dbtool 0.1.12 (macOS)\n\n### Install\n* not this\n\n## What's Changed\n* [fix] ; 없는 문장 나누기 by @Hkhyyy in https://github.com/Hkhyyy/dbtool/pull/17\n* [feat] 다른 것 by @someone in https://github.com/Hkhyyy/dbtool/pull/16\n\n## New Contributors\n* @x made their first contribution\n\n**Full Changelog**: https://github.com/Hkhyyy/dbtool/compare/v0.1.11...v0.1.12";
-        assert_eq!(changes(body), ["[fix] ; 없는 문장 나누기 (#17)", "[feat] 다른 것 (#16)"]);
+        let body = "## dbtool 0.1.12 (macOS)\n\n### Install\n* not this\n\n## What's Changed\n* [fix] Split statements without ; by @Hkhyyy in https://github.com/Hkhyyy/dbtool/pull/17\n* [feat] Something else by @someone in https://github.com/Hkhyyy/dbtool/pull/16\n\n## New Contributors\n* @x made their first contribution\n\n**Full Changelog**: https://github.com/Hkhyyy/dbtool/compare/v0.1.11...v0.1.12";
+        assert_eq!(changes(body), ["[fix] Split statements without ; (#17)", "[feat] Something else (#16)"]);
         assert!(changes("no section").is_empty());
         // Terminal control characters in PR titles are removed (--update prints them as is)
         assert_eq!(changes("## What's Changed\n* [fix] a\x1b]0;x\x07b by @u in https://github.com/Hkhyyy/qurry/pull/9"), ["[fix] a]0;xb (#9)"]);

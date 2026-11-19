@@ -235,7 +235,7 @@ export const ListItems: S = {
       <ListItem icon={<TableIcon />} title="users" hint="public" trailing="[PROD] kr · kr" color="#6e2a2a" selected />
       <ListItem icon="⚡" title="New Query Console" hint="Tool Windows" trailing={<Kbd>⇧⌘L</Kbd>} />
       <ListItem icon={<ConsoleIcon />} title="console_2 [DEV] shop" hint="closed tab" dim color="#2f5634" />
-      <ListItem mono title="select * from users where id = 42" trailing="2026. 10. 28. 오후 3:43" />
+      <ListItem mono title="select * from users where id = 42" trailing="2026-10-28 15:43" />
       <ListItem leading={<Checkbox checked onChange={() => {}} />} title={<><Text tone="accent">add column</Text> users.email</>} />
       <ListItem leading={<Checkbox checked={false} onChange={() => {}} />} title={<><Text tone="danger">drop table</Text> old_stuff</>} />
       <ListItem title={<b>tickets search</b>} subtitle="3,000 rows · 2026-10-27 14:50" />

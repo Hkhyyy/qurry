@@ -271,6 +271,13 @@ const endTx = (tabId: string) => {
   const { [tabId]: _, ...rest } = openTxs();
   sessionStorage.setItem(TX_KEY, JSON.stringify(rest));
 };
+/** The fields the core's ConnectionView adds (ConnectionConfig::starts_manual / production_starts_manual), as it computes them */
+const withManual = (c: any) => {
+  const o = c.options ?? {};
+  const manualWorks = c.kind === "postgres" || c.kind === "mysql";
+  const productionStartsManual = manualWorks && !o.txManual && !!o.confirmChanges && o.productionManual !== false;
+  return { ...c, startsManual: (manualWorks && !!o.txManual) || productionStartsManual, productionStartsManual };
+};
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
   // window.__mockRedis (set before load): { readOnly, production, managed } for [Redis] cache (managed: CONFIG refused, as on ElastiCache).
@@ -278,7 +285,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   list_connections: () =>
     structuredClone([...conns, ...((globalThis as any).__mockMoreConns ?? [])]).map((c: any) => {
       const r = (globalThis as any).__mockRedis;
-      return c.id === "rd" && r ? { ...c, readOnly: !!r.readOnly, options: { ...c.options, confirmChanges: !!r.production } } : c;
+      return withManual(c.id === "rd" && r ? { ...c, readOnly: !!r.readOnly, options: { ...c.options, confirmChanges: !!r.production } } : c);
     }),
   // window.__mockDbListFail: the account can't connect to a source's default database, so listing through the source itself fails.
   // window.__mockDbListDelay (ms): the list arrives that late (a select asked for it only on its first click would open without it)
@@ -624,8 +631,6 @@ const handlers: Record<string, (a: any) => unknown> = {
   explain_wrap: () => ((globalThis as any).__mockManual === true ? ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"] : ["BEGIN", "ROLLBACK"]),
   // Production confirmation: rows a change would touch; like the backend, only UPDATE/DELETE are counted (null = can't count, e.g. INSERT or DDL)
   preview_impact: (a: any) => (/^\s*(update|delete)\b/i.test(a.sql) ? (/\bwhere\b/i.test(a.sql) ? 3 : 500) : null),
-  // Redis as qurry_shared::guard::unsafe_statement words it
-  unsafe_reason: (a: any) => a.kind === "redis" ? ((c) => (/^(FLUSHALL|FLUSHDB|DEL|UNLINK|SHUTDOWN|SWAPDB|REPLICAOF|SLAVEOF)$/.test(c) ? `${c} deletes or replaces data` : /^(EVAL|EVALSHA|EVAL_RO|EVALSHA_RO|FCALL|FUNCTION|SCRIPT)$/.test(c) ? `${c} runs a script that can change anything` : null))(String(a.sql).trim().split(/\s+/)[0].toUpperCase()) : (/^\s*(delete|update)\b(?![\s\S]*\bwhere\b)/i.test(a.sql) ? "DELETE without WHERE changes every row" : /^\s*(drop|truncate)\b/i.test(a.sql) ? "DROP removes data" : null),
   trust_ssh_host: () => "Trusted",
   export_data: (a: any) => new Promise((ok) => setTimeout(() => ok({ rows: 500, path: a.clipboard ? null : `~/Downloads/${a.defaultName}.${a.format}`, text: a.clipboard ? "id\tname\n1\ta\n" : null }), 4000)),
   cancel_job: () => null,
@@ -1006,8 +1011,8 @@ function updateInfo() {
     channel: updateChannel,
     latest: (window as any).__mockNoUpdate ? null : { version: "0.1.2", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.1.2", notes: "## dbtool 0.1.2\n- something new", assets: [{ name: "dbtool_0.1.2_aarch64.dmg", url: "https://example.com/dbtool_0.1.2_aarch64.dmg" }] },
     changes: [
-      { version: "0.1.2", changes: ["[feat] TUI 키 안내: ⌃P 시작, F1 Start here, 상태줄 (#18)", "[fix] ; 없는 문장 나누기 (#17)"] },
-      { version: "0.1.1", changes: ["[fix] 분할 탭 바 구분선, GUI 탭 사이 간격 (#16)"] },
+      { version: "0.1.2", changes: ["[feat] TUI key hints: ⌃P to start, F1 Start here, the status line (#18)", "[fix] Split statements without ; (#17)"] },
+      { version: "0.1.1", changes: ["[fix] Split tab bar divider, the gap between GUI tabs (#16)"] },
     ],
   };
 }

@@ -127,14 +127,25 @@ describe("pane operations", () => {
     expect(due()).toEqual(["d"]);
   });
 
-  it("a Production console starts in Manual where Manual works (PostgreSQL, MySQL), never on Redis or a driver plugin (core ConnectionConfig::starts_manual)", () => {
-    const prod = (kind: string, options = {}) => ({ ...conn, id: `p-${kind}`, kind, options: { confirmChanges: true, ...options } }) as ConnectionView;
-    const manual = (c: ConnectionView) => buildTab(c, "console", {}, 0, "c").txManual;
-    expect(["postgres", "mysql"].map((k) => manual(prod(k)))).toEqual([true, true]);
-    expect(["redis", "sqlite", "mssql", "oracle", "clickhouse", "duckdb"].map((k) => manual(prod(k)))).toEqual([false, false, false, false, false, false]);
-    expect(manual(prod("redis", { txManual: true }))).toBe(false);
-    expect(manual(prod("postgres", { productionManual: false }))).toBe(false);
-    expect(buildTab(prod("redis"), "console", {}, 0, "c").output).toEqual([]);
+  it("a console starts in the Transaction mode the core says (ConnectionView startsManual / productionStartsManual), and says why once when it is Production", () => {
+    const view = (id: string, startsManual: boolean, productionStartsManual: boolean) => ({ ...conn, id, options: { confirmChanges: true }, startsManual, productionStartsManual }) as ConnectionView;
+    const tabOf = (c: ConnectionView) => buildTab(c, "console", {}, 0, "c");
+    expect(tabOf(view("v-prod", true, true)).txManual).toBe(true);
+    expect(tabOf(view("v-prod", true, true)).output).toEqual([]);
+    expect(tabOf(view("v-own", true, false))).toMatchObject({ txManual: true, output: [] });
+    // Production where the core says Auto (Redis, a driver plugin, "start consoles in Manual" off): no copy of the rule overrides it
+    expect(tabOf({ ...view("v-redis", false, false), kind: "redis" } as ConnectionView)).toMatchObject({ txManual: false, output: [] });
+    const told = tabOf(view("v-told", true, true)).output;
+    expect(told).toHaveLength(1);
+    expect(told[0].text).toContain("Production");
+    expect(buildTab(view("v-told", true, true), "table", {}, 0, "t").txManual).toBe(false);
+  });
+
+  it("a view without the fields (a mock or a test) starts a Production console in Manual, never in Auto", () => {
+    const old = (id: string, options = {}) => ({ ...conn, id, options }) as ConnectionView;
+    expect(buildTab(old("o-prod", { confirmChanges: true }), "console", {}, 0, "c").txManual).toBe(true);
+    expect(buildTab(old("o-prod2", { confirmChanges: true }), "console", {}, 0, "c").output).toHaveLength(1);
+    expect(buildTab(old("o-dev"), "console", {}, 0, "c").txManual).toBe(false);
   });
 });
 

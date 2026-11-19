@@ -1,4 +1,6 @@
-//! DB connections and query execution. Only PostgreSQL is supported for now.
+//! The connection pool of every kind (`Pool`: PostgreSQL, MySQL, Redis, driver plugins) and connecting it, the result types they
+//! share (`QueryResult`, `ColumnInfo`), the TLS and local-host rules, and PostgreSQL's own query running and value decoding.
+//! MySQL and Redis keep theirs in `mysql_db.rs` and `redisdb.rs`
 use crate::backend::{Backend, dispatch};
 use crate::error::AppResult;
 use crate::store::{ConnectionConfig, DbKind};

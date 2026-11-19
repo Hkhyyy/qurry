@@ -69,7 +69,7 @@ export interface ConnOptions {
   singleDb?: boolean;
   /** Production: modifying statements show the affected row count and ask for confirmation */
   confirmChanges?: boolean;
-  /** Production: consoles start in Manual transaction mode (unset = on; core ConnOptions::starts_manual) */
+  /** Production: consoles start in Manual transaction mode (unset = on; core ConnectionConfig::production_starts_manual) */
   productionManual?: boolean | null;
   /** Remote MySQL with SSL unset may connect in plain text if it can't do TLS */
   allowPlaintext?: boolean;
@@ -105,6 +105,10 @@ export interface SsmConfig {
 export interface ConnectionView extends ConnectionConfig {
   hasPassword: boolean;
   connected: boolean;
+  /** A new console starts in Manual transaction mode (core ConnectionConfig::starts_manual) */
+  startsManual?: boolean;
+  /** Manual only because it is Production: the console says so once (core ConnectionConfig::production_starts_manual) */
+  productionStartsManual?: boolean;
 }
 
 export interface ColumnInfo {
@@ -370,7 +374,6 @@ export const api = {
   /** Whether the driver plugin is installed (null for built-in DBs) · download and install */
   driverStatus: (kind: DbKind) => invoke<boolean | null>("driver_status", { kind }),
   installDriver: (kind: DbKind) => invoke<string>("install_driver", { kind }),
-  unsafeReason: (kind: DbKind, sql: string) => invoke<string | null>("unsafe_reason", { kind, sql }),
 };
 
 /** A data source that reconnects (core app::Reconnecting): what to say meanwhile, after 10 s (`slow`), when its load fails and after Cancel */

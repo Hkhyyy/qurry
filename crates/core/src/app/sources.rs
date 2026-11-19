@@ -93,6 +93,17 @@ pub struct ConnectionView {
     /// From the qurry-tui command line, only in this process (Store::temporary)
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub temporary: bool,
+    /// ConnectionConfig::starts_manual, for the GUI (a new console's Transaction mode), so the rule has no TS copy
+    pub starts_manual: bool,
+    /// ConnectionConfig::production_starts_manual, for the GUI (the console says why it is in Manual)
+    pub production_starts_manual: bool,
+}
+
+impl ConnectionView {
+    pub fn new(config: ConnectionConfig, has_password: bool, connected: bool, temporary: bool) -> Self {
+        let (starts_manual, production_starts_manual) = (config.starts_manual(), config.production_starts_manual());
+        Self { config, has_password, connected, temporary, starts_manual, production_starts_manual }
+    }
 }
 
 /// DBs shown in the tree (scope from the Data Source › Schemas tab, system DBs hidden). Shared by GUI, TUI and the search cache
@@ -127,12 +138,10 @@ impl AppState {
             .list()?
             .into_iter()
             .map(|c| {
-                Ok(ConnectionView {
-                    has_password: c.password_saved || self.secret_file.contains(&c.password_key()).unwrap_or(true),
-                    connected: pools.keys().any(|k| belongs(k, &c.id)),
-                    temporary: self.store.is_temporary(&c.id),
-                    config: c,
-                })
+                let has_password = c.password_saved || self.secret_file.contains(&c.password_key()).unwrap_or(true);
+                let connected = pools.keys().any(|k| belongs(k, &c.id));
+                let temporary = self.store.is_temporary(&c.id);
+                Ok(ConnectionView::new(c, has_password, connected, temporary))
             })
             .collect()
     }
@@ -890,5 +899,39 @@ mod tests {
     #[ignore]
     async fn form_listing_mysql() {
         form_listing(crate::store::DbKind::Mysql).await;
+    }
+
+    /// The view carries the core's Manual-start rule, so the GUI reads it instead of keeping a copy (#156): Production PostgreSQL /
+    /// MySQL start Manual and say why, the source's own Transaction control starts Manual without the note, Redis never
+    #[tokio::test]
+    async fn view_says_whether_a_console_starts_manual() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let src = |id: &str, kind: &str, opts: serde_json::Value| -> ConnectionConfig {
+            let mut c = silent_source(id, 1, None);
+            c.kind = serde_json::from_value(serde_json::json!(kind)).unwrap();
+            c.options = serde_json::from_value(opts).unwrap();
+            c
+        };
+        for c in [
+            src("prod", "postgres", serde_json::json!({ "confirmChanges": true })),
+            src("prod-my", "mysql", serde_json::json!({ "confirmChanges": true })),
+            src("prod-off", "postgres", serde_json::json!({ "confirmChanges": true, "productionManual": false })),
+            src("own", "postgres", serde_json::json!({ "txManual": true })),
+            src("prod-rd", "redis", serde_json::json!({ "confirmChanges": true, "txManual": true })),
+            src("dev", "postgres", serde_json::json!({})),
+        ] {
+            st.store.save(&c).unwrap();
+        }
+        let views = st.list_connections().await.unwrap();
+        let got = |id: &str| views.iter().find(|v| v.config.id == id).map(|v| (v.starts_manual, v.production_starts_manual)).unwrap();
+        assert_eq!(got("prod"), (true, true));
+        assert_eq!(got("prod-my"), (true, true));
+        assert_eq!(got("prod-off"), (false, false));
+        assert_eq!(got("own"), (true, false));
+        assert_eq!(got("prod-rd"), (false, false));
+        assert_eq!(got("dev"), (false, false));
+        let json = serde_json::to_value(views.iter().find(|v| v.config.id == "prod").unwrap()).unwrap();
+        assert_eq!((json["startsManual"].as_bool(), json["productionStartsManual"].as_bool()), (Some(true), Some(true)));
     }
 }

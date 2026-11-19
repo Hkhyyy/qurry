@@ -96,6 +96,9 @@ test("MySQL: a TRUNCATE after a # comment shows schema change", async ({ page })
   await openConsole(page, "[MySQL] shop");
   await typeSql(page, "# wipe\ntruncate t");
   await runAll(page);
+  // A TRUNCATE is a dangerous statement first (qurry_shared::guard::unsafe_statement), then a Production write
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("[MySQL] shop: dangerous statement");
+  await dialog(page).getByRole("button", { name: "Run Anyway" }).click();
   await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Production: [MySQL] shop");
   await expect(dialog(page).locator(".ui-detail-value")).toHaveText("schema change");
 });

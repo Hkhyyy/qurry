@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { askedStatements, explainAnalyzeAsk, explainAnalyzeNote, impactLine, isDdl, isRead } from "./stmtKind";
+import { askedStatements, explainAnalyzeAsk, explainAnalyzeNote, impactLine, isDdl, isRead, unsafeReason } from "./stmtKind";
 
 describe("stmtKind (core guard through WASM)", () => {
   it("reads the statement as the TUI does (D1)", () => {
@@ -10,6 +10,15 @@ describe("stmtKind (core guard through WASM)", () => {
     expect(isRead("postgres", "with d as (delete from t returning *) select * from d")).toBe(false);
     expect(isDdl("mysql", "# wipe\ntruncate t")).toBe(true);
     expect(isDdl("postgres", "# wipe\ntruncate t")).toBe(false);
+  });
+
+  it("unsafeReason gives the core guard's reason for a dangerous statement, and nothing for a safe one (qurry_shared::guard::unsafe_statement)", () => {
+    expect(unsafeReason("postgres", "delete from t")).toMatch(/WHERE/);
+    expect(unsafeReason("mysql", "drop table t")).toBeTruthy();
+    expect(unsafeReason("redis", "FLUSHALL")).toMatch(/FLUSHALL/);
+    expect(unsafeReason("postgres", "delete from t where id = 1")).toBeUndefined();
+    expect(unsafeReason("postgres", "select 1")).toBeUndefined();
+    expect(unsafeReason("redis", "GET a")).toBeUndefined();
   });
 
   it("SELECT … INTO and sequence writers change data", () => {
