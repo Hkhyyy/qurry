@@ -697,12 +697,6 @@ pub async fn trust_ssh_host(state: State<'_, AppState>, host: String, port: u16)
     state.trust_ssh_host(host, port)
 }
 
-/// The reason, if this is a dangerous statement needing confirmation before running (UPDATE/DELETE without WHERE, DROP, TRUNCATE, Redis FLUSH*·DEL)
-#[tauri::command]
-pub fn unsafe_reason(kind: crate::store::DbKind, sql: String) -> Option<String> {
-    qurry_core::guard::unsafe_statement(&sql, kind)
-}
-
 #[tauri::command]
 pub async fn list_databases(state: State<'_, AppState>, id: String) -> AppResult<Vec<String>> {
     state.list_databases(id).await

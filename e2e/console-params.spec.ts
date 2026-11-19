@@ -77,7 +77,7 @@ test("on Production the confirmation lists the statement with the value in", asy
   await expect(status(page)).toHaveText("Ready");
 });
 
-test("without the WebAssembly module the console runs its text as before, with no dialog or notice", async ({ page }) => {
+test("without the WebAssembly module the console runs its text as before, with no parameter dialog or notice", async ({ page }) => {
   await page.route((url) => url.pathname.endsWith("/qurry_shared_wasm_bg.wasm") && !url.search, (route) => route.abort());
   await page.addInitScript(() => localStorage.setItem("dbtool.execSettings", JSON.stringify({ inside: "ask", outside: "nothing", selection: "single" })));
   await openApp(page);
@@ -89,6 +89,8 @@ test("without the WebAssembly module the console runs its text as before, with n
   await typeSql(page, "select * from users where id = :id");
   await page.evaluate(() => ((window as any).__mockRan = []));
   await runAll(page);
+  // The one question: nothing can be checked for danger without the module (stmtKind unsafeReason), so it asks before running
+  await dialog(page).filter({ hasText: "can't check this statement" }).getByRole("button", { name: "Run Anyway" }).click();
   await expect(resultTabs(page)).toHaveText(["Output", /^1: users/]);
   await expect(dialog(page)).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__mockRan)).toEqual(["select * from users where id = :id"]);

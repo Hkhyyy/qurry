@@ -12,7 +12,7 @@ import { schemaChanged } from "../../components/SchemaTree";
 import { commitNoticeTitle } from "../../lib/commitNotice";
 import { sharedOr } from "../../lib/shared";
 import { cancelTableLoad, loadTableTab } from "../explorer/tableTab";
-import { askedStatements, explainAnalyzeAsk, explainAnalyzeNote, impactLine, isDdl, isRead } from "../../lib/stmtKind";
+import { askedStatements, explainAnalyzeAsk, explainAnalyzeNote, impactLine, isDdl, isRead, unsafeReason } from "../../lib/stmtKind";
 import { explainSql } from "../../lib/explain";
 import { withoutComments } from "../../lib/sqlSplit";
 import { noticeLines } from "./notices";
@@ -179,7 +179,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     // Explain Analyse asks its own question below, with this reason when there is one (one dialog, as in the TUI)
     if (!explain) {
       for (const s of stmts) {
-        const why = await api.unsafeReason(kind, s).catch(() => null);
+        const why = unsafeReason(kind, s);
         if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: withoutComments(s, kind).slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return drop();
       }
     }

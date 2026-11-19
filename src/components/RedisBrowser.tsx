@@ -5,7 +5,7 @@ import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panel
 import { api, history, QueryResult, redis, RedisDbInfo, RedisKeyDetail, RedisKeyRow, RedisOverview, RedisReply } from "../lib/api";
 import { keyTree, parentPaths, visibleRows } from "../lib/keyTree";
 import { sharedOr, useSharedReady, type RedisAssist, type RedisReplyTable } from "../lib/shared";
-import { isRead } from "../lib/stmtKind";
+import { isRead, unsafeReason } from "../lib/stmtKind";
 import { FolderIcon } from "../ui/icons";
 import { Badge, Button, EmptyState, FormGrid, IconButton, Modal, Named, Notice, Select, Spacer, Table, Tabs, Td, Text, TextArea, TextInput, Th, ToolButton, Toolbar, TreeRow } from "../ui";
 
@@ -835,7 +835,7 @@ function Terminal({ target, connId, connName, database, readOnly, production, pr
         push(echo, { kind: "err", text: `(error) "${connName}" is read-only: ${line.split(/\s+/)[0].toUpperCase()} changes data. A read-only data source runs read commands only (Data Source Properties ▸ Read-only).` })
       );
     // FLUSHALL · FLUSHDB · DEL … always ask; on Production every write asks (one question for both)
-    const why = await api.unsafeReason("redis", line).catch(() => null);
+    const why = unsafeReason("redis", line);
     if (why || (production && write)) {
       const ok = await ask(why ? `${why}. Run it anyway?` : "This command changes data. Run it?", {
         title: production ? `Production: ${connName}` : `${connName}: dangerous command`,

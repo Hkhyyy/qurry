@@ -631,8 +631,6 @@ const handlers: Record<string, (a: any) => unknown> = {
   explain_wrap: () => ((globalThis as any).__mockManual === true ? ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"] : ["BEGIN", "ROLLBACK"]),
   // Production confirmation: rows a change would touch; like the backend, only UPDATE/DELETE are counted (null = can't count, e.g. INSERT or DDL)
   preview_impact: (a: any) => (/^\s*(update|delete)\b/i.test(a.sql) ? (/\bwhere\b/i.test(a.sql) ? 3 : 500) : null),
-  // Redis as qurry_shared::guard::unsafe_statement words it
-  unsafe_reason: (a: any) => a.kind === "redis" ? ((c) => (/^(FLUSHALL|FLUSHDB|DEL|UNLINK|SHUTDOWN|SWAPDB|REPLICAOF|SLAVEOF)$/.test(c) ? `${c} deletes or replaces data` : /^(EVAL|EVALSHA|EVAL_RO|EVALSHA_RO|FCALL|FUNCTION|SCRIPT)$/.test(c) ? `${c} runs a script that can change anything` : null))(String(a.sql).trim().split(/\s+/)[0].toUpperCase()) : (/^\s*(delete|update)\b(?![\s\S]*\bwhere\b)/i.test(a.sql) ? "DELETE without WHERE changes every row" : /^\s*(drop|truncate)\b/i.test(a.sql) ? "DROP removes data" : null),
   trust_ssh_host: () => "Trusted",
   export_data: (a: any) => new Promise((ok) => setTimeout(() => ok({ rows: 500, path: a.clipboard ? null : `~/Downloads/${a.defaultName}.${a.format}`, text: a.clipboard ? "id\tname\n1\ta\n" : null }), 4000)),
   cancel_job: () => null,

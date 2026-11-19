@@ -374,7 +374,6 @@ export const api = {
   /** Whether the driver plugin is installed (null for built-in DBs) · download and install */
   driverStatus: (kind: DbKind) => invoke<boolean | null>("driver_status", { kind }),
   installDriver: (kind: DbKind) => invoke<string>("install_driver", { kind }),
-  unsafeReason: (kind: DbKind, sql: string) => invoke<string | null>("unsafe_reason", { kind, sql }),
 };
 
 /** A data source that reconnects (core app::Reconnecting): what to say meanwhile, after 10 s (`slow`), when its load fails and after Cancel */

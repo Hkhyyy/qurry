@@ -50,6 +50,19 @@ export function isDdl(kind: DbKind, sql: string): boolean | null {
 }
 
 /**
+ * Why the statement needs a confirmation before it runs (UPDATE/DELETE without WHERE, DROP, TRUNCATE, FLUSHALL …;
+ * qurry_shared::guard::unsafe_statement, the TUI's rule and words), or undefined. Without the WASM module nothing can be checked,
+ * so it asks
+ */
+export function unsafeReason(kind: DbKind, sql: string): string | undefined {
+  try {
+    return shared().unsafeStatement(sql, kind);
+  } catch {
+    return "Qurry can't check this statement for changes to every row or lost data";
+  }
+}
+
+/**
  * The statements of a run the Production confirmation lists: the writes, none for Explain (qurry_shared::production::asked_statements,
  * the TUI's rule). Without the WASM module nothing can be checked, so every statement is asked
  */
