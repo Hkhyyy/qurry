@@ -33,11 +33,8 @@ impl AppState {
         // Redis has no SQL guard: refuse a write here too, before anything connects
         if kind == store::DbKind::Redis {
             let args = crate::redisdb::parse_command(&sql)?;
-            let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
-            let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
-            if !crate::redisdb::is_read_command(&cmd, &sub) {
-                return Err(AppError::Msg(format!("{cmd} is not a read-only command")));
-            }
+            let arg = |i: usize| args.get(i).map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+            self.check_read_only_redis(&id, &arg(0), &arg(1), true)?;
         }
         let sql = &sql;
         with_pool(self, &id, |p| async move { dispatch!(p, b => b.run_read_only(sql, limit).await) }).await
@@ -308,12 +305,13 @@ impl AppState {
         s.explain_wrap().await
     }
 
-    /// Block write commands on Read-only Redis Data Sources
-    fn check_read_only_redis(&self, id: &str, cmd: &str, sub: &str) -> AppResult<()> {
+    /// Block write commands on Read-only Redis Data Sources, and on every Redis source when `always` (run_read_only, MCP's
+    /// read-only mode, which says so in its own words)
+    fn check_read_only_redis(&self, id: &str, cmd: &str, sub: &str, always: bool) -> AppResult<()> {
         let cfg = self.source(id)?;
         let (cmd, sub) = (cmd.to_uppercase(), sub.to_uppercase());
-        if cfg.read_only && !crate::redisdb::is_read_command(&cmd, &sub) {
-            return Err(AppError::Msg(format!("Data source \"{}\" is read-only: {cmd} changes data", cfg.name)));
+        if (always || cfg.read_only) && !crate::redisdb::is_read_command(&cmd, &sub) {
+            return Err(AppError::Msg(if always { format!("{cmd} is not a read-only command") } else { format!("Data source \"{}\" is read-only: {cmd} changes data", cfg.name) }));
         }
         Ok(())
     }
@@ -332,7 +330,7 @@ impl AppState {
         let blocked = if cfg.kind == crate::store::DbKind::Redis {
             let args = crate::redisdb::parse_command(sql)?;
             let arg = |i: usize| args.get(i).map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
-            return self.check_read_only_redis(id, &arg(0), &arg(1));
+            return self.check_read_only_redis(id, &arg(0), &arg(1), false);
         } else {
             crate::guard::read_only_violation(sql, cfg.kind, false)
         };
@@ -575,7 +573,7 @@ impl AppState {
     }
 
     pub async fn redis_exec(&self, id: String, args: Vec<String>) -> AppResult<serde_json::Value> {
-        self.check_read_only_redis(&id, args.first().map(|s| s.as_str()).unwrap_or(""), args.get(1).map(|s| s.as_str()).unwrap_or(""))?;
+        self.check_read_only_redis(&id, args.first().map(|s| s.as_str()).unwrap_or(""), args.get(1).map(|s| s.as_str()).unwrap_or(""), false)?;
         crate::redisdb::exec_args(&redis_pool(self, &id).await?, &args).await
     }
 
@@ -647,6 +645,55 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::app::tests::*;
+
+    /// run_read_only (MCP's query) runs only Redis read commands, on any source, read-only or not, through check_read_only_redis:
+    /// the commands a read-only source lets through, refused in run_read_only's own words (#156). The set is is_read_command's,
+    /// whatever the case or the arguments
+    #[tokio::test]
+    async fn redis_run_read_only_refuses_exactly_the_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let src = |id: &str, read_only| ConnectionConfig { kind: crate::store::DbKind::Redis, read_only, ..silent_source(id, 1, None) };
+        st.store.save(&src("rd", false)).unwrap();
+        st.store.save(&src("rdro", true)).unwrap();
+        let reads = [
+            "GET k", "get k", "MGET a b", "HGETALL h", "SCAN 0", "KEYS *", "TYPE k", "TTL k", "XRANGE s - +", "INFO", "PING", "config get maxmemory",
+            "CONFIG GET maxmemory", "CLIENT LIST", "OBJECT ENCODING k", "MEMORY USAGE k", "SLOWLOG GET", "COMMAND", "COMMAND COUNT", "JSON.GET k",
+        ];
+        let writes = [
+            ("SET k v", "SET"), ("set k v", "SET"), ("DEL k", "DEL"), ("FLUSHALL", "FLUSHALL"), ("CONFIG SET maxmemory 1", "CONFIG"),
+            ("config rewrite", "CONFIG"), ("CLIENT KILL ID 1", "CLIENT"), ("OBJECT HELP", "OBJECT"), ("MEMORY PURGE", "MEMORY"), ("EVAL \"return 1\" 0", "EVAL"),
+            ("EVAL_RO \"return 1\" 0", "EVAL_RO"), ("MULTI", "MULTI"), ("SUBSCRIBE c", "SUBSCRIBE"), ("DEBUG SLEEP 1", "DEBUG"), ("NOSUCHCMD", "NOSUCHCMD"),
+            ("SLOWLOG RESET", "SLOWLOG"), ("COMMAND GETKEYS GET k", "COMMAND"), ("HSET h f v", "HSET"),
+        ];
+        let words = |line: &str| {
+            let args = crate::redisdb::parse_command(line).unwrap();
+            let arg = |i: usize| args.get(i).map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+            (arg(0), arg(1))
+        };
+        for id in ["rd", "rdro"] {
+            // A read would connect (nothing listens on port 1, and the client retries): its check is the one run_read_only makes
+            for line in reads {
+                let (cmd, sub) = words(line);
+                assert!(crate::redisdb::is_read_command(&cmd.to_uppercase(), &sub.to_uppercase()), "{line}");
+                st.check_read_only_redis(id, &cmd, &sub, true).unwrap_or_else(|e| panic!("{id}: {line} was refused: {e}"));
+                st.check_read_only_redis(id, &cmd, &sub, false).unwrap_or_else(|e| panic!("{id}: {line} was refused: {e}"));
+            }
+            for (line, name) in writes {
+                let (cmd, sub) = words(line);
+                assert!(!crate::redisdb::is_read_command(&cmd.to_uppercase(), &sub.to_uppercase()), "{line}");
+                let e = st.run_read_only(id.into(), line.into(), 10).await.unwrap_err().to_string();
+                assert!(e == format!("{name} is not a read-only command") || e.contains("--allow-write"), "{id}: {line}: {e}");
+                let source = st.check_read_only_redis(id, &cmd, &sub, false);
+                if id == "rdro" {
+                    assert_eq!(source.unwrap_err().to_string(), format!("Data source \"{id}\" is read-only: {name} changes data"));
+                } else {
+                    assert!(source.is_ok(), "{line}");
+                }
+            }
+        }
+        assert!(st.pools.read().await.is_empty());
+    }
 
     /// Submit's statements go into the history under the database they ran in (a target without one: the source's default, as a
     /// console's runs); a temporary source's are never kept
