@@ -3,15 +3,15 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import "../../lib/monaco";
 import { MONACO_THEME, connStripe, connTabVars, useThemeState } from "../../lib/theme";
-import { newBackground, type ThemeBackground } from "../../lib/themeBackground";
+import { newBackgroundSlot, newCornerSlot, type ThemeImages } from "../../lib/themeBackground";
 import { SettingsDialog } from "../../features/settings/SettingsDialog";
-import { BackgroundImageSection, ThemeBackdrop, ThemeSticker } from "../../features/settings/ThemeBackground";
+import { ThemeBackdrop, ThemeImagesSection, ThemeSticker } from "../../features/settings/ThemeBackground";
 import { GridCell, GridHeaderRow, Menu, RowNumberCell, TreeRow } from "..";
 import { DatabaseIcon, PgIcon, TableIcon } from "../icons";
 
-// Theme background image stories (#202): made-up images drawn in code, and the main window with the image Behind the SQL editor and
-// the result grid (and nowhere else: the explorer, tab bar, grid header, status bar and the open menu keep their own surface) or in a
-// Corner, in front of the window and under the open menu
+// Theme image stories (#202): made-up images drawn in code, and the main window with a Background image behind the SQL editor and the
+// result grid (and nowhere else: the explorer, tab bar, grid header, status bar and the open menu keep their own surface) and a Corner
+// image in front of the window, under the open menu
 
 const svg = (s: string) => `data:image/svg+xml;utf8,${encodeURIComponent(s)}`;
 /** Ridges under a pale sky: from near white to near black, the worst case for contrast */
@@ -58,7 +58,8 @@ const W = [44, 160, 90, 120];
 const noop = () => {};
 
 /** The main window: explorer, tabs, the console (editor over the result grid, the image behind both), status bar; a menu open over the grid */
-export function BackgroundWindow({ image, src, still, menu = true }: { image: ThemeBackground | null; src: string; still?: boolean; menu?: boolean }) {
+export function BackgroundWindow({ images, files = FILES, still, menu = true }: { images: ThemeImages; /** File name → image URL */ files?: Record<string, string>; still?: boolean; menu?: boolean }) {
+  const { background, corner } = images;
   return (
     <div className="bgwin" style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--text)" }}>
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
@@ -80,7 +81,7 @@ export function BackgroundWindow({ image, src, still, menu = true }: { image: Th
               <span className="tab-label">orders</span>
             </div>
           </div>
-          <ThemeBackdrop image={image} src={src} still={still} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <ThemeBackdrop slot={background} src={background ? files[background.file] : ""} still={still} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ flex: "1 1 55%", minHeight: 0 }}>
               <Editor value={SQL} language="pgsql" theme={MONACO_THEME} options={{ readOnly: true, minimap: { enabled: false }, scrollBeyondLastLine: false, fontSize: 13, renderLineHighlight: "none", overviewRulerLanes: 0 }} />
             </div>
@@ -119,7 +120,7 @@ export function BackgroundWindow({ image, src, still, menu = true }: { image: Th
       <div className="statusbar">
         <span>[DEV] shop_app · shop</span>
       </div>
-      <ThemeSticker image={image} src={src} still={still} />
+      <ThemeSticker slot={corner} src={corner ? files[corner.file] : ""} still={still} />
       {menu && (
         <Menu
           at={{ x: 560, y: 470 }}
@@ -133,19 +134,21 @@ export function BackgroundWindow({ image, src, still, menu = true }: { image: Th
 
 /** The made-up files and their images */
 export const FILES: Record<string, string> = { "ridges.webp": RIDGES, "dots.png": DOTS, "beacon.gif": BEACON };
-export const SAMPLE = newBackground("ridges.webp");
+export const SAMPLE_BACKGROUND = newBackgroundSlot("ridges.webp");
+export const SAMPLE_CORNER = newCornerSlot("beacon.gif");
 
 /**
- * The real Settings dialog over the main window, as in the app: the theme editor with the section over its preview, the image applied
- * live to the window behind (Peek fades Settings to show it) and to the preview (behind its editor and grid only, or in its corner).
+ * The real Settings dialog over the main window, as in the app: the theme editor with the section over its preview, the images applied
+ * live to the window behind (Peek fades Settings to show it) and to the preview (behind its editor and grid only, and in its corner).
  * A mockup: the editor doesn't take the section yet, so it and the preview's image are put into the editor's DOM once it is drawn.
- * src: a file's image other than FILES' (the local preview's)
+ * files: file name → image URL (the local preview's own files)
  */
-export function InEditor({ initial, src: own }: { initial: ThemeBackground | null; src?: string }) {
+export function InEditor({ initial, files = FILES }: { initial: ThemeImages; files?: Record<string, string> }) {
   const { current } = useThemeState();
-  const [image, setImage] = useState(initial);
+  const [images, setImages] = useState(initial);
   const [slot, setSlot] = useState<{ section: HTMLElement; layer: HTMLElement; sticker: HTMLElement } | null>(null);
-  const src = own ?? FILES[image?.file ?? ""] ?? RIDGES;
+  const srcOf = (file: string) => files[file] ?? RIDGES;
+  const { background, corner } = images;
   useEffect(() => {
     const t = setInterval(() => {
       const preview = document.querySelector<HTMLElement>(".theme-preview");
@@ -174,11 +177,11 @@ export function InEditor({ initial, src: own }: { initial: ThemeBackground | nul
   }, []);
   return (
     <>
-      <BackgroundWindow image={image} src={src} menu={false} />
+      <BackgroundWindow images={images} files={files} menu={false} />
       <SettingsDialog initialPage="theme" onClose={noop} onUpdate={noop} onChannel={noop} />
-      {slot && createPortal(<BackgroundImageSection image={image} src={src} p={current.colors} onPick={() => setImage(SAMPLE)} onChange={setImage} />, slot.section)}
-      {slot && createPortal(<ThemeBackdrop image={image} src={src} style={{ position: "absolute", inset: 0 }} />, slot.layer)}
-      {slot && createPortal(<ThemeSticker image={image} src={src} inPreview />, slot.sticker)}
+      {slot && createPortal(<ThemeImagesSection images={images} srcOf={srcOf} p={current.colors} onPick={(k) => setImages({ ...images, [k]: k === "background" ? SAMPLE_BACKGROUND : SAMPLE_CORNER })} onChange={setImages} />, slot.section)}
+      {slot && createPortal(<ThemeBackdrop slot={background} src={background ? srcOf(background.file) : ""} style={{ position: "absolute", inset: 0 }} />, slot.layer)}
+      {slot && createPortal(<ThemeSticker slot={corner} src={corner ? srcOf(corner.file) : ""} inPreview />, slot.sticker)}
     </>
   );
 }

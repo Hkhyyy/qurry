@@ -43,8 +43,8 @@ import { ReconnectToastView } from "../../components/ReconnectToasts";
 import type { ReconnectToast } from "../../lib/reconnect";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 import { inSmallWindow } from "./SmallWindow";
-import { BackgroundWindow, FILES, InEditor, SAMPLE as BG_SAMPLE } from "./BackgroundWindow";
-import { newBackground, type ThemeBackground } from "../../lib/themeBackground";
+import { BackgroundWindow, InEditor, SAMPLE_BACKGROUND, SAMPLE_CORNER } from "./BackgroundWindow";
+import { newBackgroundSlot, type ThemeImages } from "../../lib/themeBackground";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
 const meta: Meta = { title: "GUI/5 Screens", parameters: { layout: "fullscreen" } };
@@ -202,45 +202,48 @@ export const QuickSwitchTheme: S = {
   },
 };
 
-/** Theme background image (#202, a mockup until it goes into the editor). A custom theme carries an image (PNG, JPEG, WebP or GIF,
- *  copied into the config folder), shown one of two ways, picked at the top of the section over the editor's preview:
- *  Behind, drawn as it is (DataGrip's Set Background Image, 15% by default) behind the SQL editor and the result grid only; a mark on
- *  its slider shows the opacity up to which every color keeps its contrast minimum over the image's lightest and darkest pixels (0–3%
- *  in the built-in themes, 20% in High contrast), and above it the colors that fall below are counted (listed in Opacity's ⓘ), saved
- *  with their warning, never changed. Corner, scaled down (10–40% of the window's height) in front of the window, 16 px from the
- *  edges, under every menu, dialog, toast and popup; clicks pass through it; no contrast warning (it is placed on purpose).
- *  The image applies live to the window behind Settings; hold Peek (or Space on it) to fade Settings and see it. GIF and animated WebP
- *  play, and stop on their first frame while Reduce motion is on or the window isn't active: in Storybook it plays once the canvas has
- *  focus (click into it), and the Reduce motion control stands in for the system setting. GUI only: the TUI ignores the field (a
- *  terminal draws characters; its own background image shows there). The images are drawn in code (BackgroundWindow.tsx) */
-const bgEditor = (initial: ThemeBackground | null): S => ({ render: () => <InEditor initial={initial} /> });
+/** Theme images (#202, a mockup until it goes into the editor). A custom theme carries up to two images (PNG, JPEG, WebP or GIF, each
+ *  copied into the config folder), in two independent slots of the section over the editor's preview, each optional, both can be on:
+ *  Background, drawn as it is (DataGrip's Set Background Image, 15% by default) behind the SQL editor and the result grid only; a mark
+ *  on its slider shows the opacity up to which every color keeps its contrast minimum over the image's lightest and darkest pixels
+ *  (0–3% in the built-in themes, 20% in High contrast), and above it the colors that fall below are counted (listed in Opacity's ⓘ),
+ *  saved with their warning, never changed. Corner, scaled down (10–40% of the window's height) in front of the window, 16 px from the
+ *  edges, under every menu, dialog, toast and popup; clicks pass through it; no contrast warning (it is placed on purpose). A slot
+ *  without an image is one line (Choose…). The images apply live to the window behind Settings; hold Peek (or Space on it) to fade
+ *  Settings and see it. GIF and animated WebP play in either slot, and stop on their first frame while Reduce motion is on or the
+ *  window isn't active: in Storybook it plays once the canvas has focus (click into it), and the Reduce motion control stands in for
+ *  the system setting. GUI only: the TUI ignores the field (a terminal draws characters; its own background image shows there). The
+ *  images are drawn in code (BackgroundWindow.tsx) */
+const bgEditor = (initial: ThemeImages): S => ({ render: () => <InEditor initial={initial} /> });
 const motion = { args: { reduceMotion: false }, argTypes: { reduceMotion: { control: "boolean", name: "Reduce motion" } } };
-const bgWindow = (theme: string, image: ThemeBackground): S => ({
+const bgWindow = (theme: string, images: ThemeImages): S => ({
   ...motion,
   globals: { theme },
-  render: (args) => <BackgroundWindow image={image} src={FILES[image.file]} still={!!(args as { reduceMotion?: boolean }).reduceMotion} />,
+  render: (args) => <BackgroundWindow images={images} still={!!(args as { reduceMotion?: boolean }).reduceMotion} />,
 });
-const BEHIND = BG_SAMPLE;
-const CORNER: ThemeBackground = { ...newBackground("beacon.gif"), mode: "corner" };
-export const BackgroundImageEditor = bgEditor(BEHIND);
-export const BackgroundImageEditorCorner = bgEditor(CORNER);
-export const BackgroundImageEditorNoImage = bgEditor(null);
-/** Peek held: Settings fades and the window behind it shows the image as it is now */
-export const BackgroundImageEditorPeek: S = {
-  ...bgEditor(BEHIND),
+const BOTH: ThemeImages = { background: SAMPLE_BACKGROUND, corner: SAMPLE_CORNER };
+const BG: ThemeImages = { background: SAMPLE_BACKGROUND };
+const CORNER: ThemeImages = { corner: SAMPLE_CORNER };
+export const ThemeImagesEditor = bgEditor(BOTH);
+export const ThemeImagesEditorBackgroundOnly = bgEditor(BG);
+export const ThemeImagesEditorNoImages = bgEditor({});
+/** Peek held: Settings fades and the window behind it shows the images as they are now */
+export const ThemeImagesEditorPeek: S = {
+  ...bgEditor(BOTH),
   play: async ({ canvasElement }) => {
     const peek = await within(canvasElement.ownerDocument.body).findByRole("button", { name: "Peek" });
     fireEvent.pointerDown(peek, { button: 0 });
   },
 };
-export const BackgroundImageBehindDark = bgWindow("dark", BEHIND);
-export const BackgroundImageBehindLight = bgWindow("light", BEHIND);
-export const BackgroundImageBehindHighContrast = bgWindow("hc", BEHIND);
-/** An animated image Behind (tiled): it plays, and stops on its first frame with Reduce motion or when the window isn't active */
-export const BackgroundImageBehindAnimated = bgWindow("dark", { ...newBackground("beacon.gif"), behind: { opacity: 15, fill: "tile", anchor: "center" } });
-export const BackgroundImageCornerDark = bgWindow("dark", CORNER);
-export const BackgroundImageCornerLight = bgWindow("light", { ...CORNER, corner: { ...CORNER.corner, corner: "left top" } });
-export const BackgroundImageCornerHighContrast = bgWindow("hc", { ...CORNER, corner: { ...CORNER.corner, size: 35 } });
+export const ThemeImagesBothDark = bgWindow("dark", BOTH);
+export const ThemeImagesBackgroundDark = bgWindow("dark", BG);
+export const ThemeImagesBackgroundLight = bgWindow("light", BG);
+export const ThemeImagesBackgroundHighContrast = bgWindow("hc", BG);
+/** An animated image in the Background (tiled): it plays, and stops on its first frame with Reduce motion or when the window isn't active */
+export const ThemeImagesBackgroundAnimated = bgWindow("dark", { background: { ...newBackgroundSlot("beacon.gif"), fill: "tile" } });
+export const ThemeImagesCornerDark = bgWindow("dark", CORNER);
+export const ThemeImagesCornerLight = bgWindow("light", { corner: { ...SAMPLE_CORNER, corner: "left top" } });
+export const ThemeImagesCornerHighContrast = bgWindow("hc", { corner: { ...SAMPLE_CORNER, size: 35 } });
 
 /** Settings › Keymap: every menu, toolbar and Find Action command by scope (Global, Database Explorer, Query Console, Data Grid), "none" where it has no key yet */
 export const SettingsKeymap: S = { name: "Settings — Keymap", render: () => <SettingsDialog initialPage="keymap" onClose={noop} onUpdate={noop} onChannel={noop} /> };

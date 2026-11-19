@@ -1,12 +1,12 @@
-// A theme's background image (#202, GUI only: a terminal draws characters, so the TUI ignores it). Two ways to show it: Behind, faint
-// behind the SQL editor and the result grid; Corner, scaled down in front of the window (below menus, dialogs and popups), a sticker.
-// Behind costs contrast: drawn at opacity α, the image moves each pixel of Background (and the grid's odd rows) toward its own pixel
+// A theme's images (#202, GUI only: a terminal draws characters, so the TUI ignores them), two independent slots, each optional with its
+// own image: Background, faint behind the SQL editor and the result grid; Corner, scaled down in front of the window (below menus,
+// dialogs and popups), a sticker.
+// The background costs contrast: drawn at opacity α, the image moves each pixel of Background (and the grid's odd rows) toward its own pixel
 // by α; the worst pixel is black or white, so the checks (qurry_shared::theme, through the WASM) are run with those surfaces mixed
 // that far toward black and white. GIF and animated WebP play, and stop on their first frame while motion is paused (stillFrame).
 import type { CSSProperties } from "react";
 import type { Palette, ThemeWarning } from "./theme";
 
-export type Mode = "behind" | "corner";
 export type Fill = "cover" | "contain" | "tile" | "center";
 export const FILLS: { id: Fill; label: string }[] = [
   { id: "cover", label: "Cover" },
@@ -23,21 +23,27 @@ export type Corner = (typeof CORNERS)[number];
 export const SIZE_MIN = 10;
 export const SIZE_MAX = 40;
 
-export interface ThemeBackground {
-  /** The copy in the config folder */
+/** file: the copy in the config folder; opacity 0–100 */
+export interface BackgroundSlot {
   file: string;
-  mode: Mode;
-  /** Each mode keeps its own settings; opacity 0–100 */
-  behind: { opacity: number; fill: Fill; anchor: Anchor };
-  corner: { corner: Corner; size: number; opacity: number };
+  opacity: number;
+  fill: Fill;
+  anchor: Anchor;
 }
-/** A new image's settings: DataGrip's 15% behind; a corner sticker at full opacity */
-export const newBackground = (file: string): ThemeBackground => ({
-  file,
-  mode: "behind",
-  behind: { opacity: 15, fill: "cover", anchor: "center" },
-  corner: { corner: "right bottom", size: 20, opacity: 100 },
-});
+export interface CornerSlot {
+  file: string;
+  corner: Corner;
+  size: number;
+  opacity: number;
+}
+/** A theme's images: either slot, both or none */
+export interface ThemeImages {
+  background?: BackgroundSlot;
+  corner?: CornerSlot;
+}
+/** A new image's settings: DataGrip's 15% in the background; a corner sticker bottom right, fully opaque */
+export const newBackgroundSlot = (file: string): BackgroundSlot => ({ file, opacity: 15, fill: "cover", anchor: "center" });
+export const newCornerSlot = (file: string): CornerSlot => ({ file, corner: "right bottom", size: 20, opacity: 100 });
 
 /** The surfaces the image is behind */
 const SURFACES = ["bg", "odd"];
@@ -49,7 +55,7 @@ export function mixHex(a: string, b: string, t: number): string {
   return "#" + [0, 1, 2].map((i) => hex2(ch(a, i) * (1 - t) + ch(b, i) * t)).join("");
 }
 
-/** Behind: the checks that fail over the image's worst pixels at opacity (0–100) and pass without the image, one per token */
+/** Background: the checks that fail over the image's worst pixels at opacity (0–100) and pass without the image, one per token */
 export function warningsOver(p: Palette, opacity: number, warnings: (p: Palette) => ThemeWarning[]): ThemeWarning[] {
   const before = new Set(warnings(p).map((w) => w.token));
   const found = new Map<string, ThemeWarning>();
@@ -60,7 +66,7 @@ export function warningsOver(p: Palette, opacity: number, warnings: (p: Palette)
   return [...found.values()];
 }
 
-/** Behind: the highest opacity (whole %) at which no check fails over the image that passes without it */
+/** Background: the highest opacity (whole %) at which no check fails over the image that passes without it */
 export function opacityCap(p: Palette, warnings: (p: Palette) => ThemeWarning[]): number {
   let [lo, hi] = [0, 100];
   while (lo < hi) {
@@ -72,8 +78,8 @@ export function opacityCap(p: Palette, warnings: (p: Palette) => ThemeWarning[])
 }
 
 const SIZE: Record<Fill, string> = { cover: "cover", contain: "contain", tile: "auto", center: "auto" };
-/** Behind: the image layer's style (src is the image's URL) */
-export const backdropStyle = (b: ThemeBackground["behind"], src: string): CSSProperties => ({
+/** Background: the image layer's style (src is the image's URL) */
+export const backdropStyle = (b: BackgroundSlot, src: string): CSSProperties => ({
   backgroundImage: `url("${src}")`,
   backgroundSize: SIZE[b.fill],
   backgroundRepeat: b.fill === "tile" ? "repeat" : "no-repeat",
@@ -83,7 +89,7 @@ export const backdropStyle = (b: ThemeBackground["behind"], src: string): CSSPro
 
 /** Corner: the sticker's place, height and opacity; margin from the edges in px. In the window its height is a share of the window's
  *  (vh); in the editor's preview, of the preview's (%) */
-export function stickerStyle(c: ThemeBackground["corner"], margin = 16, unit: "vh" | "%" = "vh"): CSSProperties {
+export function stickerStyle(c: CornerSlot, margin = 16, unit: "vh" | "%" = "vh"): CSSProperties {
   const [x, y] = c.corner.split(" ");
   return { [x]: margin, [y]: margin, height: `${c.size}${unit}`, maxWidth: `calc(100${unit === "vh" ? "vw" : "%"} - ${2 * margin}px)`, opacity: c.opacity / 100 };
 }
