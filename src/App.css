@@ -508,6 +508,41 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-preview .tree-node.preview-hover { background: var(--c-33353a); }
 /* Pointing at a color's name: what draws it, outlined inside (nothing moves or is covered) */
 .theme-preview .tok-hot { outline: 1px dashed var(--text) !important; outline-offset: -1px; }
+/* Theme background image (#202, ThemeBackground.tsx): Background, the image layer, then the content with its surfaces made clear
+   (Monaco's background and gutter, the grid's odd rows a half tint); headers, toolbars, menus and dialogs keep their own surface */
+.theme-backdrop-host { position: relative; isolation: isolate; background: var(--bg); }
+.theme-backdrop { position: absolute; inset: 0; pointer-events: none; }
+.theme-backdrop-host > :not(.theme-backdrop) { position: relative; }
+.theme-backdrop-host .monaco-editor { --vscode-editor-background: transparent; --vscode-editorGutter-background: transparent; }
+.theme-backdrop-host .grid-row.odd { background: color-mix(in srgb, var(--c-222326) 50%, transparent); }
+.theme-bg-thumb { flex: none; display: flex; align-items: center; justify-content: center; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-sm); overflow: hidden; font-size: 11px; }
+.theme-bg-group { margin-top: 10px; }
+.theme-bg-image { display: flex; gap: var(--ui-sp-3); align-items: center; padding: 6px 0; }
+.theme-bg-file { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--ui-sp-2); }
+.theme-bg-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-fs-sm); }
+.theme-bg-file .ui-row { flex-wrap: wrap; gap: var(--ui-sp-2); }
+.theme-bg-row { display: flex; align-items: center; gap: var(--ui-sp-3); min-height: 30px; font-size: var(--ui-fs-sm); }
+.theme-bg-row > .ui-named { flex: 0 0 84px; min-width: 0; }
+.theme-bg-row .ui-select { flex: 1; min-width: 0; }
+.theme-bg-opacity { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--ui-sp-3); }
+.theme-bg-range { position: relative; flex: 1; min-width: 60px; display: flex; }
+.theme-bg-range input { width: 100%; margin: 0; accent-color: var(--ui-accent); }
+.theme-bg-range input:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; border-radius: 2px; }
+.theme-bg-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--ui-warn); pointer-events: none; }
+.theme-bg-pct { flex: none; width: 34px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ui-text-muted); }
+.theme-bg-anchor { display: grid; grid-template-columns: repeat(3, 16px); grid-template-rows: repeat(3, 12px); gap: 2px; padding: 3px; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-sm); }
+.theme-bg-anchor button { width: 16px; height: 12px; min-width: 0; padding: 0; border: 1px solid var(--ui-border-strong); border-radius: 2px; background: transparent; }
+.theme-bg-anchor button:hover:not(:disabled) { background: var(--ui-hover); }
+.theme-bg-anchor button[aria-checked="true"] { background: var(--ui-accent); border-color: var(--ui-accent); }
+.theme-bg-anchor button:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
+.theme-bg-anchor[aria-disabled="true"] { opacity: 0.45; }
+.theme-bg-bar { display: flex; flex-wrap: wrap; gap: var(--ui-sp-3) var(--ui-sp-4); padding: var(--ui-sp-3); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); }
+.theme-bg-bar-image { flex: none; display: flex; flex-direction: column; gap: var(--ui-sp-2); }
+.theme-bg-bar-image .ui-row { gap: var(--ui-sp-2); }
+.theme-bg-bar-fields { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; }
+.theme-bg-bar-title { display: flex; align-items: center; gap: var(--ui-sp-3); min-width: 0; font-size: var(--ui-fs-sm); padding-bottom: 2px; white-space: nowrap; }
+.theme-bg-bar-title > .ui-named { flex: none; font-weight: 600; }
+.theme-bg-below { flex: none; margin-left: var(--ui-sp-2); white-space: nowrap; }
 
 /* Search Everywhere (⇧⇧ / ⌘O / ⇧⌘A) */
 .ui-popover.search-everywhere { top: 12%; width: 720px; max-width: calc(100vw - 32px); max-height: 70vh; }

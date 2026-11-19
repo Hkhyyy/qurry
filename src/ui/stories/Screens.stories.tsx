@@ -43,6 +43,8 @@ import { ReconnectToastView } from "../../components/ReconnectToasts";
 import type { ReconnectToast } from "../../lib/reconnect";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 import { inSmallWindow } from "./SmallWindow";
+import { BackgroundWindow, FILES, InEditor, SAMPLE as BG_SAMPLE } from "./BackgroundWindow";
+import type { ThemeBackground } from "../../lib/themeBackground";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
 const meta: Meta = { title: "GUI/5 Screens", parameters: { layout: "fullscreen" } };
@@ -199,6 +201,48 @@ export const QuickSwitchTheme: S = {
     fireEvent.keyDown(canvasElement.ownerDocument.body, { key: "`", code: "Backquote", ctrlKey: true });
   },
 };
+
+/** Theme background image (#202, a mockup with two options; one is picked before it goes into the app). A custom theme carries an
+ *  image (PNG, JPEG or WebP, copied into the config folder) drawn faintly behind the SQL editor and the result grid, never behind the
+ *  explorer, tab bar, headers, menus, dialogs or popups, as DataGrip's Set Background Image. GUI only: the TUI ignores the field (a
+ *  terminal draws characters; its own background image shows there). The images are drawn in code (BackgroundWindow.tsx).
+ *  Option A: rows in the colors column; the image only darkens a dark Background (only lightens a light one), so no contrast check
+ *  can fail at any opacity, but on a black or white Background (Light, High contrast) it has no room and Opacity says so in its ⓘ */
+const bgEditor = (name: string, option: "A" | "B", initial: ThemeBackground | null, base?: string): S => ({
+  name: `Theme background ${option} — ${name}`,
+  render: () => <InEditor option={option} initial={initial} />,
+  play: base ? async ({ canvasElement }) => void (await userEvent.selectOptions(await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Based on" }), base)) : undefined,
+});
+const bgWindow = (option: "A" | "B", theme: string, image: ThemeBackground): S => ({
+  name: `Theme background ${option} — window (${{ dark: "dark", light: "light", hc: "high contrast", "solarized-light": "Solarized Light" }[theme]})`,
+  globals: { theme },
+  render: () => <BackgroundWindow image={image} src={FILES[image.file]} blend={option === "A" ? "one-way" : "both"} />,
+});
+export const BackgroundImageAEditor = bgEditor("editor (dark)", "A", BG_SAMPLE);
+export const BackgroundImageAEditorNoImage = bgEditor("editor, no image", "A", null);
+export const BackgroundImageAEditorTile = bgEditor("editor, Tile from the bottom right", "A", { file: "dots.png", opacity: 100, fill: "tile", anchor: "right bottom" });
+/** On Light the image has no room (Background is white): Opacity is off and its ⓘ says why */
+export const BackgroundImageAEditorLightNoRoom: S = {
+  ...bgEditor("editor (light): no room", "A", BG_SAMPLE),
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.selectOptions(await body.findByRole("combobox", { name: "Based on" }), "light");
+    await userEvent.click(await body.findByRole("button", { name: "About Opacity" }));
+  },
+};
+export const BackgroundImageAWindowDark = bgWindow("A", "dark", { ...BG_SAMPLE, opacity: 100 });
+export const BackgroundImageAWindowSolarizedLight = bgWindow("A", "solarized-light", { ...BG_SAMPLE, opacity: 100 });
+export const BackgroundImageAWindowLight = bgWindow("A", "light", { ...BG_SAMPLE, opacity: 100 });
+export const BackgroundImageAWindowHighContrast = bgWindow("A", "hc", { ...BG_SAMPLE, opacity: 100 });
+/** Option B: a bar over the preview, next to what it changes. The image is drawn as it is (DataGrip's: 15% by default); a mark on the
+ *  slider shows the opacity up to which every color keeps its minimum over the image's lightest and darkest pixels (0–3% in the
+ *  built-in themes, 20% in High contrast), and above it the colors that fall below are counted (listed in Opacity's ⓘ), saved with
+ *  their warning, never changed, as the editor's color warnings */
+export const BackgroundImageBEditor = bgEditor("editor (dark)", "B", { ...BG_SAMPLE, opacity: 15 });
+export const BackgroundImageBEditorNoImage = bgEditor("editor, no image", "B", null);
+export const BackgroundImageBWindowDark = bgWindow("B", "dark", { ...BG_SAMPLE, opacity: 15 });
+export const BackgroundImageBWindowLight = bgWindow("B", "light", { ...BG_SAMPLE, opacity: 15 });
+export const BackgroundImageBWindowHighContrast = bgWindow("B", "hc", { ...BG_SAMPLE, opacity: 15 });
 
 /** Settings › Keymap: every menu, toolbar and Find Action command by scope (Global, Database Explorer, Query Console, Data Grid), "none" where it has no key yet */
 export const SettingsKeymap: S = { name: "Settings — Keymap", render: () => <SettingsDialog initialPage="keymap" onClose={noop} onUpdate={noop} onChannel={noop} /> };
