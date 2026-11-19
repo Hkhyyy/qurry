@@ -498,7 +498,7 @@ const orders: QueryResult = {
     { name: "created_at", typeName: "TIMESTAMPTZ" },
   ],
   rows: [
-    [486, "O-20261101", "김현교", "first order after the promotion; the customer asked for a call before delivery, then changed the address twice and asked for gift wrap", "2026-11-01 10:10:00 +09:00"],
+    [486, "O-20261101", "김민지", "first order after the promotion; the customer asked for a call before delivery, then changed the address twice and asked for gift wrap", "2026-11-01 10:10:00 +09:00"],
     [487, "O-20261102", "이수진", null, "2026-11-02 10:11:00 +09:00"],
     [488, "O-20261103", "박민수 (배송 전 전화 요청, 경비실 보관)", "refund requested", "2026-11-03 10:12:00 +09:00"],
     [489, "O-20261104", "최지우", "gift wrap", "2026-11-04 10:13:00 +09:00"],

@@ -212,7 +212,7 @@ async fn explorer(h: &mut Harness) {
     h.app.tree.children.insert(p.into(), vec![node("prod|shop", "shop", "default", NodeKind::Db, p)]);
     h.app.tree.children.insert("prod|shop".into(), vec![node("prod|shop|public", "public", "", NodeKind::Schema, p)]);
     h.app.tree.children.insert("prod|shop|public".into(), vec![node("prod|shop|public|g", "tables", "66", NodeKind::Group, p)]);
-    let tables = [("adjust", "정산 테이블 (주문 단위 정산)"), ("adjust_status_log", "정산 상태 로그"), ("admin_auth", "관리자 OTP 인증"), ("admin_role", ""), ("bank_info", "은행 정보 테이블"), ("contract", "월세 계약 테이블"), ("payment", "결제 카드 정보")];
+    let tables = [("cart", "장바구니 테이블 (주문 전 담기)"), ("cart_item", "장바구니 상품"), ("coupon", "쿠폰 정보"), ("category", ""), ("product", "상품 테이블"), ("review", "상품 후기 테이블"), ("payment", "결제 카드 정보")];
     h.app.tree.children.insert("prod|shop|public|g".into(), tables.iter().map(|(t, c)| Node { expandable: true, name: Some(t.to_string()), ..node(&format!("prod|shop|public|g|{t}"), t, c, NodeKind::Object("table".into()), p) }).collect());
     for k in ["prod", "prod|shop", "prod|shop|public", "prod|shop|public|g"] {
         h.app.tree.expanded.insert(k.into());
