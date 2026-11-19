@@ -3,14 +3,15 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import "../../lib/monaco";
 import { MONACO_THEME, connStripe, connTabVars, useThemeState } from "../../lib/theme";
-import { backdropStyle, type Blend, type ThemeBackground } from "../../lib/themeBackground";
+import { newBackground, type ThemeBackground } from "../../lib/themeBackground";
 import { SettingsDialog } from "../../features/settings/SettingsDialog";
-import { BackgroundImageBar, BackgroundImageGroup, ThemeBackdrop } from "../../features/settings/ThemeBackground";
+import { BackgroundImageSection, ThemeBackdrop, ThemeSticker } from "../../features/settings/ThemeBackground";
 import { GridCell, GridHeaderRow, Menu, RowNumberCell, TreeRow } from "..";
 import { DatabaseIcon, PgIcon, TableIcon } from "../icons";
 
-// Theme background image stories (#202): made-up images drawn in code, and the main window with the image behind the SQL editor and
-// the result grid (and nowhere else: the explorer, tab bar, grid header, status bar and the open menu keep their own surface)
+// Theme background image stories (#202): made-up images drawn in code, and the main window with the image Behind the SQL editor and
+// the result grid (and nowhere else: the explorer, tab bar, grid header, status bar and the open menu keep their own surface) or in a
+// Corner, in front of the window and under the open menu
 
 const svg = (s: string) => `data:image/svg+xml;utf8,${encodeURIComponent(s)}`;
 /** Ridges under a pale sky: from near white to near black, the worst case for contrast */
@@ -24,6 +25,11 @@ export const RIDGES = svg(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 
 /** A small tile for Tile */
 export const DOTS = svg(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
 <rect width="48" height="48" fill="#8a96a3"/><circle cx="12" cy="12" r="7" fill="#f2f4f7"/><circle cx="36" cy="36" r="7" fill="#141a21"/></svg>`);
+/** An animated badge (stands in for a GIF): a ring that pulses around a dot */
+export const BEACON = svg(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+<rect x="10" y="10" width="180" height="180" rx="36" fill="#2c6e63"/><circle cx="100" cy="100" r="22" fill="#f4d35e"/>
+<circle cx="100" cy="100" r="30" fill="none" stroke="#f4d35e" stroke-width="8"><animate attributeName="r" values="30;70;30" dur="1.6s" repeatCount="indefinite"/>
+<animate attributeName="opacity" values="1;0;1" dur="1.6s" repeatCount="indefinite"/></circle></svg>`);
 
 const SQL = `-- orders this week, by customer
 select c.name,
@@ -52,8 +58,7 @@ const W = [44, 160, 90, 120];
 const noop = () => {};
 
 /** The main window: explorer, tabs, the console (editor over the result grid, the image behind both), status bar; a menu open over the grid */
-export function BackgroundWindow({ image, src, blend, menu = true }: { image: ThemeBackground | null; src: string; blend: Blend; menu?: boolean }) {
-  const { current } = useThemeState();
+export function BackgroundWindow({ image, src, still, menu = true }: { image: ThemeBackground | null; src: string; still?: boolean; menu?: boolean }) {
   return (
     <div className="bgwin" style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--text)" }}>
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
@@ -75,7 +80,7 @@ export function BackgroundWindow({ image, src, blend, menu = true }: { image: Th
               <span className="tab-label">orders</span>
             </div>
           </div>
-          <ThemeBackdrop image={image} src={src} kind={current.kind} blend={blend} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <ThemeBackdrop image={image} src={src} still={still} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ flex: "1 1 55%", minHeight: 0 }}>
               <Editor value={SQL} language="pgsql" theme={MONACO_THEME} options={{ readOnly: true, minimap: { enabled: false }, scrollBeyondLastLine: false, fontSize: 13, renderLineHighlight: "none", overviewRulerLanes: 0 }} />
             </div>
@@ -114,6 +119,7 @@ export function BackgroundWindow({ image, src, blend, menu = true }: { image: Th
       <div className="statusbar">
         <span>[DEV] shop_app · shop</span>
       </div>
+      <ThemeSticker image={image} src={src} still={still} />
       {menu && (
         <Menu
           at={{ x: 560, y: 470 }}
@@ -126,50 +132,53 @@ export function BackgroundWindow({ image, src, blend, menu = true }: { image: Th
 }
 
 /** The made-up files and their images */
-export const FILES: Record<string, string> = { "ridges.webp": RIDGES, "dots.png": DOTS };
-export const SAMPLE: ThemeBackground = { file: "ridges.webp", opacity: 60, fill: "cover", anchor: "center" };
+export const FILES: Record<string, string> = { "ridges.webp": RIDGES, "dots.png": DOTS, "beacon.gif": BEACON };
+export const SAMPLE = newBackground("ridges.webp");
 
 /**
- * The real theme editor (Settings › Theme) with an option's section put where it would go: A's rows at the end of the colors column,
- * B's bar over the preview. The image layer is put in the editor's own preview, which draws the colors being edited (a mockup: the
- * editor doesn't take the section yet, so they are placed into its DOM once it is drawn)
+ * The real Settings dialog over the main window, as in the app: the theme editor with the section over its preview, the image applied
+ * live to the window behind (Peek fades Settings to show it) and to the preview (behind its editor and grid only, or in its corner).
+ * A mockup: the editor doesn't take the section yet, so it and the preview's image are put into the editor's DOM once it is drawn.
+ * src: a file's image other than FILES' (the local preview's)
  */
-export function InEditor({ option, initial }: { option: "A" | "B"; initial: ThemeBackground | null }) {
+export function InEditor({ initial, src: own }: { initial: ThemeBackground | null; src?: string }) {
   const { current } = useThemeState();
   const [image, setImage] = useState(initial);
-  const [slot, setSlot] = useState<{ section: HTMLElement; layer: HTMLElement } | null>(null);
-  const blend: Blend = option === "A" ? "one-way" : "both";
-  const src = FILES[image?.file ?? ""] ?? RIDGES;
+  const [slot, setSlot] = useState<{ section: HTMLElement; layer: HTMLElement; sticker: HTMLElement } | null>(null);
+  const src = own ?? FILES[image?.file ?? ""] ?? RIDGES;
   useEffect(() => {
     const t = setInterval(() => {
-      const tokens = document.querySelector(".theme-tokens");
       const preview = document.querySelector<HTMLElement>(".theme-preview");
-      if (!tokens || !preview) return;
+      const editor = preview?.querySelector<HTMLElement>(".theme-preview-editor");
+      const grid = preview?.querySelector<HTMLElement>(".theme-preview-grid");
+      if (!preview || !editor || !grid) return;
       clearInterval(t);
       const section = document.createElement("div");
-      if (option === "A") tokens.insertBefore(section, tokens.querySelector(".theme-advanced"));
-      else preview.parentElement!.insertBefore(section, preview.parentElement!.firstChild);
+      preview.parentElement!.insertBefore(section, preview.parentElement!.firstChild);
+      // The preview's image covers its editor and grid only (not its explorer, tabs or notes), as one picture
+      const [P, E, G] = [preview, editor, grid].map((el) => el.getBoundingClientRect());
+      const [x, gy, w, h] = [E.left - P.left, G.top - E.top, P.width, G.bottom - E.top];
       const layer = document.createElement("div");
-      layer.className = "theme-backdrop";
-      layer.setAttribute("aria-hidden", "true");
-      preview.classList.add("theme-backdrop-host");
+      Object.assign(layer.style, { position: "absolute", left: "0", top: `${E.top - P.top}px`, width: `${w}px`, height: `${h}px`, clipPath: `polygon(${x}px 0, ${w}px 0, ${w}px ${h}px, 0 ${h}px, 0 ${gy}px, ${x}px ${gy}px)` });
+      const sticker = document.createElement("div");
+      Object.assign(sticker.style, { position: "absolute", inset: "0", pointerEvents: "none", zIndex: "1" });
+      preview.style.position = "relative";
+      // Over the layer: the preview's parts (positioned, so they paint above it), the editor and grid with clear surfaces
+      [...preview.children].forEach((el) => ((el as HTMLElement).style.position = "relative"));
       preview.insertBefore(layer, preview.firstChild);
-      setSlot({ section, layer });
+      preview.appendChild(sticker);
+      [editor, grid].forEach((el) => (el.classList.add("theme-backdrop-host"), (el.style.background = "transparent")));
+      setSlot({ section, layer, sticker });
     }, 50);
     return () => clearInterval(t);
   }, []);
-  // A's rows come after Basic colors: scrolled to, as the user would
-  useEffect(() => void (option === "A" && slot?.section.scrollIntoView({ block: "nearest" })), [slot]);
-  useEffect(() => {
-    if (!slot) return;
-    slot.layer.removeAttribute("style");
-    if (image) Object.assign(slot.layer.style, backdropStyle(image, src, current.kind, blend));
-  }, [slot, image, src, current.kind]);
-  const props = { image, src, p: current.colors, kind: current.kind, onPick: () => setImage(SAMPLE), onChange: setImage };
   return (
     <>
+      <BackgroundWindow image={image} src={src} menu={false} />
       <SettingsDialog initialPage="theme" onClose={noop} onUpdate={noop} onChannel={noop} />
-      {slot && createPortal(option === "A" ? <BackgroundImageGroup {...props} /> : <BackgroundImageBar {...props} />, slot.section)}
+      {slot && createPortal(<BackgroundImageSection image={image} src={src} p={current.colors} onPick={() => setImage(SAMPLE)} onChange={setImage} />, slot.section)}
+      {slot && createPortal(<ThemeBackdrop image={image} src={src} style={{ position: "absolute", inset: 0 }} />, slot.layer)}
+      {slot && createPortal(<ThemeSticker image={image} src={src} inPreview />, slot.sticker)}
     </>
   );
 }

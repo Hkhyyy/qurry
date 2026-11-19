@@ -44,7 +44,7 @@ import type { ReconnectToast } from "../../lib/reconnect";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 import { inSmallWindow } from "./SmallWindow";
 import { BackgroundWindow, FILES, InEditor, SAMPLE as BG_SAMPLE } from "./BackgroundWindow";
-import type { ThemeBackground } from "../../lib/themeBackground";
+import { newBackground, type ThemeBackground } from "../../lib/themeBackground";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
 const meta: Meta = { title: "GUI/5 Screens", parameters: { layout: "fullscreen" } };
@@ -202,47 +202,45 @@ export const QuickSwitchTheme: S = {
   },
 };
 
-/** Theme background image (#202, a mockup with two options; one is picked before it goes into the app). A custom theme carries an
- *  image (PNG, JPEG or WebP, copied into the config folder) drawn faintly behind the SQL editor and the result grid, never behind the
- *  explorer, tab bar, headers, menus, dialogs or popups, as DataGrip's Set Background Image. GUI only: the TUI ignores the field (a
- *  terminal draws characters; its own background image shows there). The images are drawn in code (BackgroundWindow.tsx).
- *  Option A: rows in the colors column; the image only darkens a dark Background (only lightens a light one), so no contrast check
- *  can fail at any opacity, but on a black or white Background (Light, High contrast) it has no room and Opacity says so in its ⓘ */
-const bgEditor = (name: string, option: "A" | "B", initial: ThemeBackground | null, base?: string): S => ({
-  name: `Theme background ${option} — ${name}`,
-  render: () => <InEditor option={option} initial={initial} />,
-  play: base ? async ({ canvasElement }) => void (await userEvent.selectOptions(await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Based on" }), base)) : undefined,
-});
-const bgWindow = (option: "A" | "B", theme: string, image: ThemeBackground): S => ({
-  name: `Theme background ${option} — window (${{ dark: "dark", light: "light", hc: "high contrast", "solarized-light": "Solarized Light" }[theme]})`,
+/** Theme background image (#202, a mockup until it goes into the editor). A custom theme carries an image (PNG, JPEG, WebP or GIF,
+ *  copied into the config folder), shown one of two ways, picked at the top of the section over the editor's preview:
+ *  Behind, drawn as it is (DataGrip's Set Background Image, 15% by default) behind the SQL editor and the result grid only; a mark on
+ *  its slider shows the opacity up to which every color keeps its contrast minimum over the image's lightest and darkest pixels (0–3%
+ *  in the built-in themes, 20% in High contrast), and above it the colors that fall below are counted (listed in Opacity's ⓘ), saved
+ *  with their warning, never changed. Corner, scaled down (10–40% of the window's height) in front of the window, 16 px from the
+ *  edges, under every menu, dialog, toast and popup; clicks pass through it; no contrast warning (it is placed on purpose).
+ *  The image applies live to the window behind Settings; hold Peek (or Space on it) to fade Settings and see it. GIF and animated WebP
+ *  play, and stop on their first frame while Reduce motion is on or the window isn't active: in Storybook it plays once the canvas has
+ *  focus (click into it), and the Reduce motion control stands in for the system setting. GUI only: the TUI ignores the field (a
+ *  terminal draws characters; its own background image shows there). The images are drawn in code (BackgroundWindow.tsx) */
+const bgEditor = (initial: ThemeBackground | null): S => ({ render: () => <InEditor initial={initial} /> });
+const motion = { args: { reduceMotion: false }, argTypes: { reduceMotion: { control: "boolean", name: "Reduce motion" } } };
+const bgWindow = (theme: string, image: ThemeBackground): S => ({
+  ...motion,
   globals: { theme },
-  render: () => <BackgroundWindow image={image} src={FILES[image.file]} blend={option === "A" ? "one-way" : "both"} />,
+  render: (args) => <BackgroundWindow image={image} src={FILES[image.file]} still={!!(args as { reduceMotion?: boolean }).reduceMotion} />,
 });
-export const BackgroundImageAEditor = bgEditor("editor (dark)", "A", BG_SAMPLE);
-export const BackgroundImageAEditorNoImage = bgEditor("editor, no image", "A", null);
-export const BackgroundImageAEditorTile = bgEditor("editor, Tile from the bottom right", "A", { file: "dots.png", opacity: 100, fill: "tile", anchor: "right bottom" });
-/** On Light the image has no room (Background is white): Opacity is off and its ⓘ says why */
-export const BackgroundImageAEditorLightNoRoom: S = {
-  ...bgEditor("editor (light): no room", "A", BG_SAMPLE),
+const BEHIND = BG_SAMPLE;
+const CORNER: ThemeBackground = { ...newBackground("beacon.gif"), mode: "corner" };
+export const BackgroundImageEditor = bgEditor(BEHIND);
+export const BackgroundImageEditorCorner = bgEditor(CORNER);
+export const BackgroundImageEditorNoImage = bgEditor(null);
+/** Peek held: Settings fades and the window behind it shows the image as it is now */
+export const BackgroundImageEditorPeek: S = {
+  ...bgEditor(BEHIND),
   play: async ({ canvasElement }) => {
-    const body = within(canvasElement.ownerDocument.body);
-    await userEvent.selectOptions(await body.findByRole("combobox", { name: "Based on" }), "light");
-    await userEvent.click(await body.findByRole("button", { name: "About Opacity" }));
+    const peek = await within(canvasElement.ownerDocument.body).findByRole("button", { name: "Peek" });
+    fireEvent.pointerDown(peek, { button: 0 });
   },
 };
-export const BackgroundImageAWindowDark = bgWindow("A", "dark", { ...BG_SAMPLE, opacity: 100 });
-export const BackgroundImageAWindowSolarizedLight = bgWindow("A", "solarized-light", { ...BG_SAMPLE, opacity: 100 });
-export const BackgroundImageAWindowLight = bgWindow("A", "light", { ...BG_SAMPLE, opacity: 100 });
-export const BackgroundImageAWindowHighContrast = bgWindow("A", "hc", { ...BG_SAMPLE, opacity: 100 });
-/** Option B: a bar over the preview, next to what it changes. The image is drawn as it is (DataGrip's: 15% by default); a mark on the
- *  slider shows the opacity up to which every color keeps its minimum over the image's lightest and darkest pixels (0–3% in the
- *  built-in themes, 20% in High contrast), and above it the colors that fall below are counted (listed in Opacity's ⓘ), saved with
- *  their warning, never changed, as the editor's color warnings */
-export const BackgroundImageBEditor = bgEditor("editor (dark)", "B", { ...BG_SAMPLE, opacity: 15 });
-export const BackgroundImageBEditorNoImage = bgEditor("editor, no image", "B", null);
-export const BackgroundImageBWindowDark = bgWindow("B", "dark", { ...BG_SAMPLE, opacity: 15 });
-export const BackgroundImageBWindowLight = bgWindow("B", "light", { ...BG_SAMPLE, opacity: 15 });
-export const BackgroundImageBWindowHighContrast = bgWindow("B", "hc", { ...BG_SAMPLE, opacity: 15 });
+export const BackgroundImageBehindDark = bgWindow("dark", BEHIND);
+export const BackgroundImageBehindLight = bgWindow("light", BEHIND);
+export const BackgroundImageBehindHighContrast = bgWindow("hc", BEHIND);
+/** An animated image Behind (tiled): it plays, and stops on its first frame with Reduce motion or when the window isn't active */
+export const BackgroundImageBehindAnimated = bgWindow("dark", { ...newBackground("beacon.gif"), behind: { opacity: 15, fill: "tile", anchor: "center" } });
+export const BackgroundImageCornerDark = bgWindow("dark", CORNER);
+export const BackgroundImageCornerLight = bgWindow("light", { ...CORNER, corner: { ...CORNER.corner, corner: "left top" } });
+export const BackgroundImageCornerHighContrast = bgWindow("hc", { ...CORNER, corner: { ...CORNER.corner, size: 35 } });
 
 /** Settings › Keymap: every menu, toolbar and Find Action command by scope (Global, Database Explorer, Query Console, Data Grid), "none" where it has no key yet */
 export const SettingsKeymap: S = { name: "Settings — Keymap", render: () => <SettingsDialog initialPage="keymap" onClose={noop} onUpdate={noop} onChannel={noop} /> };
