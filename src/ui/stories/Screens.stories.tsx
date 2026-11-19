@@ -766,7 +766,7 @@ export const Update: S = {
   name: "Update available",
   render: () => (
     <UpdateDialog
-      info={{ current: "0.2.5", latest: { version: "0.2.6", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.2.6", notes: "", assets: [] }, changes: [{ version: "0.2.6", changes: ["[feat] 데이터 작업 · 결과 차트 · 운영 안전", "[fix] 탐색기 가로 스크롤"] }] } as never}
+      info={{ current: "0.2.5", latest: { version: "0.2.6", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.2.6", notes: "", assets: [] }, changes: [{ version: "0.2.6", changes: ["[feat] Data tools · result charts · Production safety", "[fix] Explorer horizontal scroll"] }] } as never}
       onClose={noop}
     />
   ),

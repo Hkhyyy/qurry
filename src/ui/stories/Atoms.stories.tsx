@@ -39,7 +39,7 @@ export const TextStory: S = {
           <Text mono>mono_text</Text>
         </Row>
       </Box>
-      <Box title="truncate (마우스를 올리면 전체)">
+      <Box title="truncate (hover shows all)">
         <div style={{ width: 220 }}>
           <Text truncate>[PROD] shop · app@db.example.com · shop_main_database</Text>
         </div>
@@ -52,15 +52,15 @@ export const CodeStory: S = {
   name: "Code · CodeBlock · Kbd",
   render: () => (
     <>
-      <Box title="Code (줄 안)">
+      <Box title="Code (inline)">
         <Text>
           Run <Code>select * from users</Code> first.
         </Text>
       </Box>
-      <Box title="CodeBlock (여러 줄)">
+      <Box title="CodeBlock (several lines)">
         <CodeBlock style={{ width: 520 }}>{"ALTER TABLE public.orders ADD COLUMN user_id integer;\nALTER TABLE public.users ADD COLUMN email text;"}</CodeBlock>
       </Box>
-      <Box title="Kbd (단축키)">
+      <Box title="Kbd (shortcut)">
         <Row>
           <Kbd>⌘k</Kbd>
           <Kbd>⇧⌘A</Kbd>
@@ -85,7 +85,7 @@ export const Layout: S = {
       </Row>
       <Divider />
       <Text tone="muted" size="sm">
-        horizontal Divider 위
+        a horizontal Divider above
       </Text>
     </div>
   ),
@@ -112,7 +112,7 @@ export const Buttons: S = {
           </Button>
         </Row>
       </Box>
-      <Box title="IconButton (title 필수) · tone · active">
+      <Box title="IconButton (title required) · tone · active">
         <Row gap={1}>
           <IconButton title="Execute (⌘↩)" tone="ok">
             ▶
@@ -132,7 +132,7 @@ export const Buttons: S = {
           </IconButton>
         </Row>
       </Box>
-      <Box title="ToolButton (도구 막대 글자 버튼) · active · accent">
+      <Box title="ToolButton (toolbar text button) · active · accent">
         <Row gap={1}>
           <ToolButton>Explain ▾</ToolButton>
           <ToolButton active>Tx: Manual ▾</ToolButton>
@@ -148,7 +148,7 @@ export const Badges: S = {
   name: "Badge · Avatar · Swatch · ProgressBar",
   render: () => (
     <>
-      <Box title="Badge · tone · color (Redis 타입)">
+      <Box title="Badge · tone · color (Redis types)">
         <Row gap={2}>
           <Badge>66</Badge>
           <Badge onClick={() => {}}>1 of 3</Badge>
@@ -159,13 +159,13 @@ export const Badges: S = {
           <Badge color="#b07cc6">HASH</Badge>
         </Row>
       </Box>
-      <Box title="Avatar (워크스페이스 이니셜)">
+      <Box title="Avatar (workspace initials)">
         <Row gap={2}>
           <Avatar active>DE</Avatar>
           <Avatar>RE</Avatar>
         </Row>
       </Box>
-      <Box title="Swatch (Data Source 색)">
+      <Box title="Swatch (data source color)">
         <Row gap={2}>
           <Swatch color={null} />
           <Swatch color="#6e2a2a" selected />
@@ -173,7 +173,7 @@ export const Badges: S = {
           <Swatch color="#28406e" />
         </Row>
       </Box>
-      <Box title="ProgressBar · 알 수 있음 / 모름">
+      <Box title="ProgressBar · known / unknown">
         <Row gap={4}>
           <ProgressBar pct={62} />
           <ProgressBar pct={null} />
@@ -210,7 +210,7 @@ export const Inputs: S = {
             <option value="mysql">MySQL</option>
           </Select>
         </Box>
-        <Box title="TextArea (고정폭)">
+        <Box title="TextArea (monospace)">
           <TextArea style={{ width: "100%" }} rows={3} placeholder="SET search_path TO app, public;" />
         </Box>
         <Box title="Checkbox · indeterminate · Radio">

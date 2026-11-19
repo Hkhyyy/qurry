@@ -1011,8 +1011,8 @@ function updateInfo() {
     channel: updateChannel,
     latest: (window as any).__mockNoUpdate ? null : { version: "0.1.2", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.1.2", notes: "## dbtool 0.1.2\n- something new", assets: [{ name: "dbtool_0.1.2_aarch64.dmg", url: "https://example.com/dbtool_0.1.2_aarch64.dmg" }] },
     changes: [
-      { version: "0.1.2", changes: ["[feat] TUI 키 안내: ⌃P 시작, F1 Start here, 상태줄 (#18)", "[fix] ; 없는 문장 나누기 (#17)"] },
-      { version: "0.1.1", changes: ["[fix] 분할 탭 바 구분선, GUI 탭 사이 간격 (#16)"] },
+      { version: "0.1.2", changes: ["[feat] TUI key hints: ⌃P to start, F1 Start here, the status line (#18)", "[fix] Split statements without ; (#17)"] },
+      { version: "0.1.1", changes: ["[fix] Split tab bar divider, the gap between GUI tabs (#16)"] },
     ],
   };
 }
