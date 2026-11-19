@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { sharedOr, useSharedReady } from "../../lib/shared";
 import { TOKENS, type Palette, type ThemeWarning } from "../../lib/theme";
-import { ANCHORS, backdropStyle, CORNERS, FILLS, opacityCap, SIZE_MAX, SIZE_MIN, stickerStyle, stillFrame, warningsOver, type BackgroundSlot, type CornerSlot, type Fill, type ThemeImages } from "../../lib/themeBackground";
+import { api } from "../../lib/api";
+import { ANCHORS, backdropStyle, CORNERS, FILLS, imageUrl, newBackgroundSlot, newCornerSlot, opacityCap, SIZE_MAX, SIZE_MIN, stickerStyle, stillFrame, warningsOver, type BackgroundSlot, type CornerSlot, type Fill, type ThemeImages } from "../../lib/themeImages";
 import { Button, cx, Named, Select } from "../../ui";
 
 // Settings › Appearance › Theme › Edit Colors… › Images (#202, a mockup until it goes into the editor): two slots, each optional with
@@ -31,29 +32,41 @@ function useMotionPaused(): boolean {
   return paused;
 }
 
-/** The URL to draw: src, or its first frame as a still while motion is paused (or still is set). A still image is unchanged by it */
-function useImageSrc(src: string, still?: boolean): string {
+/** A theme image's URL to draw ("" until it is ready): the file's blob URL, or its first frame as a still while motion is paused (or
+ *  still is set: a story's Reduce motion). Nothing is drawn until the still is ready, so an animation never plays for a moment */
+function useThemeImage(file: string | undefined, still?: boolean): { url: string; error?: string } {
   const paused = useMotionPaused() || !!still;
-  const [frame, setFrame] = useState<string | null>(null);
+  const [src, setSrc] = useState<{ file: string; url: string; error?: string } | null>(null);
+  const [frame, setFrame] = useState<{ src: string; url: string } | null>(null);
   useEffect(() => {
-    setFrame(null);
-    if (!paused || !src) return;
+    if (!file) return;
     let live = true;
-    stillFrame(src).then((f) => live && setFrame(f), () => {});
+    imageUrl(file).then(
+      (url) => live && setSrc({ file, url }),
+      (e) => live && setSrc({ file, url: "", error: String(e) }),
+    );
     return () => void (live = false);
-  }, [src, paused]);
-  // Until the still is ready nothing is drawn, so an animation never plays for a moment
-  return paused ? frame ?? "" : src;
+  }, [file]);
+  const url = src && src.file === file ? src.url : "";
+  useEffect(() => {
+    if (!paused || !url) return;
+    let live = true;
+    stillFrame(url).then((f) => live && setFrame({ src: url, url: f }), () => {});
+    return () => void (live = false);
+  }, [url, paused]);
+  if (!file) return { url: "" };
+  if (src?.file === file && src.error) return { url: "", error: src.error };
+  return { url: paused ? (frame?.src === url ? frame.url : "") : url };
 }
 
-/** still: the story's Reduce motion (the first frame) */
-type Shown = { src: string; still?: boolean };
+/** still: a story's Reduce motion (the first frame) */
+type Shown = { still?: boolean };
 
 /** Background: a surface the image is drawn behind: Background, the image layer, then the children (with clear surfaces) over it */
-export function ThemeBackdrop({ slot, src, still, className, style, children }: Shown & { slot?: BackgroundSlot; className?: string; style?: CSSProperties; children?: ReactNode }) {
-  const url = useImageSrc(slot ? src : "", still);
+export function ThemeBackdrop({ slot, still, className, style, children }: Shown & { slot?: BackgroundSlot; className?: string; style?: CSSProperties; children?: ReactNode }) {
+  const { url } = useThemeImage(slot?.file, still);
   return (
-    <div className={cx("theme-backdrop-host", className)} style={style}>
+    <div className={cx("theme-backdrop-host", slot && "has-image", className)} style={style}>
       {slot && url && <div className="theme-backdrop" aria-hidden style={backdropStyle(slot, url)} />}
       {children}
     </div>
@@ -62,8 +75,8 @@ export function ThemeBackdrop({ slot, src, still, className, style, children }: 
 
 /** Corner: the image scaled down in a corner, in front of the window and under menus, dialogs, toasts and popups; clicks pass through.
  *  inPreview: in the editor's preview (or a thumbnail), sized by it */
-export function ThemeSticker({ slot, src, still, inPreview }: Shown & { slot?: CornerSlot; inPreview?: boolean }) {
-  const url = useImageSrc(slot ? src : "", still);
+export function ThemeSticker({ slot, still, inPreview }: Shown & { slot?: CornerSlot; inPreview?: boolean }) {
+  const { url } = useThemeImage(slot?.file, still);
   if (!slot || !url) return null;
   return <img className={cx("theme-sticker", inPreview && "in-preview")} src={url} alt="" aria-hidden draggable={false} style={inPreview ? stickerStyle(slot, 4, "%") : stickerStyle(slot)} />;
 }
@@ -135,17 +148,24 @@ function PeekButton() {
   );
 }
 
-/** A slot: its name, file, Choose… and Remove; with an image, its thumbnail and settings under them */
-function Slot({ name, info, file, onPick, onRemove, thumb, children }: { name: string; info: string[]; file?: string; onPick: () => void; onRemove: () => void; thumb: ReactNode; children: ReactNode }) {
+/** A slot: its name, the image's type (or why it was refused, or is missing), Choose… and Remove; with an image, its thumbnail and
+ *  settings under them */
+function Slot({ name, info, file, error, onPick, onRemove, thumb, children }: { name: string; info: string[]; file?: string; error?: string; onPick: () => void; onRemove: () => void; thumb: ReactNode; children: ReactNode }) {
+  const loaded = useThemeImage(file);
+  const why = error ?? loaded.error;
   return (
     <div className="theme-bg-slot" role="group" aria-label={name}>
       <div className="theme-bg-slot-head">
         <Named about={name} info={info}>
           {name}
         </Named>
-        <span className="theme-bg-name muted" title={file}>
-          {file ?? "No image"}
-        </span>
+        {why ? (
+          <span className="theme-bg-name theme-bg-error" role="alert" title={why}>
+            {why}
+          </span>
+        ) : (
+          <span className="theme-bg-name muted">{file ? `${file.split(".").pop()!.toUpperCase()} image` : "No image"}</span>
+        )}
         <Button size="sm" aria-label={`Choose ${name} image`} onClick={onPick}>
           Choose…
         </Button>
@@ -176,8 +196,20 @@ const ABOUT = [
  * be on; Peek. Background's slider marks the opacity up to which every color keeps its minimum over the image's lightest and darkest
  * pixels; above it the colors that fall below are counted (and listed in Opacity's ⓘ), saved with their warning
  */
-export function ThemeImagesSection({ images, srcOf, p, onPick, onChange }: { images: ThemeImages; /** A file's image URL */ srcOf: (file: string) => string; p: Palette; /** Opens the file picker for a slot, copies the file and sets it */ onPick: (slot: keyof ThemeImages) => void; onChange: (images: ThemeImages) => void }) {
+export function ThemeImagesSection({ images, p, onChange }: { images: ThemeImages; p: Palette; onChange: (images: ThemeImages) => void }) {
   const ready = useSharedReady();
+  const [errors, setErrors] = useState<{ [k in keyof ThemeImages]?: string }>({});
+  /** Choose…: the picker, then the copy (checked by the core); a new image keeps the slot's settings */
+  const pick = async (k: keyof ThemeImages) => {
+    try {
+      const file = await api.importThemeImage();
+      if (!file) return;
+      setErrors((e) => ({ ...e, [k]: undefined }));
+      onChange(k === "background" ? { ...images, background: { ...(images.background ?? newBackgroundSlot(file)), file } } : { ...images, corner: { ...(images.corner ?? newCornerSlot(file)), file } });
+    } catch (e) {
+      setErrors((x) => ({ ...x, [k]: String(e) }));
+    }
+  };
   const key = JSON.stringify(p);
   const { background: bg, corner: cn } = images;
   const cap = useMemo(() => sharedOr(0, (s) => opacityCap(p, s.themeWarnings)), [key, ready]);
@@ -198,9 +230,10 @@ export function ThemeImagesSection({ images, srcOf, p, onPick, onChange }: { ima
         name="Background"
         info={["Faint behind the SQL editor and the result grid."]}
         file={bg?.file}
-        onPick={() => onPick("background")}
-        onRemove={() => onChange({ ...images, background: undefined })}
-        thumb={<ThemeBackdrop slot={bg} src={bg ? srcOf(bg.file) : ""} {...thumb} />}
+        error={errors.background}
+        onPick={() => pick("background")}
+        onRemove={() => (setErrors((e) => ({ ...e, background: undefined })), onChange({ ...images, background: undefined }))}
+        thumb={<ThemeBackdrop slot={bg} {...thumb} />}
       >
         {bg && (
           <>
@@ -238,11 +271,12 @@ export function ThemeImagesSection({ images, srcOf, p, onPick, onChange }: { ima
         name="Corner"
         info={["Scaled down in front of the window, 16 px from its edges, under menus, dialogs and popups; clicks pass through it. No contrast warning: it covers what's under it, as placed."]}
         file={cn?.file}
-        onPick={() => onPick("corner")}
-        onRemove={() => onChange({ ...images, corner: undefined })}
+        error={errors.corner}
+        onPick={() => pick("corner")}
+        onRemove={() => (setErrors((e) => ({ ...e, corner: undefined })), onChange({ ...images, corner: undefined }))}
         thumb={
           <div {...thumb}>
-            <ThemeSticker slot={cn && { ...cn, size: 80 }} src={cn ? srcOf(cn.file) : ""} inPreview />
+            <ThemeSticker slot={cn && { ...cn, size: 80 }} inPreview />
           </div>
         }
       >

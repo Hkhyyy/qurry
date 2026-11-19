@@ -4,13 +4,16 @@ import { ask } from "../../lib/dialogs";
 import { sharedOr, useSharedReady } from "../../lib/shared";
 import { BUILT_IN, SYSTEM, TOKENS, deleteCustomTheme, findTheme, previewTheme, saveCustomTheme, setThemePick, useThemeState, type CustomTheme, type Palette, type ThemeDef, type ThemeToken, type ThemeWarning } from "../../lib/theme";
 import { Button, cx, Named, normalizeHex, Notice, Select, Text, TextInput } from "../../ui";
+import { sameImages, type ThemeImages } from "../../lib/themeImages";
+import { ThemeImagesSection } from "./ThemeImages";
 import { ThemePreview } from "./ThemePreview";
 
 // Settings › Appearance › Theme › Edit Colors…: a custom theme made from any theme (a built-in one, or a custom one to change).
 // Basic colors first, the rest behind "Advanced colors"; each color has a picker and its hex. The whole window draws the colors being
 // edited (previewTheme) and the preview, which gets most of the width, shows every state; a color's row is its name, swatch and hex,
 // and pointing at the name says what it colors (above the preview) and outlines what draws it. Contrast below a
-// minimum is warned about under the color's name and in the header, never fixed silently; a hex that isn't one is not applied
+// minimum is warned about under the color's name and in the header, never fixed silently; a hex that isn't one is not applied. The
+// theme's images (#202: Background and Corner) are set over the preview and drawn live in the window behind Settings (hold Peek)
 
 /** Leaving the editor, or replacing its colors (Based on, Import…), with colors not saved as a theme asks first */
 export const askDiscardColors = () => ask("The changed colors aren't saved as a theme. Discard them?", { title: "Theme Colors", okLabel: "Discard", danger: true });
@@ -75,6 +78,8 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
   const [baseId, setBaseId] = useState(startCustom?.base ?? (BUILT_IN.some((t) => t.id === start) ? start : "dark"));
   const [over, setOver] = useState<Palette>(startCustom?.colors ?? {});
   const [name, setName] = useState(startCustom?.name ?? "");
+  const [images, setImages] = useState<ThemeImages>(startCustom?.images ?? {});
+  const hasImages = !!(images.background || images.corner);
   /** The custom theme being changed (Save replaces it), or null for a new one */
   const [editing, setEditing] = useState<string | null>(startCustom?.id ?? null);
   const [advanced, setAdvanced] = useState(false);
@@ -86,13 +91,15 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
   const changed = Object.keys(over).filter((k) => over[k] !== base.colors[k]).sort();
   // Saved colors come back sorted by name (settings.json): compare in that order
   const savedColors = saved && Object.keys(saved.colors).sort().map((k) => [k, saved.colors[k]]);
-  const dirty = saved ? saved.name !== name.trim() || saved.base !== baseId || JSON.stringify(savedColors) !== JSON.stringify(changed.map((k) => [k, over[k]])) : changed.length > 0;
+  const dirty = saved
+    ? saved.name !== name.trim() || saved.base !== baseId || JSON.stringify(savedColors) !== JSON.stringify(changed.map((k) => [k, over[k]])) || !sameImages(saved.images, images)
+    : changed.length > 0 || hasImages;
   const ready = useSharedReady();
   const warnings = useMemo(() => sharedOr<ThemeWarning[]>([], (s) => s.themeWarnings(colors)), [JSON.stringify(colors), ready]);
   const warnOf = (k: string) => warnings.find((w) => w.token === k);
-  const draft: ThemeDef = { id: editing ?? "draft", name: name || base.name, kind: base.kind, custom: true, colors };
-  // The whole window draws the colors being edited; leaving the editor goes back to the theme picked
-  const key = JSON.stringify(colors) + base.kind;
+  const draft: ThemeDef = { id: editing ?? "draft", name: name || base.name, kind: base.kind, custom: true, colors, images };
+  // The whole window draws the colors and images being edited; leaving the editor goes back to the theme picked
+  const key = JSON.stringify(colors) + base.kind + JSON.stringify(images);
   useEffect(() => previewTheme(draft), [key]);
   useEffect(() => () => previewTheme(null), []);
   useEffect(() => void onDirty(dirty), [dirty]);
@@ -107,10 +114,11 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
     setBaseId(c ? c.base : id);
     setOver(c ? c.colors : {});
     setName(c ? c.name : "");
+    setImages(c?.images ?? {});
     setEditing(c ? c.id : null);
     setMsg(t?.custom ? { tone: "ok", text: `Changing "${t.name}": Save replaces it` } : null);
   };
-  const theme = (): CustomTheme => ({ id: "", name: name.trim(), base: baseId, colors: Object.fromEntries(changed.map((k) => [k, over[k]])) });
+  const theme = (): CustomTheme => ({ id: "", name: name.trim(), base: baseId, colors: Object.fromEntries(changed.map((k) => [k, over[k]])), ...(hasImages && { images }) });
   const save = async (asNew: boolean) => {
     try {
       const t = await saveCustomTheme({ ...theme(), id: asNew ? "" : editing ?? "" });
@@ -143,8 +151,9 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
       setBaseId(t.base);
       setOver(t.colors);
       setName(t.name);
+      setImages({});
       setEditing(null);
-      setMsg({ tone: "ok", text: `Imported "${t.name}" (based on ${BUILT_IN.find((b) => b.id === t.base)?.name}): check it, then Save as new theme` });
+      setMsg({ tone: "ok", text: `Imported "${t.name}" (based on ${BUILT_IN.find((b) => b.id === t.base)?.name}): theme files don't include images; check it, then Save as new theme` });
     } catch (e) {
       setMsg({ tone: "danger", text: `Not imported: ${e}` });
     }
@@ -152,7 +161,7 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
   const exportFile = async () => {
     try {
       const path = await api.exportTheme({ ...theme(), name: name.trim() || `${base.name} (custom)` });
-      if (path) setMsg({ tone: "ok", text: `Exported to ${path}` });
+      if (path) setMsg({ tone: "ok", text: `Exported to ${path}${hasImages ? " (without its images: theme files don't include them)" : ""}` });
     } catch (e) {
       setMsg({ tone: "danger", text: `Not exported: ${e}` });
     }
@@ -259,11 +268,12 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
           </div>
         </div>
         <div className="theme-editor-preview">
+          <ThemeImagesSection images={images} p={colors} onChange={setImages} />
           {/* One line: pointing at another color doesn't move the preview */}
           <Text size="sm" tone="muted" truncate>
             {`Preview${hot ? ` — ${LABEL[hot]}: ${TOKENS.find((t) => t.key === hot)?.desc}` : ""}`}
           </Text>
-          <ThemePreview p={colors} hot={hot} />
+          <ThemePreview p={colors} hot={hot} images={images} />
         </div>
       </div>
     </div>

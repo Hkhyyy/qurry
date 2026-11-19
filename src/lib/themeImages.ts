@@ -1,10 +1,12 @@
-// A theme's images (#202, GUI only: a terminal draws characters, so the TUI ignores them), two independent slots, each optional with its
-// own image: Background, faint behind the SQL editor and the result grid; Corner, scaled down in front of the window (below menus,
-// dialogs and popups), a sticker.
+// A custom theme's images (#202, GUI only: a terminal draws characters, so the TUI keeps them in settings.json and never draws them),
+// two independent slots, each optional with its own image: Background, faint behind the SQL editor and the result grid; Corner, scaled
+// down in front of the window (below menus, dialogs and popups), a sticker. The files are copies in the config folder
+// (crates/core/src/theme_images.rs, which checks them); the GUI reads their bytes and draws them from blob URLs (imageUrl).
 // The background costs contrast: drawn at opacity α, the image moves each pixel of Background (and the grid's odd rows) toward its own pixel
 // by α; the worst pixel is black or white, so the checks (qurry_shared::theme, through the WASM) are run with those surfaces mixed
 // that far toward black and white. GIF and animated WebP play, and stop on their first frame while motion is paused (stillFrame).
 import type { CSSProperties } from "react";
+import { api } from "./api";
 import type { Palette, ThemeWarning } from "./theme";
 
 export type Fill = "cover" | "contain" | "tile" | "center";
@@ -40,6 +42,11 @@ export interface CornerSlot {
 export interface ThemeImages {
   background?: BackgroundSlot;
   corner?: CornerSlot;
+}
+/** Two themes' images are the same, whatever order their fields come in (settings.json writes them in its own) */
+export function sameImages(a: ThemeImages | undefined, b: ThemeImages | undefined): boolean {
+  const key = (i: ThemeImages | undefined) => JSON.stringify(i ?? {}, (_, v) => (v && typeof v === "object" ? Object.fromEntries(Object.entries(v).sort()) : v));
+  return key(a) === key(b);
 }
 /** A new image's settings: DataGrip's 15% in the background; a corner sticker bottom right, fully opaque */
 export const newBackgroundSlot = (file: string): BackgroundSlot => ({ file, opacity: 15, fill: "cover", anchor: "center" });
@@ -94,17 +101,39 @@ export function stickerStyle(c: CornerSlot, margin = 16, unit: "vh" | "%" = "vh"
   return { [x]: margin, [y]: margin, height: `${c.size}${unit}`, maxWidth: `calc(100${unit === "vh" ? "vw" : "%"} - ${2 * margin}px)`, opacity: c.opacity / 100 };
 }
 
-/** An image's first frame as a still (a PNG data URL): a GIF or an animated WebP drawn into a canvas once loaded */
+const MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+const urls = new Map<string, Promise<string>>();
+/** A theme image's blob URL, read once per file (the bytes command: no asset protocol or CSP change needed). A file that can't be
+ *  read is tried again next time */
+export function imageUrl(file: string): Promise<string> {
+  let u = urls.get(file);
+  if (!u) {
+    u = api.themeImage(file).then((b) => URL.createObjectURL(new Blob([b], { type: MIME[file.split(".").pop() ?? ""] ?? "" })));
+    u.catch(() => urls.delete(file));
+    urls.set(file, u);
+  }
+  return u;
+}
+
+const stills = new Map<string, Promise<string>>();
+/** An image's first frame as a still (a blob URL), made once per image: drawn into a canvas from a fresh load, which is its first
+ *  frame for a GIF, an animated WebP or PNG (a still image comes back as it is) */
 export function stillFrame(src: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const c = document.createElement("canvas");
-      [c.width, c.height] = [img.naturalWidth || 300, img.naturalHeight || 150];
-      c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
-      resolve(c.toDataURL());
-    };
-    img.onerror = () => reject(new Error("image didn't load"));
-    img.src = src;
-  });
+  let s = stills.get(src);
+  if (!s) {
+    s = new Promise<string>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas");
+        [c.width, c.height] = [img.naturalWidth || 300, img.naturalHeight || 150];
+        c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
+        c.toBlob((b) => (b ? resolve(URL.createObjectURL(b)) : reject(new Error("no still"))));
+      };
+      img.onerror = () => reject(new Error("image didn't load"));
+      img.src = src;
+    });
+    s.catch(() => stills.delete(src));
+    stills.set(src, s);
+  }
+  return s;
 }

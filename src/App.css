@@ -508,20 +508,37 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-preview .tree-node.preview-hover { background: var(--c-33353a); }
 /* Pointing at a color's name: what draws it, outlined inside (nothing moves or is covered) */
 .theme-preview .tok-hot { outline: 1px dashed var(--text) !important; outline-offset: -1px; }
-/* Theme background image (#202, ThemeBackground.tsx). Behind: Background, the image layer, then the content with its surfaces made clear
-   (Monaco's background and gutter, the grid's odd rows a half tint); headers, toolbars, menus and dialogs keep their own surface.
-   Corner: the sticker is in front of the window's content (its own layers stay below 20) and under every popup (30 and up: menus,
-   dialogs, toasts, the statement chooser …); clicks pass through it */
-.theme-backdrop-host { position: relative; isolation: isolate; background: var(--bg); }
+/* Theme images (#202, features/settings/ThemeImages.tsx). Background: a host draws Background, the image layer, then its children (made
+   positioned, so they paint over the layer, unless they place themselves); with an image their surfaces are clear (Monaco's background
+   and gutter, the editor and result areas, the grid's odd rows a half tint) and headers, toolbars, menus and dialogs keep their own.
+   No stacking context of its own: the menus and popups inside stay above the Corner sticker, which is in front of the window's
+   content (its layers stay below 20) and under every popup (30 and up: menus, dialogs, toasts, the statement chooser …); clicks pass
+   through it */
+.theme-backdrop-host { position: relative; background: var(--bg); }
 .theme-backdrop { position: absolute; inset: 0; pointer-events: none; }
-.theme-backdrop-host > :not(.theme-backdrop) { position: relative; }
-.theme-backdrop-host .monaco-editor { --vscode-editor-background: transparent; --vscode-editorGutter-background: transparent; }
-.theme-backdrop-host .grid-row.odd { background: color-mix(in srgb, var(--c-222326) 50%, transparent); }
+:where(.theme-backdrop-host) > :where(:not(.theme-backdrop)) { position: relative; }
+.theme-backdrop-host.has-image .monaco-editor { --vscode-editor-background: transparent; --vscode-editorGutter-background: transparent; }
+.theme-backdrop-host.has-image :is(.editor-area, .result-area, .results-panel) { background: transparent; }
+.theme-backdrop-host.has-image .result-tabs { background: var(--panel); }
+.theme-backdrop-host.has-image .grid-row.odd { background: color-mix(in srgb, var(--c-222326) 50%, transparent); }
+/* The editor's preview: one picture behind its editor and grid (clipped to them), its parts over it */
+.theme-preview { position: relative; }
+.theme-preview-images { position: absolute; left: 0; right: 0; pointer-events: none; }
+.theme-preview.has-image > :not(.theme-preview-images, .theme-sticker) { position: relative; }
+.theme-preview.has-image .monaco-editor { --vscode-editor-background: transparent; --vscode-editorGutter-background: transparent; }
+.theme-preview.has-image .grid-row.odd { background: color-mix(in srgb, var(--c-222326) 50%, transparent); }
+.console-images { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.console-images > [data-group] { flex: 1; min-height: 0; }
 .theme-sticker { position: fixed; z-index: 20; pointer-events: none; user-select: none; object-fit: contain; }
 .theme-sticker.in-preview { position: absolute; z-index: 1; }
 /* Peek (held): Settings fades so the window behind it shows */
 :root.theme-peek .ui-backdrop { background: transparent; }
 :root.theme-peek .ui-backdrop > .ui-modal { opacity: 0; }
+/* The section's thumbnails hide in a narrow or low window, so the preview stays in view */
+.theme-editor-preview { container-type: inline-size; }
+@container (max-width: 380px) { .theme-bg-bar .theme-bg-thumb { display: none; } }
+@media (max-height: 640px) { .theme-bg-bar .theme-bg-thumb { display: none; } }
+.theme-bg-error { color: var(--ui-danger); }
 .theme-bg-thumb { position: relative; flex: none; width: 96px; height: 60px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-sm); overflow: hidden; font-size: 11px; }
 .theme-bg-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-fs-sm); }
 .theme-bg-row { display: flex; align-items: center; gap: var(--ui-sp-3); min-height: 30px; font-size: var(--ui-fs-sm); }
@@ -538,7 +555,6 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-bg-pos button:hover:not(:disabled) { background: var(--ui-hover); }
 .theme-bg-pos button[aria-checked="true"] { background: var(--ui-accent); border-color: var(--ui-accent); }
 .theme-bg-pos button:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
-.theme-bg-pos[aria-disabled="true"] { opacity: 0.45; }
 .theme-bg-bar { display: flex; flex-direction: column; gap: var(--ui-sp-2); padding: var(--ui-sp-3); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); }
 .theme-bg-slot { border-top: 1px solid var(--ui-border); padding-top: var(--ui-sp-2); }
 .theme-bg-slot-head { display: flex; align-items: center; gap: var(--ui-sp-3); min-height: 28px; font-size: var(--ui-fs-sm); white-space: nowrap; }

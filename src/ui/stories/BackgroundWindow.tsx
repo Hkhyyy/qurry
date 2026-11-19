@@ -1,35 +1,17 @@
 import Editor from "@monaco-editor/react";
 import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 import "../../lib/monaco";
-import { MONACO_THEME, connStripe, connTabVars, useThemeState } from "../../lib/theme";
-import { newBackgroundSlot, newCornerSlot, type ThemeImages } from "../../lib/themeBackground";
+import { MOCK_IMAGES } from "../../lib/mock";
+import { MONACO_THEME, connStripe, connTabVars, previewTheme, saveCustomTheme, setThemePick, useThemeState } from "../../lib/theme";
+import { newBackgroundSlot, newCornerSlot, type ThemeImages } from "../../lib/themeImages";
 import { SettingsDialog } from "../../features/settings/SettingsDialog";
-import { ThemeBackdrop, ThemeImagesSection, ThemeSticker } from "../../features/settings/ThemeBackground";
+import { ThemeBackdrop, ThemeSticker } from "../../features/settings/ThemeImages";
 import { GridCell, GridHeaderRow, Menu, RowNumberCell, TreeRow } from "..";
 import { DatabaseIcon, PgIcon, TableIcon } from "../icons";
 
-// Theme image stories (#202): made-up images drawn in code, and the main window with a Background image behind the SQL editor and the
-// result grid (and nowhere else: the explorer, tab bar, grid header, status bar and the open menu keep their own surface) and a Corner
-// image in front of the window, under the open menu
-
-const svg = (s: string) => `data:image/svg+xml;utf8,${encodeURIComponent(s)}`;
-/** Ridges under a pale sky: from near white to near black, the worst case for contrast */
-export const RIDGES = svg(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" width="1600" height="1000">
-<defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e9eef4"/><stop offset="1" stop-color="#93a5b9"/></linearGradient></defs>
-<rect width="1600" height="1000" fill="url(#s)"/><circle cx="1180" cy="250" r="110" fill="#fbf8f1"/>
-<path d="M0 560 L220 430 L420 520 L640 380 L880 500 L1100 400 L1340 480 L1600 410 V1000 H0Z" fill="#70839a"/>
-<path d="M0 680 L260 560 L520 650 L760 540 L1020 640 L1300 560 L1600 640 V1000 H0Z" fill="#46566b"/>
-<path d="M0 800 L300 700 L600 780 L900 690 L1200 790 L1600 720 V1000 H0Z" fill="#26303d"/>
-<path d="M0 920 L400 850 L800 910 L1200 860 L1600 900 V1000 H0Z" fill="#0d1117"/></svg>`);
-/** A small tile for Tile */
-export const DOTS = svg(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
-<rect width="48" height="48" fill="#8a96a3"/><circle cx="12" cy="12" r="7" fill="#f2f4f7"/><circle cx="36" cy="36" r="7" fill="#141a21"/></svg>`);
-/** An animated badge (stands in for a GIF): a ring that pulses around a dot */
-export const BEACON = svg(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
-<rect x="10" y="10" width="180" height="180" rx="36" fill="#2c6e63"/><circle cx="100" cy="100" r="22" fill="#f4d35e"/>
-<circle cx="100" cy="100" r="30" fill="none" stroke="#f4d35e" stroke-width="8"><animate attributeName="r" values="30;70;30" dur="1.6s" repeatCount="indefinite"/>
-<animate attributeName="opacity" values="1;0;1" dur="1.6s" repeatCount="indefinite"/></circle></svg>`);
+// Theme image stories (#202): the main window with a Background image behind the SQL editor and the result grid (and nowhere else:
+// the explorer, tab bar, grid header, status bar and the open menu keep their own surface) and a Corner image in front of the window,
+// under the open menu. The images are the mock's made-up ones (src/lib/mock-images), read as the app reads them (theme_image)
 
 const SQL = `-- orders this week, by customer
 select c.name,
@@ -58,8 +40,9 @@ const W = [44, 160, 90, 120];
 const noop = () => {};
 
 /** The main window: explorer, tabs, the console (editor over the result grid, the image behind both), status bar; a menu open over the grid */
-export function BackgroundWindow({ images, files = FILES, still, menu = true }: { images: ThemeImages; /** File name → image URL */ files?: Record<string, string>; still?: boolean; menu?: boolean }) {
-  const { background, corner } = images;
+export function BackgroundWindow({ images, still, menu = true }: { /** The theme in use's when not given */ images?: ThemeImages; still?: boolean; menu?: boolean }) {
+  const current = useThemeState().current.images;
+  const { background, corner } = images ?? current ?? {};
   return (
     <div className="bgwin" style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--text)" }}>
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
@@ -81,7 +64,7 @@ export function BackgroundWindow({ images, files = FILES, still, menu = true }: 
               <span className="tab-label">orders</span>
             </div>
           </div>
-          <ThemeBackdrop slot={background} src={background ? files[background.file] : ""} still={still} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <ThemeBackdrop slot={background} still={still} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ flex: "1 1 55%", minHeight: 0 }}>
               <Editor value={SQL} language="pgsql" theme={MONACO_THEME} options={{ readOnly: true, minimap: { enabled: false }, scrollBeyondLastLine: false, fontSize: 13, renderLineHighlight: "none", overviewRulerLanes: 0 }} />
             </div>
@@ -120,7 +103,7 @@ export function BackgroundWindow({ images, files = FILES, still, menu = true }: 
       <div className="statusbar">
         <span>[DEV] shop_app · shop</span>
       </div>
-      <ThemeSticker slot={corner} src={corner ? files[corner.file] : ""} still={still} />
+      <ThemeSticker slot={corner} still={still} />
       {menu && (
         <Menu
           at={{ x: 560, y: 470 }}
@@ -132,56 +115,25 @@ export function BackgroundWindow({ images, files = FILES, still, menu = true }: 
   );
 }
 
-/** The made-up files and their images */
-export const FILES: Record<string, string> = { "ridges.webp": RIDGES, "dots.png": DOTS, "beacon.gif": BEACON };
-export const SAMPLE_BACKGROUND = newBackgroundSlot("ridges.webp");
-export const SAMPLE_CORNER = newCornerSlot("beacon.gif");
+export const SAMPLE_BACKGROUND = newBackgroundSlot(MOCK_IMAGES.ridges);
+export const SAMPLE_CORNER = newCornerSlot(MOCK_IMAGES.beacon);
 
 /**
- * The real Settings dialog over the main window, as in the app: the theme editor with the section over its preview, the images applied
- * live to the window behind (Peek fades Settings to show it) and to the preview (behind its editor and grid only, and in its corner).
- * A mockup: the editor doesn't take the section yet, so it and the preview's image are put into the editor's DOM once it is drawn.
- * files: file name → image URL (the local preview's own files)
+ * The real Settings dialog over the main window, as in the app: a custom theme with these images is saved (in the mock) and picked,
+ * and the theme editor opens on it. The editor draws its images live in the window behind (hold Peek to see it) and in its preview
  */
-export function InEditor({ initial, files = FILES }: { initial: ThemeImages; files?: Record<string, string> }) {
-  const { current } = useThemeState();
-  const [images, setImages] = useState(initial);
-  const [slot, setSlot] = useState<{ section: HTMLElement; layer: HTMLElement; sticker: HTMLElement } | null>(null);
-  const srcOf = (file: string) => files[file] ?? RIDGES;
-  const { background, corner } = images;
+export function InEditor({ initial }: { initial: ThemeImages }) {
+  const [ready, setReady] = useState(false);
   useEffect(() => {
-    const t = setInterval(() => {
-      const preview = document.querySelector<HTMLElement>(".theme-preview");
-      const editor = preview?.querySelector<HTMLElement>(".theme-preview-editor");
-      const grid = preview?.querySelector<HTMLElement>(".theme-preview-grid");
-      if (!preview || !editor || !grid) return;
-      clearInterval(t);
-      const section = document.createElement("div");
-      preview.parentElement!.insertBefore(section, preview.parentElement!.firstChild);
-      // The preview's image covers its editor and grid only (not its explorer, tabs or notes), as one picture
-      const [P, E, G] = [preview, editor, grid].map((el) => el.getBoundingClientRect());
-      const [x, gy, w, h] = [E.left - P.left, G.top - E.top, P.width, G.bottom - E.top];
-      const layer = document.createElement("div");
-      Object.assign(layer.style, { position: "absolute", left: "0", top: `${E.top - P.top}px`, width: `${w}px`, height: `${h}px`, clipPath: `polygon(${x}px 0, ${w}px 0, ${w}px ${h}px, 0 ${h}px, 0 ${gy}px, ${x}px ${gy}px)` });
-      const sticker = document.createElement("div");
-      Object.assign(sticker.style, { position: "absolute", inset: "0", pointerEvents: "none", zIndex: "1" });
-      preview.style.position = "relative";
-      // Over the layer: the preview's parts (positioned, so they paint above it), the editor and grid with clear surfaces
-      [...preview.children].forEach((el) => ((el as HTMLElement).style.position = "relative"));
-      preview.insertBefore(layer, preview.firstChild);
-      preview.appendChild(sticker);
-      [editor, grid].forEach((el) => (el.classList.add("theme-backdrop-host"), (el.style.background = "transparent")));
-      setSlot({ section, layer, sticker });
-    }, 50);
-    return () => clearInterval(t);
+    saveCustomTheme({ id: "custom-pictures", name: "Pictures", base: "dark", colors: {}, images: initial })
+      .then((t) => setThemePick(t.id))
+      // Drawn instead of the toolbar's theme, so the editor starts from it
+      .then(() => (previewTheme(null), setReady(true)));
   }, []);
   return (
     <>
-      <BackgroundWindow images={images} files={files} menu={false} />
-      <SettingsDialog initialPage="theme" onClose={noop} onUpdate={noop} onChannel={noop} />
-      {slot && createPortal(<ThemeImagesSection images={images} srcOf={srcOf} p={current.colors} onPick={(k) => setImages({ ...images, [k]: k === "background" ? SAMPLE_BACKGROUND : SAMPLE_CORNER })} onChange={setImages} />, slot.section)}
-      {slot && createPortal(<ThemeBackdrop slot={background} src={background ? srcOf(background.file) : ""} style={{ position: "absolute", inset: 0 }} />, slot.layer)}
-      {slot && createPortal(<ThemeSticker slot={corner} src={corner ? srcOf(corner.file) : ""} inPreview />, slot.sticker)}
+      <BackgroundWindow menu={false} />
+      {ready && <SettingsDialog initialPage="theme" onClose={noop} onUpdate={noop} onChannel={noop} />}
     </>
   );
 }

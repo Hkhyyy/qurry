@@ -6,6 +6,8 @@ import { sharedOr, useSharedReady, type CompletionItem } from "../lib/shared";
 import { EditTarget, ResultGrid } from "./ResultGrid";
 import { ColumnIcon, IcFilter, IcOrder, SchemaIcon, TableIcon } from "../ui/icons";
 import { HighlightInput, IconButton, ListItem, listKey, Notice, PopupList, Text } from "../ui";
+import { useThemeState } from "../lib/theme";
+import { ThemeBackdrop } from "../features/settings/ThemeImages";
 
 /** What the WHERE / ORDER BY fields complete against: the console's index of `target`, the tab's table and database */
 export interface FilterCompletion {
@@ -48,6 +50,7 @@ interface Props {
 }
 
 export function TableEditor(p: Props) {
+  const theme = useThemeState().current;
   const [where, setWhere] = useState(p.where);
   const [orderBy, setOrderBy] = useState(p.orderBy);
   useEffect(() => setWhere(p.where), [p.where]);
@@ -75,7 +78,8 @@ export function TableEditor(p: Props) {
 
   return (
     <div className="table-editor">
-      <div className="table-body">
+      {/* The theme's Background image: behind the grid */}
+      <ThemeBackdrop slot={theme.images?.background} className="table-body">
         <ResultGrid
           result={p.result ?? empty}
           edit={p.edit}
@@ -117,7 +121,7 @@ export function TableEditor(p: Props) {
             {p.errorAction}
           </Notice>
         )}
-      </div>
+      </ThemeBackdrop>
     </div>
   );
 }

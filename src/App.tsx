@@ -14,7 +14,7 @@ import { useSharedReady } from "./lib/shared";
 import { tableTabLabels } from "./lib/tabLabels";
 import { NodeInfo } from "./components/SchemaTree";
 import { leaves } from "./lib/panes";
-import { takeThemeNotice } from "./lib/theme";
+import { takeThemeNotice, useThemeState } from "./lib/theme";
 import { Group, Tab } from "./features/tabs/types";
 import { isMac } from "./features/shortcuts/labels";
 import { offered, upToDate } from "./features/settings/SettingsDialog";
@@ -37,6 +37,7 @@ import { Dialogs, TopDialogs } from "./features/dialogs/Dialogs";
 import { useGlobalShortcuts } from "./features/shortcuts/useGlobalShortcuts";
 import { setDialog, setKeymapOpen, setSettingsOpen, setUpdate, setUpdateOpen, useDialogsStore } from "./features/dialogs/store";
 import { moveOldLayout } from "./lib/panelLayout";
+import { ThemeSticker } from "./features/settings/ThemeImages";
 import "./App.css";
 
 // Splitter sizes saved before 0.3.4, before the first render reads them (#192)
@@ -274,6 +275,7 @@ export default function App() {
   const hLayout = useDefaultLayout({ id: "dbtool-h", panelIds: showExplorer ? ["explorer", "editors"] : ["editors"] });
 
   useGlobalShortcuts({ ...app, ...groups, ...search, keymapVer, focused, tabs, split, toggleExplorer, bumpFont });
+  const theme = useThemeState().current;
 
   return (
     <div className="app">
@@ -383,6 +385,8 @@ export default function App() {
       {tabMenu && <ContextMenu menu={tabMenu} onClose={() => setTabMenu(null)} />}
 
       <TopDialogs conns={conns} setStatus={setStatus} refresh={refresh} openConsole={openConsole} />
+      {/* The theme's Corner image: in front of the window, under menus, dialogs, toasts and popups; clicks pass through */}
+      <ThemeSticker slot={theme.images?.corner} />
     </div>
   );
 }

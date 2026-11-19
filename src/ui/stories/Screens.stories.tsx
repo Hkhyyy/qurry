@@ -44,7 +44,8 @@ import type { ReconnectToast } from "../../lib/reconnect";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 import { inSmallWindow } from "./SmallWindow";
 import { BackgroundWindow, InEditor, SAMPLE_BACKGROUND, SAMPLE_CORNER } from "./BackgroundWindow";
-import { newBackgroundSlot, type ThemeImages } from "../../lib/themeBackground";
+import { MOCK_IMAGES } from "../../lib/mock";
+import { newBackgroundSlot, type ThemeImages } from "../../lib/themeImages";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
 const meta: Meta = { title: "GUI/5 Screens", parameters: { layout: "fullscreen" } };
@@ -202,7 +203,7 @@ export const QuickSwitchTheme: S = {
   },
 };
 
-/** Theme images (#202, a mockup until it goes into the editor). A custom theme carries up to two images (PNG, JPEG, WebP or GIF, each
+/** Theme images (#202). A custom theme carries up to two images (PNG, JPEG, WebP or GIF, each
  *  copied into the config folder), in two independent slots of the section over the editor's preview, each optional, both can be on:
  *  Background, drawn as it is (DataGrip's Set Background Image, 15% by default) behind the SQL editor and the result grid only; a mark
  *  on its slider shows the opacity up to which every color keeps its contrast minimum over the image's lightest and darkest pixels
@@ -212,8 +213,8 @@ export const QuickSwitchTheme: S = {
  *  without an image is one line (Choose…). The images apply live to the window behind Settings; hold Peek (or Space on it) to fade
  *  Settings and see it. GIF and animated WebP play in either slot, and stop on their first frame while Reduce motion is on or the
  *  window isn't active: in Storybook it plays once the canvas has focus (click into it), and the Reduce motion control stands in for
- *  the system setting. GUI only: the TUI ignores the field (a terminal draws characters; its own background image shows there). The
- *  images are drawn in code (BackgroundWindow.tsx) */
+ *  the system setting. GUI only: the TUI keeps the field and never draws it (a terminal draws characters; its own background image shows
+ *  there). The images are the mock's made-up ones (src/lib/mock-images) */
 const bgEditor = (initial: ThemeImages): S => ({ render: () => <InEditor initial={initial} /> });
 const motion = { args: { reduceMotion: false }, argTypes: { reduceMotion: { control: "boolean", name: "Reduce motion" } } };
 const bgWindow = (theme: string, images: ThemeImages): S => ({
@@ -240,7 +241,7 @@ export const ThemeImagesBackgroundDark = bgWindow("dark", BG);
 export const ThemeImagesBackgroundLight = bgWindow("light", BG);
 export const ThemeImagesBackgroundHighContrast = bgWindow("hc", BG);
 /** An animated image in the Background (tiled): it plays, and stops on its first frame with Reduce motion or when the window isn't active */
-export const ThemeImagesBackgroundAnimated = bgWindow("dark", { background: { ...newBackgroundSlot("beacon.gif"), fill: "tile" } });
+export const ThemeImagesBackgroundAnimated = bgWindow("dark", { background: { ...newBackgroundSlot(MOCK_IMAGES.beacon), fill: "tile" } });
 export const ThemeImagesCornerDark = bgWindow("dark", CORNER);
 export const ThemeImagesCornerLight = bgWindow("light", { corner: { ...SAMPLE_CORNER, corner: "left top" } });
 export const ThemeImagesCornerHighContrast = bgWindow("hc", { corner: { ...SAMPLE_CORNER, size: 35 } });

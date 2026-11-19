@@ -1,12 +1,15 @@
 import Editor from "@monaco-editor/react";
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import type { ThemeImages } from "../../lib/themeImages";
+import { ThemeBackdrop, ThemeSticker } from "./ThemeImages";
 import { MONACO_THEME, TOKEN_VARS, connStripe, connTabVars, themeVars, type Palette } from "../../lib/theme";
 import { Button, cx, GridCell, GridHeaderRow, JsonText, Notice, RowNumberCell, TreeRow } from "../../ui";
 import { DatabaseIcon, PgIcon, TableIcon } from "../../ui/icons";
 
 // Settings › Appearance › Theme: the editor's preview, drawn by the app's own styles with the palette's variables (the explorer, a tab bar,
 // a console, a result grid with each edit state, a JSON cell, notices). Monaco draws from its one theme, which the editor's live
-// preview has set to the palette. Pointing at a color's name outlines what draws it (usedBy)
+// preview has set to the palette. Pointing at a color's name outlines what draws it (usedBy). The theme's images as in the window: the
+// Background behind its editor and grid only (one picture over both, clipped to them), the Corner in its corner
 
 // Short lines: the console sits next to the tree, so a line isn't cut in the narrowest dialog
 const SQL = "-- users to check this week\nselect upper(name) as who,\n  100 as n\nfrom users\nwhere name <> 'lee';";
@@ -52,8 +55,26 @@ export function usedBy(wrap: HTMLElement, k: string, p: Palette): Element[] {
   return [...new Set([...inCss, ...inMonaco])];
 }
 
-export function ThemePreview({ p, hot }: { p: Palette; hot: string | null }) {
+/** The editor and grid's area in the preview, as a box from the editor's top to the grid's bottom clipped to the two of them */
+function imageArea(wrap: HTMLElement): CSSProperties | null {
+  const [editor, grid] = [".theme-preview-editor", ".theme-preview-grid"].map((s) => wrap.querySelector(s)?.getBoundingClientRect());
+  if (!editor || !grid) return null;
+  const P = wrap.getBoundingClientRect();
+  const [x, w, gy, h] = [editor.left - P.left, P.width, grid.top - editor.top, grid.bottom - editor.top];
+  return { top: editor.top - P.top, height: h, clipPath: `polygon(${x}px 0, ${w}px 0, ${w}px ${h}px, 0 ${h}px, 0 ${gy}px, ${x}px ${gy}px)` };
+}
+
+export function ThemePreview({ p, hot, images }: { p: Palette; hot: string | null; images?: ThemeImages }) {
   const wrap = useRef<HTMLDivElement>(null);
+  const [area, setArea] = useState<CSSProperties | null>(null);
+  const bg = images?.background;
+  useLayoutEffect(() => {
+    const el = wrap.current;
+    if (!bg || !el) return setArea(null);
+    const ro = new ResizeObserver(() => setArea(imageArea(el)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [!!bg]);
   const colors = JSON.stringify(p);
   useLayoutEffect(() => {
     if (!hot || !wrap.current) return;
@@ -63,7 +84,8 @@ export function ThemePreview({ p, hot }: { p: Palette; hot: string | null }) {
   }, [hot, colors]);
   const w = [44, 120, 180];
   return (
-    <div ref={wrap} className="theme-preview" style={{ ...themeVars(p), background: p.bg, color: p.text }} aria-label="Theme preview">
+    <div ref={wrap} className={cx("theme-preview", bg && "has-image")} style={{ ...themeVars(p), background: p.bg, color: p.text }} aria-label="Theme preview">
+      {bg && area && <ThemeBackdrop slot={bg} className="theme-preview-images" style={area} />}
       <div className="theme-preview-top">
         <div className="theme-preview-tree">
           <div className="conn-tree" style={{ background: "var(--theme-prod-tint)", boxShadow: `inset 3px 0 0 ${connStripe(RED)}` }}>
@@ -136,6 +158,7 @@ export function ThemePreview({ p, hot }: { p: Palette; hot: string | null }) {
           <a>link</a>
         </div>
       </div>
+      <ThemeSticker slot={images?.corner} inPreview />
     </div>
   );
 }

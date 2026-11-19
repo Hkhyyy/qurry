@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import TABLE from "../../crates/shared/src/themes.json";
 import { shared } from "./shared";
-import { backdropStyle, mixHex, newBackgroundSlot, newCornerSlot, opacityCap, stickerStyle, warningsOver } from "./themeBackground";
+import { backdropStyle, imageUrl, mixHex, newBackgroundSlot, newCornerSlot, opacityCap, sameImages, stickerStyle, warningsOver } from "./themeImages";
+
+const api = vi.hoisted(() => ({ themeImage: vi.fn() }));
+vi.mock("./api", () => ({ api }));
 
 const colors = (id: string) => TABLE.themes.find((t) => t.id === id)!.colors as Record<string, string>;
 const warn = (p: Record<string, string>) => shared().themeWarnings(p);
@@ -41,5 +44,27 @@ describe("theme background image", () => {
   it("starts a new background image at 15%, a new corner image bottom right at 20% and fully opaque", () => {
     expect(newBackgroundSlot("a.png")).toEqual({ file: "a.png", opacity: 15, fill: "cover", anchor: "center" });
     expect(newCornerSlot("a.gif")).toEqual({ file: "a.gif", corner: "right bottom", size: 20, opacity: 100 });
+  });
+  it("compares two themes' images whatever order their fields come in", () => {
+    const bg = newBackgroundSlot("0123456789abcdef.png");
+    expect(sameImages({ background: bg }, { background: { anchor: bg.anchor, fill: bg.fill, opacity: bg.opacity, file: bg.file } })).toBe(true);
+    expect(sameImages(undefined, {})).toBe(true);
+    expect(sameImages({}, { background: undefined })).toBe(true);
+    expect(sameImages({ background: bg }, { background: { ...bg, opacity: 16 } })).toBe(false);
+    expect(sameImages({ background: bg }, { corner: newCornerSlot(bg.file) })).toBe(false);
+  });
+  it("reads a theme image's bytes once into a blob URL of its type, and again after a failure", async () => {
+    const blobs: Blob[] = [];
+    vi.stubGlobal("URL", { createObjectURL: (b: Blob) => (blobs.push(b), `blob:${blobs.length}`) });
+    api.themeImage.mockResolvedValue(new ArrayBuffer(4));
+    expect(await imageUrl("0123456789abcdef.gif")).toBe("blob:1");
+    expect(await imageUrl("0123456789abcdef.gif")).toBe("blob:1");
+    expect(api.themeImage).toHaveBeenCalledTimes(1);
+    expect(blobs[0].type).toBe("image/gif");
+    api.themeImage.mockRejectedValueOnce("The theme image 1111111111111111.png is missing: choose it again");
+    await expect(imageUrl("1111111111111111.png")).rejects.toMatch(/missing/);
+    expect(await imageUrl("1111111111111111.png")).toBe("blob:2");
+    expect(blobs[1].type).toBe("image/png");
+    vi.unstubAllGlobals();
   });
 });
