@@ -1038,6 +1038,7 @@ impl Store {
             None => list.push(t.clone()),
         }
         self.set_setting("customThemes", serde_json::to_value(&list)?)?;
+        self.prune_theme_images();
         Ok(t)
     }
 
@@ -1054,7 +1055,30 @@ impl Store {
             let side = |v: &String| if v == id { gone.base.clone() } else { v.clone() };
             self.set_setting("themeSync", serde_json::to_value(theme::ThemeSync { dark: side(&s.sync.dark), light: side(&s.sync.light) })?)?;
         }
+        self.prune_theme_images();
         Ok(())
+    }
+
+    fn theme_images_dir(&self) -> PathBuf {
+        self.dir().join(crate::theme_images::DIR)
+    }
+
+    /// Settings › Theme › Images › Choose…: the picked image copied into the config folder (PNG, JPEG, GIF or WebP; 4 MB still,
+    /// 8 MB animated); its file name, for the theme to keep
+    pub fn import_theme_image(&self, src: &Path) -> AppResult<String> {
+        crate::theme_images::import(&self.theme_images_dir(), src)
+    }
+
+    /// A theme image's bytes (a name `import_theme_image` gave)
+    pub fn theme_image(&self, name: &str) -> AppResult<Vec<u8>> {
+        crate::theme_images::read(&self.theme_images_dir(), name)
+    }
+
+    /// After a custom theme is saved or deleted: the images no theme uses go (not ones copied in the last hour, which a theme being
+    /// edited may use). Saving the theme doesn't wait on it or fail with it
+    fn prune_theme_images(&self) {
+        let custom = self.theme_settings().custom;
+        let _ = crate::theme_images::prune(&self.theme_images_dir(), custom.iter().flat_map(|t| t.images.files()));
     }
 
     /// Settings › Appearance › Theme › Import…: the file read and checked (a large one is refused unread), not saved yet
@@ -1137,6 +1161,48 @@ mod tests {
         assert_eq!(saved, serde_json::json!({ "updateChannel": "beta", "later": 1 }));
     }
 
+    /// A custom theme's images (#202) survive everything else that rewrites settings.json (the TUI picks a theme, Sync with OS,
+    /// another theme saved or deleted); an image no theme uses goes once its theme is deleted (after its hour of grace)
+    #[test]
+    fn theme_images_are_kept_by_every_settings_write_and_pruned_when_unused() {
+        use qurry_shared::theme::{BackgroundImage, CornerImage, ThemeImages, ThemeSync};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let pick = |name: &str, bytes: &[u8]| {
+            let p = dir.path().join(name);
+            fs::write(&p, bytes).unwrap();
+            store.import_theme_image(&p).unwrap()
+        };
+        let bg = pick("big.png", b"\x89PNG\r\n\x1a\nillustration");
+        let corner = pick("small.gif", b"GIF89a\x01\x00\x01\x00\x00\x00\x00\x3b");
+        assert!(store.import_theme_image(&dir.path().join("nothing.png")).is_err());
+        let images = ThemeImages {
+            background: Some(BackgroundImage { file: bg.clone(), opacity: 15, fill: "contain".into(), anchor: "right bottom".into() }),
+            corner: Some(CornerImage { file: corner.clone(), corner: "right bottom".into(), size: 20, opacity: 100 }),
+        };
+        let pics = store.save_custom_theme(&CustomTheme { name: "Pics".into(), base: "dark".into(), images: images.clone(), ..Default::default() }).unwrap();
+        let plain = store.save_custom_theme(&CustomTheme { name: "Plain".into(), base: "light".into(), ..Default::default() }).unwrap();
+        // What the TUI and the GUI's other settings do
+        store.set_theme(&plain.id).unwrap();
+        store.set_theme_sync(&ThemeSync { dark: pics.id.clone(), light: plain.id.clone() }).unwrap();
+        store.save_custom_theme(&CustomTheme { name: "Plain 2".into(), ..plain.clone() }).unwrap();
+        let other = store.save_custom_theme(&CustomTheme { name: "Gone".into(), base: "hc".into(), ..Default::default() }).unwrap();
+        store.delete_custom_theme(&other.id).unwrap();
+        let read = Store::new(dir.path().join("cfg")).theme_settings();
+        assert_eq!(read.custom.iter().find(|t| t.id == pics.id).unwrap().images, images);
+        assert_eq!(store.theme_image(&bg).unwrap(), b"\x89PNG\r\n\x1a\nillustration");
+        assert!(store.theme_image("../settings.json").is_err());
+        // Deleted: its images go, unless copied within the hour
+        let images_dir = dir.path().join("cfg").join(crate::theme_images::DIR);
+        store.delete_custom_theme(&pics.id).unwrap();
+        assert!(images_dir.join(&bg).exists(), "an hour of grace");
+        for f in [&bg, &corner] {
+            fs::File::options().write(true).open(images_dir.join(f)).unwrap().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200)).unwrap();
+        }
+        store.save_custom_theme(&CustomTheme { name: "Plain 3".into(), ..plain }).unwrap();
+        assert!(!images_dir.join(&bg).exists() && !images_dir.join(&corner).exists());
+    }
+
     /// Theme, Sync with OS and custom themes round trip through settings.json for both apps; the TUI's older "tuiTheme" stands in
     /// until a theme is picked; deleting the picked custom theme leaves its base picked; theme files are checked
     #[test]
@@ -1151,7 +1217,7 @@ mod tests {
         assert_eq!(store.theme_settings().theme.as_deref(), Some(SYSTEM), "the TUI's Auto is Sync with OS");
         store.set_theme("dracula").unwrap();
         assert!(store.set_theme("monokai").unwrap_err().to_string().contains("no theme"));
-        let mine = CustomTheme { id: String::new(), name: " Night ".into(), base: "dracula".into(), colors: [("bg".into(), "#101010".into())].into() };
+        let mine = CustomTheme { id: String::new(), name: " Night ".into(), base: "dracula".into(), colors: [("bg".into(), "#101010".into())].into(), ..Default::default() };
         let saved = store.save_custom_theme(&mine).unwrap();
         assert_eq!((saved.id.as_str(), saved.name.as_str()), ("custom-1", "Night"));
         assert_eq!(store.save_custom_theme(&mine).unwrap().id, "custom-2", "Save as new theme twice: two themes");

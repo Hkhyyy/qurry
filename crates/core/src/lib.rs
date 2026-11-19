@@ -53,6 +53,7 @@ pub mod ssh_config;
 pub mod testenv;
 pub mod store;
 pub mod subset;
+pub mod theme_images;
 pub mod transfer;
 pub mod tunnel;
 pub mod update;

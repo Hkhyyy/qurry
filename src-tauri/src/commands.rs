@@ -933,6 +933,20 @@ pub async fn export_theme(app: tauri::AppHandle, state: State<'_, AppState>, the
     Ok(Some(path))
 }
 
+/// Settings › Theme › Images › Choose…: the native picker (opened here, so the WebView never names a path), then the image copied
+/// into the config folder; its file name, None if cancelled
+#[tauri::command]
+pub async fn import_theme_image(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<Option<String>> {
+    let Some(path) = app.dialog().file().add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"]).blocking_pick_file().and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    Ok(Some(state.store.import_theme_image(&path)?))
+}
+
+/// A theme image's bytes (an ArrayBuffer in the WebView, drawn from a blob URL: no asset protocol or CSP change needed)
+#[tauri::command]
+pub async fn theme_image(state: State<'_, AppState>, file: String) -> AppResult<tauri::ipc::Response> {
+    Ok(tauri::ipc::Response::new(state.store.theme_image(&file)?))
+}
+
 /// Column widths a user gave a table tab's columns (settings.json "columnWidths", shared with the TUI)
 #[tauri::command]
 pub fn column_widths(state: State<'_, AppState>, table: qurry_core::store::TableRef) -> qurry_core::format::ColumnWidths {
