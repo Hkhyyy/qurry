@@ -229,18 +229,52 @@ test.describe("with Reduce motion on", () => {
   });
 });
 
-test("Export… leaves the images out and Import… says theme files don't include them", async ({ page }) => {
-  await openInTheme(page, "custom-1", pictures({ corner: CORNER }));
+test("Export… carries the images (version 2) and Import… on another computer brings both back and draws them", async ({ page, browser }) => {
+  const bg = { file: RIDGES, opacity: 25, fill: "contain", anchor: "right bottom", span: "pane" };
+  await openInTheme(page, "custom-1", pictures({ background: bg, corner: CORNER }));
   await openEditor(page);
   const message = dialog(page).locator(".theme-editor-actions .ui-notice");
   await dialog(page).getByRole("button", { name: "Export…" }).click();
-  await expect(message).toHaveText("Exported to /Users/me/Downloads/Pictures.qurry-theme.json (without its images: theme files don't include them)");
-  const file = JSON.parse(await page.evaluate(() => (window as any).__mockThemeExported));
-  expect(file).toEqual({ qurryTheme: 1, name: "Pictures", base: "dark", colors: {} });
-  await page.evaluate((f) => ((window as any).__mockThemeFile = f), JSON.stringify(file));
-  await dialog(page).getByRole("button", { name: "Import…" }).click();
-  await expect(message).toHaveText(/^Imported "Pictures" \(based on Dark\): theme files don't include images/);
-  await expect(slot(page, "Corner")).toContainText("No image");
+  await expect(message).toHaveText("Exported to /Users/me/Downloads/Pictures.qurry-theme.json with its images (Qurry 0.3.5-beta.1 and older can't import such a file)");
+  const text: string = await page.evaluate(() => (window as any).__mockThemeExported);
+  const file = JSON.parse(text);
+  expect(file.qurryTheme).toBe(2);
+  expect(Object.keys(file.images)).toEqual(["background", "corner"]);
+  expect(file.images.background).toMatchObject({ type: "png", opacity: 25, fill: "contain", anchor: "right bottom", span: "pane" });
+  // Never the local file names
+  expect(text).not.toContain(RIDGES);
+  expect(text).not.toContain(BEACON);
+  // Another computer: a fresh mock without these images
+  const other = await (await browser.newContext()).newPage();
+  await openApp(other);
+  await openEditor(other);
+  await other.evaluate((f) => ((window as any).__mockThemeFile = f), text);
+  await dialog(other).getByRole("button", { name: "Import…" }).click();
+  await expect(dialog(other).locator(".theme-editor-actions .ui-notice")).toHaveText(/^Imported "Pictures" \(based on Dark\) with its background and corner images\. Check it/);
+  await expect(slot(other, "Background")).toContainText("PNG image");
+  await expect(slot(other, "Corner")).toContainText("GIF image");
+  await expect(slot(other, "Background").getByRole("combobox", { name: "Span" })).toHaveValue("pane");
+  // Drawn: the preview's layer and sticker from the imported bytes
+  await expect(dialog(other).locator(".theme-preview .theme-backdrop")).toHaveCount(1);
+  await expect(dialog(other).locator(".theme-preview img.theme-sticker")).toBeVisible();
+  expect(await dialog(other).locator(".theme-preview img.theme-sticker").evaluate((i: HTMLImageElement) => i.naturalWidth)).toBe(120);
+  // A slot that fails is left out and named; the rest comes in
+  const bad = JSON.parse(text);
+  bad.images.background.data = btoa('<svg xmlns="http://www.w3.org/2000/svg"/>');
+  await other.evaluate((f) => ((window as any).__mockThemeFile = f), JSON.stringify(bad));
+  await dialog(other).getByRole("button", { name: "Import…" }).click();
+  // The first import isn't saved: replacing it asks first
+  await other.getByRole("button", { name: "Discard" }).click();
+  await expect(dialog(other).locator(".theme-editor-actions .ui-notice")).toHaveText(/with its corner image; left out: The background image isn't a PNG, JPEG, GIF or WebP image/);
+  await expect(slot(other, "Background")).toContainText("No image");
+});
+
+test("Export… of a theme without images writes version 1, as before", async ({ page }) => {
+  await openInTheme(page, "custom-1", pictures({}));
+  await openEditor(page);
+  await dialog(page).getByRole("button", { name: "Export…" }).click();
+  await expect(dialog(page).locator(".theme-editor-actions .ui-notice")).toHaveText("Exported to /Users/me/Downloads/Pictures.qurry-theme.json");
+  expect(JSON.parse(await page.evaluate(() => (window as any).__mockThemeExported))).toEqual({ qurryTheme: 1, name: "Pictures", base: "dark", colors: {} });
 });
 
 test("OK saves an image picked while editing a saved custom theme; it is there when the editor opens again", async ({ page }) => {
@@ -274,6 +308,9 @@ test("started from a built-in theme, Images says it is saved with a new custom t
 
 // The Background's span: "area" (the default) is one picture behind every split together, "pane" one in each console or table
 const split = async (page: Page) => {
+  // The tabs and splits are kept across a reload: already split (the test's first half), nothing to do
+  await expect(page.locator(".editor-group").first()).toBeVisible();
+  if ((await page.locator(".editor-group").count()) === 2) return;
   await treeItem(page, "users").first().dblclick();
   await treeItem(page, "contracts").first().dblclick();
   await page.getByRole("tab", { name: /contracts/ }).click({ button: "right" });

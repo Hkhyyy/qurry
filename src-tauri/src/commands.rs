@@ -919,7 +919,7 @@ pub fn delete_custom_theme(state: State<'_, AppState>, id: String) -> AppResult<
 
 /// Import…: the native picker, then the file read and checked (not saved: the editor shows it first); None if cancelled
 #[tauri::command]
-pub async fn import_theme(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<Option<qurry_core::theme::CustomTheme>> {
+pub async fn import_theme(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<Option<qurry_core::store::ImportedTheme>> {
     let Some(path) = app.dialog().file().add_filter("Qurry theme", &["json"]).blocking_pick_file().and_then(|p| p.into_path().ok()) else { return Ok(None) };
     Ok(Some(state.store.read_theme_file(&path)?))
 }

@@ -154,14 +154,18 @@ export function ThemeEditor({ start, onBack, onDirty, commit }: { start: string;
   };
   const importFile = async () => {
     try {
-      const t = await api.importTheme();
-      if (!t || (dirty && !(await askDiscardColors()))) return;
+      const got = await api.importTheme();
+      if (!got || (dirty && !(await askDiscardColors()))) return;
+      const t = got.theme;
       setBaseId(t.base);
       setOver(t.colors);
       setName(t.name);
-      setImages({});
+      setImages(t.images ?? {});
       setEditing(null);
-      setMsg({ tone: "ok", text: `Imported "${t.name}" (based on ${BUILT_IN.find((b) => b.id === t.base)?.name}): theme files don't include images; check it, then Save as new theme` });
+      const came = [t.images?.background && "background", t.images?.corner && "corner"].filter(Boolean);
+      const with_ = came.length ? ` with its ${came.join(" and ")} image${came.length > 1 ? "s" : ""}` : "";
+      const left = got.dropped.length ? `; left out: ${got.dropped.join("; ")}` : "";
+      setMsg({ tone: got.dropped.length ? "warn" : "ok", text: `Imported "${t.name}" (based on ${BUILT_IN.find((b) => b.id === t.base)?.name})${with_}${left}. Check it, then Save as new theme` });
     } catch (e) {
       setMsg({ tone: "danger", text: `Not imported: ${e}` });
     }
@@ -169,7 +173,7 @@ export function ThemeEditor({ start, onBack, onDirty, commit }: { start: string;
   const exportFile = async () => {
     try {
       const path = await api.exportTheme({ ...theme(), name: name.trim() || `${base.name} (custom)` });
-      if (path) setMsg({ tone: "ok", text: `Exported to ${path}${hasImages ? " (without its images: theme files don't include them)" : ""}` });
+      if (path) setMsg({ tone: "ok", text: `Exported to ${path}${hasImages ? " with its images (Qurry 0.3.5-beta.1 and older can't import such a file)" : ""}` });
     } catch (e) {
       setMsg({ tone: "danger", text: `Not exported: ${e}` });
     }

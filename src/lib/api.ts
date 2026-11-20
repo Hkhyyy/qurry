@@ -284,7 +284,7 @@ export const api = {
   saveCustomTheme: (theme: CustomTheme) => invoke<CustomTheme>("save_custom_theme", { theme }),
   deleteCustomTheme: (id: string) => invoke<void>("delete_custom_theme", { id }),
   /** The picked theme file, checked (not saved); null if cancelled. Throws why a file is refused */
-  importTheme: () => invoke<CustomTheme | null>("import_theme"),
+  importTheme: () => invoke<{ theme: CustomTheme; dropped: string[] } | null>("import_theme"),
   /** The path written, null if cancelled */
   exportTheme: (theme: CustomTheme) => invoke<string | null>("export_theme", { theme }),
   /** Settings › Theme › Images › Choose…: the picker, then the image copied into the config folder; its file name, null if cancelled */

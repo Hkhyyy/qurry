@@ -415,8 +415,10 @@ const api = {
   /** The tokens of a palette whose contrast pair is below its minimum (qurry_shared::theme::warnings) */
   themeWarnings: (colors: Record<string, string>): ThemeWarning[] => wasm.themeWarnings(colors),
   /** A theme file → the theme (id ""); throws the reason it is refused (qurry_shared::theme::parse_file) */
-  parseThemeFile: (text: string): CustomTheme => wasm.parseThemeFile(text),
-  themeFileText: (theme: CustomTheme): string => wasm.themeFileText(theme),
+  /** A theme file: the theme (without images) and, version 2, its images as in the file (type, base64 data, settings) */
+  parseThemeFile: (text: string): { theme: CustomTheme; images: { background?: Record<string, unknown> & { type: string; data: string }; corner?: Record<string, unknown> & { type: string; data: string } } } => wasm.parseThemeFile(text),
+  /** Version 1, or with images (each slot's type, base64 data and settings) version 2 */
+  themeFileText: (theme: CustomTheme, images?: Record<string, unknown>): string => wasm.themeFileText(theme, images ?? null),
 };
 
 let ready = false;

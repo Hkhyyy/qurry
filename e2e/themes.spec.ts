@@ -195,7 +195,7 @@ test("Import… / Export… a theme file: checked strictly, loaded into the edit
   for (const [file, why] of [
     ['{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"bg": "red"}}', /"bg" is "red": colors are written #rrggbb/],
     ['{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"glow": "#123456"}}', /Unknown color "glow"/],
-    ["x".repeat(20000), /at most 16 KB/],
+    [JSON.stringify({ qurryTheme: 1, name: "x".repeat(20000), base: "dark", colors: {} }), /at most 16 KB/],
   ] as const) {
     await page.evaluate((f) => ((window as any).__mockThemeFile = f), file);
     await dialog(page).getByRole("button", { name: "Import…" }).click();
