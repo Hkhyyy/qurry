@@ -931,6 +931,11 @@ const handlers: Record<string, (a: any) => unknown> = {
     for (const slot of ["background", "corner"]) if (a.theme.images?.[slot] && !themeImages[a.theme.images[slot].file]) throw `The ${slot} image is missing: choose it again`;
     const s = themeSettings();
     const t = { ...a.theme, name: a.theme.name.trim() };
+    // As the core: one name per theme (a built-in's too), unless the theme keeps the name it has
+    const wanted = t.name.toLowerCase();
+    const own = s.custom.find((c: any) => c.id === t.id)?.name.trim().toLowerCase();
+    const taken = THEMES.themes.some((b: { name: string }) => b.name.toLowerCase() === wanted) || s.custom.some((c: any) => c.id !== t.id && c.name.trim().toLowerCase() === wanted);
+    if (taken && own !== wanted) throw `A theme named "${t.name}" already exists: choose another name`;
     if (!t.id) for (let n = 1; !t.id; n++) if (!s.custom.some((c: any) => c.id === `custom-${n}`)) t.id = `custom-${n}`;
     const custom = s.custom.some((c: any) => c.id === t.id) ? s.custom.map((c: any) => (c.id === t.id ? t : c)) : [...s.custom, t];
     saveThemeSettings({ ...s, custom });

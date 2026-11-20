@@ -1050,6 +1050,15 @@ impl Store {
         } else if !t.id.starts_with("custom-") {
             return Err(AppError::Msg(format!("A custom theme's id starts with \"custom-\", not \"{}\"", t.id)));
         }
+        // One name per theme: another custom theme's or a built-in one's (case and spaces aside). A theme saved again under the name
+        // it already has passes, so two that share a name from an older version can still be saved
+        let name_of = |v: &serde_json::Value| v.get("name").and_then(|n| n.as_str()).map(|n| n.trim().to_lowercase());
+        let wanted = t.name.to_lowercase();
+        let own = list.iter().find(|v| id_of(v).as_ref() == Some(&t.id)).and_then(name_of);
+        let taken = theme::table().themes.iter().any(|b| b.name.to_lowercase() == wanted) || list.iter().any(|v| id_of(v).as_ref() != Some(&t.id) && name_of(v).as_ref() == Some(&wanted));
+        if taken && own.as_ref() != Some(&wanted) {
+            return Err(AppError::Msg(format!("A theme named \"{}\" already exists: choose another name", t.name)));
+        }
         match list.iter_mut().find(|v| id_of(v).as_ref() == Some(&t.id)) {
             Some(v) => *v = theme::custom_to_value(Some(v), &t),
             None => list.push(theme::custom_to_value(None, &t)),
@@ -1266,6 +1275,29 @@ mod tests {
         assert_eq!(saved, serde_json::json!({ "updateChannel": "beta", "later": 1 }));
     }
 
+    /// A theme name is used once: Save as new theme with another custom theme's name or a built-in one's is refused (case and
+    /// spaces aside); saving a theme again under its own name passes, also when an older version left two themes with that name
+    #[test]
+    fn theme_names_are_not_used_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let theme = |id: &str, name: &str| CustomTheme { id: id.into(), name: name.into(), base: "dark".into(), ..Default::default() };
+        let mine = store.save_custom_theme(&theme("", "My Dark")).unwrap();
+        for name in ["My Dark", " my dark ", "Dark", "light"] {
+            let e = store.save_custom_theme(&theme("", name)).unwrap_err().to_string();
+            assert!(e.contains("already exists: choose another name"), "{name}: {e}");
+        }
+        // Replacing it under its own name, or renaming it to a free one
+        store.save_custom_theme(&theme(&mine.id, "My Dark")).unwrap();
+        store.save_custom_theme(&theme(&mine.id, "Night")).unwrap();
+        assert!(store.save_custom_theme(&theme("", "My Dark")).is_ok(), "the old name is free again");
+        // Two themes an older version saved under one name: each can still be saved as it is
+        let path = dir.path().join("cfg/settings.json");
+        fs::write(&path, r#"{"customThemes": [{"id": "custom-7", "name": "Twin", "base": "dark"}, {"id": "custom-8", "name": "Twin", "base": "light"}]}"#).unwrap();
+        store.save_custom_theme(&theme("custom-8", "Twin")).unwrap();
+        assert!(store.save_custom_theme(&theme("custom-7", "Other")).is_ok());
+    }
+
     /// A custom theme's images (#202) survive everything else that rewrites settings.json (the TUI picks a theme, Sync with OS,
     /// another theme saved or deleted); an image no theme uses goes once its theme is deleted (after its hour of grace)
     #[test]
@@ -1458,7 +1490,8 @@ mod tests {
         let mine = CustomTheme { id: String::new(), name: " Night ".into(), base: "dracula".into(), colors: [("bg".into(), "#101010".into())].into(), ..Default::default() };
         let saved = store.save_custom_theme(&mine).unwrap();
         assert_eq!((saved.id.as_str(), saved.name.as_str()), ("custom-1", "Night"));
-        assert_eq!(store.save_custom_theme(&mine).unwrap().id, "custom-2", "Save as new theme twice: two themes");
+        assert!(store.save_custom_theme(&mine).is_err(), "Save as new theme twice under one name: refused (theme_names_are_not_used_twice)");
+        assert_eq!(store.save_custom_theme(&CustomTheme { name: "Night copy".into(), ..mine.clone() }).unwrap().id, "custom-2", "under another name: a second theme");
         store.save_custom_theme(&CustomTheme { name: "Night 2".into(), ..saved.clone() }).unwrap();
         assert!(store.save_custom_theme(&CustomTheme { colors: [("bg".into(), "#10101".into())].into(), ..mine.clone() }).is_err());
         assert!(store.save_custom_theme(&CustomTheme { id: "dark".into(), ..mine.clone() }).is_err(), "not over a built-in id");
@@ -1468,7 +1501,7 @@ mod tests {
         let next = Store::new(dir.path().join("cfg")).theme_settings();
         assert_eq!(next.theme.as_deref(), Some("custom-1"));
         assert_eq!(next.sync, ThemeSync { dark: "custom-1".into(), light: "solarized-light".into() });
-        assert_eq!(next.custom.iter().map(|c| (c.id.as_str(), c.name.as_str())).collect::<Vec<_>>(), [("custom-1", "Night 2"), ("custom-2", "Night")]);
+        assert_eq!(next.custom.iter().map(|c| (c.id.as_str(), c.name.as_str())).collect::<Vec<_>>(), [("custom-1", "Night 2"), ("custom-2", "Night copy")]);
         assert_eq!(next.resolve("dark", true).color("bg"), "#101010");
         let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["later"], 1, "other settings are kept");
@@ -1478,7 +1511,7 @@ mod tests {
         // Theme files: written and read back; a bad or large file is refused with why
         let file = dir.path().join("t.json");
         store.write_theme_file(&file, &s.custom[0]).unwrap();
-        assert_eq!(store.read_theme_file(&file).unwrap().theme.name, "Night");
+        assert_eq!(store.read_theme_file(&file).unwrap().theme.name, "Night copy");
         fs::write(&file, "x".repeat(theme::FILE_MAX + 1)).unwrap();
         // Under the version 2 cap it is read: not a theme file. A version 1 file over 16 KB still says so
         assert!(store.read_theme_file(&file).unwrap_err().to_string().contains("Not a Qurry theme file"));

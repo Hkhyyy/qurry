@@ -186,6 +186,28 @@ test("saving a custom theme under Sync with OS keeps Sync with OS; Save as new t
   expect((await saved(page)).theme).toBe("custom-2");
 });
 
+test("Save as new theme under a name another theme has is refused with why; a free name saves", async ({ page }) => {
+  await openInTheme(page, "custom-1", [{ id: "custom-1", name: "Night shift", base: "dracula", colors: { bg: "#1d1e26" } }]);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  const message = dialog(page).locator(".theme-editor-actions .ui-notice");
+  for (const name of ["Night shift", "night shift ", "Dark"]) {
+    await dialog(page).getByRole("textbox", { name: "Theme name" }).fill(name);
+    await dialog(page).getByRole("button", { name: "Save as new theme" }).click();
+    await expect(message).toHaveText(`Not saved: A theme named "${name.trim()}" already exists: choose another name`);
+  }
+  expect((await saved(page)).custom).toHaveLength(1);
+  // Save keeps the theme's own name
+  await dialog(page).getByRole("textbox", { name: "Theme name" }).fill("Night shift");
+  await dialog(page).getByRole("textbox", { name: "Accent hex", exact: true }).fill("#9580ff");
+  await dialog(page).getByRole("button", { name: "Save", exact: true }).click();
+  await expect(message).toHaveText(/^Saved "Night shift"/);
+  await dialog(page).getByRole("textbox", { name: "Theme name" }).fill("Night shift copy");
+  await dialog(page).getByRole("button", { name: "Save as new theme" }).click();
+  await expect(message).toHaveText(/^Saved "Night shift copy"/);
+  expect((await saved(page)).custom).toHaveLength(2);
+});
+
 test("Import… / Export… a theme file: checked strictly, loaded into the editor to save", async ({ page }) => {
   await openApp(page);
   await settings(page);
@@ -386,6 +408,8 @@ test("editing a saved custom theme, Save is the primary button and replaces it; 
     await expect(dialog(page).locator(".theme-editor-msg")).toHaveText(/Saved "Night shift"/);
   }
   expect((await saved(page)).custom.map((c: { id: string; colors: { bg: string } }) => [c.id, c.colors.bg])).toEqual([["custom-1", "#121220"]]);
+  // A copy takes a name of its own (one name per theme)
+  await dialog(page).getByRole("textbox", { name: "Theme name" }).fill("Night shift copy");
   await asNew.click();
   await expect.poll(async () => (await saved(page)).custom.length).toBe(2);
 });
