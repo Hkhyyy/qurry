@@ -1,7 +1,7 @@
 // A custom theme's images (#202, GUI only: a terminal draws characters, so the TUI keeps them in settings.json and never draws them),
 // two independent slots, each optional with its own image: Background, faint behind the SQL editor and the result grid; Corner, scaled
 // down in front of the window (below menus, dialogs and popups), a sticker. The files are copies in the config folder
-// (crates/core/src/theme_images.rs, which checks them); the GUI reads their bytes and draws them from blob URLs (imageUrl).
+// (crates/core/src/theme_images.rs, which checks them); the GUI reads their bytes and draws them from blob URLs (holdImage), freed when nothing draws them.
 // The background costs contrast: drawn at opacity α, the image moves each pixel of Background (and the grid's odd rows) toward its own pixel
 // by α; the worst pixel is black or white, so the checks (qurry_shared::theme, through the WASM) are run with those surfaces mixed
 // that far toward black and white. GIF and animated WebP play, and stop on their first frame while motion is paused (stillFrame).
@@ -102,38 +102,57 @@ export function stickerStyle(c: CornerSlot, margin = 16, unit: "vh" | "%" = "vh"
 }
 
 const MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
-const urls = new Map<string, Promise<string>>();
-/** A theme image's blob URL, read once per file (the bytes command: no asset protocol or CSP change needed). A file that can't be
- *  read is tried again next time */
-export function imageUrl(file: string): Promise<string> {
-  let u = urls.get(file);
-  if (!u) {
-    u = api.themeImage(file).then((b) => URL.createObjectURL(new Blob([b], { type: MIME[file.split(".").pop() ?? ""] ?? "" })));
-    u.catch(() => urls.delete(file));
-    urls.set(file, u);
+/** A GIF or WebP may move (they are frozen while motion is paused); a PNG or JPEG is drawn as it is */
+export const mayMove = (file: string) => /\.(gif|webp)$/.test(file);
+
+/** Each image in use: its blob URL, its still once made, and how many drawings use it. The last one to let go frees both */
+const images = new Map<string, { url: Promise<string>; still?: Promise<string>; users: number }>();
+const revoke = (u?: Promise<string>) => u?.then((x) => URL.revokeObjectURL(x), () => {});
+
+/** A theme image's blob URL, read once while it is used (the bytes command: no asset protocol or CSP change needed); each call is
+ *  one use, ended by releaseImage. A file that can't be read is read again by the next use */
+export function holdImage(file: string): Promise<string> {
+  let e = images.get(file);
+  if (!e) {
+    const url = api.themeImage(file).then((b) => URL.createObjectURL(new Blob([b], { type: MIME[file.split(".").pop() ?? ""] ?? "" })));
+    e = { url, users: 0 };
+    const entry = e;
+    url.catch(() => images.get(file) === entry && images.delete(file));
+    images.set(file, e);
   }
-  return u;
+  e.users++;
+  return e.url;
 }
 
-const stills = new Map<string, Promise<string>>();
-/** An image's first frame as a still (a blob URL), made once per image: drawn into a canvas from a fresh load, which is its first
- *  frame for a GIF, an animated WebP or PNG (a still image comes back as it is) */
-export function stillFrame(src: string): Promise<string> {
-  let s = stills.get(src);
-  if (!s) {
-    s = new Promise<string>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        const c = document.createElement("canvas");
-        [c.width, c.height] = [img.naturalWidth || 300, img.naturalHeight || 150];
-        c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
-        c.toBlob((b) => (b ? resolve(URL.createObjectURL(b)) : reject(new Error("no still"))));
-      };
-      img.onerror = () => reject(new Error("image didn't load"));
-      img.src = src;
-    });
-    s.catch(() => stills.delete(src));
-    stills.set(src, s);
-  }
-  return s;
+/** One use of a file ends; with none left its blob URL and still are freed */
+export function releaseImage(file: string) {
+  const e = images.get(file);
+  if (!e || --e.users > 0) return;
+  images.delete(file);
+  revoke(e.url);
+  revoke(e.still);
+}
+
+/** A GIF's or WebP's first frame as a still (a blob URL), made once while the file is used: drawn into a canvas from a fresh load,
+ *  which is its first frame. Only for a file in use (holdImage) */
+export function stillFrame(file: string): Promise<string> {
+  const e = images.get(file);
+  if (!e) return Promise.reject(new Error("not in use"));
+  e.still ??= e.url.then(
+    (src) =>
+      new Promise<string>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const c = document.createElement("canvas");
+          [c.width, c.height] = [img.naturalWidth || 300, img.naturalHeight || 150];
+          c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
+          c.toBlob((b) => (b ? resolve(URL.createObjectURL(b)) : reject(new Error("no still"))));
+        };
+        img.onerror = () => reject(new Error("image didn't load"));
+        img.src = src;
+      }),
+  );
+  const still = e.still;
+  still.catch(() => e.still === still && (e.still = undefined));
+  return still;
 }

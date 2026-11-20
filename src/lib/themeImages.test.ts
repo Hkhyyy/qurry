@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import TABLE from "../../crates/shared/src/themes.json";
 import { shared } from "./shared";
-import { backdropStyle, imageUrl, mixHex, newBackgroundSlot, newCornerSlot, opacityCap, sameImages, stickerStyle, warningsOver } from "./themeImages";
+import { backdropStyle, holdImage, mayMove, mixHex, releaseImage, newBackgroundSlot, newCornerSlot, opacityCap, sameImages, stickerStyle, warningsOver } from "./themeImages";
 
 const api = vi.hoisted(() => ({ themeImage: vi.fn() }));
 vi.mock("./api", () => ({ api }));
@@ -53,18 +53,35 @@ describe("theme background image", () => {
     expect(sameImages({ background: bg }, { background: { ...bg, opacity: 16 } })).toBe(false);
     expect(sameImages({ background: bg }, { corner: newCornerSlot(bg.file) })).toBe(false);
   });
-  it("reads a theme image's bytes once into a blob URL of its type, and again after a failure", async () => {
-    const blobs: Blob[] = [];
-    vi.stubGlobal("URL", { createObjectURL: (b: Blob) => (blobs.push(b), `blob:${blobs.length}`) });
-    api.themeImage.mockResolvedValue(new ArrayBuffer(4));
-    expect(await imageUrl("0123456789abcdef.gif")).toBe("blob:1");
-    expect(await imageUrl("0123456789abcdef.gif")).toBe("blob:1");
+  it("reads an image once while it is used, frees its blob URL when the last use ends, and reads it again after a failure", async () => {
+    const made: Blob[] = [];
+    const revoked: string[] = [];
+    vi.stubGlobal("URL", { createObjectURL: (b: Blob) => (made.push(b), `blob:${made.length}`), revokeObjectURL: (u: string) => revoked.push(u) });
+    api.themeImage.mockReset().mockResolvedValue(new ArrayBuffer(4));
+    const gif = "0123456789abcdef.gif";
+    expect(await holdImage(gif)).toBe("blob:1");
+    expect(await holdImage(gif)).toBe("blob:1");
     expect(api.themeImage).toHaveBeenCalledTimes(1);
-    expect(blobs[0].type).toBe("image/gif");
-    api.themeImage.mockRejectedValueOnce("The theme image 1111111111111111.png is missing: choose it again");
-    await expect(imageUrl("1111111111111111.png")).rejects.toMatch(/missing/);
-    expect(await imageUrl("1111111111111111.png")).toBe("blob:2");
-    expect(blobs[1].type).toBe("image/png");
+    expect(made[0].type).toBe("image/gif");
+    releaseImage(gif);
+    await Promise.resolve();
+    expect(revoked).toEqual([]);
+    releaseImage(gif);
+    await new Promise((r) => setTimeout(r));
+    expect(revoked).toEqual(["blob:1"]);
+    // Used again: read again
+    expect(await holdImage(gif)).toBe("blob:2");
+    expect(api.themeImage).toHaveBeenCalledTimes(2);
+    releaseImage(gif);
+    releaseImage(gif);
+    const png = "1111111111111111.png";
+    api.themeImage.mockRejectedValueOnce(`The theme image ${png} is missing: choose it again`);
+    await expect(holdImage(png)).rejects.toMatch(/missing/);
+    expect(await holdImage(png)).toBe("blob:3");
+    expect(made[2].type).toBe("image/png");
     vi.unstubAllGlobals();
+  });
+  it("freezes only a GIF or a WebP: a PNG or JPEG is drawn as it is", () => {
+    expect(["a.gif", "a.webp", "a.png", "a.jpg"].map(mayMove)).toEqual([true, true, false, false]);
   });
 });

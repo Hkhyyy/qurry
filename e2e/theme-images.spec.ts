@@ -146,6 +146,15 @@ test.describe("with Reduce motion on", () => {
     // and nothing yet where the late frames draw it: the badge's green
     expect(at[4]).toBeLessThan(100);
   });
+  test("a PNG is drawn as it is, never re-encoded into a still", async ({ page }) => {
+    await openInTheme(page, "custom-1", pictures({ background: { file: RIDGES, opacity: 15, fill: "cover", anchor: "center" } }));
+    await treeItem(page, "users").first().dblclick();
+    await expect(windowLayer(page)).toHaveCount(1);
+    const src = await windowLayer(page).evaluate((e) => getComputedStyle(e).backgroundImage.slice(5, -2));
+    // The mock's PNG file, byte for byte (a still would be a canvas copy)
+    const size = await page.evaluate(async (u) => (await (await fetch(u)).arrayBuffer()).byteLength, src);
+    expect(size).toBe(10949);
+  });
 });
 
 test("Export… leaves the images out and Import… says theme files don't include them", async ({ page }) => {

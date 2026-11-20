@@ -2,14 +2,14 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import { sharedOr, useSharedReady } from "../../lib/shared";
 import { TOKENS, useThemeState, type Palette, type ThemeWarning } from "../../lib/theme";
 import { api } from "../../lib/api";
-import { ANCHORS, backdropStyle, CORNERS, FILLS, imageUrl, newBackgroundSlot, newCornerSlot, opacityCap, SIZE_MAX, SIZE_MIN, stickerStyle, stillFrame, warningsOver, type BackgroundSlot, type CornerSlot, type Fill, type ThemeImages } from "../../lib/themeImages";
+import { ANCHORS, backdropStyle, CORNERS, FILLS, holdImage, mayMove, newBackgroundSlot, newCornerSlot, opacityCap, releaseImage, SIZE_MAX, SIZE_MIN, stickerStyle, stillFrame, warningsOver, type BackgroundSlot, type CornerSlot, type Fill, type ThemeImages } from "../../lib/themeImages";
 import { Button, cx, Named, Select } from "../../ui";
 
 // Settings › Appearance › Theme › Edit Colors… › Images (#202, a mockup until it goes into the editor): two slots, each optional with
 // its own image, both can be on. Background (ThemeBackdrop): faint behind the SQL editor and the result grid, drawn as it is
 // (DataGrip's), with the colors that fall below their contrast minimum over it counted, never changed. Corner (ThemeSticker): scaled
 // down in front of the window, under every menu, dialog and popup, clicks passing through. GIF and animated WebP play in each slot and
-// stop on their first frame while motion is paused (useImageSrc). The TUI ignores them
+// stop on their first frame while motion is paused (useThemeImage). The TUI ignores them
 
 const LABEL = Object.fromEntries(TOKENS.map((t) => [t.key, t.label.split(",")[0]]));
 const POS_LABEL = (a: string) => (a === "center" ? "Center" : a.replace(/^(\w+) (\w+)$/, "$2 $1").replace("center", "middle").replace(/^\w/, (c) => c.toUpperCase()));
@@ -32,31 +32,35 @@ function useMotionPaused(): boolean {
   return paused;
 }
 
-/** A theme image's URL to draw ("" until it is ready): the file's blob URL, or its first frame as a still while motion is paused (or
- *  still is set: a story's Reduce motion). Nothing is drawn until the still is ready, so an animation never plays for a moment */
+/** A theme image's URL to draw ("" until it is ready): the file's blob URL, or, for a GIF or WebP while motion is paused (or still is
+ *  set: a story's Reduce motion), its first frame as a still. Nothing is drawn until the still is ready, so an animation never plays
+ *  for a moment; a PNG or JPEG is never re-encoded. The file is used while this is mounted (freed after) */
 function useThemeImage(file: string | undefined, still?: boolean): { url: string; error?: string } {
-  const paused = useMotionPaused() || !!still;
+  const paused = (useMotionPaused() || !!still) && !!file && mayMove(file);
   const [src, setSrc] = useState<{ file: string; url: string; error?: string } | null>(null);
-  const [frame, setFrame] = useState<{ src: string; url: string } | null>(null);
+  const [frame, setFrame] = useState<{ file: string; url: string } | null>(null);
   useEffect(() => {
     if (!file) return;
     let live = true;
-    imageUrl(file).then(
+    holdImage(file).then(
       (url) => live && setSrc({ file, url }),
       (e) => live && setSrc({ file, url: "", error: String(e) }),
     );
-    return () => void (live = false);
+    return () => {
+      live = false;
+      releaseImage(file);
+    };
   }, [file]);
   const url = src && src.file === file ? src.url : "";
   useEffect(() => {
-    if (!paused || !url) return;
+    if (!paused || !url || !file) return;
     let live = true;
-    stillFrame(url).then((f) => live && setFrame({ src: url, url: f }), () => {});
+    stillFrame(file).then((f) => live && setFrame({ file, url: f }), () => {});
     return () => void (live = false);
   }, [url, paused]);
   if (!file) return { url: "" };
   if (src?.file === file && src.error) return { url: "", error: src.error };
-  return { url: paused ? (frame?.src === url ? frame.url : "") : url };
+  return { url: paused ? (frame?.file === file ? frame.url : "") : url };
 }
 
 /** still: a story's Reduce motion (the first frame) */
