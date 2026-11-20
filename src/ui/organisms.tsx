@@ -6,7 +6,7 @@ import { Children, CSSProperties, FocusEvent, HTMLAttributes, InputHTMLAttribute
 import { Button, Checkbox, IconButton, Spacer, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { DetailRow, EmptyState, ListItem, MenuItem, MenuLabel, MenuSeparator, SearchField, SectionTitle } from "./molecules";
-import { clampDrag, listKey, matchOptions, placePopup } from "./popup";
+import { clampDrag, listKey, matchOptions, placePopup, topOf } from "./popup";
 
 // ───────── Toolbar ─────────
 export function Toolbar({ children, className, ...rest }: HTMLAttributes<HTMLDivElement>) {
@@ -99,14 +99,15 @@ export function Modal(p: {
   useEffect(() => {
     if (box.current && !box.current.contains(document.activeElement)) box.current.focus();
   }, []);
-  // Esc closes the top window also when nothing has the focus (the focused button went away, e.g. one that switched the page)
+  // Esc closes the top window also when nothing has the focus (the focused button went away, e.g. one that switched the page): the one
+  // in the highest layer (a confirm over a dialog), then the last opened
   const close = useRef(p.onClose);
   close.current = p.onClose;
   useEffect(() => {
     const key = (e: globalThis.KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || (document.activeElement && document.activeElement !== document.body)) return;
-      const open = document.querySelectorAll(".ui-modal[aria-modal='true']");
-      if (open[open.length - 1] !== box.current) return;
+      const open = [...document.querySelectorAll<HTMLElement>(".ui-modal[aria-modal='true']")];
+      if (topOf(open, (m) => Number(getComputedStyle(m.parentElement ?? m).zIndex) || 0) !== box.current) return;
       e.preventDefault();
       close.current();
     };
