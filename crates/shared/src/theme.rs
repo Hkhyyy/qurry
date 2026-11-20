@@ -70,19 +70,36 @@ pub struct CustomTheme {
     pub images: ThemeImages,
 }
 
-/// A custom theme's images, each slot optional: Background, faint behind the GUI's SQL editor and result grid; Corner, scaled down
+/// A custom theme's images, each slot optional, and when animated ones play: Background, faint behind the GUI's SQL editor and result grid; Corner, scaled down
 /// in front of the window. `file` is a name in the config folder's theme-images (image_name_ok)
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ThemeImages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<BackgroundImage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corner: Option<CornerImage>,
+    /// When animated images play, one of PLAYS: "focused" (the default; a theme saved without it reads so) stops them on their first
+    /// frame while Qurry isn't the active window, "always" doesn't. Reduce motion stops them either way
+    #[serde(default = "play_focused")]
+    pub play: String,
 }
 
+impl Default for ThemeImages {
+    fn default() -> Self {
+        Self { background: None, corner: None, play: play_focused() }
+    }
+}
+
+fn play_focused() -> String {
+    "focused".into()
+}
+
+pub const PLAYS: [&str; 2] = ["focused", "always"];
+
 impl ThemeImages {
+    /// Nothing to keep: no image and the default play
     pub fn is_empty(&self) -> bool {
-        self.background.is_none() && self.corner.is_none()
+        self.background.is_none() && self.corner.is_none() && self.play == "focused"
     }
     /// The image files the theme uses
     pub fn files(&self) -> impl Iterator<Item = &str> {
@@ -233,6 +250,9 @@ fn check_images(i: &ThemeImages) -> Result<(), String> {
     if i.corner.as_ref().is_some_and(|c| !corner_ok(c)) {
         return Err("The corner image's corner, size or opacity isn't one Qurry knows".into());
     }
+    if !PLAYS.contains(&i.play.as_str()) {
+        return Err(format!("\"play\" is \"{}\": it is \"focused\" or \"always\"", i.play));
+    }
     Ok(())
 }
 
@@ -240,8 +260,8 @@ fn check_images(i: &ThemeImages) -> Result<(), String> {
 fn slot_from_value(images: &serde_json::Value, key: &str) -> Option<ThemeImages> {
     let v = images.get(key)?.clone();
     match key {
-        "background" => serde_json::from_value(v).ok().filter(background_ok).map(|b| ThemeImages { background: Some(b), corner: None }),
-        "corner" => serde_json::from_value(v).ok().filter(corner_ok).map(|c| ThemeImages { background: None, corner: Some(c) }),
+        "background" => serde_json::from_value(v).ok().filter(background_ok).map(|b| ThemeImages { background: Some(b), ..Default::default() }),
+        "corner" => serde_json::from_value(v).ok().filter(corner_ok).map(|c| ThemeImages { corner: Some(c), ..Default::default() }),
         _ => None,
     }
 }
@@ -252,9 +272,11 @@ pub fn custom_from_value(v: &serde_json::Value) -> Option<CustomTheme> {
     let mut plain = v.clone();
     let images = plain.as_object_mut()?.remove("images").unwrap_or_default();
     let mut t: CustomTheme = serde_json::from_value(plain).ok()?;
+    let play = images.get("play").and_then(|p| p.as_str()).filter(|p| PLAYS.contains(p)).unwrap_or("focused");
     t.images = ThemeImages {
         background: slot_from_value(&images, "background").and_then(|i| i.background),
         corner: slot_from_value(&images, "corner").and_then(|i| i.corner),
+        play: play.into(),
     };
     check(&t).is_ok().then_some(t)
 }
@@ -270,12 +292,14 @@ pub fn custom_to_value(old: Option<&serde_json::Value>, t: &CustomTheme) -> serd
     let mut images = new.get("images").and_then(|i| i.as_object().cloned()).unwrap_or_default();
     if let Some(old_images) = old.and_then(|o| o.get("images")).and_then(|i| i.as_object()) {
         for (k, v) in old_images {
-            if !images.contains_key(k) && slot_from_value(&serde_json::Value::Object(old_images.clone()), k).is_none() {
+            // A play this version doesn't know was read as the default: kept unless changed
+            let unknown_play = k == "play" && !v.as_str().is_some_and(|p| PLAYS.contains(&p)) && t.images.play == "focused";
+            if unknown_play || (k != "play" && !images.contains_key(k) && slot_from_value(&serde_json::Value::Object(old_images.clone()), k).is_none()) {
                 images.insert(k.clone(), v.clone());
             }
         }
     }
-    if images.is_empty() {
+    if images.keys().all(|k| k == "play") && images.get("play").is_none_or(|p| p == "focused") {
         entry.remove("images");
     } else {
         entry.insert("images".into(), images.into());
@@ -459,13 +483,22 @@ pub struct FileCorner {
     pub opacity: u8,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileImages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<FileBackground>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corner: Option<FileCorner>,
+    /// As ThemeImages::play; checked by the importer
+    #[serde(default = "play_focused")]
+    pub play: String,
+}
+
+impl Default for FileImages {
+    fn default() -> Self {
+        Self { background: None, corner: None, play: play_focused() }
+    }
 }
 
 impl BackgroundImage {
@@ -652,7 +685,7 @@ mod tests {
         let t = CustomTheme { id: "custom-1".into(), name: "Pics".into(), base: "dark".into(), colors: [("bg".into(), "#101010".into())].into(), ..Default::default() };
         let bg = BackgroundImage { file: "0123456789abcdef.png".into(), opacity: 20, fill: "contain".into(), anchor: "right bottom".into(), span: "pane".into() };
         let cn = CornerImage { file: "fedcba9876543210.gif".into(), corner: "left top".into(), size: 30, opacity: 90 };
-        let images = FileImages { background: Some(bg.to_file("png", "iVBORw0K".into())), corner: Some(cn.to_file("gif", "R0lGODlh".into())) };
+        let images = FileImages { background: Some(bg.to_file("png", "iVBORw0K".into())), corner: Some(cn.to_file("gif", "R0lGODlh".into())), ..Default::default() };
         let text = file_text(&t, Some(&images));
         // Never the local file names
         assert!(!text.contains("0123456789abcdef") && !text.contains("fedcba9876543210"), "{text}");
@@ -801,6 +834,7 @@ mod tests {
         let images = ThemeImages {
             background: Some(BackgroundImage { file: "0123456789abcdef.png".into(), opacity: 15, fill: "cover".into(), anchor: "right bottom".into(), span: "pane".into() }),
             corner: Some(CornerImage { file: "fedcba9876543210.gif".into(), corner: "right bottom".into(), size: 20, opacity: 100 }),
+            ..Default::default()
         };
         let t = CustomTheme { id: "custom-1".into(), name: "Pics".into(), base: "dark".into(), colors: BTreeMap::new(), images: images.clone() };
         assert_eq!(check(&t), Ok(()));
@@ -818,13 +852,13 @@ mod tests {
         let with = |i: ThemeImages| check(&CustomTheme { images: i, ..t.clone() });
         let bg = images.background.clone().unwrap();
         let cn = images.corner.clone().unwrap();
-        assert!(with(ThemeImages { background: Some(BackgroundImage { file: "../x.png".into(), ..bg.clone() }), corner: None }).unwrap_err().contains("file name"));
-        assert!(with(ThemeImages { background: Some(BackgroundImage { opacity: 101, ..bg.clone() }), corner: None }).is_err());
-        assert!(with(ThemeImages { background: Some(BackgroundImage { fill: "stretch".into(), ..bg.clone() }), corner: None }).is_err());
-        assert!(with(ThemeImages { background: Some(BackgroundImage { anchor: "middle".into(), ..bg }), corner: None }).is_err());
-        assert!(with(ThemeImages { background: None, corner: Some(CornerImage { size: 41, ..cn.clone() }) }).is_err());
-        assert!(with(ThemeImages { background: None, corner: Some(CornerImage { size: 9, ..cn.clone() }) }).is_err());
-        assert!(with(ThemeImages { background: None, corner: Some(CornerImage { corner: "center".into(), ..cn }) }).is_err());
+        assert!(with(ThemeImages { background: Some(BackgroundImage { file: "../x.png".into(), ..bg.clone() }), corner: None, ..Default::default() }).unwrap_err().contains("file name"));
+        assert!(with(ThemeImages { background: Some(BackgroundImage { opacity: 101, ..bg.clone() }), corner: None, ..Default::default() }).is_err());
+        assert!(with(ThemeImages { background: Some(BackgroundImage { fill: "stretch".into(), ..bg.clone() }), corner: None, ..Default::default() }).is_err());
+        assert!(with(ThemeImages { background: Some(BackgroundImage { anchor: "middle".into(), ..bg }), corner: None, ..Default::default() }).is_err());
+        assert!(with(ThemeImages { background: None, corner: Some(CornerImage { size: 41, ..cn.clone() }), ..Default::default() }).is_err());
+        assert!(with(ThemeImages { background: None, corner: Some(CornerImage { size: 9, ..cn.clone() }), ..Default::default() }).is_err());
+        assert!(with(ThemeImages { background: None, corner: Some(CornerImage { corner: "center".into(), ..cn }), ..Default::default() }).is_err());
     }
 
 
@@ -885,7 +919,37 @@ mod tests {
         let t = custom_from_value(&later).unwrap();
         assert!(t.images.background.is_none());
         assert_eq!(custom_to_value(Some(&later), &t)["images"]["background"]["span"], "window");
-        assert!(check(&CustomTheme { images: ThemeImages { background: Some(BackgroundImage { span: "window".into(), ..pane.images.background.clone().unwrap() }), corner: None }, ..pane.clone() }).is_err());
+        assert!(check(&CustomTheme { images: ThemeImages { background: Some(BackgroundImage { span: "window".into(), ..pane.images.background.clone().unwrap() }), corner: None, ..Default::default() }, ..pane.clone() }).is_err());
+    }
+
+
+    #[test]
+    fn animated_images_play_while_focused_unless_the_theme_says_always() {
+        let entry = |images: &str| serde_json::from_str::<serde_json::Value>(&format!(r#"{{"id": "custom-1", "name": "A", "base": "dark", "images": {images}}}"#)).unwrap();
+        let corner = r#""corner": {"file": "fedcba9876543210.gif", "corner": "right bottom", "size": 20, "opacity": 100}"#;
+        // Saved without it: while focused
+        assert_eq!(custom_from_value(&entry(&format!("{{{corner}}}"))).unwrap().images.play, "focused");
+        let always = custom_from_value(&entry(&format!(r#"{{{corner}, "play": "always"}}"#))).unwrap();
+        assert_eq!(always.images.play, "always");
+        // Round trip, and kept with no image left (the value stays)
+        let back = custom_to_value(None, &always);
+        assert_eq!(back["images"]["play"], "always");
+        assert_eq!(custom_from_value(&back).unwrap(), always);
+        let none = CustomTheme { images: ThemeImages { play: "always".into(), ..Default::default() }, ..always.clone() };
+        assert_eq!(custom_to_value(None, &none)["images"], serde_json::json!({ "play": "always" }));
+        assert!(custom_to_value(None, &CustomTheme { images: ThemeImages::default(), ..always.clone() }).get("images").is_none());
+        // A value this version doesn't know: read as the default, kept in the file unless changed
+        let later = entry(&format!(r#"{{{corner}, "play": "on-hover"}}"#));
+        let t = custom_from_value(&later).unwrap();
+        assert_eq!((t.images.play.as_str(), t.images.corner.is_some()), ("focused", true));
+        assert_eq!(custom_to_value(Some(&later), &t)["images"]["play"], "on-hover");
+        assert_eq!(custom_to_value(Some(&later), &CustomTheme { images: ThemeImages { play: "always".into(), ..t.images.clone() }, ..t.clone() })["images"]["play"], "always");
+        assert!(check(&CustomTheme { images: ThemeImages { play: "on-hover".into(), ..t.images.clone() }, ..t.clone() }).is_err());
+        // A theme file carries it (version 2)
+        let file = file_text(&t, Some(&FileImages { play: "always".into(), corner: Some(t.images.corner.clone().unwrap().to_file("gif", "R0lGODlh".into())), ..Default::default() }));
+        assert_eq!(parse_file(&file).unwrap().1.play, "always");
+        let without = file_text(&t, Some(&FileImages { corner: Some(t.images.corner.clone().unwrap().to_file("gif", "R0lGODlh".into())), ..Default::default() })).replace(",\n    \"play\": \"focused\"", "");
+        assert_eq!(parse_file(&without).unwrap().1.play, "focused");
     }
 
 }

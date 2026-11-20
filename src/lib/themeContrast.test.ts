@@ -25,10 +25,10 @@ describe("theme contrast (WASM)", () => {
   });
   it("refuses theme files that aren't one, saying why", () => {
     const ok = shared().parseThemeFile(JSON.stringify({ qurryTheme: 1, name: "Mine", base: "dracula", colors: { bg: "#101010" } }));
-    expect(ok).toEqual({ theme: { id: "", name: "Mine", base: "dracula", colors: { bg: "#101010" } }, images: {} });
+    expect(ok).toEqual({ theme: { id: "", name: "Mine", base: "dracula", colors: { bg: "#101010" } }, images: { play: "focused" } });
     expect(shared().parseThemeFile(shared().themeFileText({ ...ok.theme, name: "Again" })).theme.name).toBe("Again");
     // With images: version 2, the images as written
-    const images = { corner: { type: "gif", data: "R0lGODlh", corner: "left top", size: 20, opacity: 100 } };
+    const images = { corner: { type: "gif", data: "R0lGODlh", corner: "left top", size: 20, opacity: 100 }, play: "always" };
     const v2 = shared().themeFileText(ok.theme, images);
     expect(JSON.parse(v2).qurryTheme).toBe(2);
     expect(shared().parseThemeFile(v2).images).toEqual(images);

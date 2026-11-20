@@ -118,7 +118,7 @@ export function ThemeEditor({ start, onBack, onDirty, commit }: { start: string;
     setEditing(c ? c.id : null);
     setMsg(t?.custom ? { tone: "ok", text: `Changing "${t.name}": Save replaces it` } : null);
   };
-  const theme = (as = name): CustomTheme => ({ id: "", name: as.trim(), base: baseId, colors: Object.fromEntries(changed.map((k) => [k, over[k]])), ...(hasImages && { images }) });
+  const theme = (as = name): CustomTheme => ({ id: "", name: as.trim(), base: baseId, colors: Object.fromEntries(changed.map((k) => [k, over[k]])), ...((hasImages || images.play === "always") && { images }) });
   /** Save (as new, or over the theme being changed) under the name field's name, or `as`; whether it was saved (else the message
    *  says why) */
   const save = async (asNew: boolean, as?: string): Promise<boolean> => {

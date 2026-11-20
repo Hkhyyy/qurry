@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import TABLE from "../../crates/shared/src/themes.json";
 import { shared } from "./shared";
-import { backdropStyle, holdImage, TINTS, mayMove, mixHex, releaseImage, newBackgroundSlot, newCornerSlot, opacityCap, sameImages, stickerStyle, warningsOver } from "./themeImages";
+import { backdropStyle, holdImage, motionPaused, TINTS, mayMove, mixHex, releaseImage, newBackgroundSlot, newCornerSlot, opacityCap, sameImages, stickerStyle, warningsOver } from "./themeImages";
 
 const api = vi.hoisted(() => ({ themeImage: vi.fn() }));
 vi.mock("./api", () => ({ api }));
@@ -97,6 +97,13 @@ describe("theme background image", () => {
     expect(await holdImage("2222222222222222.apng")).toBe("blob:4");
     expect(made[3].type).toBe("image/apng");
     vi.unstubAllGlobals();
+  });
+  it("stops animated images with Reduce motion whatever the theme says, and while unfocused unless the theme plays them always", () => {
+    expect(motionPaused(false, true, undefined)).toBe(false);
+    expect(motionPaused(false, false, undefined)).toBe(true);
+    expect(motionPaused(false, false, "focused")).toBe(true);
+    expect(motionPaused(false, false, "always")).toBe(false);
+    for (const play of [undefined, "focused", "always"] as const) for (const focused of [true, false]) expect(motionPaused(true, focused, play)).toBe(true);
   });
   it("freezes only a GIF or a WebP: a PNG or JPEG is drawn as it is", () => {
     expect(["a.gif", "a.webp", "a.apng", "a.png", "a.jpg"].map(mayMove)).toEqual([true, true, true, false, false]);

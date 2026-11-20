@@ -45,11 +45,21 @@ export interface CornerSlot {
   size: number;
   opacity: number;
 }
-/** A theme's images: either slot, both or none */
+/** When animated images play: "focused" (the default) stops them on their first frame while Qurry isn't the active window */
+export type Play = "focused" | "always";
+export const PLAYS: { id: Play; label: string }[] = [
+  { id: "focused", label: "While focused" },
+  { id: "always", label: "Always" },
+];
+/** A theme's images: either slot, both or none, and when animated ones play (one setting for both) */
 export interface ThemeImages {
   background?: BackgroundSlot;
   corner?: CornerSlot;
+  play?: Play;
 }
+/** An animated image stops on its first frame: always with the system's Reduce motion (an accessibility setting), and while the window
+ *  isn't focused unless the theme plays them always */
+export const motionPaused = (reduceMotion: boolean, focused: boolean, play?: Play) => reduceMotion || (!focused && play !== "always");
 /** Two themes' images are the same, whatever order their fields come in (settings.json writes them in its own) */
 export function sameImages(a: ThemeImages | undefined, b: ThemeImages | undefined): boolean {
   const key = (i: ThemeImages | undefined) => JSON.stringify(i ?? {}, (_, v) => (v && typeof v === "object" ? Object.fromEntries(Object.entries(v).sort()) : v));

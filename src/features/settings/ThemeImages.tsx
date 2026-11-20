@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import { sharedOr, useSharedReady } from "../../lib/shared";
 import { TOKENS, useThemeState, type Palette, type ThemeWarning } from "../../lib/theme";
 import { api } from "../../lib/api";
-import { ANCHORS, backdropStyle, CORNERS, FILLS, holdImage, mayMove, newBackgroundSlot, newCornerSlot, opacityCap, releaseImage, SIZE_MAX, SIZE_MIN, SPANS, stickerStyle, stillFrame, warningsOver, type BackgroundSlot, type CornerSlot, type Fill, type Span, type ThemeImages } from "../../lib/themeImages";
+import { ANCHORS, backdropStyle, motionPaused, PLAYS, type Play, CORNERS, FILLS, holdImage, mayMove, newBackgroundSlot, newCornerSlot, opacityCap, releaseImage, SIZE_MAX, SIZE_MIN, SPANS, stickerStyle, stillFrame, warningsOver, type BackgroundSlot, type CornerSlot, type Fill, type Span, type ThemeImages } from "../../lib/themeImages";
 import { Button, cx, Named, Select } from "../../ui";
 
 // Settings › Appearance › Theme › Edit Colors… › Images (#202, a mockup until it goes into the editor): two slots, each optional with
@@ -14,12 +14,14 @@ import { Button, cx, Named, Select } from "../../ui";
 const LABEL = Object.fromEntries(TOKENS.map((t) => [t.key, t.label.split(",")[0]]));
 const POS_LABEL = (a: string) => (a === "center" ? "Center" : a.replace(/^(\w+) (\w+)$/, "$2 $1").replace("center", "middle").replace(/^\w/, (c) => c.toUpperCase()));
 
-/** Motion is paused while the system's Reduce motion is on or the window isn't the active one */
+/** Motion is paused while the system's Reduce motion is on, or the window isn't the active one and the theme in use (the editor's draft
+ *  while it is open) plays animated images only while focused */
 function useMotionPaused(): boolean {
   const media = useMemo(() => window.matchMedia("(prefers-reduced-motion: reduce)"), []);
-  const [paused, setPaused] = useState(() => media.matches || !document.hasFocus());
+  const play = useThemeState().current.images?.play;
+  const [state, setState] = useState(() => ({ reduce: media.matches, focused: document.hasFocus() }));
   useEffect(() => {
-    const update = () => setPaused(media.matches || !document.hasFocus());
+    const update = () => setState({ reduce: media.matches, focused: document.hasFocus() });
     media.addEventListener("change", update);
     window.addEventListener("focus", update);
     window.addEventListener("blur", update);
@@ -29,7 +31,7 @@ function useMotionPaused(): boolean {
       window.removeEventListener("blur", update);
     };
   }, [media]);
-  return paused;
+  return motionPaused(state.reduce, state.focused, play);
 }
 
 /** A theme image's URL to draw ("" until it is ready): the file's blob URL, or, for a GIF or WebP while motion is paused (or still is
@@ -263,6 +265,21 @@ export function ThemeImagesSection({ images, p, onChange, newTheme }: { images: 
         )}
         <PeekButton />
       </div>
+      {/* Only with an animated image; the value is kept when there is none */}
+      {[bg?.file, cn?.file].some((f) => f && mayMove(f)) && (
+        <div className="theme-bg-row">
+          <Named about="Play" info={["While focused: animated images stop on their first frame while Qurry isn't the active window, which saves battery.", "Always: they keep playing.", "With the system's Reduce motion on they show their first frame either way."]}>
+            Play
+          </Named>
+          <Select aria-label="Play" value={images.play ?? "focused"} onChange={(e) => onChange({ ...images, play: e.target.value as Play })}>
+            {PLAYS.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.label}
+              </option>
+            ))}
+          </Select>
+        </div>
+      )}
       <Slot
         name="Background"
         info={["Faint behind the SQL editor and the result grid."]}

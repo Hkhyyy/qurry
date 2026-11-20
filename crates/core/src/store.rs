@@ -1113,6 +1113,11 @@ impl Store {
         let (mut theme, images) = theme::parse_file(&fs::read_to_string(path)?).map_err(AppError::Msg)?;
         let mut dropped = Vec::new();
         const SETTINGS: &str = "settings aren't ones Qurry knows";
+        if theme::PLAYS.contains(&images.play.as_str()) {
+            theme.images.play = images.play.clone();
+        } else {
+            dropped.push("When animated images play isn't a setting Qurry knows: while focused".to_string());
+        }
         if let Some(b) = images.background {
             match self.file_image(&b.kind, &b.data, "The background image") {
                 Ok(file) => match b.slot(file) {
@@ -1161,10 +1166,10 @@ impl Store {
             let ext = file.rsplit_once('.').map(|(_, e)| e.to_string()).unwrap_or_default();
             Ok((ext, base64::engine::general_purpose::STANDARD.encode(self.theme_image(file)?)))
         };
-        let images = if t.images.is_empty() {
+        let images = if t.images.background.is_none() && t.images.corner.is_none() {
             None
         } else {
-            let mut i = theme::FileImages::default();
+            let mut i = theme::FileImages { play: t.images.play.clone(), ..Default::default() };
             if let Some(b) = &t.images.background {
                 let (ext, d) = data(&b.file)?;
                 i.background = Some(b.to_file(&ext, d));
@@ -1261,6 +1266,7 @@ mod tests {
         let images = ThemeImages {
             background: Some(BackgroundImage { file: bg.clone(), opacity: 15, fill: "contain".into(), anchor: "right bottom".into(), span: "pane".into() }),
             corner: Some(CornerImage { file: corner.clone(), corner: "right bottom".into(), size: 20, opacity: 100 }),
+            ..Default::default()
         };
         let pics = store.save_custom_theme(&CustomTheme { name: "Pics".into(), base: "dark".into(), images: images.clone(), ..Default::default() }).unwrap();
         let plain = store.save_custom_theme(&CustomTheme { name: "Plain".into(), base: "light".into(), ..Default::default() }).unwrap();
@@ -1334,7 +1340,9 @@ mod tests {
         let images = ThemeImages {
             background: Some(BackgroundImage { file: pick("big.png", &png), opacity: 20, fill: "contain".into(), anchor: "right bottom".into(), span: "pane".into() }),
             corner: Some(CornerImage { file: pick("small.gif", &gif), corner: "left top".into(), size: 30, opacity: 90 }),
+            ..Default::default()
         };
+        let images = ThemeImages { play: "always".into(), ..images };
         let t = CustomTheme { name: "Pics".into(), base: "dark".into(), colors: [("bg".into(), "#101010".into())].into(), images: images.clone(), ..Default::default() };
         let file = from.path().join("pics.json");
         a.write_theme_file(&file, &t).unwrap();

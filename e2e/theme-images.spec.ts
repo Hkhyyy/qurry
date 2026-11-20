@@ -239,7 +239,7 @@ test("Export… carries the images (version 2) and Import… on another computer
   const text: string = await page.evaluate(() => (window as any).__mockThemeExported);
   const file = JSON.parse(text);
   expect(file.qurryTheme).toBe(2);
-  expect(Object.keys(file.images)).toEqual(["background", "corner"]);
+  expect(Object.keys(file.images).sort()).toEqual(["background", "corner", "play"]);
   expect(file.images.background).toMatchObject({ type: "png", opacity: 25, fill: "contain", anchor: "right bottom", span: "pane" });
   // Never the local file names
   expect(text).not.toContain(RIDGES);
@@ -357,4 +357,54 @@ test("Span switches live in the editor and OK keeps it", async ({ page }) => {
   await expect(layers(page)).toHaveCount(2);
   await openEditor(page);
   await expect(slot(page, "Background").getByRole("combobox", { name: "Span" })).toHaveValue("pane");
+});
+
+// When animated images play (one setting per theme): while focused (the default) or always; Reduce motion stops them either way
+const blobType = (page: Page, src: string) => page.evaluate(async (u) => (await (await fetch(u)).blob()).type, src);
+const blur = (page: Page) =>
+  page.evaluate(() => {
+    Object.defineProperty(document, "hasFocus", { value: () => false, configurable: true });
+    window.dispatchEvent(new Event("blur"));
+  });
+for (const play of ["focused", "always"] as const) {
+  test(`play ${play}: with the window not focused the animated image ${play === "always" ? "keeps playing" : "stops on its first frame"}`, async ({ page }) => {
+    await openInTheme(page, "custom-1", pictures({ corner: CORNER, play }));
+    await expect(windowSticker(page)).toBeVisible();
+    const before = (await windowSticker(page).getAttribute("src"))!;
+    expect(await blobType(page, before)).toBe("image/gif");
+    await blur(page);
+    if (play === "always") {
+      await page.waitForTimeout(500);
+      expect(await windowSticker(page).getAttribute("src")).toBe(before);
+    } else {
+      await expect.poll(async () => blobType(page, (await windowSticker(page).getAttribute("src"))!)).toBe("image/png");
+    }
+  });
+}
+
+test.describe("Reduce motion with play always", () => {
+  test.use({ reducedMotion: "reduce" });
+  test("the animated image shows its first frame anyway", async ({ page }) => {
+    await openInTheme(page, "custom-1", pictures({ corner: CORNER, play: "always" }));
+    await expect(windowSticker(page)).toBeVisible();
+    expect(await blobType(page, (await windowSticker(page).getAttribute("src"))!)).toBe("image/png");
+  });
+});
+
+test("Play shows with an animated image only, applies live, and OK keeps it", async ({ page }) => {
+  await openInTheme(page, "custom-1", pictures({ background: { file: RIDGES, opacity: 15, fill: "cover", anchor: "center", span: "area" } }));
+  await openEditor(page);
+  await expect(dialog(page).getByRole("combobox", { name: "Play" })).toHaveCount(0);
+  await pickNext(page, "beacon.gif");
+  await slot(page, "Corner").getByRole("button", { name: "Choose Corner image" }).click();
+  const play = dialog(page).getByRole("combobox", { name: "Play" });
+  await expect(play).toHaveValue("focused");
+  await play.selectOption("always");
+  // Live: the window behind Settings keeps the GIF playing when the window isn't focused
+  await blur(page);
+  await page.waitForTimeout(500);
+  expect(await blobType(page, (await windowSticker(page).getAttribute("src"))!)).toBe("image/gif");
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await expect.poll(async () => (await saved(page)).custom[0].images.play).toBe("always");
 });
