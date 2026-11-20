@@ -254,3 +254,19 @@ test("OK saves an image picked while editing a saved custom theme; it is there w
   await openEditor(page);
   await expect(slot(page, "Background")).toContainText("PNG image");
 });
+
+test("started from a built-in theme, Images says it is saved with a new custom theme (its ⓘ how); a custom theme being changed says nothing", async ({ page }) => {
+  await openApp(page);
+  await openEditor(page);
+  const title = dialog(page).locator(".theme-bg-bar-title");
+  await expect(title).toContainText("Saved with a new custom theme");
+  await title.getByRole("button", { name: "About Theme images" }).click();
+  await expect(page.getByRole("note", { name: "About Theme images" })).toContainText("Images belong to a custom theme: OK saves these edits as a new custom theme and picks it.");
+  await page.keyboard.press("Escape");
+  // A saved custom theme
+  await openInTheme(page, "custom-1", pictures({}));
+  await openEditor(page);
+  await expect(dialog(page).locator(".theme-bg-bar-title")).not.toContainText("Saved with");
+  await dialog(page).locator(".theme-bg-bar-title").getByRole("button", { name: "About Theme images" }).click();
+  await expect(page.getByRole("note", { name: "About Theme images" })).not.toContainText("Images belong to a custom theme");
+});

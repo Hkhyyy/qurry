@@ -202,6 +202,7 @@ function Slot({ name, info, file, error, onPick, onRemove, thumb, children }: { 
   );
 }
 
+const NEW_THEME = "Images belong to a custom theme: OK saves these edits as a new custom theme and picks it.";
 const ABOUT = [
   "PNG, JPEG, WebP or GIF, each copied into the config folder and kept with the theme: up to 4 MB, 8 MB when animated. GIF and animated WebP play, and stop on their first frame while Reduce motion is on or Qurry isn't the active window.",
   "Hold Peek (or Space on it) to see the window behind Settings.",
@@ -213,7 +214,7 @@ const ABOUT = [
  * be on; Peek. Background's slider marks the opacity up to which every color keeps its minimum over the image's lightest and darkest
  * pixels; above it the colors that fall below are counted (and listed in Opacity's ⓘ), saved with their warning
  */
-export function ThemeImagesSection({ images, p, onChange }: { images: ThemeImages; p: Palette; onChange: (images: ThemeImages) => void }) {
+export function ThemeImagesSection({ images, p, onChange, newTheme }: { images: ThemeImages; p: Palette; onChange: (images: ThemeImages) => void; /** Started from a built-in theme: the images go with the new custom theme OK saves */ newTheme?: boolean }) {
   const ready = useSharedReady();
   const [errors, setErrors] = useState<{ [k in keyof ThemeImages]?: string }>({});
   /** Choose…: the picker, then the copy (checked by the core); a new image keeps the slot's settings */
@@ -238,9 +239,14 @@ export function ThemeImagesSection({ images, p, onChange }: { images: ThemeImage
   return (
     <div className="theme-bg-bar" role="group" aria-label="Theme images">
       <div className="theme-bg-bar-title">
-        <Named about="Theme images" info={ABOUT}>
+        <Named about="Theme images" info={newTheme ? [NEW_THEME, ...ABOUT] : ABOUT}>
           Images
         </Named>
+        {newTheme && (
+          <span className="theme-bg-name muted" title="Saved with a new custom theme">
+            Saved with a new custom theme
+          </span>
+        )}
         <PeekButton />
       </div>
       <Slot

@@ -279,7 +279,7 @@ export function ThemeEditor({ start, onBack, onDirty, commit }: { start: string;
           </div>
         </div>
         <div className="theme-editor-preview">
-          <ThemeImagesSection images={images} p={colors} onChange={setImages} />
+          <ThemeImagesSection images={images} p={colors} onChange={setImages} newTheme={!editing} />
           {/* One line: pointing at another color doesn't move the preview */}
           <Text size="sm" tone="muted" truncate>
             {`Preview${hot ? ` — ${LABEL[hot]}: ${TOKENS.find((t) => t.key === hot)?.desc}` : ""}`}

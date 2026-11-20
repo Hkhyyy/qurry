@@ -230,6 +230,15 @@ export const ThemeImagesEditorBackgroundOnly = bgEditor(BG);
 export const ThemeImagesEditorNoImages = bgEditor({});
 /** A saved custom theme in the smallest window (#204): the action row (Import…, Export…, Reset to base, Delete, the name, Save, Save as
  *  new theme) wraps and nothing is cut; OK saves the changes, as DataGrip's (Esc and × ask to discard them) */
+/** Started from a built-in theme (Dark): the Images header says the images are saved with a new custom theme (its ⓘ: OK saves these
+ *  edits as one and picks it); a background image picked here. A saved custom theme being changed has no such line */
+export const ThemeImagesEditorFromBuiltIn: S = {
+  render: () => <SettingsDialog initialPage="theme" onClose={noop} onUpdate={noop} onChannel={noop} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await body.findByRole("button", { name: "Choose Background image" }));
+  },
+};
 export const ThemeEditorSavedSmallWindow: S = { ...bgEditor({}), ...inSmallWindow };
 /** Peek held: Settings fades and the window behind it shows the images as they are now */
 export const ThemeImagesEditorPeek: S = {
