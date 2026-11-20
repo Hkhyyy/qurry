@@ -228,6 +228,9 @@ const CORNER: ThemeImages = { corner: SAMPLE_CORNER };
 export const ThemeImagesEditor = bgEditor(BOTH);
 export const ThemeImagesEditorBackgroundOnly = bgEditor(BG);
 export const ThemeImagesEditorNoImages = bgEditor({});
+/** A saved custom theme in the smallest window (#204): the action row (Import…, Export…, Reset to base, Delete, the name, Save, Save as
+ *  new theme) wraps and nothing is cut; OK saves the changes, as DataGrip's (Esc and × ask to discard them) */
+export const ThemeEditorSavedSmallWindow: S = { ...bgEditor({}), ...inSmallWindow };
 /** Peek held: Settings fades and the window behind it shows the images as they are now */
 export const ThemeImagesEditorPeek: S = {
   ...bgEditor(BOTH),

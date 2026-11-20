@@ -442,6 +442,14 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage }: { 
     then();
   };
   const go = (p: typeof page) => leave(() => setPage(p));
+  /** OK: the theme editor's changes are saved first (Esc, × and leaving the editor ask to discard them instead); a save that fails
+   *  keeps Settings open, its reason in the editor */
+  const themeCommit = useRef<(() => Promise<boolean>) | null>(null);
+  const ok = async () => {
+    if (page === "theme" && themeCommit.current && !(await themeCommit.current())) return;
+    themeDirty.current = false;
+    onClose();
+  };
   // Listed when Settings opens and again each time a picker opens (a font installed meanwhile shows up); empty if it can't
   // (the pickers then offer the default and the saved family)
   const [fonts, setFonts] = useState<FontFamily[] | null>(null);
@@ -488,7 +496,7 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage }: { 
       footer={
         <>
           {shown === "appearance" && <span className="ui-modal-foot-hint">Quick switch theme: {sk("theme")}</span>}
-          <Button variant="primary" onClick={() => leave(onClose)}>
+          <Button variant="primary" onClick={ok}>
             OK
           </Button>
         </>
@@ -513,7 +521,7 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage }: { 
         <ErrorBoundary key={page} scope="page">
           {page === "keymap" && <KeymapEditor />}
           {page === "passwords" && <PasswordSettings />}
-          {page === "theme" && <ThemeEditor start={currentTheme().id} onBack={() => go("appearance")} onDirty={(d) => (themeDirty.current = d)} />}
+          {page === "theme" && <ThemeEditor start={currentTheme().id} onBack={() => go("appearance")} onDirty={(d) => (themeDirty.current = d)} commit={themeCommit} />}
           {page === "appearance" && (
             <div className="settings-form">
               <ThemeField onEdit={() => setPage("theme")} />

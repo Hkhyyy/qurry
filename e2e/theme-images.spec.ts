@@ -241,3 +241,16 @@ test("Export… leaves the images out and Import… says theme files don't inclu
   await expect(message).toHaveText(/^Imported "Pictures" \(based on Dark\): theme files don't include images/);
   await expect(slot(page, "Corner")).toContainText("No image");
 });
+
+test("OK saves an image picked while editing a saved custom theme; it is there when the editor opens again", async ({ page }) => {
+  await openInTheme(page, "custom-1", pictures({}));
+  await openEditor(page);
+  await slot(page, "Background").getByRole("button", { name: "Choose Background image" }).click();
+  await expect(slot(page, "Background")).toContainText("PNG image");
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await expect.poll(async () => (await saved(page))?.custom?.[0]?.images?.background?.file).toBe(RIDGES);
+  expect((await saved(page)).custom).toHaveLength(1);
+  await openEditor(page);
+  await expect(slot(page, "Background")).toContainText("PNG image");
+});

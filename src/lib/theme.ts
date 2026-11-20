@@ -216,6 +216,15 @@ export function setThemeSync(sync: ThemeSync): Promise<void> {
   return save(api.setThemeSync(sync));
 }
 
+/** A new custom theme's name: the one typed, or "<Base> custom" (then "… 2", "… 3") when none is */
+export function customThemeName(base: string, typed: string, taken: string[]): string {
+  if (typed.trim()) return typed.trim();
+  const name = (n: number) => `${base} custom${n > 1 ? ` ${n}` : ""}`;
+  let n = 1;
+  while (taken.includes(name(n))) n++;
+  return name(n);
+}
+
 /** Add (empty id) or replace a custom theme; the saved one (with its id) */
 export async function saveCustomTheme(t: CustomTheme): Promise<CustomTheme> {
   const saved = await api.saveCustomTheme(t);

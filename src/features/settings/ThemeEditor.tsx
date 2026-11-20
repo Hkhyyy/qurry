@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../../lib/api";
 import { ask } from "../../lib/dialogs";
 import { sharedOr, useSharedReady } from "../../lib/shared";
-import { BUILT_IN, SYSTEM, TOKENS, deleteCustomTheme, findTheme, previewTheme, saveCustomTheme, setThemePick, useThemeState, type CustomTheme, type Palette, type ThemeDef, type ThemeToken, type ThemeWarning } from "../../lib/theme";
+import { BUILT_IN, SYSTEM, TOKENS, customThemeName, deleteCustomTheme, findTheme, previewTheme, saveCustomTheme, setThemePick, useThemeState, type CustomTheme, type Palette, type ThemeDef, type ThemeToken, type ThemeWarning } from "../../lib/theme";
 import { Button, cx, Named, normalizeHex, Notice, Select, Text, TextInput } from "../../ui";
 import { sameImages, type ThemeImages } from "../../lib/themeImages";
 import { ThemeImagesSection } from "./ThemeImages";
@@ -71,8 +71,8 @@ function TokenRow({ t, value, edited, warning, onHot, onChange, onReset }: { t: 
   );
 }
 
-/** start: the theme to start from (the one in use) */
-export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack: () => void; onDirty: (dirty: boolean) => void }) {
+/** start: the theme to start from (the one in use); commit: set to what Settings' OK runs (saveIfDirty) */
+export function ThemeEditor({ start, onBack, onDirty, commit }: { start: string; onBack: () => void; onDirty: (dirty: boolean) => void; commit?: { current: (() => Promise<boolean>) | null } }) {
   const { settings } = useThemeState();
   const startCustom = settings.custom.find((c) => c.id === start);
   const [baseId, setBaseId] = useState(startCustom?.base ?? (BUILT_IN.some((t) => t.id === start) ? start : "dark"));
@@ -118,10 +118,12 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
     setEditing(c ? c.id : null);
     setMsg(t?.custom ? { tone: "ok", text: `Changing "${t.name}": Save replaces it` } : null);
   };
-  const theme = (): CustomTheme => ({ id: "", name: name.trim(), base: baseId, colors: Object.fromEntries(changed.map((k) => [k, over[k]])), ...(hasImages && { images }) });
-  const save = async (asNew: boolean) => {
+  const theme = (as = name): CustomTheme => ({ id: "", name: as.trim(), base: baseId, colors: Object.fromEntries(changed.map((k) => [k, over[k]])), ...(hasImages && { images }) });
+  /** Save (as new, or over the theme being changed) under the name field's name, or `as`; whether it was saved (else the message
+   *  says why) */
+  const save = async (asNew: boolean, as?: string): Promise<boolean> => {
     try {
-      const t = await saveCustomTheme({ ...theme(), id: asNew ? "" : editing ?? "" });
+      const t = await saveCustomTheme({ ...theme(as), id: asNew ? "" : editing ?? "" });
       setEditing(t.id);
       setName(t.name);
       // Sync with OS stays on when a theme is replaced (drawn already if it is one of its two); a new one is switched to
@@ -130,10 +132,16 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
       const low = warnings.length ? ` (${warnings.length} below the contrast minimum, as warned)` : "";
       const how = !sync ? " and switched to it" : asNew ? " and switched to it: Sync with OS is off" : ", Sync with OS stays on";
       setMsg({ tone: "ok", text: `Saved "${t.name}"${how}${low}` });
+      return true;
     } catch (e) {
       setMsg({ tone: "danger", text: `Not saved: ${e}` });
+      return false;
     }
   };
+  /** Settings' OK (as DataGrip's): changes are saved, over the custom theme being changed, or from a built-in one as a new theme named
+   *  by the name field or "<Base> custom"; true when there was nothing to save or it was saved */
+  const saveIfDirty = async () => !dirty || (saved ? save(false) : save(true, customThemeName(base.name, name, settings.custom.map((c) => c.name))));
+  if (commit) commit.current = saveIfDirty;
   const remove = async () => {
     if (!saved || !(await ask(`Delete the custom theme "${saved.name}"? Where it is picked, ${base.name} takes its place (in the TUI too).`, { title: "Delete Theme", okLabel: "Delete", danger: true }))) return;
     try {

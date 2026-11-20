@@ -252,6 +252,54 @@ test("a theme the GUI kept in the webview before 0.3.2 moves to the shared setti
   expect(await page.evaluate(() => localStorage.getItem("dbtool.theme"))).toBeNull();
 });
 
+// #202: OK saves the theme editor's changes, as DataGrip's OK applies them; Esc and × ask to discard them, as leaving the editor does
+test("OK saves colors changed from a built-in theme as a new custom theme, picks it and closes Settings", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("textbox", { name: "Background, editor hex", exact: true }).fill("#101018");
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  const s = await saved(page);
+  expect(s.custom).toEqual([expect.objectContaining({ name: "Dark custom", base: "dark", colors: { bg: "#101018" } })]);
+  expect(s.theme).toBe(s.custom[0].id);
+  await expect.poll(() => drawn(page)).toMatchObject({ bg: "rgb(16, 16, 24)" });
+  // Again from Dark: the next free name
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("combobox", { name: "Based on" }).selectOption("dark");
+  await dialog(page).getByRole("textbox", { name: "Accent hex", exact: true }).fill("#7a5af8");
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  expect((await saved(page)).custom.map((c: { name: string }) => c.name)).toEqual(["Dark custom", "Dark custom 2"]);
+});
+
+test("OK with a save that fails keeps Settings open and says why", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("textbox", { name: "Background, editor hex", exact: true }).fill("#101018");
+  await page.evaluate(() => ((window as any).__mockChannelSaveFails = true));
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page).locator(".theme-editor-msg")).toHaveText(/Not saved: Couldn't save the settings: permission denied/);
+  await expect(dialog(page).locator(".theme-editor-msg")).toBeInViewport();
+  expect((await saved(page))?.custom ?? []).toEqual([]);
+  // Saved once the file can be written
+  await page.evaluate(() => ((window as any).__mockChannelSaveFails = false));
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  expect((await saved(page)).custom).toHaveLength(1);
+});
+
+// Esc and × with unsaved colors ask to discard them (the test above); with nothing changed they close at once
+test("Esc in the theme editor with nothing changed closes Settings at once", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("textbox", { name: "Theme name" }).press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+});
+
 // #204: the editor's action row wraps instead of being cut, also for a saved theme (Delete, Save) in the smallest window
 for (const theme of ["dark", "light"]) {
   test(`the theme editor's buttons, name and message all show for a saved theme at 800×500 (${theme})`, async ({ page }) => {

@@ -907,6 +907,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     saveThemeSettings({ ...themeSettings(), sync: a.sync });
   },
   save_custom_theme: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
     checkTheme(a.theme);
     const s = themeSettings();
     const t = { ...a.theme, name: a.theme.name.trim() };
