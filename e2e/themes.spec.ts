@@ -186,6 +186,28 @@ test("saving a custom theme under Sync with OS keeps Sync with OS; Save as new t
   expect((await saved(page)).theme).toBe("custom-2");
 });
 
+test("Save as new theme under a name another theme has is refused with why; a free name saves", async ({ page }) => {
+  await openInTheme(page, "custom-1", [{ id: "custom-1", name: "Night shift", base: "dracula", colors: { bg: "#1d1e26" } }]);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  const message = dialog(page).locator(".theme-editor-actions .ui-notice");
+  for (const name of ["Night shift", "night shift ", "Dark"]) {
+    await dialog(page).getByRole("textbox", { name: "Theme name" }).fill(name);
+    await dialog(page).getByRole("button", { name: "Save as new theme" }).click();
+    await expect(message).toHaveText(`Not saved: A theme named "${name.trim()}" already exists: choose another name`);
+  }
+  expect((await saved(page)).custom).toHaveLength(1);
+  // Save keeps the theme's own name
+  await dialog(page).getByRole("textbox", { name: "Theme name" }).fill("Night shift");
+  await dialog(page).getByRole("textbox", { name: "Accent hex", exact: true }).fill("#9580ff");
+  await dialog(page).getByRole("button", { name: "Save", exact: true }).click();
+  await expect(message).toHaveText(/^Saved "Night shift"/);
+  await dialog(page).getByRole("textbox", { name: "Theme name" }).fill("Night shift copy");
+  await dialog(page).getByRole("button", { name: "Save as new theme" }).click();
+  await expect(message).toHaveText(/^Saved "Night shift copy"/);
+  expect((await saved(page)).custom).toHaveLength(2);
+});
+
 test("Import… / Export… a theme file: checked strictly, loaded into the editor to save", async ({ page }) => {
   await openApp(page);
   await settings(page);
@@ -195,7 +217,7 @@ test("Import… / Export… a theme file: checked strictly, loaded into the edit
   for (const [file, why] of [
     ['{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"bg": "red"}}', /"bg" is "red": colors are written #rrggbb/],
     ['{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"glow": "#123456"}}', /Unknown color "glow"/],
-    ["x".repeat(20000), /at most 16 KB/],
+    [JSON.stringify({ qurryTheme: 1, name: "x".repeat(20000), base: "dark", colors: {} }), /at most 16 KB/],
   ] as const) {
     await page.evaluate((f) => ((window as any).__mockThemeFile = f), file);
     await dialog(page).getByRole("button", { name: "Import…" }).click();
@@ -250,4 +272,177 @@ test("a theme the GUI kept in the webview before 0.3.2 moves to the shared setti
   await expect.poll(() => drawn(page)).toMatchObject({ bg: rgb(theme("light").colors.bg), kind: "light" });
   expect((await saved(page)).theme).toBe("light");
   expect(await page.evaluate(() => localStorage.getItem("dbtool.theme"))).toBeNull();
+});
+
+// #202: OK saves the theme editor's changes, as DataGrip's OK applies them; Esc and × ask to discard them, as leaving the editor does
+test("OK saves colors changed from a built-in theme as a new custom theme, picks it and closes Settings", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("textbox", { name: "Background, editor hex", exact: true }).fill("#101018");
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  const s = await saved(page);
+  expect(s.custom).toEqual([expect.objectContaining({ name: "Dark custom", base: "dark", colors: { bg: "#101018" } })]);
+  expect(s.theme).toBe(s.custom[0].id);
+  await expect.poll(() => drawn(page)).toMatchObject({ bg: "rgb(16, 16, 24)" });
+  // Again from Dark: the next free name
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("combobox", { name: "Based on" }).selectOption("dark");
+  await dialog(page).getByRole("textbox", { name: "Accent hex", exact: true }).fill("#7a5af8");
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  expect((await saved(page)).custom.map((c: { name: string }) => c.name)).toEqual(["Dark custom", "Dark custom 2"]);
+});
+
+test("OK with a save that fails keeps Settings open and says why", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("textbox", { name: "Background, editor hex", exact: true }).fill("#101018");
+  await page.evaluate(() => ((window as any).__mockChannelSaveFails = true));
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page).locator(".theme-editor-msg")).toHaveText(/Not saved: Couldn't save the settings: permission denied/);
+  await expect(dialog(page).locator(".theme-editor-msg")).toBeInViewport();
+  expect((await saved(page))?.custom ?? []).toEqual([]);
+  // Saved once the file can be written
+  await page.evaluate(() => ((window as any).__mockChannelSaveFails = false));
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  expect((await saved(page)).custom).toHaveLength(1);
+});
+
+// Esc and × with unsaved colors ask to discard them (the test above); with nothing changed they close at once
+test("Esc in the theme editor with nothing changed closes Settings at once", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("textbox", { name: "Theme name" }).press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+});
+
+// The button that opened the editor goes away with the page, leaving the focus on the body: Esc still reaches Settings
+test("Esc closes Settings when nothing has the focus, and asks first with unsaved colors", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  // Chromium leaves it there by itself; WebKit doesn't focus a clicked button, so it is put there
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("textbox", { name: "Text hex", exact: true }).fill("#ff0000");
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".ui-modal", { hasText: "Discard them?" })).toBeVisible();
+  await page.getByRole("button", { name: "Discard" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+});
+
+// #204: the editor's action row wraps instead of being cut, also for a saved theme (Delete, Save) in the smallest window
+for (const theme of ["dark", "light"]) {
+  test(`the theme editor's buttons, name and message all show for a saved theme at 800×500 (${theme})`, async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 500 });
+    await openInTheme(page, "custom-1", [{ id: "custom-1", name: "Night shift", base: theme, colors: { accent: "#9580ff" } }]);
+    await settings(page);
+    await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+    const actions = dialog(page).locator(".theme-editor-actions");
+    await dialog(page).getByRole("textbox", { name: "Theme name" }).fill("Night shift 2");
+    for (const name of ["Import…", "Export…", "Reset to base", "Delete", "Save", "Save as new theme"]) {
+      const b = actions.getByRole("button", { name, exact: true });
+      await expect(b, name).toBeInViewport({ ratio: 1 });
+      // Not covered or cut: a click at its middle lands on it
+      const box = (await b.boundingBox())!;
+      expect(await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.textContent?.trim(), [box.x + box.width / 2, box.y + box.height / 2]), name).toBe(name);
+    }
+    await expect(actions.getByRole("textbox", { name: "Theme name" })).toBeInViewport({ ratio: 1 });
+    await actions.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog(page).locator(".theme-editor-msg")).toHaveText(/Saved "Night shift 2"/);
+    await expect(dialog(page).locator(".theme-editor-msg .ui-notice")).toBeInViewport({ ratio: 1 });
+  });
+}
+
+// beta.1's "can't scroll here": the wheel over a color's swatch (its hidden color input) didn't scroll the list in Chromium
+test("the color list scrolls with the wheel, over the swatches too, down to the last basic color and Advanced colors at 800×500", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 500 });
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  const list = dialog(page).locator(".theme-tokens");
+  const swatch = (await dialog(page).locator(".theme-swatch").first().boundingBox())!;
+  await page.mouse.move(swatch.x + swatch.width / 2, swatch.y + swatch.height / 2);
+  for (let i = 0; i < 8; i++) await page.mouse.wheel(0, 150);
+  await expect.poll(() => list.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
+  // Scrolled to the end: the last basic color and Advanced colors inside the list's box
+  const inList = async (l: import("@playwright/test").Locator) => {
+    const [r, b] = [(await l.boundingBox())!, (await list.boundingBox())!];
+    return r.y >= b.y - 1 && r.y + r.height <= b.y + b.height + 1;
+  };
+  await expect.poll(() => inList(dialog(page).locator('[data-token="prodTint"]'))).toBe(true);
+  await expect.poll(() => inList(dialog(page).getByRole("button", { name: /Advanced colors/ }))).toBe(true);
+  // The actions under the list stay where they are
+  for (const name of ["Import…", "Export…", "Save as new theme"]) await expect(dialog(page).getByRole("button", { name, exact: true })).toBeInViewport({ ratio: 1 });
+  // A click on the swatch still reaches its color input (the system picker)
+  const clicked = page.evaluate(() => new Promise<boolean>((ok) => document.querySelector<HTMLInputElement>('[data-token="bg"] input[type=color]')!.addEventListener("click", (e) => (e.preventDefault(), ok(true)), { once: true })));
+  await dialog(page).locator('[data-token="bg"] .theme-swatch').click();
+  expect(await clicked).toBe(true);
+});
+
+// #204: the primary button follows what is being edited, as OK does
+test("editing a saved custom theme, Save is the primary button and replaces it; Save as new theme makes a copy", async ({ page }) => {
+  await openInTheme(page, "custom-1", [{ id: "custom-1", name: "Night shift", base: "dracula", colors: { accent: "#9580ff" } }]);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  const actions = dialog(page).locator(".theme-editor-actions");
+  const save = actions.getByRole("button", { name: "Save", exact: true });
+  const asNew = actions.getByRole("button", { name: "Save as new theme" });
+  await expect(save).toHaveClass(/ui-btn-primary/);
+  await expect(asNew).not.toHaveClass(/ui-btn-primary/);
+  const hex = dialog(page).getByRole("textbox", { name: "Background, editor hex", exact: true });
+  for (const color of ["#101018", "#121220"]) {
+    await hex.fill(color);
+    await save.click();
+    await expect(dialog(page).locator(".theme-editor-msg")).toHaveText(/Saved "Night shift"/);
+  }
+  expect((await saved(page)).custom.map((c: { id: string; colors: { bg: string } }) => [c.id, c.colors.bg])).toEqual([["custom-1", "#121220"]]);
+  // A copy takes a name of its own (one name per theme)
+  await dialog(page).getByRole("textbox", { name: "Theme name" }).fill("Night shift copy");
+  await asNew.click();
+  await expect.poll(async () => (await saved(page)).custom.length).toBe(2);
+});
+
+test("starting from a built-in theme there is no Save: Save as new theme is the primary button", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  const actions = dialog(page).locator(".theme-editor-actions");
+  await expect(actions.getByRole("button", { name: "Save", exact: true })).toHaveCount(0);
+  await expect(actions.getByRole("button", { name: "Save as new theme" })).toHaveClass(/ui-btn-primary/);
+});
+
+// Delete leaves the editor with nothing to save: OK then closes and doesn't bring the theme back
+test("Delete, then OK: the deleted theme stays deleted", async ({ page }) => {
+  await openInTheme(page, "custom-1", [{ id: "custom-1", name: "Night shift", base: "dracula", colors: { accent: "#9580ff" } }]);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("button", { name: "Delete", exact: true }).click();
+  await page.locator(".ui-modal", { hasText: "Delete the custom theme" }).getByRole("button", { name: "Delete" }).click();
+  await expect(dialog(page).locator(".theme-editor-msg")).toHaveText(/Deleted "Night shift"/);
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  expect((await saved(page)).custom).toEqual([]);
+});
+
+test("a double-click on OK saves the theme once", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("textbox", { name: "Background, editor hex", exact: true }).fill("#101018");
+  await dialog(page).getByRole("button", { name: "OK" }).dblclick();
+  await expect(dialog(page)).toHaveCount(0);
+  await page.waitForTimeout(300);
+  expect((await saved(page)).custom.map((c: { name: string }) => c.name)).toEqual(["Dark custom"]);
 });

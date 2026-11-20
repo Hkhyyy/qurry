@@ -28,14 +28,20 @@ pub fn import(dir: &Path, src: &Path) -> AppResult<String> {
         let size = file.metadata().map(|m| m.len() as f64 / (1024.0 * 1024.0)).map_err(cant_read)?;
         return Err(AppError::Msg(format!("{shown} is {size:.1} MB: an animated image can be at most 8 MB, a still one 4 MB")));
     }
-    let ext = theme::check_image(&bytes, &shown).map_err(AppError::Msg)?;
-    let hash = Sha256::digest(&bytes);
+    import_bytes(dir, &bytes, &shown)
+}
+
+/// An image's bytes (picked, or from a theme file) checked by their first bytes and size and copied into `dir`; its file name. `shown`
+/// names it in an error. The one path every theme image comes in by
+pub fn import_bytes(dir: &Path, bytes: &[u8], shown: &str) -> AppResult<String> {
+    let ext = theme::check_image(bytes, shown).map_err(AppError::Msg)?;
+    let hash = Sha256::digest(bytes);
     let name = format!("{}.{ext}", hash[..8].iter().map(|b| format!("{b:02x}")).collect::<String>());
     std::fs::create_dir_all(dir).map_err(|e| AppError::Msg(format!("Couldn't create the theme images folder ({})", e.kind())))?;
     // Written whole under a temporary name, then renamed over the name: a copy is never half written, and the same image picked
     // again replaces a damaged copy and starts its hour of grace again
     let tmp = dir.join(format!("{TMP}{}", uuid::Uuid::new_v4()));
-    let copied = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).and_then(|mut f| f.write_all(&bytes)).and_then(|()| std::fs::rename(&tmp, dir.join(&name)));
+    let copied = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).and_then(|mut f| f.write_all(bytes)).and_then(|()| std::fs::rename(&tmp, dir.join(&name)));
     if let Err(e) = copied {
         let _ = std::fs::remove_file(&tmp);
         return Err(AppError::Msg(format!("Couldn't copy {shown} ({})", e.kind())));

@@ -80,6 +80,14 @@ pub struct ThemeImages {
     pub corner: Option<CornerImage>,
 }
 
+fn play_focused() -> String {
+    "focused".into()
+}
+
+/// When a slot's animated image plays: "focused" (the default; a slot saved without it reads so) stops it on its first frame while
+/// Qurry isn't the active window, "always" doesn't. Reduce motion stops it either way
+pub const PLAYS: [&str; 2] = ["focused", "always"];
+
 impl ThemeImages {
     pub fn is_empty(&self) -> bool {
         self.background.is_none() && self.corner.is_none()
@@ -90,13 +98,23 @@ impl ThemeImages {
     }
 }
 
-/// opacity 0–100; fill one of FILLS; anchor one of ANCHORS (CSS background-position)
+/// opacity 0–100; fill one of FILLS; anchor one of ANCHORS (CSS background-position); span one of SPANS: "area", one picture behind
+/// the whole editor area (all splits together), or "pane", one per console or table pane. Saved without it (0.3.5-beta.1): "area"
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BackgroundImage {
     pub file: String,
     pub opacity: u8,
     pub fill: String,
     pub anchor: String,
+    #[serde(default = "span_area")]
+    pub span: String,
+    /// One of PLAYS
+    #[serde(default = "play_focused")]
+    pub play: String,
+}
+
+fn span_area() -> String {
+    "area".into()
 }
 
 /// corner one of CORNERS; size SIZE_MIN–SIZE_MAX (% of the window's height); opacity 0–100
@@ -106,11 +124,15 @@ pub struct CornerImage {
     pub corner: String,
     pub size: u8,
     pub opacity: u8,
+    /// One of PLAYS
+    #[serde(default = "play_focused")]
+    pub play: String,
 }
 
 pub const FILLS: [&str; 4] = ["cover", "contain", "tile", "center"];
 pub const ANCHORS: [&str; 9] = ["left top", "center top", "right top", "left center", "center", "right center", "left bottom", "center bottom", "right bottom"];
 pub const CORNERS: [&str; 4] = ["left top", "right top", "left bottom", "right bottom"];
+pub const SPANS: [&str; 2] = ["area", "pane"];
 pub const SIZE_MIN: u8 = 10;
 pub const SIZE_MAX: u8 = 40;
 /// The largest still image a theme takes, and the largest animated one (GIF, animated WebP)
@@ -207,20 +229,20 @@ pub fn check_image(bytes: &[u8], shown: &str) -> Result<&'static str, String> {
 }
 
 fn background_ok(b: &BackgroundImage) -> bool {
-    image_name_ok(&b.file) && b.opacity <= 100 && FILLS.contains(&b.fill.as_str()) && ANCHORS.contains(&b.anchor.as_str())
+    image_name_ok(&b.file) && b.opacity <= 100 && FILLS.contains(&b.fill.as_str()) && ANCHORS.contains(&b.anchor.as_str()) && SPANS.contains(&b.span.as_str()) && PLAYS.contains(&b.play.as_str())
 }
 
 fn corner_ok(c: &CornerImage) -> bool {
-    image_name_ok(&c.file) && c.opacity <= 100 && (SIZE_MIN..=SIZE_MAX).contains(&c.size) && CORNERS.contains(&c.corner.as_str())
+    image_name_ok(&c.file) && c.opacity <= 100 && (SIZE_MIN..=SIZE_MAX).contains(&c.size) && CORNERS.contains(&c.corner.as_str()) && PLAYS.contains(&c.play.as_str())
 }
 
 /// A theme's image settings are ones the GUI can draw: known file names, positions and fills, sizes and opacities in range
 fn check_images(i: &ThemeImages) -> Result<(), String> {
     if let Some(f) = i.files().find(|f| !image_name_ok(f)) {
-        return Err(format!("\"{f}\" isn't a theme image's file name"));
+        return Err(format!("\"{}\" isn't a theme image's file name", cut(f)));
     }
     if i.background.as_ref().is_some_and(|b| !background_ok(b)) {
-        return Err("The background image's opacity, fill or placement isn't one Qurry knows".into());
+        return Err("The background image's opacity, fill, placement or span isn't one Qurry knows".into());
     }
     if i.corner.as_ref().is_some_and(|c| !corner_ok(c)) {
         return Err("The corner image's corner, size or opacity isn't one Qurry knows".into());
@@ -230,10 +252,16 @@ fn check_images(i: &ThemeImages) -> Result<(), String> {
 
 /// An image slot of a settings.json entry this version can draw
 fn slot_from_value(images: &serde_json::Value, key: &str) -> Option<ThemeImages> {
-    let v = images.get(key)?.clone();
+    let mut v = images.get(key)?.clone();
+    // A play this version doesn't know: read as the default (custom_to_value keeps it)
+    if let Some(o) = v.as_object_mut()
+        && o.get("play").is_some_and(|p| !p.as_str().is_some_and(|p| PLAYS.contains(&p)))
+    {
+        o.insert("play".into(), "focused".into());
+    }
     match key {
-        "background" => serde_json::from_value(v).ok().filter(background_ok).map(|b| ThemeImages { background: Some(b), corner: None }),
-        "corner" => serde_json::from_value(v).ok().filter(corner_ok).map(|c| ThemeImages { background: None, corner: Some(c) }),
+        "background" => serde_json::from_value(v).ok().filter(background_ok).map(|b| ThemeImages { background: Some(b), ..Default::default() }),
+        "corner" => serde_json::from_value(v).ok().filter(corner_ok).map(|c| ThemeImages { corner: Some(c), ..Default::default() }),
         _ => None,
     }
 }
@@ -264,6 +292,13 @@ pub fn custom_to_value(old: Option<&serde_json::Value>, t: &CustomTheme) -> serd
         for (k, v) in old_images {
             if !images.contains_key(k) && slot_from_value(&serde_json::Value::Object(old_images.clone()), k).is_none() {
                 images.insert(k.clone(), v.clone());
+            } else if let Some(slot) = images.get_mut(k).and_then(|s| s.as_object_mut()) {
+                // A play this version doesn't know was read as the default: kept unless changed
+                if let Some(old_play) = v.get("play").filter(|p| !p.as_str().is_some_and(|p| PLAYS.contains(&p)))
+                    && slot.get("play").and_then(|p| p.as_str()) == Some("focused")
+                {
+                    slot.insert("play".into(), old_play.clone());
+                }
             }
         }
     }
@@ -393,9 +428,25 @@ pub fn warnings(colors: &BTreeMap<String, String>) -> Vec<Warning> {
 
 /// A theme file larger than this is refused unread (one holds ~40 colors and a name: about 1.5 KB)
 pub const FILE_MAX: usize = 16 * 1024;
-/// The "qurryTheme" value this version reads and writes
+/// The "qurryTheme" value of a theme without images (what older versions read), and of one with them
 const FILE_VERSION: u64 = 1;
+const FILE_VERSION_IMAGES: u64 = 2;
+/// The length of `n` bytes in base64
+pub const fn b64_len(n: usize) -> usize {
+    n.div_ceil(3) * 4
+}
+/// A theme file with images is at most this: two images at the animated cap, in base64, and the rest of a theme file
+pub const FILE_IMAGES_MAX: usize = 2 * b64_len(ANIMATED_MAX) + FILE_MAX;
 const NAME_MAX: usize = 64;
+
+/// Text from a file, as an error shows it: at most 200 characters (a theme file may be megabytes)
+fn cut(s: &str) -> String {
+    const MAX: usize = 200;
+    match s.char_indices().nth(MAX) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
+}
 
 /// The name, base and colors are the ones a custom theme may have: a known built-in, known tokens, #rrggbb only
 pub fn check(t: &CustomTheme) -> Result<(), String> {
@@ -405,30 +456,102 @@ pub fn check(t: &CustomTheme) -> Result<(), String> {
     }
     if builtin(&t.base).is_none() {
         let ids: Vec<_> = table().themes.iter().map(|t| t.id.as_str()).collect();
-        return Err(format!("\"base\" must be a built-in theme ({}), not \"{}\"", ids.join(", "), t.base));
+        return Err(format!("\"base\" must be a built-in theme ({}), not \"{}\"", ids.join(", "), cut(&t.base)));
     }
     for (k, v) in &t.colors {
         if !table().tokens.iter().any(|t| &t.key == k) {
-            return Err(format!("Unknown color \"{k}\" (Settings › Appearance › Theme lists the colors a theme has)"));
+            return Err(format!("Unknown color \"{}\" (Settings › Appearance › Theme lists the colors a theme has)", cut(k)));
         }
         if rgb(v).is_none() {
-            return Err(format!("\"{k}\" is \"{v}\": colors are written #rrggbb"));
+            return Err(format!("\"{}\" is \"{}\": colors are written #rrggbb", cut(k), cut(v)));
         }
     }
     check_images(&t.images)
 }
 
-/// The file Export… writes: name, base and colors; never the images (Import… says so)
-pub fn file_text(t: &CustomTheme) -> String {
-    let v = serde_json::json!({ "qurryTheme": FILE_VERSION, "name": t.name, "base": t.base, "colors": t.colors });
+/// A theme file's image (version 2): its type (the extension it is kept under), its bytes in base64 and the slot's settings. As read,
+/// nothing in it is checked yet: the core decodes it, checks it as Choose… does and copies it
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileBackground {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub data: String,
+    pub opacity: u8,
+    pub fill: String,
+    pub anchor: String,
+    #[serde(default = "span_area")]
+    pub span: String,
+    #[serde(default = "play_focused")]
+    pub play: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileCorner {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub data: String,
+    pub corner: String,
+    pub size: u8,
+    pub opacity: u8,
+    #[serde(default = "play_focused")]
+    pub play: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileImages {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<FileBackground>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corner: Option<FileCorner>,
+}
+
+impl BackgroundImage {
+    /// This slot as a theme file carries it (its image `data` in base64, of type `kind`)
+    pub fn to_file(&self, kind: &str, data: String) -> FileBackground {
+        FileBackground { kind: kind.into(), data, opacity: self.opacity, fill: self.fill.clone(), anchor: self.anchor.clone(), span: self.span.clone(), play: self.play.clone() }
+    }
+}
+
+impl CornerImage {
+    pub fn to_file(&self, kind: &str, data: String) -> FileCorner {
+        FileCorner { kind: kind.into(), data, corner: self.corner.clone(), size: self.size, opacity: self.opacity, play: self.play.clone() }
+    }
+}
+
+impl FileBackground {
+    /// The slot with its image copied as `file`, if its settings are ones Qurry can draw
+    pub fn slot(&self, file: String) -> Option<BackgroundImage> {
+        Some(BackgroundImage { file, opacity: self.opacity, fill: self.fill.clone(), anchor: self.anchor.clone(), span: self.span.clone(), play: self.play.clone() }).filter(background_ok)
+    }
+}
+
+impl FileCorner {
+    pub fn slot(&self, file: String) -> Option<CornerImage> {
+        Some(CornerImage { file, corner: self.corner.clone(), size: self.size, opacity: self.opacity, play: self.play.clone() }).filter(corner_ok)
+    }
+}
+
+/// The file Export… writes: name, base and colors (version 1, which every version reads); with `images`, version 2 with them
+pub fn file_text(t: &CustomTheme, images: Option<&FileImages>) -> String {
+    let mut v = serde_json::json!({ "qurryTheme": FILE_VERSION, "name": t.name, "base": t.base, "colors": t.colors });
+    if let Some(i) = images {
+        v["qurryTheme"] = FILE_VERSION_IMAGES.into();
+        v["images"] = serde_json::to_value(i).unwrap_or_default();
+    }
     serde_json::to_string_pretty(&v).unwrap_or_default() + "\n"
 }
 
-/// A theme file (Import…): {"qurryTheme": 1, "name", "base", "colors": {token: "#rrggbb"}} and nothing else. The theme comes back
-/// without an id (the caller gives it one when it is saved)
-pub fn parse_file(text: &str) -> Result<CustomTheme, String> {
-    if text.len() > FILE_MAX {
-        return Err(format!("Not a Qurry theme: the file is {} KB, a theme file is at most {} KB", text.len().div_ceil(1024), FILE_MAX / 1024));
+/// A theme file (Import…): {"qurryTheme": 1, "name", "base", "colors": {token: "#rrggbb"}} and nothing else, or version 2 with
+/// "images" too ({"background": {...}, "corner": {...}}, each with "type" and "data" and the slot's settings). The theme comes back
+/// without an id (the caller gives it one when it is saved) and without images; a version 2 file's images come back as they are in it,
+/// for the core to check. Each size is checked before anything is read: the file's (16 KB, or for version 2 FILE_IMAGES_MAX)
+pub fn parse_file(text: &str) -> Result<(CustomTheme, FileImages), String> {
+    let too_large = |max: usize| format!("Not a Qurry theme: the file is {} KB, a theme file is at most {} KB", text.len().div_ceil(1024), max / 1024);
+    if text.len() > FILE_IMAGES_MAX {
+        return Err(too_large(FILE_IMAGES_MAX));
     }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -437,14 +560,20 @@ pub fn parse_file(text: &str) -> Result<CustomTheme, String> {
         name: String,
         base: String,
         colors: BTreeMap<String, String>,
+        images: Option<FileImages>,
     }
-    let f: File = serde_json::from_str(text).map_err(|e| format!("Not a Qurry theme file ({e})"))?;
-    if f.qurry_theme != FILE_VERSION {
-        return Err(format!("This theme file is version {} — this Qurry reads version {FILE_VERSION}: update Qurry", f.qurry_theme));
-    }
+    let f: File = serde_json::from_str(text).map_err(|e| format!("Not a Qurry theme file ({})", cut(&e.to_string())))?;
+    let images = match (f.qurry_theme, f.images) {
+        (FILE_VERSION, None) if text.len() <= FILE_MAX => FileImages::default(),
+        (FILE_VERSION, None) => return Err(too_large(FILE_MAX)),
+        (FILE_VERSION, Some(_)) => return Err("Not a Qurry theme file (a version 1 file has no \"images\")".into()),
+        (FILE_VERSION_IMAGES, Some(i)) => i,
+        (FILE_VERSION_IMAGES, None) => return Err("Not a Qurry theme file (a version 2 file has \"images\")".into()),
+        (v, _) => return Err(format!("This theme file is version {v} — this Qurry reads versions {FILE_VERSION} and {FILE_VERSION_IMAGES}: update Qurry")),
+    };
     let t = CustomTheme { id: String::new(), name: f.name.trim().to_string(), base: f.base, colors: f.colors.into_iter().map(|(k, v)| (k, v.to_ascii_lowercase())).collect(), ..Default::default() };
     check(&t)?;
-    Ok(t)
+    Ok((t, images))
 }
 
 #[cfg(test)]
@@ -535,10 +664,10 @@ mod tests {
     #[test]
     fn theme_files_round_trip_and_anything_else_is_refused() {
         let t = CustomTheme { id: "c-9".into(), name: "Paper".into(), base: "solarized-light".into(), colors: [("text".into(), "#3d4f55".into())].into(), ..Default::default() };
-        let back = parse_file(&file_text(&t)).unwrap();
+        let back = parse_file(&file_text(&t, None)).unwrap().0;
         assert_eq!(back, CustomTheme { id: String::new(), ..t.clone() });
         // Upper-case hex is read, stored lower case
-        assert_eq!(parse_file(r##"{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"bg": "#ABCDEF"}}"##).unwrap().colors["bg"], "#abcdef");
+        assert_eq!(parse_file(r##"{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"bg": "#ABCDEF"}}"##).unwrap().0.colors["bg"], "#abcdef");
         let refused = |text: &str, want: &str| {
             let e = parse_file(text).unwrap_err();
             assert!(e.contains(want), "{text}: {e}");
@@ -549,13 +678,53 @@ mod tests {
         refused(r##"{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"background": "#123456"}}"##, "Unknown color \"background\"");
         refused(r##"{"qurryTheme": 1, "name": "A", "base": "monokai", "colors": {}}"##, "built-in theme");
         refused(r##"{"qurryTheme": 1, "name": " ", "base": "dark", "colors": {}}"##, "name");
-        refused(r##"{"qurryTheme": 2, "name": "A", "base": "dark", "colors": {}}"##, "update Qurry");
+        refused(r##"{"qurryTheme": 3, "name": "A", "base": "dark", "colors": {}}"##, "update Qurry");
         refused(r##"{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {}, "script": "x"}"##, "unknown field");
         refused(r##"{"name": "A", "base": "dark", "colors": {}}"##, "Not a Qurry theme file");
         refused(r##"{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"bg": 5}}"##, "Not a Qurry theme file");
         refused("[]", "Not a Qurry theme file");
         refused(&format!(r##"{{"qurryTheme": 1, "name": "{}", "base": "dark", "colors": {{}}}}"##, "x".repeat(FILE_MAX)), "at most 16 KB");
         refused(&format!(r##"{{"qurryTheme": 1, "name": "{}", "base": "dark", "colors": {{}}}}"##, "x".repeat(65)), "1 to 64");
+    }
+
+    #[test]
+    fn theme_files_with_images_are_version_2_and_as_strict() {
+        let t = CustomTheme { id: "custom-1".into(), name: "Pics".into(), base: "dark".into(), colors: [("bg".into(), "#101010".into())].into(), ..Default::default() };
+        let bg = BackgroundImage { file: "0123456789abcdef.png".into(), opacity: 20, fill: "contain".into(), anchor: "right bottom".into(), span: "pane".into(), play: "focused".into() };
+        let cn = CornerImage { file: "fedcba9876543210.gif".into(), corner: "left top".into(), size: 30, opacity: 90, play: "focused".into() };
+        let images = FileImages { background: Some(bg.to_file("png", "iVBORw0K".into())), corner: Some(cn.to_file("gif", "R0lGODlh".into())) };
+        let text = file_text(&t, Some(&images));
+        // Never the local file names
+        assert!(!text.contains("0123456789abcdef") && !text.contains("fedcba9876543210"), "{text}");
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["qurryTheme"], 2);
+        assert_eq!(v["images"]["background"], serde_json::json!({ "type": "png", "data": "iVBORw0K", "opacity": 20, "fill": "contain", "anchor": "right bottom", "span": "pane", "play": "focused" }));
+        let (back, back_images) = parse_file(&text).unwrap();
+        assert_eq!((back.name.as_str(), back.colors["bg"].as_str(), back.images.is_empty()), ("Pics", "#101010", true));
+        assert_eq!(back_images, images);
+        // The slots' settings back with a copy's name; settings Qurry can't draw give none
+        assert_eq!(back_images.background.as_ref().unwrap().slot(bg.file.clone()), Some(bg.clone()));
+        assert_eq!(back_images.corner.as_ref().unwrap().slot(cn.file.clone()), Some(cn.clone()));
+        assert_eq!(FileBackground { fill: "stretch".into(), ..images.background.clone().unwrap() }.slot(bg.file.clone()), None);
+        // Without images: version 1, as before
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&file_text(&t, None)).unwrap()["qurryTheme"], 1);
+        let refused = |text: &str, want: &str| {
+            let e = parse_file(text).unwrap_err();
+            assert!(e.contains(want), "{}: {e}", &text[..text.len().min(120)]);
+        };
+        let with = |images: &str| format!(r##"{{"qurryTheme": 2, "name": "A", "base": "dark", "colors": {{}}, "images": {images}}}"##);
+        refused(&with(r#"{"background": {"type": "png", "data": "", "opacity": 1, "fill": "cover", "anchor": "center", "file": "../x"}}"#), "unknown field");
+        refused(&with(r#"{"frame": {}}"#), "unknown field");
+        refused(&with(r#"{"corner": {"type": "gif", "corner": "left top", "size": 20, "opacity": 100}}"#), "missing field");
+        refused(r##"{"qurryTheme": 2, "name": "A", "base": "dark", "colors": {}}"##, "version 2 file has");
+        refused(r##"{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {}, "images": {}}"##, "version 1 file has no");
+        // Size: a version 1 file over 16 KB as before; any file over the version 2 cap before it is parsed
+        refused(&format!(r##"{{"qurryTheme": 1, "name": "{}", "base": "dark", "colors": {{}}}}"##, "a".repeat(FILE_MAX)), "at most 16 KB");
+        refused(&format!("{{{}", " ".repeat(FILE_IMAGES_MAX)), &format!("at most {} KB", FILE_IMAGES_MAX / 1024));
+        let large = with(&format!(r#"{{"background": {{"type": "png", "data": "{}", "opacity": 1, "fill": "cover", "anchor": "center"}}}}"#, "A".repeat(FILE_MAX * 2)));
+        assert_eq!(parse_file(&large).unwrap().1.background.unwrap().data.len(), FILE_MAX * 2, "a version 2 file may be larger than 16 KB");
+        assert_eq!(b64_len(3), 4);
+        assert_eq!(b64_len(4), 8);
     }
 
     /// A GIF of `frames` 1×1 frames (each with a graphic control extension), with a global color table if `gct`
@@ -670,22 +839,22 @@ mod tests {
     #[test]
     fn a_custom_themes_images_are_checked_kept_in_settings_and_left_out_of_its_file() {
         let images = ThemeImages {
-            background: Some(BackgroundImage { file: "0123456789abcdef.png".into(), opacity: 15, fill: "cover".into(), anchor: "right bottom".into() }),
-            corner: Some(CornerImage { file: "fedcba9876543210.gif".into(), corner: "right bottom".into(), size: 20, opacity: 100 }),
+            background: Some(BackgroundImage { file: "0123456789abcdef.png".into(), opacity: 15, fill: "cover".into(), anchor: "right bottom".into(), span: "pane".into(), play: "focused".into() }),
+            corner: Some(CornerImage { file: "fedcba9876543210.gif".into(), corner: "right bottom".into(), size: 20, opacity: 100, play: "focused".into() }),
         };
         let t = CustomTheme { id: "custom-1".into(), name: "Pics".into(), base: "dark".into(), colors: BTreeMap::new(), images: images.clone() };
         assert_eq!(check(&t), Ok(()));
         // settings.json: written and read back as they are; a theme without images writes no "images"
         let json = serde_json::to_value(&t).unwrap();
-        assert_eq!(json["images"]["corner"], serde_json::json!({ "file": "fedcba9876543210.gif", "corner": "right bottom", "size": 20, "opacity": 100 }));
+        assert_eq!(json["images"]["corner"], serde_json::json!({ "file": "fedcba9876543210.gif", "corner": "right bottom", "size": 20, "opacity": 100, "play": "focused" }));
         assert_eq!(serde_json::from_value::<CustomTheme>(json).unwrap(), t);
         assert!(serde_json::to_value(CustomTheme { images: ThemeImages::default(), ..t.clone() }).unwrap().get("images").is_none());
         // Older settings without images read as none
         assert!(serde_json::from_str::<CustomTheme>(r#"{"id": "custom-1", "name": "A", "base": "dark"}"#).unwrap().images.is_empty());
         assert_eq!(images.files().collect::<Vec<_>>(), ["0123456789abcdef.png", "fedcba9876543210.gif"]);
         // The file leaves them out
-        assert!(!file_text(&t).contains("images") && !file_text(&t).contains("0123456789abcdef"));
-        assert!(parse_file(&file_text(&t)).unwrap().images.is_empty());
+        assert!(!file_text(&t, None).contains("images") && !file_text(&t, None).contains("0123456789abcdef"));
+        assert!(parse_file(&file_text(&t, None)).unwrap().0.images.is_empty());
         let with = |i: ThemeImages| check(&CustomTheme { images: i, ..t.clone() });
         let bg = images.background.clone().unwrap();
         let cn = images.corner.clone().unwrap();
@@ -737,6 +906,79 @@ mod tests {
         // A new theme has no old entry
         let fresh = custom_to_value(None, &CustomTheme { id: "custom-2".into(), name: "New".into(), base: "light".into(), ..Default::default() });
         assert_eq!(fresh, serde_json::json!({ "id": "custom-2", "name": "New", "base": "light", "colors": {} }));
+    }
+
+
+    #[test]
+    fn the_background_spans_the_editor_area_unless_saved_per_pane() {
+        let slot = |extra: &str| serde_json::from_str::<serde_json::Value>(&format!(r#"{{"id": "custom-1", "name": "A", "base": "dark", "images": {{"background": {{"file": "0123456789abcdef.png", "opacity": 15, "fill": "cover", "anchor": "center"{extra}}}}}}}"#)).unwrap();
+        // Saved without it (0.3.5-beta.1): the whole area
+        assert_eq!(custom_from_value(&slot("")).unwrap().images.background.unwrap().span, "area");
+        let pane = custom_from_value(&slot(r#", "span": "pane""#)).unwrap();
+        assert_eq!(pane.images.background.as_ref().unwrap().span, "pane");
+        // Written back as read, and kept by the settings.json round trip
+        let back = custom_to_value(Some(&slot(r#", "span": "pane""#)), &pane);
+        assert_eq!(back["images"]["background"]["span"], "pane");
+        assert_eq!(custom_from_value(&back).unwrap(), pane);
+        // An unknown span: the slot is left out (and kept in the file), the theme read
+        let later = slot(r#", "span": "window""#);
+        let t = custom_from_value(&later).unwrap();
+        assert!(t.images.background.is_none());
+        assert_eq!(custom_to_value(Some(&later), &t)["images"]["background"]["span"], "window");
+        assert!(check(&CustomTheme { images: ThemeImages { background: Some(BackgroundImage { span: "window".into(), ..pane.images.background.clone().unwrap() }), corner: None }, ..pane.clone() }).is_err());
+    }
+
+
+    #[test]
+    fn each_slot_plays_while_focused_unless_it_says_always() {
+        let entry = |images: &str| serde_json::from_str::<serde_json::Value>(&format!(r#"{{"id": "custom-1", "name": "A", "base": "dark", "images": {images}}}"#)).unwrap();
+        let bg = |play: &str| format!(r#""background": {{"file": "0123456789abcdef.gif", "opacity": 15, "fill": "cover", "anchor": "center"{play}}}"#);
+        let cn = |play: &str| format!(r#""corner": {{"file": "fedcba9876543210.gif", "corner": "right bottom", "size": 20, "opacity": 100{play}}}"#);
+        // Saved without it: while focused, each
+        let t = custom_from_value(&entry(&format!("{{{}, {}}}", bg(""), cn("")))).unwrap();
+        assert_eq!((t.images.background.as_ref().unwrap().play.as_str(), t.images.corner.as_ref().unwrap().play.as_str()), ("focused", "focused"));
+        // Each its own, round trip
+        let mixed = custom_from_value(&entry(&format!(r#"{{{}, {}}}"#, bg(r#", "play": "always""#), cn("")))).unwrap();
+        assert_eq!((mixed.images.background.as_ref().unwrap().play.as_str(), mixed.images.corner.as_ref().unwrap().play.as_str()), ("always", "focused"));
+        let back = custom_to_value(None, &mixed);
+        assert_eq!((&back["images"]["background"]["play"], &back["images"]["corner"]["play"]), (&serde_json::json!("always"), &serde_json::json!("focused")));
+        assert_eq!(custom_from_value(&back).unwrap(), mixed);
+        // A value this version doesn't know: the slot read with the default, the value kept in the file unless changed
+        let later = entry(&format!(r#"{{{}, {}}}"#, bg(""), cn(r#", "play": "on-hover""#)));
+        let t = custom_from_value(&later).unwrap();
+        assert_eq!(t.images.corner.as_ref().unwrap().play, "focused");
+        assert_eq!(custom_to_value(Some(&later), &t)["images"]["corner"]["play"], "on-hover");
+        let set = CustomTheme { images: ThemeImages { corner: Some(CornerImage { play: "always".into(), ..t.images.corner.clone().unwrap() }), ..t.images.clone() }, ..t.clone() };
+        assert_eq!(custom_to_value(Some(&later), &set)["images"]["corner"]["play"], "always");
+        assert!(check(&CustomTheme { images: ThemeImages { corner: Some(CornerImage { play: "on-hover".into(), ..t.images.corner.clone().unwrap() }), ..t.images.clone() }, ..t.clone() }).is_err());
+        // A theme file (version 2) carries each
+        let file = file_text(&mixed, Some(&FileImages { background: Some(mixed.images.background.clone().unwrap().to_file("gif", "R0lGODlh".into())), corner: Some(mixed.images.corner.clone().unwrap().to_file("gif", "R0lGODlh".into())) }));
+        let read = parse_file(&file).unwrap().1;
+        assert_eq!((read.background.unwrap().play, read.corner.unwrap().play), ("always".to_string(), "focused".to_string()));
+        assert!(!file.contains(r#""play": "always",
+  "background""#), "no theme-wide play");
+    }
+
+
+    #[test]
+    fn errors_show_at_most_200_characters_of_what_the_file_says() {
+        assert_eq!(cut("abc"), "abc");
+        assert_eq!(cut(&"é".repeat(250)).chars().count(), 201);
+        assert!(cut(&"é".repeat(250)).ends_with("é…"));
+        let long = "k".repeat(10_000);
+        let short = |e: String| {
+            assert!(e.chars().count() < 400, "{} chars", e.chars().count());
+            e
+        };
+        let e = short(parse_file(&format!(r##"{{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {{"{long}": "#123456"}}}}"##)).unwrap_err());
+        assert!(e.starts_with("Unknown color \"kkk") && e.contains("…\""), "{e}");
+        short(parse_file(&format!(r##"{{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {{"bg": "{long}"}}}}"##)).unwrap_err());
+        short(parse_file(&format!(r##"{{"qurryTheme": 1, "name": "A", "base": "{long}", "colors": {{}}}}"##)).unwrap_err());
+        // A serde error quoting an unknown field
+        let e = short(parse_file(&format!(r##"{{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {{}}, "{long}": 1}}"##)).unwrap_err());
+        assert!(e.starts_with("Not a Qurry theme file (unknown field") && e.ends_with("…)"), "{e}");
+        let t = CustomTheme { name: "A".into(), base: "dark".into(), images: ThemeImages { background: Some(BackgroundImage { file: long.clone(), opacity: 1, fill: "cover".into(), anchor: "center".into(), span: "area".into(), play: "focused".into() }), corner: None }, ..Default::default() };
+        short(check(&t).unwrap_err());
     }
 
 }

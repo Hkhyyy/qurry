@@ -44,10 +44,12 @@ export function Switcher({ items, start, onPick, onClose }: { items: SwitchItem[
   }, [items]);
   return (
     <Overlay variant="clear" onClose={onClose}>
-      <Popover title="Switcher" foot={items[i]?.hint}>
+      {/* .switcher: the app-wide key handler leaves the keys (⌃⇥ above all) to this popup while it is open */}
+      <Popover className="switcher" title="Switcher" foot={items[i]?.hint}>
         <List>
           {items.map((it, k) => (
-            <ListItem key={it.key} icon={it.icon} color={it.color ?? null} title={it.title} hint={it.hint} selected={k === i} onMouseEnter={() => setI(k)} onClick={() => onPick(it.key)} />
+            // With ⌃ still held a click is a secondary click on macOS (no click event, a context menu): it opens the entry too
+            <ListItem key={it.key} icon={it.icon} color={it.color ?? null} title={it.title} hint={it.hint} selected={k === i} onMouseEnter={() => setI(k)} onClick={() => onPick(it.key)} onContextMenu={(e) => (e.preventDefault(), onPick(it.key))} />
           ))}
         </List>
       </Popover>

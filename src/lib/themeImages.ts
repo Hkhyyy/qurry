@@ -25,35 +25,54 @@ export type Corner = (typeof CORNERS)[number];
 export const SIZE_MIN = 10;
 export const SIZE_MAX = 40;
 
+/** When a slot's animated image plays: "focused" (the default) stops it on its first frame while Qurry isn't the active window */
+export type Play = "focused" | "always";
+export const PLAYS: { id: Play; label: string }[] = [
+  { id: "focused", label: "While focused" },
+  { id: "always", label: "Always" },
+];
+/** "area": one picture behind the whole editor area (all splits together); "pane": one in each console or table pane */
+export type Span = "area" | "pane";
+export const SPANS: { id: Span; label: string }[] = [
+  { id: "area", label: "Whole editor area" },
+  { id: "pane", label: "Each pane" },
+];
 /** file: the copy in the config folder; opacity 0–100 */
 export interface BackgroundSlot {
   file: string;
   opacity: number;
   fill: Fill;
   anchor: Anchor;
+  span: Span;
+  play?: Play;
 }
 export interface CornerSlot {
   file: string;
   corner: Corner;
   size: number;
   opacity: number;
+  play?: Play;
 }
 /** A theme's images: either slot, both or none */
 export interface ThemeImages {
   background?: BackgroundSlot;
   corner?: CornerSlot;
 }
+/** An animated image stops on its first frame: always with the system's Reduce motion (an accessibility setting), and while the window
+ *  isn't focused unless its slot plays it always */
+export const motionPaused = (reduceMotion: boolean, focused: boolean, play?: Play) => reduceMotion || (!focused && play !== "always");
 /** Two themes' images are the same, whatever order their fields come in (settings.json writes them in its own) */
 export function sameImages(a: ThemeImages | undefined, b: ThemeImages | undefined): boolean {
   const key = (i: ThemeImages | undefined) => JSON.stringify(i ?? {}, (_, v) => (v && typeof v === "object" ? Object.fromEntries(Object.entries(v).sort()) : v));
   return key(a) === key(b);
 }
 /** A new image's settings: DataGrip's 15% in the background; a corner sticker bottom right, fully opaque */
-export const newBackgroundSlot = (file: string): BackgroundSlot => ({ file, opacity: 15, fill: "cover", anchor: "center" });
-export const newCornerSlot = (file: string): CornerSlot => ({ file, corner: "right bottom", size: 20, opacity: 100 });
+export const newBackgroundSlot = (file: string): BackgroundSlot => ({ file, opacity: 15, fill: "cover", anchor: "center", span: "area", play: "focused" });
+export const newCornerSlot = (file: string): CornerSlot => ({ file, corner: "right bottom", size: 20, opacity: 100, play: "focused" });
 
-/** The surfaces the image is behind */
-const SURFACES = ["bg", "odd"];
+/** The grid's colors drawn as tints over the image (App.css, :is(.theme-backdrop-host, .theme-preview).has-image): how much of each
+ *  color is laid over it. Background itself is the image's backdrop */
+export const TINTS: Record<string, number> = { odd: 0.5, panel: 0.85, panel2: 0.85, sel: 0.7, changed: 0.7, added: 0.7, deleted: 0.7, match: 0.7 };
 
 const hex2 = (n: number) => Math.round(n).toString(16).padStart(2, "0");
 /** a mixed toward b by t (0–1), in sRGB as CSS opacity mixes */
@@ -62,12 +81,14 @@ export function mixHex(a: string, b: string, t: number): string {
   return "#" + [0, 1, 2].map((i) => hex2(ch(a, i) * (1 - t) + ch(b, i) * t)).join("");
 }
 
-/** Background: the checks that fail over the image's worst pixels at opacity (0–100) and pass without the image, one per token */
+/** Background: the checks that fail over the image's worst pixels at opacity (0–100) and pass without the image, one per token.
+ *  Background is mixed toward the pixel; each tinted surface is its color laid over that (TINTS) */
 export function warningsOver(p: Palette, opacity: number, warnings: (p: Palette) => ThemeWarning[]): ThemeWarning[] {
   const before = new Set(warnings(p).map((w) => w.token));
   const found = new Map<string, ThemeWarning>();
   for (const x of ["#000000", "#ffffff"]) {
-    const over = { ...p, ...Object.fromEntries(SURFACES.map((s) => [s, mixHex(p[s], x, opacity / 100)])) };
+    const bg = mixHex(p.bg, x, opacity / 100);
+    const over = { ...p, bg, ...Object.fromEntries(Object.entries(TINTS).map(([s, a]) => [s, mixHex(bg, p[s], a)])) };
     for (const w of warnings(over)) if (!before.has(w.token) && !found.has(w.token)) found.set(w.token, w);
   }
   return [...found.values()];

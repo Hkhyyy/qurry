@@ -25,10 +25,19 @@ describe("theme contrast (WASM)", () => {
   });
   it("refuses theme files that aren't one, saying why", () => {
     const ok = shared().parseThemeFile(JSON.stringify({ qurryTheme: 1, name: "Mine", base: "dracula", colors: { bg: "#101010" } }));
-    expect(ok).toEqual({ id: "", name: "Mine", base: "dracula", colors: { bg: "#101010" } });
-    expect(shared().parseThemeFile(shared().themeFileText({ ...ok, name: "Again" })).name).toBe("Again");
+    expect(ok).toEqual({ theme: { id: "", name: "Mine", base: "dracula", colors: { bg: "#101010" } }, images: {} });
+    expect(shared().parseThemeFile(shared().themeFileText({ ...ok.theme, name: "Again" })).theme.name).toBe("Again");
+    // With images: version 2, the images as written
+    const images = { corner: { type: "gif", data: "R0lGODlh", corner: "left top", size: 20, opacity: 100, play: "always" } };
+    const v2 = shared().themeFileText(ok.theme, images);
+    expect(JSON.parse(v2).qurryTheme).toBe(2);
+    expect(shared().parseThemeFile(v2).images).toEqual(images);
+    const withFile = JSON.parse(v2);
+    withFile.images.corner.file = "../x";
+    expect(() => shared().parseThemeFile(JSON.stringify(withFile))).toThrow(/unknown field/);
     expect(() => shared().parseThemeFile('{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"bg": "#12"}}')).toThrow(/#rrggbb/);
     expect(() => shared().parseThemeFile('{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"glow": "#123456"}}')).toThrow(/Unknown color "glow"/);
-    expect(() => shared().parseThemeFile("x".repeat(20000))).toThrow(/at most 16 KB/);
+    expect(() => shared().parseThemeFile(JSON.stringify({ qurryTheme: 1, name: "x".repeat(20000), base: "dark", colors: {} }))).toThrow(/at most 16 KB/);
+    expect(() => shared().parseThemeFile("x".repeat(20000))).toThrow(/Not a Qurry theme file/);
   });
 });

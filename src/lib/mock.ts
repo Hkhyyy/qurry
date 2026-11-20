@@ -161,6 +161,24 @@ const THEME_IMAGE_PICKS: Record<string, string | { refused: string }> = {
   "logo.svg": { refused: "logo.svg isn't a PNG, JPEG, GIF or WebP image" },
   "big.png": { refused: "big.png is 5.0 MB: a still image can be at most 4 MB" },
 };
+/** An image's type by its first bytes, as the core's check (qurry_shared::theme::image_ext; APNG: an acTL chunk before IDAT) */
+function sniffImage(b: Uint8Array): string | null {
+  const at = (i: number, s: string) => [...s].every((c, j) => b[i + j] === c.charCodeAt(0));
+  if (b[0] === 0x89 && at(1, "PNG")) {
+    for (let i = 8; i + 8 <= b.length; ) {
+      const len = ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0;
+      if (at(i + 4, "acTL")) return "apng";
+      if (at(i + 4, "IDAT") || at(i + 4, "IEND")) break;
+      i += 12 + len;
+    }
+    return "png";
+  }
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "jpg";
+  if (at(0, "GIF87a") || at(0, "GIF89a")) return "gif";
+  if (at(0, "RIFF") && at(8, "WEBP")) return "webp";
+  return null;
+}
+
 /** A story's own image, read like a copy in the config folder (the local previews) */
 export const mockThemeImage = (file: string, url: string) => void (themeImages[file] = url);
 
@@ -907,9 +925,17 @@ const handlers: Record<string, (a: any) => unknown> = {
     saveThemeSettings({ ...themeSettings(), sync: a.sync });
   },
   save_custom_theme: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
     checkTheme(a.theme);
+    // As the core: its images must be there
+    for (const slot of ["background", "corner"]) if (a.theme.images?.[slot] && !themeImages[a.theme.images[slot].file]) throw `The ${slot} image is missing: choose it again`;
     const s = themeSettings();
     const t = { ...a.theme, name: a.theme.name.trim() };
+    // As the core: one name per theme (a built-in's too), unless the theme keeps the name it has
+    const wanted = t.name.toLowerCase();
+    const own = s.custom.find((c: any) => c.id === t.id)?.name.trim().toLowerCase();
+    const taken = THEMES.themes.some((b: { name: string }) => b.name.toLowerCase() === wanted) || s.custom.some((c: any) => c.id !== t.id && c.name.trim().toLowerCase() === wanted);
+    if (taken && own !== wanted) throw `A theme named "${t.name}" already exists: choose another name`;
     if (!t.id) for (let n = 1; !t.id; n++) if (!s.custom.some((c: any) => c.id === `custom-${n}`)) t.id = `custom-${n}`;
     const custom = s.custom.some((c: any) => c.id === t.id) ? s.custom.map((c: any) => (c.id === t.id ? t : c)) : [...s.custom, t];
     saveThemeSettings({ ...s, custom });
@@ -923,15 +949,48 @@ const handlers: Record<string, (a: any) => unknown> = {
     const side = (v: string) => (v === a.id ? gone.base : v);
     saveThemeSettings({ theme: s.theme === a.id ? gone.base : s.theme, sync: { dark: side(s.sync.dark), light: side(s.sync.light) }, custom: s.custom.filter((c: any) => c.id !== a.id) });
   },
-  // window.__mockThemeFile: the text of the file picked (unset: cancelled); refused as the core refuses it
-  import_theme: () => {
+  // window.__mockThemeFile: the text of the file picked (unset: cancelled); refused as the core refuses it. A version 2 file's images
+  // are decoded and kept as copies by their content's hash, as the core does (its checks: the type by the first bytes, never SVG)
+  import_theme: async () => {
     const text = (window as any).__mockThemeFile;
-    return text == null ? null : shared().parseThemeFile(text);
+    if (text == null) return null;
+    const { theme, images } = shared().parseThemeFile(text);
+    const dropped: string[] = [];
+    const slots: Record<string, unknown> = {};
+    for (const k of ["background", "corner"] as const) {
+      const slot = images[k];
+      if (!slot) continue;
+      const { type, data, ...settings } = slot;
+      const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+      const ext = sniffImage(bytes);
+      if (!ext) {
+        dropped.push(`The ${k} image isn't a PNG, JPEG, GIF or WebP image`);
+        continue;
+      }
+      if (ext !== type) {
+        dropped.push(`The ${k} image says it is ${type} but is ${ext}`);
+        continue;
+      }
+      const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
+      const file = `${hash}.${ext}`;
+      themeImages[file] = URL.createObjectURL(new Blob([bytes]));
+      slots[k] = { file, ...settings };
+    }
+    return { theme: { ...theme, images: slots }, dropped };
   },
-  // The file's text goes to window.__mockThemeExported
-  export_theme: (a: any) => {
+  // The file's text goes to window.__mockThemeExported: version 2 with each image's bytes when the theme has images
+  export_theme: async (a: any) => {
     checkTheme(a.theme);
-    (window as any).__mockThemeExported = shared().themeFileText(a.theme);
+    let images: Record<string, unknown> | undefined;
+    for (const [k, slot] of Object.entries<any>(a.theme.images ?? {})) {
+      if (!slot) continue;
+      const { file, ...settings } = slot;
+      const bytes = new Uint8Array(await (await fetch(themeImages[file])).arrayBuffer());
+      let bin = "";
+      bytes.forEach((b) => (bin += String.fromCharCode(b)));
+      (images ??= {})[k] = { type: file.split(".").pop(), data: btoa(bin), ...settings };
+    }
+    (window as any).__mockThemeExported = shared().themeFileText(a.theme, images);
     return `/Users/me/Downloads/${a.theme.name}.qurry-theme.json`;
   },
   // window.__mockThemeImagePick: the file picked ("ridges.png" unset; "beacon.gif", "beacon.png" (animated), "logo.svg", "big.png"; null: cancelled)

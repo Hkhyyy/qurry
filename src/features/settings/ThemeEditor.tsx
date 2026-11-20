@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../../lib/api";
 import { ask } from "../../lib/dialogs";
 import { sharedOr, useSharedReady } from "../../lib/shared";
-import { BUILT_IN, SYSTEM, TOKENS, deleteCustomTheme, findTheme, previewTheme, saveCustomTheme, setThemePick, useThemeState, type CustomTheme, type Palette, type ThemeDef, type ThemeToken, type ThemeWarning } from "../../lib/theme";
+import { BUILT_IN, SYSTEM, TOKENS, customThemeName, deleteCustomTheme, findTheme, previewTheme, saveCustomTheme, setThemePick, useThemeState, type CustomTheme, type Palette, type ThemeDef, type ThemeToken, type ThemeWarning } from "../../lib/theme";
 import { Button, cx, Named, normalizeHex, Notice, Select, Text, TextInput } from "../../ui";
 import { sameImages, type ThemeImages } from "../../lib/themeImages";
 import { ThemeImagesSection } from "./ThemeImages";
@@ -71,8 +71,8 @@ function TokenRow({ t, value, edited, warning, onHot, onChange, onReset }: { t: 
   );
 }
 
-/** start: the theme to start from (the one in use) */
-export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack: () => void; onDirty: (dirty: boolean) => void }) {
+/** start: the theme to start from (the one in use); commit: set to what Settings' OK runs (saveIfDirty) */
+export function ThemeEditor({ start, onBack, onDirty, commit }: { start: string; onBack: () => void; onDirty: (dirty: boolean) => void; commit?: { current: (() => Promise<boolean>) | null } }) {
   const { settings } = useThemeState();
   const startCustom = settings.custom.find((c) => c.id === start);
   const [baseId, setBaseId] = useState(startCustom?.base ?? (BUILT_IN.some((t) => t.id === start) ? start : "dark"));
@@ -91,9 +91,14 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
   const changed = Object.keys(over).filter((k) => over[k] !== base.colors[k]).sort();
   // Saved colors come back sorted by name (settings.json): compare in that order
   const savedColors = saved && Object.keys(saved.colors).sort().map((k) => [k, saved.colors[k]]);
-  const dirty = saved
-    ? saved.name !== name.trim() || saved.base !== baseId || JSON.stringify(savedColors) !== JSON.stringify(changed.map((k) => [k, over[k]])) || !sameImages(saved.images, images)
-    : changed.length > 0 || hasImages;
+  /** What the editor shows when it was last left with nothing to save (after Delete): clean until the next edit */
+  const [cleanAt, setCleanAt] = useState<string | null>(null);
+  const shown = JSON.stringify([baseId, over, name, images]);
+  const dirty =
+    cleanAt !== shown &&
+    (saved
+      ? saved.name !== name.trim() || saved.base !== baseId || JSON.stringify(savedColors) !== JSON.stringify(changed.map((k) => [k, over[k]])) || !sameImages(saved.images, images)
+      : changed.length > 0 || hasImages);
   const ready = useSharedReady();
   const warnings = useMemo(() => sharedOr<ThemeWarning[]>([], (s) => s.themeWarnings(colors)), [JSON.stringify(colors), ready]);
   const warnOf = (k: string) => warnings.find((w) => w.token === k);
@@ -118,10 +123,12 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
     setEditing(c ? c.id : null);
     setMsg(t?.custom ? { tone: "ok", text: `Changing "${t.name}": Save replaces it` } : null);
   };
-  const theme = (): CustomTheme => ({ id: "", name: name.trim(), base: baseId, colors: Object.fromEntries(changed.map((k) => [k, over[k]])), ...(hasImages && { images }) });
-  const save = async (asNew: boolean) => {
+  const theme = (as = name): CustomTheme => ({ id: "", name: as.trim(), base: baseId, colors: Object.fromEntries(changed.map((k) => [k, over[k]])), ...(hasImages && { images }) });
+  /** Save (as new, or over the theme being changed) under the name field's name, or `as`; whether it was saved (else the message
+   *  says why) */
+  const save = async (asNew: boolean, as?: string): Promise<boolean> => {
     try {
-      const t = await saveCustomTheme({ ...theme(), id: asNew ? "" : editing ?? "" });
+      const t = await saveCustomTheme({ ...theme(as), id: asNew ? "" : editing ?? "" });
       setEditing(t.id);
       setName(t.name);
       // Sync with OS stays on when a theme is replaced (drawn already if it is one of its two); a new one is switched to
@@ -130,15 +137,23 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
       const low = warnings.length ? ` (${warnings.length} below the contrast minimum, as warned)` : "";
       const how = !sync ? " and switched to it" : asNew ? " and switched to it: Sync with OS is off" : ", Sync with OS stays on";
       setMsg({ tone: "ok", text: `Saved "${t.name}"${how}${low}` });
+      return true;
     } catch (e) {
       setMsg({ tone: "danger", text: `Not saved: ${e}` });
+      return false;
     }
   };
+  /** Settings' OK (as DataGrip's): changes are saved, over the custom theme being changed, or from a built-in one as a new theme named
+   *  by the name field or "<Base> custom"; true when there was nothing to save or it was saved */
+  const saveIfDirty = async () => !dirty || (saved ? save(false) : save(true, customThemeName(base.name, name, settings.custom.map((c) => c.name))));
+  if (commit) commit.current = saveIfDirty;
   const remove = async () => {
     if (!saved || !(await ask(`Delete the custom theme "${saved.name}"? Where it is picked, ${base.name} takes its place (in the TUI too).`, { title: "Delete Theme", okLabel: "Delete", danger: true }))) return;
     try {
       await deleteCustomTheme(saved.id);
       setEditing(null);
+      // Nothing to save until the next edit: OK closes, it doesn't bring the deleted theme back
+      setCleanAt(shown);
       setMsg({ tone: "ok", text: `Deleted "${saved.name}"; its colors stay here as a new theme until you leave` });
     } catch (e) {
       setMsg({ tone: "danger", text: `Not deleted: ${e}` });
@@ -146,14 +161,18 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
   };
   const importFile = async () => {
     try {
-      const t = await api.importTheme();
-      if (!t || (dirty && !(await askDiscardColors()))) return;
+      const got = await api.importTheme();
+      if (!got || (dirty && !(await askDiscardColors()))) return;
+      const t = got.theme;
       setBaseId(t.base);
       setOver(t.colors);
       setName(t.name);
-      setImages({});
+      setImages(t.images ?? {});
       setEditing(null);
-      setMsg({ tone: "ok", text: `Imported "${t.name}" (based on ${BUILT_IN.find((b) => b.id === t.base)?.name}): theme files don't include images; check it, then Save as new theme` });
+      const came = [t.images?.background && "background", t.images?.corner && "corner"].filter(Boolean);
+      const with_ = came.length ? ` with its ${came.join(" and ")} image${came.length > 1 ? "s" : ""}` : "";
+      const left = got.dropped.length ? `; left out: ${got.dropped.join("; ")}` : "";
+      setMsg({ tone: got.dropped.length ? "warn" : "ok", text: `Imported "${t.name}" (based on ${BUILT_IN.find((b) => b.id === t.base)?.name})${with_}${left}. Check it: Save as new theme or OK keeps it` });
     } catch (e) {
       setMsg({ tone: "danger", text: `Not imported: ${e}` });
     }
@@ -161,7 +180,7 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
   const exportFile = async () => {
     try {
       const path = await api.exportTheme({ ...theme(), name: name.trim() || `${base.name} (custom)` });
-      if (path) setMsg({ tone: "ok", text: `Exported to ${path}${hasImages ? " (without its images: theme files don't include them)" : ""}` });
+      if (path) setMsg({ tone: "ok", text: `Exported to ${path}${hasImages ? " with its images (Qurry 0.3.5-beta.1 and older can't import such a file)" : ""}` });
     } catch (e) {
       setMsg({ tone: "danger", text: `Not exported: ${e}` });
     }
@@ -255,20 +274,25 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
             </div>
             <div className="ui-row">
               <TextInput aria-label="Theme name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Theme name" maxLength={64} style={{ flex: 1, minWidth: 120 }} />
+              {/* The primary button is what OK does: Save over the custom theme being changed; from a built-in one, Save as new theme
+                  (there is nothing to replace, so no Save) */}
               {saved && (
-                <Button size="sm" disabled={!name.trim() || !dirty} onClick={() => save(false)}>
+                <Button size="sm" variant="primary" disabled={!name.trim() || !dirty} onClick={() => save(false)}>
                   Save
                 </Button>
               )}
-              <Button size="sm" variant="primary" disabled={!name.trim()} onClick={() => save(true)}>
+              <Button size="sm" variant={saved ? "default" : "primary"} disabled={!name.trim()} onClick={() => save(true)}>
                 Save as new theme
               </Button>
             </div>
-            {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+            {/* Its own line, kept (an empty one too) so a message doesn't move the color list; it is never cut */}
+            <div className="theme-editor-msg" role="status">
+              {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+            </div>
           </div>
         </div>
         <div className="theme-editor-preview">
-          <ThemeImagesSection images={images} p={colors} onChange={setImages} />
+          <ThemeImagesSection images={images} p={colors} onChange={setImages} newTheme={!editing} />
           {/* One line: pointing at another color doesn't move the preview */}
           <Text size="sm" tone="muted" truncate>
             {`Preview${hot ? ` — ${LABEL[hot]}: ${TOKENS.find((t) => t.key === hot)?.desc}` : ""}`}

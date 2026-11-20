@@ -44,3 +44,10 @@ export function clampDrag(off: { x: number; y: number }, base: { left: number; t
     y: Math.max(0, Math.min(base.top + off.y, view.height - base.height)) - base.top,
   };
 }
+
+/** The window on top: the one in the highest layer (its z-index: a confirm over a dialog), the last opened among equals (DOM order) */
+export function topOf<T>(windows: T[], layer: (w: T) => number): T | undefined {
+  let top: T | undefined;
+  for (const w of windows) if (top === undefined || layer(w) >= layer(top)) top = w;
+  return top;
+}

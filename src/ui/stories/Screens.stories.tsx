@@ -43,7 +43,7 @@ import { ReconnectToastView } from "../../components/ReconnectToasts";
 import type { ReconnectToast } from "../../lib/reconnect";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 import { inSmallWindow } from "./SmallWindow";
-import { BackgroundWindow, InEditor, SAMPLE_BACKGROUND, SAMPLE_CORNER } from "./BackgroundWindow";
+import { BackgroundWindow, InEditor, SAMPLE_BACKGROUND, SAMPLE_CORNER, SplitWindow } from "./BackgroundWindow";
 import { MOCK_IMAGES } from "../../lib/mock";
 import { newBackgroundSlot, type ThemeImages } from "../../lib/themeImages";
 
@@ -228,6 +228,29 @@ const CORNER: ThemeImages = { corner: SAMPLE_CORNER };
 export const ThemeImagesEditor = bgEditor(BOTH);
 export const ThemeImagesEditorBackgroundOnly = bgEditor(BG);
 export const ThemeImagesEditorNoImages = bgEditor({});
+/** A saved custom theme in the smallest window (#204): the action row (Import…, Export…, Reset to base, Delete, the name, Save, Save as
+ *  new theme) wraps and nothing is cut. Save, which replaces the theme, is the primary button, as OK does it; Save as new theme makes a
+ *  copy. OK saves the changes, as DataGrip's (Esc and × ask to discard them) */
+/** Started from a built-in theme (Dark): the Images header says the images are saved with a new custom theme (its ⓘ: OK saves these
+ *  edits as one and picks it); a background image picked here. There is no Save (nothing to replace): Save as new theme is the primary
+ *  button. A saved custom theme being changed has no such line, and Save is its primary button */
+export const ThemeImagesEditorFromBuiltIn: S = {
+  render: () => <SettingsDialog initialPage="theme" onClose={noop} onUpdate={noop} onChannel={noop} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await body.findByRole("button", { name: "Choose Background image" }));
+  },
+};
+/** Play, per slot (when its animated image plays: While focused, the default, or Always), shown in a slot while its image is animated:
+ *  here the Corner's GIF plays always and the Background's PNG has none; its ⓘ: battery, and Reduce motion shows the first frame either
+ *  way */
+export const ThemeImagesEditorPlay: S = {
+  ...bgEditor({ background: SAMPLE_BACKGROUND, corner: { ...SAMPLE_CORNER, play: "always" } }),
+  play: async ({ canvasElement }) => {
+    await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Corner play" });
+  },
+};
+export const ThemeEditorSavedSmallWindow: S = { ...bgEditor({}), ...inSmallWindow };
 /** Peek held: Settings fades and the window behind it shows the images as they are now */
 export const ThemeImagesEditorPeek: S = {
   ...bgEditor(BOTH),
@@ -245,6 +268,36 @@ export const ThemeImagesBackgroundAnimated = bgWindow("dark", { background: { ..
 export const ThemeImagesCornerDark = bgWindow("dark", CORNER);
 export const ThemeImagesCornerLight = bgWindow("light", { corner: { ...SAMPLE_CORNER, corner: "left top" } });
 export const ThemeImagesCornerHighContrast = bgWindow("hc", { corner: { ...SAMPLE_CORNER, size: 35 } });
+/** A table tab and a console with a Background image, the grid's colors drawn as tints over it (#205): the odd-row stripe at 50%, the
+ *  header, row numbers and the pinned column at 85%, the selection and the edited, new and deleted rows at 70%, so the image shows
+ *  behind the data. "Before" draws the grid as before #205 (opaque but for the odd rows) to compare; the "Tints (#205)" control
+ *  switches it in any of these stories (story-only, not an app setting). Without an image nothing changes */
+const tintArgs = { args: { tints: true }, argTypes: { tints: { control: "boolean", name: "Tints (#205)" } } };
+const STRONG: ThemeImages = { background: { ...SAMPLE_BACKGROUND, opacity: 35 } };
+const tinted = (theme: string, view: "table" | "console", images: ThemeImages, tints = true): S => ({
+  ...tintArgs,
+  args: { tints },
+  globals: { theme },
+  render: (args) => <BackgroundWindow view={view} images={images} menu={false} tints={(args as { tints?: boolean }).tints !== false} />,
+});
+export const ThemeImagesTableAfter = tinted("dark", "table", STRONG);
+export const ThemeImagesTableBefore = tinted("dark", "table", STRONG, false);
+export const ThemeImagesTableLight = tinted("light", "table", STRONG);
+export const ThemeImagesTableNoImage = tinted("dark", "table", {});
+export const ThemeImagesConsoleAfter = tinted("dark", "console", STRONG);
+export const ThemeImagesConsoleBefore = tinted("dark", "console", STRONG, false);
+/** The Background's span, four tables split 2×2: "Whole editor area" (the default) draws one picture behind all of them, "Each pane"
+ *  one in each table. A theme saved without it (0.3.5-beta.1) spans the area */
+const SPLIT_AREA: ThemeImages = { background: { ...SAMPLE_BACKGROUND, opacity: 35 } };
+export const ThemeImagesSplitArea: S = { globals: { theme: "dark" }, render: () => <SplitWindow images={SPLIT_AREA} /> };
+export const ThemeImagesSplitPane: S = { globals: { theme: "dark" }, render: () => <SplitWindow images={{ background: { ...SPLIT_AREA.background!, span: "pane" } }} /> };
+/** The editor's Span control (Background › Span), in a custom theme with a Background image */
+export const ThemeImagesEditorSpan: S = {
+  ...bgEditor({ background: SAMPLE_BACKGROUND }),
+  play: async ({ canvasElement }) => {
+    await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Span" });
+  },
+};
 
 /** Settings › Keymap: every menu, toolbar and Find Action command by scope (Global, Database Explorer, Query Console, Data Grid), "none" where it has no key yet */
 export const SettingsKeymap: S = { name: "Settings — Keymap", render: () => <SettingsDialog initialPage="keymap" onClose={noop} onUpdate={noop} onChannel={noop} /> };

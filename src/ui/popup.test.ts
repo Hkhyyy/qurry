@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampDrag, listKey, matchOptions, placePopup } from "./popup";
+import { clampDrag, listKey, matchOptions, placePopup, topOf } from "./popup";
 
 const TYPES = ["integer", "bigint", "smallint", "numeric(10,2)", "text", "timestamp", "timestamptz", "time", "interval", "text[]"];
 
@@ -58,4 +58,11 @@ describe("clampDrag: a dialog moved by its title bar stays inside the window", (
   });
   it("a narrower window pulls a moved dialog back in", () => expect(clampDrag({ x: 250, y: 0 }, base, { width: 800, height: 800 })).toEqual({ x: 50, y: 0 }));
   it("one larger than the window keeps its top left corner in", () => expect(clampDrag({ x: 30, y: 30 }, { left: 0, top: 0, width: 1200, height: 900 }, view)).toEqual({ x: 0, y: 0 }));
+});
+
+describe("topOf: the window Esc closes", () => {
+  it("the highest layer wins over DOM order: a confirm (400) opened before a dialog (100) that came later", () =>
+    expect(topOf([{ id: "confirm", z: 400 }, { id: "update", z: 100 }], (w) => w.z)?.id).toBe("confirm"));
+  it("among equals, the last opened", () => expect(topOf([{ id: "a", z: 100 }, { id: "b", z: 100 }], (w) => w.z)?.id).toBe("b"));
+  it("none open: none", () => expect(topOf([], () => 0)).toBeUndefined());
 });

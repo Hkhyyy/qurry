@@ -393,6 +393,13 @@ pub struct Store {
     temporary: std::sync::Mutex<Vec<ConnectionConfig>>,
 }
 
+/// Import…: the theme read from a file (its images copied, not saved yet) and the images left out, each with why
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ImportedTheme {
+    pub theme: CustomTheme,
+    pub dropped: Vec<String>,
+}
+
 pub const TEMPORARY_NOT_SAVED: &str = "This data source comes from the qurry-tui command line: it is temporary, so it isn't saved and its form can't change it. To keep it, add a data source with these settings (n in the explorer).";
 
 /// Per-source settings that older apps (0.2.12 and before) don't know. They are kept in connection-access.json too (by connection id),
@@ -1027,6 +1034,13 @@ impl Store {
     /// colors, #rrggbb only. Returns the saved theme
     pub fn save_custom_theme(&self, t: &CustomTheme) -> AppResult<CustomTheme> {
         theme::check(t).map_err(AppError::Msg)?;
+        // Its images must be there (a theme deleted meanwhile may have taken them)
+        let dir = self.theme_images_dir();
+        for (slot, file) in [("background", t.images.background.as_ref().map(|b| &b.file)), ("corner", t.images.corner.as_ref().map(|c| &c.file))] {
+            if file.is_some_and(|f| !dir.join(f).is_file()) {
+                return Err(AppError::Msg(format!("The {slot} image is missing: choose it again")));
+            }
+        }
         let mut t = CustomTheme { name: t.name.trim().to_string(), ..t.clone() };
         // The file's entries as they are: one this version can't read, and fields it doesn't know, stay
         let mut list = self.custom_entries();
@@ -1035,6 +1049,15 @@ impl Store {
             t.id = (1..).map(|n| format!("custom-{n}")).find(|id| !list.iter().any(|v| id_of(v).as_ref() == Some(id))).unwrap_or_default();
         } else if !t.id.starts_with("custom-") {
             return Err(AppError::Msg(format!("A custom theme's id starts with \"custom-\", not \"{}\"", t.id)));
+        }
+        // One name per theme: another custom theme's or a built-in one's (case and spaces aside). A theme saved again under the name
+        // it already has passes, so two that share a name from an older version can still be saved
+        let name_of = |v: &serde_json::Value| v.get("name").and_then(|n| n.as_str()).map(|n| n.trim().to_lowercase());
+        let wanted = t.name.to_lowercase();
+        let own = list.iter().find(|v| id_of(v).as_ref() == Some(&t.id)).and_then(name_of);
+        let taken = theme::table().themes.iter().any(|b| b.name.to_lowercase() == wanted) || list.iter().any(|v| id_of(v).as_ref() != Some(&t.id) && name_of(v).as_ref() == Some(&wanted));
+        if taken && own.as_ref() != Some(&wanted) {
+            return Err(AppError::Msg(format!("A theme named \"{}\" already exists: choose another name", t.name)));
         }
         match list.iter_mut().find(|v| id_of(v).as_ref() == Some(&t.id)) {
             Some(v) => *v = theme::custom_to_value(Some(v), &t),
@@ -1095,19 +1118,96 @@ impl Store {
         let _ = crate::theme_images::prune(&self.theme_images_dir(), files.iter().map(String::as_str));
     }
 
-    /// Settings › Appearance › Theme › Import…: the file read and checked (a large one is refused unread), not saved yet
-    pub fn read_theme_file(&self, path: &Path) -> AppResult<CustomTheme> {
-        let size = fs::metadata(path)?.len();
-        if size > theme::FILE_MAX as u64 {
-            return Err(AppError::Msg(format!("Not a Qurry theme: the file is {} KB, a theme file is at most {} KB", size.div_ceil(1024), theme::FILE_MAX / 1024)));
+    /// Settings › Appearance › Theme › Import…: the file read and checked (a large one is refused unread), not saved yet. A version 2
+    /// file's images go the way Choose…'s do (checked by their first bytes and size, copied into theme-images); one that doesn't is
+    /// left out, and `dropped` says which and why, the colors and the other image coming in
+    pub fn read_theme_file(&self, path: &Path) -> AppResult<ImportedTheme> {
+        use std::io::Read;
+        let not_a_file = || AppError::Msg("Not a Qurry theme: that isn't a file".into());
+        // A regular file only (not a device, a pipe or a link to one), opened without waiting on a pipe, and read no further than the
+        // largest theme file: its own size can't be trusted (a link to /dev/zero says 0 bytes)
+        if !fs::metadata(path)?.is_file() {
+            return Err(not_a_file());
         }
-        theme::parse_file(&fs::read_to_string(path)?).map_err(AppError::Msg)
+        let mut open = fs::OpenOptions::new();
+        open.read(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut open, libc::O_NONBLOCK);
+        let file = open.open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(not_a_file());
+        }
+        let mut text = String::new();
+        file.take(theme::FILE_IMAGES_MAX as u64 + 1).read_to_string(&mut text).map_err(|e| AppError::Msg(format!("Not a Qurry theme file ({})", e.kind())))?;
+        if text.len() > theme::FILE_IMAGES_MAX {
+            return Err(AppError::Msg(format!("Not a Qurry theme: a theme file is at most {} KB", theme::FILE_IMAGES_MAX / 1024)));
+        }
+        let (mut theme, images) = theme::parse_file(&text).map_err(AppError::Msg)?;
+        let mut dropped = Vec::new();
+        const SETTINGS: &str = "settings aren't ones Qurry knows";
+        if let Some(b) = images.background {
+            match self.file_image(&b.kind, &b.data, "The background image") {
+                Ok(file) => match b.slot(file) {
+                    Some(slot) => theme.images.background = Some(slot),
+                    None => dropped.push(format!("The background image's {SETTINGS}")),
+                },
+                Err(e) => dropped.push(e),
+            }
+        }
+        if let Some(c) = images.corner {
+            match self.file_image(&c.kind, &c.data, "The corner image") {
+                Ok(file) => match c.slot(file) {
+                    Some(slot) => theme.images.corner = Some(slot),
+                    None => dropped.push(format!("The corner image's {SETTINGS}")),
+                },
+                Err(e) => dropped.push(e),
+            }
+        }
+        Ok(ImportedTheme { theme, dropped })
     }
 
-    /// Export…: the theme as a file (its name, base and changed colors)
+    /// A theme file's image: its base64 `data` (no longer than an image at the 8 MB cap, checked before it is decoded), of the type it
+    /// says, through the same checks and copy as Choose…; its file name, or why not
+    fn file_image(&self, kind: &str, data: &str, shown: &str) -> Result<String, String> {
+        use base64::Engine;
+        if !theme::IMAGE_EXTS.contains(&kind) {
+            return Err(format!("{shown} isn't a PNG, JPEG, GIF or WebP image"));
+        }
+        if data.len() > theme::b64_len(theme::ANIMATED_MAX) {
+            return Err(format!("{shown} is over 8 MB: an animated image can be at most 8 MB, a still one 4 MB"));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|_| format!("{shown} isn't base64 data"))?;
+        match theme::image_ext(&bytes) {
+            Some(ext) if ext != kind => return Err(format!("{shown} says it is {kind} but is {ext}")),
+            _ => {}
+        }
+        crate::theme_images::import_bytes(&self.theme_images_dir(), &bytes, shown).map_err(|e| e.to_string())
+    }
+
+    /// Export…: the theme as a file: its name, base and changed colors (version 1), and with images each one's bytes and settings
+    /// (version 2, which older versions refuse)
     pub fn write_theme_file(&self, path: &Path, t: &CustomTheme) -> AppResult<()> {
+        use base64::Engine;
         theme::check(t).map_err(AppError::Msg)?;
-        Ok(fs::write(path, theme::file_text(t))?)
+        let data = |file: &str| -> AppResult<(String, String)> {
+            let ext = file.rsplit_once('.').map(|(_, e)| e.to_string()).unwrap_or_default();
+            Ok((ext, base64::engine::general_purpose::STANDARD.encode(self.theme_image(file)?)))
+        };
+        let images = if t.images.is_empty() {
+            None
+        } else {
+            let mut i = theme::FileImages::default();
+            if let Some(b) = &t.images.background {
+                let (ext, d) = data(&b.file)?;
+                i.background = Some(b.to_file(&ext, d));
+            }
+            if let Some(c) = &t.images.corner {
+                let (ext, d) = data(&c.file)?;
+                i.corner = Some(c.to_file(&ext, d));
+            }
+            Some(i)
+        };
+        Ok(fs::write(path, theme::file_text(t, images.as_ref()))?)
     }
 
     /// Change one key of settings.json, keeping the others
@@ -1175,6 +1275,29 @@ mod tests {
         assert_eq!(saved, serde_json::json!({ "updateChannel": "beta", "later": 1 }));
     }
 
+    /// A theme name is used once: Save as new theme with another custom theme's name or a built-in one's is refused (case and
+    /// spaces aside); saving a theme again under its own name passes, also when an older version left two themes with that name
+    #[test]
+    fn theme_names_are_not_used_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let theme = |id: &str, name: &str| CustomTheme { id: id.into(), name: name.into(), base: "dark".into(), ..Default::default() };
+        let mine = store.save_custom_theme(&theme("", "My Dark")).unwrap();
+        for name in ["My Dark", " my dark ", "Dark", "light"] {
+            let e = store.save_custom_theme(&theme("", name)).unwrap_err().to_string();
+            assert!(e.contains("already exists: choose another name"), "{name}: {e}");
+        }
+        // Replacing it under its own name, or renaming it to a free one
+        store.save_custom_theme(&theme(&mine.id, "My Dark")).unwrap();
+        store.save_custom_theme(&theme(&mine.id, "Night")).unwrap();
+        assert!(store.save_custom_theme(&theme("", "My Dark")).is_ok(), "the old name is free again");
+        // Two themes an older version saved under one name: each can still be saved as it is
+        let path = dir.path().join("cfg/settings.json");
+        fs::write(&path, r#"{"customThemes": [{"id": "custom-7", "name": "Twin", "base": "dark"}, {"id": "custom-8", "name": "Twin", "base": "light"}]}"#).unwrap();
+        store.save_custom_theme(&theme("custom-8", "Twin")).unwrap();
+        assert!(store.save_custom_theme(&theme("custom-7", "Other")).is_ok());
+    }
+
     /// A custom theme's images (#202) survive everything else that rewrites settings.json (the TUI picks a theme, Sync with OS,
     /// another theme saved or deleted); an image no theme uses goes once its theme is deleted (after its hour of grace)
     #[test]
@@ -1191,8 +1314,8 @@ mod tests {
         let corner = pick("small.gif", b"GIF89a\x01\x00\x01\x00\x00\x00\x00\x3b");
         assert!(store.import_theme_image(&dir.path().join("nothing.png")).is_err());
         let images = ThemeImages {
-            background: Some(BackgroundImage { file: bg.clone(), opacity: 15, fill: "contain".into(), anchor: "right bottom".into() }),
-            corner: Some(CornerImage { file: corner.clone(), corner: "right bottom".into(), size: 20, opacity: 100 }),
+            background: Some(BackgroundImage { file: bg.clone(), opacity: 15, fill: "contain".into(), anchor: "right bottom".into(), span: "pane".into(), play: "focused".into() }),
+            corner: Some(CornerImage { file: corner.clone(), corner: "right bottom".into(), size: 20, opacity: 100, play: "focused".into() }),
         };
         let pics = store.save_custom_theme(&CustomTheme { name: "Pics".into(), base: "dark".into(), images: images.clone(), ..Default::default() }).unwrap();
         let plain = store.save_custom_theme(&CustomTheme { name: "Plain".into(), base: "light".into(), ..Default::default() }).unwrap();
@@ -1230,6 +1353,9 @@ mod tests {
                           "corner": { "file": "fedcba9876543210.gif", "corner": "right bottom", "size": 20, "opacity": 100 } } }
         ]);
         store.set_setting("customThemes", later.clone()).unwrap();
+        // The corner's copy is there (a save checks)
+        fs::create_dir_all(store.theme_images_dir()).unwrap();
+        fs::write(store.theme_images_dir().join("fedcba9876543210.gif"), b"GIF89a").unwrap();
         let read = store.theme_settings().custom;
         assert_eq!(read.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["custom-2"], "the theme with the later fill is kept");
         assert!(read[0].images.background.is_none() && read[0].images.corner.is_some());
@@ -1241,10 +1367,110 @@ mod tests {
         assert_eq!(file[0], later[0]);
         assert_eq!((file[1]["name"].as_str(), &file[1]["glow"]), (Some("Renamed"), &serde_json::json!(true)));
         assert_eq!(file[1]["images"]["background"], later[1]["images"]["background"]);
-        assert_eq!(file[1]["images"]["corner"], later[1]["images"]["corner"]);
+        let mut corner = later[1]["images"]["corner"].clone();
+        corner["play"] = "focused".into();
+        assert_eq!(file[1]["images"]["corner"], corner, "written as read, with its play");
         // Deleting another theme leaves them too
         store.delete_custom_theme(&added.id).unwrap();
         assert_eq!(store.custom_entries()[..2], file[..2]);
+    }
+
+    /// Export… of a theme with images writes version 2 with each image's bytes; Import… brings them back through Choose…'s checks into
+    /// another config folder, leaving out (and naming) one that fails; without images the file is version 1 as before
+    #[test]
+    fn theme_files_carry_their_images() {
+        use base64::Engine;
+        use qurry_shared::theme::{BackgroundImage, CornerImage, ThemeImages};
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (a, b) = (Store::new(from.path().join("cfg")), Store::new(to.path().join("cfg")));
+        let png = b"\x89PNG\r\n\x1a\nexported-picture".to_vec();
+        let gif = b"GIF89a\x01\x00\x01\x00\x00\x00\x00\x3b".to_vec();
+        let pick = |name: &str, bytes: &[u8]| {
+            let p = from.path().join(name);
+            fs::write(&p, bytes).unwrap();
+            a.import_theme_image(&p).unwrap()
+        };
+        let images = ThemeImages {
+            background: Some(BackgroundImage { file: pick("big.png", &png), opacity: 20, fill: "contain".into(), anchor: "right bottom".into(), span: "pane".into(), play: "always".into() }),
+            corner: Some(CornerImage { file: pick("small.gif", &gif), corner: "left top".into(), size: 30, opacity: 90, play: "focused".into() }),
+        };
+        let t = CustomTheme { name: "Pics".into(), base: "dark".into(), colors: [("bg".into(), "#101010".into())].into(), images: images.clone(), ..Default::default() };
+        let file = from.path().join("pics.json");
+        a.write_theme_file(&file, &t).unwrap();
+        let text = fs::read_to_string(&file).unwrap();
+        assert!(text.contains("\"qurryTheme\": 2") && !text.contains(&images.background.as_ref().unwrap().file), "the bytes, never the local name");
+        // Imported elsewhere: same settings, same bytes, under the content's names
+        let got = b.read_theme_file(&file).unwrap();
+        assert_eq!(got.dropped, Vec::<String>::new());
+        assert_eq!((got.theme.name.as_str(), got.theme.colors["bg"].as_str()), ("Pics", "#101010"));
+        assert_eq!(got.theme.images, images, "same content, same names");
+        assert_eq!(b.theme_image(&got.theme.images.background.as_ref().unwrap().file).unwrap(), png);
+        assert_eq!(b.theme_image(&got.theme.images.corner.as_ref().unwrap().file).unwrap(), gif);
+        // Without images: version 1, unchanged
+        a.write_theme_file(&file, &CustomTheme { images: ThemeImages::default(), ..t.clone() }).unwrap();
+        assert!(fs::read_to_string(&file).unwrap().contains("\"qurryTheme\": 1"));
+        assert!(b.read_theme_file(&file).unwrap().theme.images.is_empty());
+        // A file someone else made: each slot on its own
+        let v2 = |bg: serde_json::Value, corner: serde_json::Value| {
+            fs::write(&file, serde_json::json!({ "qurryTheme": 2, "name": "X", "base": "light", "colors": { "text": "#202020" }, "images": { "background": bg, "corner": corner } }).to_string()).unwrap();
+            b.read_theme_file(&file)
+        };
+        let good_corner = serde_json::json!({ "type": "gif", "data": b64(&gif), "corner": "right bottom", "size": 20, "opacity": 100 });
+        let svg = serde_json::json!({ "type": "png", "data": b64(br#"<svg xmlns="http://www.w3.org/2000/svg"><script>x</script></svg>"#), "opacity": 15, "fill": "cover", "anchor": "center" });
+        let got = v2(svg, good_corner.clone()).unwrap();
+        assert_eq!(got.dropped, ["The background image isn't a PNG, JPEG, GIF or WebP image"]);
+        assert!(got.theme.images.background.is_none() && got.theme.images.corner.is_some());
+        assert_eq!(got.theme.colors["text"], "#202020");
+        // Over the cap in base64: refused by its length, before decoding (it isn't even base64)
+        let huge = serde_json::json!({ "type": "png", "data": "!".repeat(qurry_shared::theme::b64_len(qurry_shared::theme::ANIMATED_MAX) + 4), "opacity": 15, "fill": "cover", "anchor": "center" });
+        assert_eq!(v2(huge, good_corner.clone()).unwrap().dropped, ["The background image is over 8 MB: an animated image can be at most 8 MB, a still one 4 MB"]);
+        // Decoded, a still image over 4 MB: Choose…'s cap
+        let mut big = png.clone();
+        big.resize(qurry_shared::theme::IMAGE_MAX + 1, 0);
+        let got = v2(serde_json::json!({ "type": "png", "data": b64(&big), "opacity": 15, "fill": "cover", "anchor": "center" }), good_corner.clone()).unwrap();
+        assert_eq!(got.dropped, ["The background image is 4.0 MB: a still image can be at most 4 MB"]);
+        // Not base64, a type that isn't the content's, an unknown type, settings Qurry can't draw
+        let bg = |kind: &str, data: String, fill: &str| serde_json::json!({ "type": kind, "data": data, "opacity": 15, "fill": fill, "anchor": "center" });
+        assert_eq!(v2(bg("png", "%%%".into(), "cover"), good_corner.clone()).unwrap().dropped, ["The background image isn't base64 data"]);
+        assert_eq!(v2(bg("png", b64(&gif), "cover"), good_corner.clone()).unwrap().dropped, ["The background image says it is png but is gif"]);
+        assert_eq!(v2(bg("svg", b64(&png), "cover"), good_corner.clone()).unwrap().dropped, ["The background image isn't a PNG, JPEG, GIF or WebP image"]);
+        assert_eq!(v2(bg("png", b64(&png), "stretch"), good_corner.clone()).unwrap().dropped, ["The background image's settings aren't ones Qurry knows"]);
+        // Unknown fields refused, as in version 1
+        let e = v2(serde_json::json!({ "type": "png", "data": b64(&png), "opacity": 15, "fill": "cover", "anchor": "center", "file": "../../x" }), good_corner).unwrap_err().to_string();
+        assert!(e.contains("unknown field"), "{e}");
+        // A file over the version 2 cap: read no further than it
+        fs::write(&file, vec![b' '; qurry_shared::theme::FILE_IMAGES_MAX + 1]).unwrap();
+        assert!(b.read_theme_file(&file).unwrap_err().to_string().contains(&format!("at most {} KB", qurry_shared::theme::FILE_IMAGES_MAX / 1024)));
+        // Not a file: a link to a device that never ends, a pipe nobody writes to (refused at once, not read or waited on)
+        #[cfg(unix)]
+        {
+            let zero = from.path().join("zero.json");
+            std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+            assert_eq!(b.read_theme_file(&zero).unwrap_err().to_string(), "Not a Qurry theme: that isn't a file");
+            let fifo = from.path().join("fifo.json");
+            let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+            assert_eq!(b.read_theme_file(&fifo).unwrap_err().to_string(), "Not a Qurry theme: that isn't a file");
+        }
+    }
+
+    /// A theme whose image file is gone (a theme deleted meanwhile pruned it) isn't saved: the message names the slot
+    #[test]
+    fn a_theme_with_a_missing_image_is_not_saved() {
+        use qurry_shared::theme::{BackgroundImage, CornerImage, ThemeImages};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let src = dir.path().join("a.png");
+        fs::write(&src, b"\x89PNG\r\n\x1a\nthere").unwrap();
+        let there = store.import_theme_image(&src).unwrap();
+        let bg = BackgroundImage { file: there, opacity: 15, fill: "cover".into(), anchor: "center".into(), span: "area".into(), play: "focused".into() };
+        let gone = CornerImage { file: "0123456789abcdef.gif".into(), corner: "right bottom".into(), size: 20, opacity: 100, play: "focused".into() };
+        let t = |corner: Option<CornerImage>| CustomTheme { name: "Pics".into(), base: "dark".into(), images: ThemeImages { background: Some(bg.clone()), corner }, ..Default::default() };
+        let e = store.save_custom_theme(&t(Some(gone))).unwrap_err().to_string();
+        assert_eq!(e, "The corner image is missing: choose it again");
+        assert!(store.theme_settings().custom.is_empty());
+        assert!(store.save_custom_theme(&t(None)).is_ok());
     }
 
     /// Theme, Sync with OS and custom themes round trip through settings.json for both apps; the TUI's older "tuiTheme" stands in
@@ -1264,7 +1490,8 @@ mod tests {
         let mine = CustomTheme { id: String::new(), name: " Night ".into(), base: "dracula".into(), colors: [("bg".into(), "#101010".into())].into(), ..Default::default() };
         let saved = store.save_custom_theme(&mine).unwrap();
         assert_eq!((saved.id.as_str(), saved.name.as_str()), ("custom-1", "Night"));
-        assert_eq!(store.save_custom_theme(&mine).unwrap().id, "custom-2", "Save as new theme twice: two themes");
+        assert!(store.save_custom_theme(&mine).is_err(), "Save as new theme twice under one name: refused (theme_names_are_not_used_twice)");
+        assert_eq!(store.save_custom_theme(&CustomTheme { name: "Night copy".into(), ..mine.clone() }).unwrap().id, "custom-2", "under another name: a second theme");
         store.save_custom_theme(&CustomTheme { name: "Night 2".into(), ..saved.clone() }).unwrap();
         assert!(store.save_custom_theme(&CustomTheme { colors: [("bg".into(), "#10101".into())].into(), ..mine.clone() }).is_err());
         assert!(store.save_custom_theme(&CustomTheme { id: "dark".into(), ..mine.clone() }).is_err(), "not over a built-in id");
@@ -1274,7 +1501,7 @@ mod tests {
         let next = Store::new(dir.path().join("cfg")).theme_settings();
         assert_eq!(next.theme.as_deref(), Some("custom-1"));
         assert_eq!(next.sync, ThemeSync { dark: "custom-1".into(), light: "solarized-light".into() });
-        assert_eq!(next.custom.iter().map(|c| (c.id.as_str(), c.name.as_str())).collect::<Vec<_>>(), [("custom-1", "Night 2"), ("custom-2", "Night")]);
+        assert_eq!(next.custom.iter().map(|c| (c.id.as_str(), c.name.as_str())).collect::<Vec<_>>(), [("custom-1", "Night 2"), ("custom-2", "Night copy")]);
         assert_eq!(next.resolve("dark", true).color("bg"), "#101010");
         let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["later"], 1, "other settings are kept");
@@ -1284,8 +1511,11 @@ mod tests {
         // Theme files: written and read back; a bad or large file is refused with why
         let file = dir.path().join("t.json");
         store.write_theme_file(&file, &s.custom[0]).unwrap();
-        assert_eq!(store.read_theme_file(&file).unwrap().name, "Night");
+        assert_eq!(store.read_theme_file(&file).unwrap().theme.name, "Night copy");
         fs::write(&file, "x".repeat(theme::FILE_MAX + 1)).unwrap();
+        // Under the version 2 cap it is read: not a theme file. A version 1 file over 16 KB still says so
+        assert!(store.read_theme_file(&file).unwrap_err().to_string().contains("Not a Qurry theme file"));
+        fs::write(&file, format!(r##"{{"qurryTheme": 1, "name": "{}", "base": "dark", "colors": {{}}}}"##, "a".repeat(theme::FILE_MAX))).unwrap();
         assert!(store.read_theme_file(&file).unwrap_err().to_string().contains("at most 16 KB"));
         fs::write(&file, r##"{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {"bg": "#12"}}"##).unwrap();
         assert!(store.read_theme_file(&file).unwrap_err().to_string().contains("#rrggbb"));

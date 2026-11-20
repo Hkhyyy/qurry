@@ -127,3 +127,13 @@ describe("the pick the GUI kept before 0.3.2 (webview storage)", () => {
     expect(theme.takeThemeNotice()).toBeNull();
   });
 });
+
+// Settings' OK saves changes made from a built-in theme as a new custom theme: its name
+describe("customThemeName", () => {
+  it("is the name typed, or the base's name with custom and the next free number", () => {
+    expect(theme.customThemeName("Dark", "  Night shift ", [])).toBe("Night shift");
+    expect(theme.customThemeName("Dark", "", [])).toBe("Dark custom");
+    expect(theme.customThemeName("Dark", " ", ["Dark custom"])).toBe("Dark custom 2");
+    expect(theme.customThemeName("Dark", "", ["Dark custom", "Dark custom 2", "Light custom"])).toBe("Dark custom 3");
+  });
+});
