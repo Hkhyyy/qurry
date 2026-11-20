@@ -368,3 +368,33 @@ test("the color list scrolls with the wheel, over the swatches too, down to the 
   await dialog(page).locator('[data-token="bg"] .theme-swatch').click();
   expect(await clicked).toBe(true);
 });
+
+// #204: the primary button follows what is being edited, as OK does
+test("editing a saved custom theme, Save is the primary button and replaces it; Save as new theme makes a copy", async ({ page }) => {
+  await openInTheme(page, "custom-1", [{ id: "custom-1", name: "Night shift", base: "dracula", colors: { accent: "#9580ff" } }]);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  const actions = dialog(page).locator(".theme-editor-actions");
+  const save = actions.getByRole("button", { name: "Save", exact: true });
+  const asNew = actions.getByRole("button", { name: "Save as new theme" });
+  await expect(save).toHaveClass(/ui-btn-primary/);
+  await expect(asNew).not.toHaveClass(/ui-btn-primary/);
+  const hex = dialog(page).getByRole("textbox", { name: "Background, editor hex", exact: true });
+  for (const color of ["#101018", "#121220"]) {
+    await hex.fill(color);
+    await save.click();
+    await expect(dialog(page).locator(".theme-editor-msg")).toHaveText(/Saved "Night shift"/);
+  }
+  expect((await saved(page)).custom.map((c: { id: string; colors: { bg: string } }) => [c.id, c.colors.bg])).toEqual([["custom-1", "#121220"]]);
+  await asNew.click();
+  await expect.poll(async () => (await saved(page)).custom.length).toBe(2);
+});
+
+test("starting from a built-in theme there is no Save: Save as new theme is the primary button", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  const actions = dialog(page).locator(".theme-editor-actions");
+  await expect(actions.getByRole("button", { name: "Save", exact: true })).toHaveCount(0);
+  await expect(actions.getByRole("button", { name: "Save as new theme" })).toHaveClass(/ui-btn-primary/);
+});

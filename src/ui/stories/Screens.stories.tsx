@@ -229,9 +229,11 @@ export const ThemeImagesEditor = bgEditor(BOTH);
 export const ThemeImagesEditorBackgroundOnly = bgEditor(BG);
 export const ThemeImagesEditorNoImages = bgEditor({});
 /** A saved custom theme in the smallest window (#204): the action row (Import…, Export…, Reset to base, Delete, the name, Save, Save as
- *  new theme) wraps and nothing is cut; OK saves the changes, as DataGrip's (Esc and × ask to discard them) */
+ *  new theme) wraps and nothing is cut. Save, which replaces the theme, is the primary button, as OK does it; Save as new theme makes a
+ *  copy. OK saves the changes, as DataGrip's (Esc and × ask to discard them) */
 /** Started from a built-in theme (Dark): the Images header says the images are saved with a new custom theme (its ⓘ: OK saves these
- *  edits as one and picks it); a background image picked here. A saved custom theme being changed has no such line */
+ *  edits as one and picks it); a background image picked here. There is no Save (nothing to replace): Save as new theme is the primary
+ *  button. A saved custom theme being changed has no such line, and Save is its primary button */
 export const ThemeImagesEditorFromBuiltIn: S = {
   render: () => <SettingsDialog initialPage="theme" onClose={noop} onUpdate={noop} onChannel={noop} />,
   play: async ({ canvasElement }) => {

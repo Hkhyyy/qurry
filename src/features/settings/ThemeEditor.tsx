@@ -267,12 +267,14 @@ export function ThemeEditor({ start, onBack, onDirty, commit }: { start: string;
             </div>
             <div className="ui-row">
               <TextInput aria-label="Theme name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Theme name" maxLength={64} style={{ flex: 1, minWidth: 120 }} />
+              {/* The primary button is what OK does: Save over the custom theme being changed; from a built-in one, Save as new theme
+                  (there is nothing to replace, so no Save) */}
               {saved && (
-                <Button size="sm" disabled={!name.trim() || !dirty} onClick={() => save(false)}>
+                <Button size="sm" variant="primary" disabled={!name.trim() || !dirty} onClick={() => save(false)}>
                   Save
                 </Button>
               )}
-              <Button size="sm" variant="primary" disabled={!name.trim()} onClick={() => save(true)}>
+              <Button size="sm" variant={saved ? "default" : "primary"} disabled={!name.trim()} onClick={() => save(true)}>
                 Save as new theme
               </Button>
             </div>
