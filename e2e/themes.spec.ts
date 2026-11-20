@@ -411,3 +411,14 @@ test("Delete, then OK: the deleted theme stays deleted", async ({ page }) => {
   await expect(dialog(page)).toHaveCount(0);
   expect((await saved(page)).custom).toEqual([]);
 });
+
+test("a double-click on OK saves the theme once", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("textbox", { name: "Background, editor hex", exact: true }).fill("#101018");
+  await dialog(page).getByRole("button", { name: "OK" }).dblclick();
+  await expect(dialog(page)).toHaveCount(0);
+  await page.waitForTimeout(300);
+  expect((await saved(page)).custom.map((c: { name: string }) => c.name)).toEqual(["Dark custom"]);
+});
