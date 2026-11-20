@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { sharedOr, useSharedReady } from "../../lib/shared";
-import { TOKENS, type Palette, type ThemeWarning } from "../../lib/theme";
+import { TOKENS, useThemeState, type Palette, type ThemeWarning } from "../../lib/theme";
 import { api } from "../../lib/api";
 import { ANCHORS, backdropStyle, CORNERS, FILLS, imageUrl, newBackgroundSlot, newCornerSlot, opacityCap, SIZE_MAX, SIZE_MIN, stickerStyle, stillFrame, warningsOver, type BackgroundSlot, type CornerSlot, type Fill, type ThemeImages } from "../../lib/themeImages";
 import { Button, cx, Named, Select } from "../../ui";
@@ -72,6 +72,19 @@ export function ThemeBackdrop({ slot, still, className, style, children }: Shown
     </div>
   );
 }
+
+/** The theme in use's Background behind children: subscribed here, so a change of the theme (the editor's every tick) redraws this host
+ *  and not the children, which keep their element and bail out */
+export function ThemeBackground({ className, children }: { className?: string; children?: ReactNode }) {
+  return (
+    <ThemeBackdrop slot={useThemeState().current.images?.background} className={className}>
+      {children}
+    </ThemeBackdrop>
+  );
+}
+
+/** The theme in use's Corner image (the window's): subscribed here, not by the App */
+export const ThemeCorner = () => <ThemeSticker slot={useThemeState().current.images?.corner} />;
 
 /** Corner: the image scaled down in a corner, in front of the window and under menus, dialogs, toasts and popups; clicks pass through.
  *  inPreview: in the editor's preview (or a thumbnail), sized by it */

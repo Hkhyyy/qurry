@@ -14,8 +14,7 @@ import { ask } from "../lib/dialogs";
 import { planText } from "../lib/planText";
 import { explainSql } from "../lib/explain";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
-import { useThemeState } from "../lib/theme";
-import { ThemeBackdrop } from "../features/settings/ThemeImages";
+import { ThemeBackground } from "../features/settings/ThemeImages";
 import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep, TxPending } from "../ui";
 
 const SETTINGS_KEY = "dbtool.execSettings";
@@ -152,7 +151,6 @@ interface Props {
 }
 
 export function ConsolePane(p: Props) {
-  const theme = useThemeState().current;
   const [settings, setSettingsState] = useState<ExecSettings>(loadExecSettings);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [chooser, setChooser] = useState<{ options: { label: string; stmts: RunStmt[]; ranges: { start: number; end: number }[] }[]; idx: number; req: RunRequest } | null>(null);
@@ -431,7 +429,7 @@ export function ConsolePane(p: Props) {
       </Toolbar>
 
       {/* The theme's Background image: behind the editor and the results, as one picture */}
-      <ThemeBackdrop slot={theme.images?.background} className="console-images">
+      <ThemeBackground className="console-images">
         <Group orientation="vertical" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
           <Panel id="editor" defaultSize="58%" minSize="15%">
             <div className="editor-area">
@@ -565,7 +563,7 @@ export function ConsolePane(p: Props) {
             </div>
           </Panel>
         </Group>
-      </ThemeBackdrop>
+      </ThemeBackground>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   );
