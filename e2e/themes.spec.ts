@@ -342,3 +342,29 @@ for (const theme of ["dark", "light"]) {
     await expect(dialog(page).locator(".theme-editor-msg .ui-notice")).toBeInViewport({ ratio: 1 });
   });
 }
+
+// beta.1's "can't scroll here": the wheel over a color's swatch (its hidden color input) didn't scroll the list in Chromium
+test("the color list scrolls with the wheel, over the swatches too, down to the last basic color and Advanced colors at 800×500", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 500 });
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  const list = dialog(page).locator(".theme-tokens");
+  const swatch = (await dialog(page).locator(".theme-swatch").first().boundingBox())!;
+  await page.mouse.move(swatch.x + swatch.width / 2, swatch.y + swatch.height / 2);
+  for (let i = 0; i < 8; i++) await page.mouse.wheel(0, 150);
+  await expect.poll(() => list.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
+  // Scrolled to the end: the last basic color and Advanced colors inside the list's box
+  const inList = async (l: import("@playwright/test").Locator) => {
+    const [r, b] = [(await l.boundingBox())!, (await list.boundingBox())!];
+    return r.y >= b.y - 1 && r.y + r.height <= b.y + b.height + 1;
+  };
+  await expect.poll(() => inList(dialog(page).locator('[data-token="prodTint"]'))).toBe(true);
+  await expect.poll(() => inList(dialog(page).getByRole("button", { name: /Advanced colors/ }))).toBe(true);
+  // The actions under the list stay where they are
+  for (const name of ["Import…", "Export…", "Save as new theme"]) await expect(dialog(page).getByRole("button", { name, exact: true })).toBeInViewport({ ratio: 1 });
+  // A click on the swatch still reaches its color input (the system picker)
+  const clicked = page.evaluate(() => new Promise<boolean>((ok) => document.querySelector<HTMLInputElement>('[data-token="bg"] input[type=color]')!.addEventListener("click", (e) => (e.preventDefault(), ok(true)), { once: true })));
+  await dialog(page).locator('[data-token="bg"] .theme-swatch').click();
+  expect(await clicked).toBe(true);
+});
