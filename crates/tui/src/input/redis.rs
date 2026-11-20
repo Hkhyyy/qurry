@@ -430,7 +430,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn redis_explorer_and_tab_on_a_real_server() {
-        let addr = std::env::var("QURRY_TEST_REDIS").unwrap_or_else(|_| "127.0.0.1:16379".into());
+        let Some(addr) = qurry_core::testenv::var("QURRY_TEST_REDIS") else { return };
         let (host, port) = addr.rsplit_once(':').unwrap();
         let mut h = Harness::new().await;
         let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "rb", "name": "rb", "kind": "redis", "host": host, "port": port.parse::<u16>().unwrap(), "user": "", "database": "12" })).unwrap();

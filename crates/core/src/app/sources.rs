@@ -19,16 +19,20 @@ impl AppState {
         if self.store.is_temporary(store::secret_owner(key)) {
             return Ok(self.temporary.lock().unwrap().get(key).cloned());
         }
-        // MCP server: never reads passwords of Data Sources hidden from MCP (so it cannot connect either)
-        if self.mcp {
-            let id = store::secret_owner(key);
-            if let Some(c) = self.store.get(id)?.filter(|c| c.mcp_access(false) == store::McpAccess::Off) {
-                return Err(AppError::Msg(format!("Data source \"{}\" is not shared with MCP (turn it on in the data source's Options)", c.name)));
-            }
-        }
+        self.mcp_may_log_in(store::secret_owner(key))?;
         // No in-memory cache: another app (the GUI) may have changed the server and its password since; the file is cheap to read
         // Passwords live only in the encrypted file (the keychain holds at most the master key: crate::secrets)
         self.secret_file.get(key)
+    }
+
+    /// MCP server: never reads passwords of, or runs password commands for, Data Sources hidden from MCP (so it cannot connect either)
+    pub(crate) fn mcp_may_log_in(&self, id: &str) -> AppResult<()> {
+        if self.mcp
+            && let Some(c) = self.store.get(id)?.filter(|c| c.mcp_access(false) == store::McpAccess::Off)
+        {
+            return Err(AppError::Msg(format!("Data source \"{}\" is not shared with MCP (turn it on in the data source's Options)", c.name)));
+        }
+        Ok(())
     }
 
     /// Where the password file's master key is kept (shown in Settings)
@@ -89,19 +93,22 @@ pub struct ConnectionView {
     /// From the qurry-tui command line, only in this process (Store::temporary)
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub temporary: bool,
+    /// ConnectionConfig::starts_manual, for the GUI (a new console's Transaction mode), so the rule has no TS copy
+    pub starts_manual: bool,
+    /// ConnectionConfig::production_starts_manual, for the GUI (the console says why it is in Manual)
+    pub production_starts_manual: bool,
+}
+
+impl ConnectionView {
+    pub fn new(config: ConnectionConfig, has_password: bool, connected: bool, temporary: bool) -> Self {
+        let (starts_manual, production_starts_manual) = (config.starts_manual(), config.production_starts_manual());
+        Self { config, has_password, connected, temporary, starts_manual, production_starts_manual }
+    }
 }
 
 /// DBs shown in the tree (scope from the Data Source › Schemas tab, system DBs hidden). Shared by GUI, TUI and the search cache
 pub fn visible_dbs(cfg: &ConnectionConfig, dbs: Vec<String>, def: &str) -> Vec<String> {
-    let hidden: &[&str] = match cfg.kind {
-        store::DbKind::Postgres => &["template0", "template1", "rdsadmin"],
-        store::DbKind::Mysql => &crate::mysql::SYSTEM_DBS,
-        store::DbKind::Redis => &[],
-        store::DbKind::Mssql => &["master", "tempdb", "model", "msdb"],
-        store::DbKind::Mongodb => &["admin", "config", "local"],
-        store::DbKind::Clickhouse => &["system", "information_schema", "INFORMATION_SCHEMA"],
-        _ => &[],
-    };
+    let hidden = qurry_shared::kind::system_databases(cfg.kind);
     let scoped = cfg.scope.databases.as_ref().map(|d| !d.is_empty()).unwrap_or(false);
     dbs.into_iter()
         .filter(|d| scoped || d == def || !hidden.contains(&d.as_str()))
@@ -131,12 +138,10 @@ impl AppState {
             .list()?
             .into_iter()
             .map(|c| {
-                Ok(ConnectionView {
-                    has_password: c.password_saved || self.secret_file.contains(&c.password_key()).unwrap_or(true),
-                    connected: pools.keys().any(|k| belongs(k, &c.id)),
-                    temporary: self.store.is_temporary(&c.id),
-                    config: c,
-                })
+                let has_password = c.password_saved || self.secret_file.contains(&c.password_key()).unwrap_or(true);
+                let connected = pools.keys().any(|k| belongs(k, &c.id));
+                let temporary = self.store.is_temporary(&c.id);
+                Ok(ConnectionView::new(c, has_password, connected, temporary))
             })
             .collect()
     }
@@ -158,12 +163,17 @@ impl AppState {
         // Check against the saved source, set the secrets and write under the store lock: another app's save in between
         // (another server, a password saved or removed) can't be decided on stale settings
         let config = self.store.save_with(config, |prev, config| {
+            let mut forget_password = false;
             // If the server changed, do not use the saved password for the new server: ask for it again
             // "Saved" means the password actually exists, not the flag (old imports left entries with only the flag turned off).
             // A damaged secrets.json that may hold it counts as saved
             if let Some(p) = prev {
                 if password.is_none() && self.secret_file.contains(&p.password_key()).unwrap_or(true) && !p.same_server(config) {
-                    return Err(AppError::Msg(SERVER_CHANGED.into()));
+                    // With a password command there is no password to enter (the field is off): the old one is forgotten instead
+                    if config.password_command.trim().is_empty() {
+                        return Err(AppError::Msg(SERVER_CHANGED.into()));
+                    }
+                    forget_password = true;
                 }
                 if ssh_secret.is_none() && self.secret_file.contains(&store::ssh_secret_key(&p.id)).unwrap_or(true) && config.active_ssh().is_some() && !p.same_ssh(config) {
                     return Err(AppError::Msg(SSH_CHANGED.into()));
@@ -172,7 +182,7 @@ impl AppState {
             // The saved-password flag is managed on the backend (None = keep the existing value)
             config.password_saved = prev.is_some_and(|p| p.password_saved);
             config.ssh_secret_saved = prev.is_some_and(|p| p.ssh_secret_saved);
-            match password.as_deref() {
+            match password.as_deref().or(forget_password.then_some("")) {
                 Some("") => {
                     for k in store::password_keys(&config.id) {
                         self.set_secret(&k, None)?;
@@ -260,6 +270,7 @@ impl AppState {
         crate::search_cache::remove_conn(&self.store.dir(), &id);
         self.store.delete(&id)?;
         self.connecting.lock().unwrap().remove(&id);
+        self.command_passwords.lock().unwrap().remove(&id);
         forgot.map_err(|e| AppError::Msg(format!("The data source was removed, but its saved password couldn't be: {e}")))
     }
 
@@ -292,6 +303,8 @@ impl AppState {
     /// kept, the caller closes both. If `password` is None, use the saved password (only when it is the same server as the saved settings).
     async fn connect_form(&self, config: &ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<(Pool, Option<crate::tunnel::Tunnel>)> {
         let password = match password {
+            // The form's own command runs (the saved password isn't read)
+            _ if !config.password_command.trim().is_empty() => self.login_password(config).await?,
             Some(p) => Some(p),
             None if !config.id.is_empty() => self.saved_password_for(config)?,
             None => None,
@@ -491,7 +504,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: "a".into(), name: "a".into(), kind: crate::store::DbKind::Postgres, host: "127.0.0.1".into(), port: 1,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         let saved = st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
         let mut moved = saved.clone();
@@ -523,7 +536,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: String::new(), name: "trust".into(), kind: crate::store::DbKind::Postgres, host: "127.0.0.1".into(), port: 1,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         let saved = st.save_connection(cfg, None, None).await.unwrap();
         assert_eq!(saved.options.mcp.as_deref(), Some("off"));
@@ -625,7 +638,7 @@ mod tests {
         let mut cfg = ConnectionConfig {
             id: "prod".into(), name: "prod".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: true,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         cfg.options.confirm_changes = true;
         st.store.save(&cfg).unwrap();
@@ -649,7 +662,7 @@ mod tests {
             id: id.into(), name: id.into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, password_saved: false,
             ssh: Some(crate::store::SshConfig { enabled: true, host: "127.0.0.1".into(), port: 1, user: "me".into(), auth: Default::default(), key_path: String::new() }),
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         st.save_connection(mk("pw"), Some("secret".into()), None).await.unwrap();
         st.save_connection(mk("trust"), None, None).await.unwrap();
@@ -682,7 +695,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: "p".into(), name: "p".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
         // Another app turns on Read-only
@@ -709,7 +722,7 @@ mod tests {
         let mk = |id: &str, kind| ConnectionConfig {
             id: id.into(), name: id.into(), kind, host: "db.example".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         st.save_connection(mk("p", crate::store::DbKind::Postgres), Some("pw".into()), None).await.unwrap();
         // A pool that is open now (lazy: never connects)
@@ -759,7 +772,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: "r".into(), name: "r".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         Store::new(dir.clone()).save(&cfg).unwrap();
         // Create the key before the threads open the file
@@ -798,7 +811,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: "m".into(), name: "m".into(), kind: crate::store::DbKind::Mysql, host: "db.example".into(), port: 3306,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
         let file = dir.join("import.json");
@@ -886,5 +899,39 @@ mod tests {
     #[ignore]
     async fn form_listing_mysql() {
         form_listing(crate::store::DbKind::Mysql).await;
+    }
+
+    /// The view carries the core's Manual-start rule, so the GUI reads it instead of keeping a copy (#156): Production PostgreSQL /
+    /// MySQL start Manual and say why, the source's own Transaction control starts Manual without the note, Redis never
+    #[tokio::test]
+    async fn view_says_whether_a_console_starts_manual() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let src = |id: &str, kind: &str, opts: serde_json::Value| -> ConnectionConfig {
+            let mut c = silent_source(id, 1, None);
+            c.kind = serde_json::from_value(serde_json::json!(kind)).unwrap();
+            c.options = serde_json::from_value(opts).unwrap();
+            c
+        };
+        for c in [
+            src("prod", "postgres", serde_json::json!({ "confirmChanges": true })),
+            src("prod-my", "mysql", serde_json::json!({ "confirmChanges": true })),
+            src("prod-off", "postgres", serde_json::json!({ "confirmChanges": true, "productionManual": false })),
+            src("own", "postgres", serde_json::json!({ "txManual": true })),
+            src("prod-rd", "redis", serde_json::json!({ "confirmChanges": true, "txManual": true })),
+            src("dev", "postgres", serde_json::json!({})),
+        ] {
+            st.store.save(&c).unwrap();
+        }
+        let views = st.list_connections().await.unwrap();
+        let got = |id: &str| views.iter().find(|v| v.config.id == id).map(|v| (v.starts_manual, v.production_starts_manual)).unwrap();
+        assert_eq!(got("prod"), (true, true));
+        assert_eq!(got("prod-my"), (true, true));
+        assert_eq!(got("prod-off"), (false, false));
+        assert_eq!(got("own"), (true, false));
+        assert_eq!(got("prod-rd"), (false, false));
+        assert_eq!(got("dev"), (false, false));
+        let json = serde_json::to_value(views.iter().find(|v| v.config.id == "prod").unwrap()).unwrap();
+        assert_eq!((json["startsManual"].as_bool(), json["productionStartsManual"].as_bool()), (Some(true), Some(true)));
     }
 }

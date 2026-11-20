@@ -379,8 +379,7 @@ async fn an_open_popup_is_never_replaced() {
 #[tokio::test]
 #[ignore]
 async fn pg_tree_end_to_end() {
-    let db = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG").split(':').nth(3).unwrap().to_string();
-    let mut h = shared_pg().await;
+    let Some((mut h, db)) = shared_pg().await else { return };
     h.app.focus = Focus::Tree;
     h.key("Right");
     h.settle().await;
@@ -400,7 +399,7 @@ async fn pg_tree_end_to_end() {
 #[tokio::test]
 #[ignore]
 async fn pg_console_reconnects_and_reloads_the_tree() {
-    let mut h = shared_pg().await;
+    let Some((mut h, db)) = shared_pg().await else { return };
     h.app.focus = Focus::Tree;
     h.key("Right");
     h.settle().await;
@@ -421,7 +420,6 @@ async fn pg_console_reconnects_and_reloads_the_tree() {
     assert!(h.app.status.contains("Not encrypted"), "{}", h.app.status);
     assert_eq!(h.console_output().last().map(String::as_str), Some("Connected. Run again."));
     assert_eq!(RUNS.load(Ordering::SeqCst), runs + 1, "the statement isn't run again");
-    let db = std::env::var("QURRY_TEST_PG").unwrap().split(':').nth(3).unwrap().to_string();
     assert!(kids(&h).contains(&db), "{:?}", kids(&h));
     let _ = h.app.state.disconnect("test".into()).await;
 }
@@ -430,7 +428,7 @@ async fn pg_console_reconnects_and_reloads_the_tree() {
 #[tokio::test]
 #[ignore]
 async fn pg_table_tab_reloads() {
-    let mut h = shared_pg().await;
+    let Some((mut h, _)) = shared_pg().await else { return };
     h.app.open_table("test", String::new(), "pg_catalog".into(), "pg_am".into(), "table".into());
     h.settle().await;
     read_it(&mut h);
@@ -441,14 +439,15 @@ async fn pg_table_tab_reloads() {
     let _ = h.app.state.disconnect("test".into()).await;
 }
 
-/// Data source "test" on the shared PostgreSQL (QURRY_TEST_PG=host:port:user:db), at "127.1" so Qurry treats it as remote
-async fn shared_pg() -> Harness {
-    let e = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG");
+/// Data source "test" on the shared PostgreSQL (QURRY_TEST_PG=host:port:user:db), at "127.1" so Qurry treats it as remote, and its
+/// database. None (the test skips) when QURRY_TEST_PG is unset
+async fn shared_pg() -> Option<(Harness, String)> {
+    let e = qurry_core::testenv::var("QURRY_TEST_PG")?;
     let p: Vec<&str> = e.split(':').collect();
     let mut h = Harness::new().await;
     let cfg = serde_json::from_value(serde_json::json!({ "id": "test", "name": "LAN pg", "kind": "postgres", "host": "127.1", "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[3] })).unwrap();
     h.app.state.save_connection(cfg, Some("pw".into()), None).await.unwrap();
     h.app.reload_conns();
     h.settle().await;
-    h
+    Some((h, p[3].to_string()))
 }

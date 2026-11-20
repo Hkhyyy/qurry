@@ -1,6 +1,7 @@
 //! Real servers for the ignored tests, read one way by every core test module:
 //! QURRY_TEST_PG=host:port:user:db[:password] · QURRY_TEST_MY=host:port:user:password:db.
-//! Unset: None, and the test returns without running.
+//! Unset: None and one `skipped: <VAR> is unset (<format>)` line on stderr, and the test returns without running.
+//! Core's own tests and, through the `testenv` feature (a dev-dependency only), the TUI and MCP tests read it.
 
 use crate::store::{ConnectionConfig, DbKind};
 
@@ -21,7 +22,7 @@ pub fn server(kind: DbKind) -> Option<Server> {
 
 /// QURRY_TEST_PG=host:port:user:db[:password] (the password is the rest of the line, so it may hold ':')
 pub fn pg() -> Option<Server> {
-    std::env::var("QURRY_TEST_PG").ok().map(|e| parse_pg(&e))
+    var("QURRY_TEST_PG").map(|e| parse_pg(&e))
 }
 
 /// QURRY_TEST_MY=host:port:user:password:db
@@ -30,8 +31,22 @@ pub fn my() -> Option<Server> {
 }
 
 /// Another MySQL in the QURRY_TEST_MY format (e.g. QURRY_TEST_MY_NOTLS)
-pub fn my_from(var: &str) -> Option<Server> {
-    std::env::var(var).ok().map(|e| parse_my(var, &e))
+pub fn my_from(name: &str) -> Option<Server> {
+    var(name).map(|e| parse_my(name, &e))
+}
+
+/// A test server variable; unset, the test says it skipped (visible with --nocapture) and gets None
+pub fn var(name: &str) -> Option<String> {
+    let v = std::env::var(name).ok();
+    if v.is_none() {
+        let format = match name {
+            "QURRY_TEST_PG" => "host:port:user:db[:password]",
+            "QURRY_TEST_REDIS" => "host:port",
+            _ => "host:port:user:password:db",
+        };
+        eprintln!("skipped: {name} is unset ({format})");
+    }
+    v
 }
 
 /// One MySQL connection to the test server, made the way the app connects (crate::db::connect): TLS when the server's TLS works
@@ -84,6 +99,8 @@ fn cfg(kind: DbKind, var: &str, host: &str, port: &str, user: &str, database: &s
         ssl: None,
         redis: None,
         ssm: None,
+        password_command: String::new(),
+        password_reuse_secs: None,
     }
 }
 

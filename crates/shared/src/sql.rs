@@ -34,6 +34,16 @@ pub fn quote_ident(kind: DbKind, s: &str) -> String {
     }
 }
 
+/// A PostgreSQL console's schema (the console's schema picker, and a console opened from a schema): `public` stays on the path
+pub fn search_path_sql(schema: &str) -> String {
+    format!("SET search_path TO {}, public", quote_ident(DbKind::Postgres, schema))
+}
+
+/// A MySQL console's schema, which is a database there
+pub fn use_sql(schema: &str) -> String {
+    format!("USE {}", quote_ident(DbKind::Mysql, schema))
+}
+
 /// Whether it is a pgvector column (vector(3) · halfvec · sparsevec)
 pub fn is_vector_type(t: &str) -> bool {
     let t = t.trim().to_lowercase();
@@ -338,6 +348,23 @@ pub(crate) fn quotes_vary(text: &str, kind: DbKind) -> bool {
     matches!(kind, DbKind::Mysql | DbKind::Postgres) && text.contains('\\')
 }
 
+/// The text with every byte of what isn't code (comments, strings, quoted names, dollar quotes, as the server reads them) turned
+/// into a space, so byte offsets stay the same. The inside of MySQL `/*! … */` · `/*M! … */` stays: it is code
+pub(crate) fn blank_non_code(text: &str, kind: DbKind) -> String {
+    let mut out = text.as_bytes().to_vec();
+    let mut i = 0;
+    while i < text.len() {
+        match skip_non_code(text, i, kind, SplitOptions::default()) {
+            Some(j) => {
+                out[i..j].fill(b' ');
+                i = j;
+            }
+            None => i += text[i..].chars().next().map_or(1, char::len_utf8),
+        }
+    }
+    String::from_utf8(out).expect("only whole characters are blanked")
+}
+
 /// A statement as the confirm dialogs and the Execute chooser show it: its comments left out as the server reads them (`--`, `/* */`
 /// nested in PostgreSQL, MySQL `#`; not inside strings, quoted names or dollar quotes) and its whitespace collapsed. What the
 /// server runs stays as written: strings, names, MySQL `/*! … */`. Where the quotes vary (quotes_vary), a comment holding a quote
@@ -634,6 +661,15 @@ fn trimmed(text: &str, s: usize, e: usize) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_switch_statements_quote_the_name() {
+        assert_eq!(search_path_sql("billing"), "SET search_path TO billing, public");
+        assert_eq!(search_path_sql("Billing"), "SET search_path TO \"Billing\", public");
+        assert_eq!(search_path_sql("a\"b"), "SET search_path TO \"a\"\"b\", public");
+        assert_eq!(use_sql("shop"), "USE shop");
+        assert_eq!(use_sql("my`db"), "USE `my``db`");
+    }
 
     #[test]
     fn subqueries_around_the_caret() {

@@ -697,12 +697,6 @@ pub async fn trust_ssh_host(state: State<'_, AppState>, host: String, port: u16)
     state.trust_ssh_host(host, port)
 }
 
-/// The reason, if this is a dangerous statement needing confirmation before running (UPDATE/DELETE without WHERE, DROP, TRUNCATE, Redis FLUSH*·DEL)
-#[tauri::command]
-pub fn unsafe_reason(kind: crate::store::DbKind, sql: String) -> Option<String> {
-    qurry_core::guard::unsafe_statement(&sql, kind)
-}
-
 #[tauri::command]
 pub async fn list_databases(state: State<'_, AppState>, id: String) -> AppResult<Vec<String>> {
     state.list_databases(id).await
@@ -939,6 +933,20 @@ pub async fn export_theme(app: tauri::AppHandle, state: State<'_, AppState>, the
     Ok(Some(path))
 }
 
+/// Settings › Theme › Images › Choose…: the native picker (opened here, so the WebView never names a path), then the image copied
+/// into the config folder; its file name, None if cancelled
+#[tauri::command]
+pub async fn import_theme_image(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<Option<String>> {
+    let Some(path) = app.dialog().file().add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"]).blocking_pick_file().and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    Ok(Some(state.store.import_theme_image(&path)?))
+}
+
+/// A theme image's bytes (an ArrayBuffer in the WebView, drawn from a blob URL: no asset protocol or CSP change needed)
+#[tauri::command]
+pub async fn theme_image(state: State<'_, AppState>, file: String) -> AppResult<tauri::ipc::Response> {
+    Ok(tauri::ipc::Response::new(state.store.theme_image(&file)?))
+}
+
 /// Column widths a user gave a table tab's columns (settings.json "columnWidths", shared with the TUI)
 #[tauri::command]
 pub fn column_widths(state: State<'_, AppState>, table: qurry_core::store::TableRef) -> qurry_core::format::ColumnWidths {
@@ -955,6 +963,17 @@ pub fn reset_column_widths(state: State<'_, AppState>, table: qurry_core::store:
     state.store.reset_column_widths(&table)
 }
 
+/// A table tab's hidden and pinned columns (settings.json "columnLayout", shared with the TUI)
+#[tauri::command]
+pub fn column_layout(state: State<'_, AppState>, table: qurry_core::store::TableRef) -> qurry_core::format::ColumnLayout {
+    state.store.column_layout(&table)
+}
+
+#[tauri::command]
+pub fn set_column_layout(state: State<'_, AppState>, table: qurry_core::store::TableRef, layout: qurry_core::format::ColumnLayout) -> AppResult<()> {
+    state.store.set_column_layout(&table, &layout)
+}
+
 /// Help › Show Log and Find Action: reveals the log file in Finder, or opens its folder until the file exists
 #[tauri::command]
 pub fn show_log() -> AppResult<()> {
@@ -962,6 +981,13 @@ pub fn show_log() -> AppResult<()> {
     std::fs::create_dir_all(&dir)?;
     let opened = if file.exists() { tauri_plugin_opener::reveal_item_in_dir(&file) } else { tauri_plugin_opener::open_path(&dir, None::<&str>) };
     opened.map_err(|e| crate::error::AppError::Msg(format!("Couldn't open the log ({e}). Open it from Finder: {}", file.display())))
+}
+
+/// Help › Copy Diagnostics and Find Action: the text the front end puts on the clipboard (qurry_core::diagnostics, never names,
+/// hosts or secrets)
+#[tauri::command]
+pub fn diagnostics(state: State<'_, AppState>) -> AppResult<String> {
+    Ok(qurry_core::diagnostics::text("gui", env!("CARGO_PKG_VERSION"), &state.store.list()?, &qurry_core::logfile::path(), 200))
 }
 
 /// A front-end error (an error boundary's, window error, unhandledrejection) into qurry.log: message and stacks only, redacted,

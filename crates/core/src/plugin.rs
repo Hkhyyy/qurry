@@ -307,7 +307,7 @@ mod tests {
 
     /// Server DBs: only when QURRY_TEST_<KIND>=host:port:user:password:database is set
     fn server_cfg(kind: &str, env: &str) -> Option<(ConnectionConfig, String)> {
-        let e = std::env::var(env).ok()?;
+        let e = crate::testenv::var(env)?;
         let p: Vec<&str> = e.splitn(5, ':').collect();
         let cfg = serde_json::from_value(json!({ "id": "s", "name": "s", "kind": kind, "host": p[0], "port": p[1].parse::<u16>().ok()?, "user": p[2], "database": p[4] })).ok()?;
         Some((cfg, p[3].to_string()))

@@ -50,7 +50,7 @@ mod tests {
                 assert_eq!(n, 0, "MySQL ran the DELETE under {mode}");
             }
         }
-        if let Ok(e) = std::env::var("QURRY_TEST_PG") {
+        if let Some(e) = crate::testenv::var("QURRY_TEST_PG") {
             let p: Vec<&str> = e.split(':').collect();
             let mut c = sqlx::PgConnection::connect(&format!("postgres://{}@{}:{}/{}", p[2], p[0], p[1], p[3])).await.unwrap();
             sqlx::raw_sql("drop schema if exists stmt_kind_exec cascade; create schema stmt_kind_exec").execute(&mut c).await.unwrap();
@@ -73,7 +73,7 @@ mod tests {
         let seq = "select nextval('stmt_kind_exec_into.s')";
         let lo = "select lo_create(0)";
         assert!(!is_read(into, DbKind::Postgres) && !is_read(seq, DbKind::Postgres) && !is_read(lo, DbKind::Postgres));
-        let Ok(e) = std::env::var("QURRY_TEST_PG") else { return };
+        let Some(e) = crate::testenv::var("QURRY_TEST_PG") else { return };
         let p: Vec<&str> = e.split(':').collect();
         let mut c = sqlx::PgConnection::connect(&format!("postgres://{}@{}:{}/{}", p[2], p[0], p[1], p[3])).await.unwrap();
         sqlx::raw_sql("drop schema if exists stmt_kind_exec_into cascade; create schema stmt_kind_exec_into; create table stmt_kind_exec_into.t (a int); create sequence stmt_kind_exec_into.s")
@@ -103,7 +103,7 @@ mod tests {
         assert!(!is_read(pg, DbKind::Postgres) && !is_read(my, DbKind::Mysql));
         let fixture = "create table run4_guard_fixes.t (a int); insert into run4_guard_fixes.t values (1), (2), (3)";
         let count = "select count(*) from run4_guard_fixes.t";
-        if let Ok(e) = std::env::var("QURRY_TEST_PG") {
+        if let Some(e) = crate::testenv::var("QURRY_TEST_PG") {
             let p: Vec<&str> = e.split(':').collect();
             let mut c = sqlx::PgConnection::connect(&format!("postgres://{}@{}:{}/{}", p[2], p[0], p[1], p[3])).await.unwrap();
             sqlx::raw_sql("drop schema if exists run4_guard_fixes cascade; create schema run4_guard_fixes").execute(&mut c).await.unwrap();
@@ -133,7 +133,7 @@ mod tests {
         let del = "delete from run4_guard_fixes_rb.t";
         let seq = "select nextval('run4_guard_fixes_rb.s'), setval('run4_guard_fixes_rb.s2', 5)";
         assert!(rollback_undoes(del, DbKind::Postgres) && !rollback_undoes(seq, DbKind::Postgres));
-        let Ok(e) = std::env::var("QURRY_TEST_PG") else { return };
+        let Some(e) = crate::testenv::var("QURRY_TEST_PG") else { return };
         let p: Vec<&str> = e.split(':').collect();
         let mut c = sqlx::PgConnection::connect(&format!("postgres://{}@{}:{}/{}", p[2], p[0], p[1], p[3])).await.unwrap();
         sqlx::raw_sql(
@@ -178,7 +178,7 @@ mod tests {
         assert!(!rollback_undoes(pg, DbKind::Postgres) && !rollback_undoes(my, DbKind::Mysql));
         let fixture = "create table run4_guard_fixes_multi.t (a int); insert into run4_guard_fixes_multi.t values (1), (2)";
         let count = "select count(*) from run4_guard_fixes_multi.t";
-        if let Ok(e) = std::env::var("QURRY_TEST_PG") {
+        if let Some(e) = crate::testenv::var("QURRY_TEST_PG") {
             let p: Vec<&str> = e.split(':').collect();
             let mut c = sqlx::PgConnection::connect(&format!("postgres://{}@{}:{}/{}", p[2], p[0], p[1], p[3])).await.unwrap();
             sqlx::raw_sql("drop schema if exists run4_guard_fixes_multi cascade; create schema run4_guard_fixes_multi").execute(&mut c).await.unwrap();

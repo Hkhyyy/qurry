@@ -52,17 +52,48 @@ pub fn confirm_lines(text: &str) -> Vec<Line<'static>> {
     lines
 }
 
-/// The N of "→ N rows" (None when it isn't a number: "schema change", "can't count")
+/// A popup's key hints on its last row(s), wrapped in a narrow window so no key is cut off; returns the area above them
+pub fn keys_at_bottom(f: &mut Frame, inner: Rect, keys: Line<'static>) -> Rect {
+    let kh = wrapped_height(std::slice::from_ref(&keys), inner.width).min(inner.height);
+    let [body, bottom] = Layout::vertical([Constraint::Min(0), Constraint::Length(kh)]).areas(inner);
+    f.render_widget(Paragraph::new(keys).wrap(Wrap { trim: false }), bottom);
+    body
+}
+
+/// `lines` wrapped in `body`, from wrapped row `scroll`, kept so the last row can't go above the bottom; returns the scroll used
+pub fn scrolled(f: &mut Frame, body: Rect, lines: Vec<Line<'static>>, scroll: u16) -> u16 {
+    let scroll = scroll.min(wrapped_height(&lines, body.width).saturating_sub(body.height));
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((scroll, 0)), body);
+    scroll
+}
+
+/// A border title of key hints ("Enter open · ⌃b DDL · Esc") that fits `width` cells: the hints from the middle give way to "…",
+/// the last one (how to close) always stays
+pub fn fit_hints(title: &str, width: u16) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let parts: Vec<&str> = title.trim().split(" · ").collect();
+    let fits = |s: &String| s.width() <= width as usize;
+    let all = format!(" {} ", parts.join(" · "));
+    if fits(&all) || parts.len() < 2 {
+        return all;
+    }
+    let last = parts[parts.len() - 1];
+    (0..parts.len() - 1).rev().map(|k| format!(" {} ", [&parts[..k], &["…", last]].concat().join(" · "))).find(fits).unwrap_or_else(|| format!(" {last} "))
+}
+
+/// The N of "→ N rows" (None when it isn't a number: "schema change", "can't count", "can't count: <error>"; the words of
+/// qurry_shared::production::impact_line)
 fn row_count(v: &str) -> Option<u64> {
     v.split_whitespace().next().and_then(|x| x.replace(',', "").parse().ok())
 }
 
-/// "→ N rows": 0 dimmed · 1~99 WARN · 100+ or unknown DANGER
+/// "→ N rows" by the GUI's thresholds (qurry_shared::production::tone): 0 dimmed · 1~99 WARN · 100+ or unknown DANGER
 fn count_style(n: Option<u64>) -> Style {
-    let c = match n {
-        Some(0) => DIM,
-        Some(n) if n < 100 => WARN,
-        _ => DANGER,
+    use qurry_shared::production::{Tone, tone};
+    let c = match tone(n) {
+        Tone::None => DIM,
+        Tone::Warn => WARN,
+        Tone::Danger => DANGER,
     };
     Style::default().fg(c).add_modifier(Modifier::BOLD)
 }

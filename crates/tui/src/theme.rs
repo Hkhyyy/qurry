@@ -663,7 +663,7 @@ mod tests {
         // A custom theme's colors reach the TUI
         let s = ThemeSettings {
             theme: Some("custom-1".into()),
-            custom: vec![qurry_shared::theme::CustomTheme { id: "custom-1".into(), name: "Mine".into(), base: "dark".into(), colors: [("sel".into(), "#123456".into())].into() }],
+            custom: vec![qurry_shared::theme::CustomTheme { id: "custom-1".into(), name: "Mine".into(), base: "dark".into(), colors: [("sel".into(), "#123456".into())].into(), ..Default::default() }],
             ..Default::default()
         };
         assert_eq!(at(&Look::of(&s, false), ColorMode::TrueColor, Style::default().bg(SEL)).1, Color::Rgb(0x12, 0x34, 0x56));
@@ -715,9 +715,9 @@ mod tests {
                 assert!(contrast(lt(t, false), bg) >= 3.0, "{t:?} on {bg:?}: {}", contrast(lt(t, false), bg));
             }
         }
-        // SQL comments are only drawn in the WHERE / ORDER BY input (a popup), never on a selection; 3:1 as the GUI's comment
+        // SQL comments are only drawn in the WHERE / ORDER BY input (a popup), never on a selection; 4.5:1 as the GUI's comment
         for bg in [white, lt(POPUP_BG, true)] {
-            assert!(contrast(lt(SQL_COMMENT, false), bg) >= 3.0, "SQL_COMMENT on {bg:?}");
+            assert!(contrast(lt(SQL_COMMENT, false), bg) >= 4.5, "SQL_COMMENT on {bg:?}");
         }
         // Light surfaces and selections, each one apart from the others
         let bgs = [SEL, SEL_BLUR, SURFACE, POPUP_BG, CELL_EDITED, CELL_RANGE, DROP].map(|c| lt(c, true));

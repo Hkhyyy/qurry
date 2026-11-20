@@ -17,8 +17,10 @@ use tokio::sync::mpsc::UnboundedSender;
 use tui_textarea::TextArea;
 
 mod actions;
+mod columns;
 mod completion;
 mod conns;
+mod console_schema;
 mod explorer;
 mod palette;
 mod redis;
@@ -36,6 +38,7 @@ pub use actions::{title, ACTIONS};
 #[cfg(test)]
 pub use actions::{OPENER_FAILS, REPO_URL};
 pub use tables::Resize;
+pub use columns::COLUMNS;
 pub(crate) use tables::cut_note;
 pub(crate) use palette::{is_search, scope_name};
 #[cfg(test)]
@@ -78,6 +81,10 @@ pub struct Console {
     pub joined: Vec<reformat::Joined>,
     /// The text's SQL colors, highlighted again only when the text changes
     pub colors: SqlColors,
+    /// The values last given to its `:name` parameters (#173), offered again on the next run; not saved with the workspace
+    pub params: std::collections::BTreeMap<String, String>,
+    /// The schema the session was switched to (opened from a schema, or Switch Schema…); None: the default one
+    pub schema: Option<String>,
 }
 
 /// The console's statements (qurry_shared::sql::split_script, as ⌃↩ plans them) for the lines and source kind they were split for:
@@ -266,7 +273,7 @@ pub const SERVER_WARNING: &str = "WARNING: ";
 impl Console {
     /// A new console's state around its editor and session
     pub fn new(editor: TextArea<'static>, session: String, output: Vec<(bool, String)>, tx_manual: bool) -> Self {
-        Console { editor, session, results: Default::default(), stmts: Default::default(), output, running: false, tx_manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![], colors: Default::default() }
+        Console { editor, session, results: Default::default(), stmts: Default::default(), output, running: false, tx_manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![], colors: Default::default(), params: Default::default(), schema: None }
     }
 
     /// Result tabs follow the script (#151): after an edit they follow their statements, and the caret entering another statement
@@ -597,6 +604,8 @@ pub enum PAction {
     AlignClass(qurry_core::format::ValueClass),
     /// Grid alignment: where a value class sits, picked
     Align(qurry_core::format::ValueClass, qurry_core::format::Align),
+    /// Columns…: a column shown or hidden (None: Show All)
+    Column(Option<usize>),
     /// Status bar items: one toggled (None: Restore defaults)
     StatusItem(Option<qurry_core::statusbar::Item>),
     /// Theme picked
@@ -686,9 +695,11 @@ impl ConnForm {
     }
 
     /// Whether a field can't be changed now (shown dim), and if so whether it shows as on meanwhile (its value stays as chosen).
-    /// Admin reports (MCP's dba_report, #131) asks only on Production sources shared with MCP: the others always answer it
+    /// Admin reports (MCP's dba_report, #131) asks only on Production sources shared with MCP: the others always answer it.
+    /// Password is off while a password command gives it (#177)
     pub fn disabled(&self, label: &str) -> Option<bool> {
         match label {
+            "Password" if !self.value("Password command").trim().is_empty() => Some(false),
             "Admin reports" if self.value("MCP") == "off" => Some(false),
             "Admin reports" if self.value("Production") != "on" => Some(true),
             _ => None,
@@ -705,6 +716,8 @@ impl ConnForm {
 
 /// Input's on_ok: called with the entered text
 pub type OnInput = Box<dyn FnOnce(&mut App, String)>;
+/// The Parameters popup's Enter: each name with its value
+pub type OnParams = Box<dyn FnOnce(&mut App, std::collections::BTreeMap<String, String>)>;
 
 // One popup is open at a time, so its size doesn't add up; boxing the bigger ones would only add derefs at every use
 #[allow(clippy::large_enum_variant)]
@@ -733,6 +746,9 @@ pub enum Popup {
     Find(crate::find::FindBar),
     /// Import Data Sources' confirm: a checkbox per added row (Space), y / Enter imports the checked ones
     ImportPick(crate::import::ImportPick),
+    /// A console run's `:name` parameters (#173): a field per name in order, `sel` the focused one; `preview` is the statements
+    /// that have them, drawn in `kind`'s colors. Enter gives on_ok every value, Esc runs nothing
+    Params { fields: Vec<(String, TextArea<'static>)>, sel: usize, preview: String, kind: DbKind, on_ok: OnParams },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -761,6 +777,7 @@ pub enum Action {
     SearchEverywhere,
     RecentTabs,
     ExecSettings,
+    SwitchSchema,
     ClearConsole,
     Ddl,
     EditData,
@@ -778,6 +795,9 @@ pub enum Action {
     ColumnFit,
     ColumnFitAll,
     ColumnReset,
+    ColumnHide,
+    ColumnPinToggle,
+    Columns,
     FindSimilar,
     RagSearch,
     RagBuild,
@@ -855,6 +875,7 @@ pub enum Action {
     OpenGitHub,
     Help,
     ShowLog,
+    CopyDiagnostics,
     Quit,
 }
 
@@ -897,6 +918,8 @@ pub struct Hits {
     pub result_tabs: Vec<(ratatui::layout::Rect, Option<usize>)>,
     /// The open confirm's question or warnings didn't fit the window: y / Enter don't answer it
     pub confirm_unseen: bool,
+    /// Rows of a scrolled Message / Note's text on screen (PgUp PgDn move by this)
+    pub popup_page: u16,
 }
 
 /// Tabs·split of a workspace other than the current one (tab objects kept as is: console sessions·transactions·results survive)
@@ -946,6 +969,8 @@ pub struct App {
     pub focus: Focus,
     pub explorer: bool,
     pub popup: Option<Popup>,
+    /// How far a Message / Note too long for the window is scrolled (0 when none is open)
+    pub popup_scroll: u16,
     /// Confirms an async result opened while the user works in another popup (a form, a palette): the next one opens when that closes
     pub(crate) waiting: Vec<Popup>,
     pub status: String,
@@ -1030,6 +1055,9 @@ pub struct App {
     /// Tests only (testkit): answers console statements and the Production row counts instead of the database
     #[cfg(test)]
     pub fake_db: Option<FakeDb>,
+    /// Tests only: answers a load-more (App::fetch_more) instead of the core, given the tab's session id
+    #[cfg(test)]
+    pub fake_more: Option<FakeDb>,
     /// Tests only: every command run_action ran, in order (tests/actions.rs checks keys reach the right one)
     #[cfg(test)]
     pub ran: Vec<Action>,
@@ -1037,6 +1065,8 @@ pub struct App {
     pub import_home: std::path::PathBuf,
     /// What Show Log reveals (qurry_core::logfile::path(); tests use a temporary one)
     pub log_file: std::path::PathBuf,
+    /// Where Copy Diagnostics also saves its text (qurry-diagnostics.txt in the temp folder; tests use a temporary one)
+    pub diagnostics_file: std::path::PathBuf,
 }
 
 /// Tests only (testkit): stands in for the database, answering each query by its text
@@ -1088,6 +1118,7 @@ impl App {
             focus: Focus::Tree,
             explorer: true,
             popup: None,
+            popup_scroll: 0,
             waiting: vec![],
             status: "Ready — not sure? ⌃p searches everything · F1 keymap".into(),
             quit: false,
@@ -1123,9 +1154,12 @@ impl App {
             #[cfg(test)]
             fake_db: None,
             #[cfg(test)]
+            fake_more: None,
+            #[cfg(test)]
             ran: vec![],
             import_home: qurry_core::import::home(),
             log_file: qurry_core::logfile::path(),
+            diagnostics_file: std::env::temp_dir().join("qurry-diagnostics.txt"),
             next_id: 1,
             exec: Default::default(),
             ddl_structure: false,

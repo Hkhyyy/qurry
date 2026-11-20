@@ -30,6 +30,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::Commit, hint: "", run: |app| app.tx(Action::Commit) },
     ActionDef { action: Action::Rollback, hint: "", run: |app| app.tx(Action::Rollback) },
     ActionDef { action: Action::ExecSettings, hint: "", run: |app| app.palette_exec() },
+    ActionDef { action: Action::SwitchSchema, hint: "", run: |app| app.switch_schema_start() },
     ActionDef { action: Action::ClearConsole, hint: "⌘A ⌫ (console)", run: clear_console },
     ActionDef { action: Action::SearchEverywhere, hint: "", run: |app| app.palette_everywhere() },
     ActionDef { action: Action::GoToObject, hint: "", run: |app| app.palette_objects("Go to Database Object", vec![]) },
@@ -50,6 +51,9 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::ColumnFit, hint: "", run: |app| app.resize_columns(Resize::Fit) },
     ActionDef { action: Action::ColumnFitAll, hint: "", run: |app| app.resize_columns(Resize::FitAll) },
     ActionDef { action: Action::ColumnReset, hint: "", run: |app| app.resize_columns(Resize::Reset) },
+    ActionDef { action: Action::ColumnHide, hint: "", run: |app| app.column_hide() },
+    ActionDef { action: Action::ColumnPinToggle, hint: "", run: |app| app.column_pin_toggle() },
+    ActionDef { action: Action::Columns, hint: "", run: |app| app.palette_columns() },
     ActionDef { action: Action::FindSimilar, hint: "", run: |app| app.find_similar() },
     ActionDef { action: Action::RagSearch, hint: "", run: |app| app.rag_search_start() },
     ActionDef { action: Action::RagBuild, hint: "", run: |app| app.rag_build_start() },
@@ -138,6 +142,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::OpenGitHub, hint: "", run: open_github },
     ActionDef { action: Action::Help, hint: "", run: |app| app.popup = Some(Popup::Help { sel: 0, scroll: 0, record: None, message: None }) },
     ActionDef { action: Action::ShowLog, hint: "", run: show_log },
+    ActionDef { action: Action::CopyDiagnostics, hint: "", run: copy_diagnostics },
     ActionDef { action: Action::Quit, hint: "", run: quit },
 ];
 
@@ -145,11 +150,11 @@ fn new_console(app: &mut App) {
     let sel = app.tree.selected();
     let tab_conn = app.tabs.get(app.active).map(|t| (t.conn.clone(), t.db.clone()));
     if let Some(n) = sel.as_ref().filter(|_| app.focus == Focus::Tree).or(None) {
-        app.open_console(&n.conn.clone(), n.db.clone())
+        app.open_console(&n.conn.clone(), n.db.clone(), n.schema.clone())
     } else if let Some((c, d)) = tab_conn {
-        app.open_console(&c, Some(d))
+        app.open_console(&c, Some(d), None)
     } else if let Some(n) = sel {
-        app.open_console(&n.conn.clone(), n.db.clone())
+        app.open_console(&n.conn.clone(), n.db.clone(), n.schema.clone())
     }
 }
 
@@ -306,7 +311,7 @@ fn grid_long_values(app: &mut App) {
         };
     });
     if let Some(Popup::Input { body, .. }) = &mut app.popup {
-        *body = "Text, JSON, XML and array values longer than this come cut in PostgreSQL console and table results, ending with a dim …. v, ↩ and y read the whole value by the primary key; a result without one keeps the cut text.".into();
+        *body = "Text, JSON, XML and array values longer than this come cut in PostgreSQL and MySQL console and table results, ending with a dim …. v, ↩ and y read the whole value by the primary key; a result without one keeps the cut text.".into();
     }
 }
 
@@ -493,6 +498,28 @@ fn show_log(app: &mut App) {
         Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
         Err(e) => app.status = format!("Show Log: couldn't open it ({e}). Open it yourself: {}", file.display()),
     }
+}
+
+/// Copies qurry_core::diagnostics (no names, hosts or secrets) and also saves it to qurry-diagnostics.txt in the temp folder, the
+/// user's only (0600): over SSH a terminal may not pass the clipboard (OSC 52) on, the file is there
+fn copy_diagnostics(app: &mut App) {
+    let sources = match app.state.store.list() {
+        Ok(s) => s,
+        Err(e) => return app.status = format!("Couldn't copy diagnostics: the data sources can't be read ({e}). Attach the log file instead: ⌃k › Show Log"),
+    };
+    let text = qurry_core::diagnostics::text("tui", env!("CARGO_PKG_VERSION"), &sources, &app.log_file, 200);
+    crate::input::copy(app, &text);
+    let file = app.diagnostics_file.clone();
+    // A new file each time: one left by someone else (a link) is removed, not written through
+    let _ = std::fs::remove_file(&file);
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    app.status = match o.open(&file).and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes())) {
+        Ok(()) => format!("Diagnostics copied · also saved to {}", file.display()),
+        Err(e) => format!("Diagnostics copied, but couldn't save {} ({e}). Paste from the clipboard, or delete that file and try again", file.display()),
+    };
 }
 
 /// The project page ⌃k › Open GitHub opens (the GUI's Settings › Updates › Open GitHub)

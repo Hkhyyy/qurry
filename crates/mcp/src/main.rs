@@ -163,7 +163,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_dba_erd_explain() {
-        let pg = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG=host:port:user:db");
+        let Some(pg) = qurry_core::testenv::var("QURRY_TEST_PG") else { return };
         let pg: Vec<&str> = pg.split(':').collect();
         let mut c = source("pg", "Demo PG", Some("read"), false).config;
         (c.host, c.port, c.user, c.database) = (pg[0].into(), pg[1].parse().unwrap(), pg[2].into(), pg[3].into());
@@ -250,7 +250,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_dba_and_explain() {
-        let my = std::env::var("QURRY_TEST_MY").expect("QURRY_TEST_MY=host:port:user:password:db");
+        let Some(my) = qurry_core::testenv::var("QURRY_TEST_MY") else { return };
         let my: Vec<&str> = my.split(':').collect();
         let mut c = source("my", "Demo MySQL", Some("read"), false).config;
         c.kind = DbKind::Mysql;

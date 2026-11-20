@@ -2,6 +2,10 @@
 // A real font file for the added custom fonts (FontFace has to load something): Monaco's icon font (by path: the package exports only .js)
 import fontBytesUrl from "/node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.ttf?url";
 import { shared } from "./shared";
+// Made-up theme images (#202): a landscape and an animated badge, drawn for the mock
+import ridgesUrl from "./mock-images/ridges.png?url";
+import beaconUrl from "./mock-images/beacon.gif?url";
+import beaconApngUrl from "./mock-images/beacon.apng?url";
 import THEMES from "../../crates/shared/src/themes.json";
 const conns = [
   { id: "dev", name: "[DEV] shop_app", kind: "postgres", host: "dev-db.example.com", port: 5432, user: "app", database: "shop_app", color: "#5f5b24", hasPassword: true, connected: true },
@@ -145,6 +149,21 @@ let flakyLoads = 0;
 let updateChannel = "stable";
 /** Font files added in Settings: each "Add Font File…" adds "Fira Code" (then "Fira Code 2"…, as the backend names a taken name) */
 let customFonts: { name: string; file: string }[] = [];
+/** Theme images (#202): the copies in the config folder, by the names the core gives them (a hash and the type), as URLs to read */
+export const MOCK_IMAGES = { ridges: "a1b2c3d4e5f60718.png", beacon: "0f1e2d3c4b5a6978.gif", beaconApng: "1a2b3c4d5e6f7081.apng" };
+const themeImages: Record<string, string> = { [MOCK_IMAGES.ridges]: ridgesUrl, [MOCK_IMAGES.beacon]: beaconUrl, [MOCK_IMAGES.beaconApng]: beaconApngUrl };
+/** The picked files the mock knows, as the core answers them: a name, or why it is refused */
+const THEME_IMAGE_PICKS: Record<string, string | { refused: string }> = {
+  "ridges.png": MOCK_IMAGES.ridges,
+  "beacon.gif": MOCK_IMAGES.beacon,
+  // An animated PNG: kept as .apng, as the core keeps one
+  "beacon.png": MOCK_IMAGES.beaconApng,
+  "logo.svg": { refused: "logo.svg isn't a PNG, JPEG, GIF or WebP image" },
+  "big.png": { refused: "big.png is 5.0 MB: a still image can be at most 4 MB" },
+};
+/** A story's own image, read like a copy in the config folder (the local previews) */
+export const mockThemeImage = (file: string, url: string) => void (themeImages[file] = url);
+
 /** settings.json "theme" / "themeSync" / "customThemes" (kept across a reload, as the file is; read on each call, so a test can change
  *  it as the TUI would). Custom themes are checked as the core checks them (the shared WASM's theme file rules) */
 const themeSettings = () => JSON.parse(localStorage.getItem("mock-themeSettings") ?? "null") ?? { theme: null, sync: { dark: "dark", light: "light" }, custom: [] };
@@ -169,10 +188,20 @@ const statusItems = (): string[] => JSON.parse(localStorage.getItem("mock-status
 const columnWidths = (): Record<string, Record<string, number>> => JSON.parse(localStorage.getItem("mock-columnWidths") ?? "{}");
 const widthsKey = (t: any) => JSON.stringify([t.source, t.database, t.schema, t.table]);
 const saveWidths = (all: Record<string, Record<string, number>>) => localStorage.setItem("mock-columnWidths", JSON.stringify(all));
+/** settings.json "columnLayout": table (as widthsKey) → its hidden and pinned columns (kept and read as columnWidths) */
+const columnLayouts = (): Record<string, { hidden: string[]; pinned: string[] }> => JSON.parse(localStorage.getItem("mock-columnLayout") ?? "{}");
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
 let updateChecked = false;
 /** A delayed load-more in flight (__mockFetchMoreDelay): cancel_query makes it fail as the server does */
 let cancelMore: (() => void) | null = null;
+// A table of wide rows (#194): the core stops a page at its byte budget, so a page of logs_demo has 150 rows, fewer than Page
+// size, and still more to load (truncated) until the third. Tab id → the id its next page starts at
+const logsNext = new Map<string, number>();
+const logsPage = (tabId: string, from: number) => {
+  if (from + 150 <= 450) logsNext.set(tabId, from + 150);
+  else logsNext.delete(tabId);
+  return { ...result, rows: result.rows.slice(0, 150).map((r, i) => [from + i, ...r.slice(1)]), truncated: from + 150 <= 450 };
+};
 /** The last id save_connection gave a new data source (never reused, also after a delete) */
 let newIds = 0;
 /** Test Connections waiting for cancel_call, by test id */
@@ -261,6 +290,13 @@ const endTx = (tabId: string) => {
   const { [tabId]: _, ...rest } = openTxs();
   sessionStorage.setItem(TX_KEY, JSON.stringify(rest));
 };
+/** The fields the core's ConnectionView adds (ConnectionConfig::starts_manual / production_starts_manual), as it computes them */
+const withManual = (c: any) => {
+  const o = c.options ?? {};
+  const manualWorks = c.kind === "postgres" || c.kind === "mysql";
+  const productionStartsManual = manualWorks && !o.txManual && !!o.confirmChanges && o.productionManual !== false;
+  return { ...c, startsManual: (manualWorks && !!o.txManual) || productionStartsManual, productionStartsManual };
+};
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
   // window.__mockRedis (set before load): { readOnly, production, managed } for [Redis] cache (managed: CONFIG refused, as on ElastiCache).
@@ -268,7 +304,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   list_connections: () =>
     structuredClone([...conns, ...((globalThis as any).__mockMoreConns ?? [])]).map((c: any) => {
       const r = (globalThis as any).__mockRedis;
-      return c.id === "rd" && r ? { ...c, readOnly: !!r.readOnly, options: { ...c.options, confirmChanges: !!r.production } } : c;
+      return withManual(c.id === "rd" && r ? { ...c, readOnly: !!r.readOnly, options: { ...c.options, confirmChanges: !!r.production } } : c);
     }),
   // window.__mockDbListFail: the account can't connect to a source's default database, so listing through the source itself fails.
   // window.__mockDbListDelay (ms): the list arrives that late (a select asked for it only on its first click would open without it)
@@ -455,6 +491,8 @@ const handlers: Record<string, (a: any) => unknown> = {
         ? { ...result, columns: [], rows: [], rowsAffected: 0, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true, notices: [{ level: "NOTICE", message: "role app_owner isn't a member, owner change skipped" }, { level: "WARNING", message: "table shop.orders has no primary key" }, { level: "", message: "… 3 more" }] }
       : /^\s*(insert|update|delete)/i.test(a.sql)
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
+        : /\blogs_demo\b/i.test(a.sql)
+          ? { ...logsPage(a.tabId, 1), inTransaction: (globalThis as any).__mockManual === true }
         : /\bwide_demo\b/i.test(a.sql)
           ? { ...wide, inTransaction: (globalThis as any).__mockManual === true }
           : /\bcjk_demo\b/i.test(a.sql)
@@ -496,6 +534,9 @@ const handlers: Record<string, (a: any) => unknown> = {
   test_connection: async (a: any) => {
     const delay = (globalThis as any).__mockTestDelay;
     if (delay) await new Promise((r) => setTimeout(r, delay));
+    // A password command that fails: the core's error has its exit code and standard error, never what it printed (mock-stdout-marker)
+    const program = String(a.config.passwordCommand ?? "").trim().split(/\s+/)[0];
+    if (program === "/bin/false" || program.startsWith("fail")) throw "Password command failed (exit 1): mock stderr: token expired";
     if (a.config.host === lan.host && !a.config.options?.allowPlaintext) throw NEEDS_TLS;
     if (a.config.ssm?.enabled && a.config.ssm.target === "i-0000000000000dead") throw SSM_NO_PLUGIN;
     return a.config.ssm?.enabled && a.config.ssm.target === "i-00000000000000000"
@@ -557,10 +598,12 @@ const handlers: Record<string, (a: any) => unknown> = {
     return c;
   },
   // e2e sets __mockFetchMoreError for a load-more the core refuses or that fails (e.g. after the data source reconnected)
-  fetch_more: () => {
+  fetch_more: (a: any) => {
     const g = globalThis as any;
     g.__mockFetchMoreCalls = (g.__mockFetchMoreCalls ?? 0) + 1;
     if (g.__mockFetchMoreError) throw g.__mockFetchMoreError;
+    const next = logsNext.get(a.tabId);
+    if (next) return logsPage(a.tabId, next);
     const more = { ...result, rows: result.rows.slice(0, 120).map((r) => [Number(r[0]) + 500, ...r.slice(1)]), truncated: false };
     // __mockFetchMoreDelay (ms): an answer that arrives after the tab ran again, or fails as the server's does when cancelled meanwhile
     if (!g.__mockFetchMoreDelay) return more;
@@ -607,8 +650,6 @@ const handlers: Record<string, (a: any) => unknown> = {
   explain_wrap: () => ((globalThis as any).__mockManual === true ? ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"] : ["BEGIN", "ROLLBACK"]),
   // Production confirmation: rows a change would touch; like the backend, only UPDATE/DELETE are counted (null = can't count, e.g. INSERT or DDL)
   preview_impact: (a: any) => (/^\s*(update|delete)\b/i.test(a.sql) ? (/\bwhere\b/i.test(a.sql) ? 3 : 500) : null),
-  // Redis as qurry_shared::guard::unsafe_statement words it
-  unsafe_reason: (a: any) => a.kind === "redis" ? ((c) => (/^(FLUSHALL|FLUSHDB|DEL|UNLINK|SHUTDOWN|SWAPDB|REPLICAOF|SLAVEOF)$/.test(c) ? `${c} deletes or replaces data` : /^(EVAL|EVALSHA|EVAL_RO|EVALSHA_RO|FCALL|FUNCTION|SCRIPT)$/.test(c) ? `${c} runs a script that can change anything` : null))(String(a.sql).trim().split(/\s+/)[0].toUpperCase()) : (/^\s*(delete|update)\b(?![\s\S]*\bwhere\b)/i.test(a.sql) ? "DELETE without WHERE changes every row" : /^\s*(drop|truncate)\b/i.test(a.sql) ? "DROP removes data" : null),
   trust_ssh_host: () => "Trusted",
   export_data: (a: any) => new Promise((ok) => setTimeout(() => ok({ rows: 500, path: a.clipboard ? null : `~/Downloads/${a.defaultName}.${a.format}`, text: a.clipboard ? "id\tname\n1\ta\n" : null }), 4000)),
   cancel_job: () => null,
@@ -695,13 +736,15 @@ const handlers: Record<string, (a: any) => unknown> = {
   ],
   apply_migrations: () => ["3"],
   save_migration: (a: any) => `${a.dir}/V4__x.sql`,
-  // Kept for the session, newest first; the core masks passwords (AUTH …) as history::redact does
+  // Kept for the session, newest first; the core masks passwords (AUTH …) as history::redact does. window.__mockHistoryRows
+  // (stories): that many more queries after these, for a long list
   history_add: (a: any) => void historyAdded.unshift({ id: `ha${historyAdded.length}`, connId: a.connId, database: a.database ?? undefined, sql: String(a.sql).replace(/^(\s*auth\s+).*$/i, "$1***"), ts: Date.now() }),
   history_list: (a: any) =>
     [
       ...historyAdded,
       { id: "h1", connId: "dev", sql: "SELECT client_ip, count(*) FROM logs.user_activity_log GROUP BY 1 ORDER BY 2 DESC LIMIT 20", ts: Date.now() - 60000 },
       { id: "h2", connId: "dev", sql: "select * from users where id = 42", ts: Date.now() - 3600000 },
+      ...Array.from({ length: (globalThis as any).__mockHistoryRows ?? 0 }, (_, i) => ({ id: `hm${i}`, connId: "dev", sql: `select * from orders where user_id = ${i + 1} order by created_at desc`, ts: Date.now() - 7200000 - i * 60000 })),
     ].filter((h) => !a?.connId || h.connId === a.connId),
   history_delete: () => null,
   fake_preview: () => ({
@@ -821,6 +864,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   },
   save_keymap: () => null,
   show_log: () => null,
+  diagnostics: () => "Qurry gui 0.0.0-mock · core 0.0.0-mock\nOS: macos (aarch64)\n\nData sources: 2\n  postgres: 1\n  redis: 1\n",
   // The specs read what reached the log
   log_frontend_error: (a: any) => (((window as any).__mockLogged ??= []).push(a), null),
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
@@ -890,6 +934,19 @@ const handlers: Record<string, (a: any) => unknown> = {
     (window as any).__mockThemeExported = shared().themeFileText(a.theme);
     return `/Users/me/Downloads/${a.theme.name}.qurry-theme.json`;
   },
+  // window.__mockThemeImagePick: the file picked ("ridges.png" unset; "beacon.gif", "beacon.png" (animated), "logo.svg", "big.png"; null: cancelled)
+  import_theme_image: () => {
+    const pick = (window as any).__mockThemeImagePick;
+    if (pick === null) return null;
+    const r = THEME_IMAGE_PICKS[pick ?? "ridges.png"];
+    if (typeof r !== "string") throw r.refused;
+    return r;
+  },
+  theme_image: (a: any) => {
+    const url = themeImages[a.file];
+    if (!url) throw `The theme image ${a.file} is missing: choose it again`;
+    return fetch(url).then((r) => r.arrayBuffer());
+  },
   keyword_case: () => keywordCase,
   set_keyword_case: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
@@ -953,6 +1010,16 @@ const handlers: Record<string, (a: any) => unknown> = {
     delete all[widthsKey(a.table)];
     saveWidths(all);
   },
+  column_layout: (a: any) => columnLayouts()[widthsKey(a.table)] ?? { hidden: [], pinned: [] },
+  // As the core: replaces the table's layout, nothing hidden or pinned removes it. window.__mockChannelSaveFails: the file can't be written
+  set_column_layout: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    const all = columnLayouts();
+    const { hidden = [], pinned = [] } = a.layout;
+    if (hidden.length || pinned.length) all[widthsKey(a.table)] = { hidden, pinned };
+    else delete all[widthsKey(a.table)];
+    localStorage.setItem("mock-columnLayout", JSON.stringify(all));
+  },
   // window.__mockChannelSaveFails: the settings file can't be written
   set_update_channel: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
@@ -976,8 +1043,8 @@ function updateInfo() {
     channel: updateChannel,
     latest: (window as any).__mockNoUpdate ? null : { version: "0.1.2", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.1.2", notes: "## dbtool 0.1.2\n- something new", assets: [{ name: "dbtool_0.1.2_aarch64.dmg", url: "https://example.com/dbtool_0.1.2_aarch64.dmg" }] },
     changes: [
-      { version: "0.1.2", changes: ["[feat] TUI 키 안내: ⌃P 시작, F1 Start here, 상태줄 (#18)", "[fix] ; 없는 문장 나누기 (#17)"] },
-      { version: "0.1.1", changes: ["[fix] 분할 탭 바 구분선, GUI 탭 사이 간격 (#16)"] },
+      { version: "0.1.2", changes: ["[feat] TUI key hints: ⌃P to start, F1 Start here, the status line (#18)", "[fix] Split statements without ; (#17)"] },
+      { version: "0.1.1", changes: ["[fix] Split tab bar divider, the gap between GUI tabs (#16)"] },
     ],
   };
 }

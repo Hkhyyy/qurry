@@ -21,6 +21,12 @@ pub enum DbKind {
 }
 
 impl DbKind {
+    /// Every kind, built-in ones first
+    pub const ALL: [DbKind; 12] = [
+        DbKind::Postgres, DbKind::Mysql, DbKind::Redis, DbKind::Sqlite, DbKind::Mssql, DbKind::Clickhouse,
+        DbKind::Duckdb, DbKind::Mongodb, DbKind::Oracle, DbKind::Qdrant, DbKind::Chroma, DbKind::Milvus,
+    ];
+
     /// Driver plugin name (None for the built-in PG·MySQL·Redis)
     pub fn driver(self) -> Option<&'static str> {
         match self {
@@ -106,6 +112,26 @@ pub fn default_db(kind: DbKind, database: &str) -> String {
     }
 }
 
+/// Databases the server keeps for itself: the explorer, the search and the scope pickers skip them unless the Schemas tab
+/// names them (the default database always shows)
+pub fn system_databases(kind: DbKind) -> &'static [&'static str] {
+    match kind {
+        // template0/1 are CREATE DATABASE's templates; rdsadmin is Amazon RDS's own (no access for users).
+        // postgres is not here: it is the default database, a user's to use
+        DbKind::Postgres => &["template0", "template1", "rdsadmin"],
+        // The server's catalog, instrumentation and grant tables, and the sys views over them
+        DbKind::Mysql => &["information_schema", "performance_schema", "mysql", "sys"],
+        // The instance's catalog, scratch space, new-database template and Agent jobs
+        DbKind::Mssql => &["master", "tempdb", "model", "msdb"],
+        // admin holds users and roles, config the sharding metadata, local the replication oplog
+        DbKind::Mongodb => &["admin", "config", "local"],
+        // System tables, and information_schema in both of the cases ClickHouse lists it in
+        DbKind::Clickhouse => &["system", "information_schema", "INFORMATION_SCHEMA"],
+        // Redis' db<n> are all the user's; file DBs have main only; Oracle and the vector DBs list none of the server's own
+        DbKind::Redis | DbKind::Sqlite | DbKind::Duckdb | DbKind::Oracle | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus => &[],
+    }
+}
+
 /// A Redis database index from its name or the Database field: "db3" / "3" / "" → 3 / 3 / 0
 pub fn redis_db_index(name: &str) -> i64 {
     name.trim().trim_start_matches("db").parse().unwrap_or(0)
@@ -115,10 +141,6 @@ pub fn redis_db_index(name: &str) -> i64 {
 mod tests {
     use super::*;
 
-    const ALL: [DbKind; 12] = [
-        DbKind::Postgres, DbKind::Mysql, DbKind::Redis, DbKind::Sqlite, DbKind::Mssql, DbKind::Clickhouse,
-        DbKind::Duckdb, DbKind::Mongodb, DbKind::Oracle, DbKind::Qdrant, DbKind::Chroma, DbKind::Milvus,
-    ];
     /// (blank Database, Database " app ") → default db; a match, so a new kind doesn't compile without its row
     fn expected(k: DbKind) -> (&'static str, &'static str) {
         match k {
@@ -135,7 +157,7 @@ mod tests {
 
     #[test]
     fn default_db_per_kind() {
-        for k in ALL {
+        for k in DbKind::ALL {
             let (blank, set) = expected(k);
             assert_eq!(default_db(k, ""), blank, "{k:?} blank");
             assert_eq!(default_db(k, "  "), blank, "{k:?} spaces");
@@ -149,7 +171,7 @@ mod tests {
 
     #[test]
     fn default_port_per_kind() {
-        let ports: Vec<(DbKind, u16)> = ALL.iter().map(|&k| (k, k.default_port())).collect();
+        let ports: Vec<(DbKind, u16)> = DbKind::ALL.iter().map(|&k| (k, k.default_port())).collect();
         assert_eq!(
             ports,
             [
@@ -158,6 +180,31 @@ mod tests {
                 (DbKind::Qdrant, 6333), (DbKind::Chroma, 8000), (DbKind::Milvus, 19530),
             ]
         );
+    }
+
+    #[test]
+    fn system_databases_per_kind() {
+        let lists: Vec<(DbKind, &[&str])> = DbKind::ALL.iter().map(|&k| (k, system_databases(k))).collect();
+        let none: &[&str] = &[];
+        assert_eq!(
+            lists,
+            [
+                (DbKind::Postgres, &["template0", "template1", "rdsadmin"][..]),
+                (DbKind::Mysql, &["information_schema", "performance_schema", "mysql", "sys"][..]),
+                (DbKind::Redis, none),
+                (DbKind::Sqlite, none),
+                (DbKind::Mssql, &["master", "tempdb", "model", "msdb"][..]),
+                (DbKind::Clickhouse, &["system", "information_schema", "INFORMATION_SCHEMA"][..]),
+                (DbKind::Duckdb, none),
+                (DbKind::Mongodb, &["admin", "config", "local"][..]),
+                (DbKind::Oracle, none),
+                (DbKind::Qdrant, none),
+                (DbKind::Chroma, none),
+                (DbKind::Milvus, none),
+            ]
+        );
+        // The default database is the user's: never hidden as a system one
+        assert!(!system_databases(DbKind::Postgres).contains(&"postgres"));
     }
 
     #[test]

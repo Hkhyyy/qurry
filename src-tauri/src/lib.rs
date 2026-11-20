@@ -52,7 +52,9 @@ pub fn run() {
             let keymap = tauri::menu::MenuItemBuilder::with_id("keymap", "Keymap Reference").build(app)?;
             // Help › Show Log: opened here in Rust, no webview round-trip (Find Action runs the same commands::show_log)
             let show_log = tauri::menu::MenuItemBuilder::with_id("show-log", "Show Log").build(app)?;
-            let help_menu = SubmenuBuilder::new(app, "Help").item(&keymap).item(&show_log).build()?;
+            // Help › Copy Diagnostics: the webview copies it (navigator.clipboard), as Find Action does
+            let diagnostics = tauri::menu::MenuItemBuilder::with_id("copy-diagnostics", "Copy Diagnostics").build(app)?;
+            let help_menu = SubmenuBuilder::new(app, "Help").item(&keymap).item(&show_log).item(&diagnostics).build()?;
             app.set_menu(MenuBuilder::new(app).items(&[&app_menu, &edit_menu, &window_menu, &help_menu]).build()?)?;
             app.on_menu_event(|app, ev| {
                 use tauri::Emitter;
@@ -63,6 +65,8 @@ pub fn run() {
                     if let Err(e) = commands::show_log() {
                         app.dialog().message(e.to_string()).title("Show Log").kind(tauri_plugin_dialog::MessageDialogKind::Error).show(|_| {});
                     }
+                } else if ev.id() == "copy-diagnostics" {
+                    let _ = app.emit("copy-diagnostics", ());
                 } else if ev.id() == "settings" {
                     let _ = app.emit("open-settings", ());
                 } else if ev.id() == "check-update" {
@@ -162,7 +166,6 @@ pub fn run() {
             commands::tx_state,
             commands::explain_wrap,
             commands::trust_ssh_host,
-            commands::unsafe_reason,
             commands::list_databases,
             commands::list_schemas,
             commands::list_objects,
@@ -230,9 +233,13 @@ pub fn run() {
             commands::delete_custom_theme,
             commands::import_theme,
             commands::export_theme,
+            commands::import_theme_image,
+            commands::theme_image,
             commands::column_widths,
             commands::set_column_widths,
             commands::reset_column_widths,
+            commands::column_layout,
+            commands::set_column_layout,
             fonts::font_families,
             fonts::custom_fonts,
             fonts::add_font_file,
@@ -240,6 +247,7 @@ pub fn run() {
             fonts::font_file,
             commands::install_update,
             commands::show_log,
+            commands::diagnostics,
             commands::log_frontend_error,
         ])
         .build(app_context())

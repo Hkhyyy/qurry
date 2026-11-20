@@ -426,7 +426,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_backup_leaves_out_definers_when_asked() {
-        let Ok(e) = std::env::var("QURRY_TEST_MY") else { return };
+        let Some(e) = qurry_core::testenv::var("QURRY_TEST_MY") else { return };
         if qurry_core::backup::find_tool("mysqldump").is_none() {
             return;
         }

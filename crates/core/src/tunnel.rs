@@ -491,7 +491,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn real_redis_answers_the_tunnel_check() {
-        let addr = std::env::var("QURRY_TEST_REDIS").expect("QURRY_TEST_REDIS=host:port");
+        let Some(addr) = crate::testenv::var("QURRY_TEST_REDIS") else { return };
         let port: u16 = addr.rsplit(':').next().unwrap().parse().unwrap();
         let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "r", "kind": "redis", "host": "127.0.0.1", "port": port, "user": "" })).unwrap();
         let t = std::time::Instant::now();
@@ -525,7 +525,7 @@ mod tests {
         unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", &kh) }; // Used only in a single test
         let cfg = ConnectionConfig {
             id: "t".into(), name: "t".into(), kind: DbKind::Postgres, host: "dbtool-pg".into(), port: 5432,
-            user: "postgres".into(), database: "postgres".into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            user: "postgres".into(), database: "postgres".into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         let mut ssh = SshConfig { enabled: true, host: "localhost".into(), port: 2222, user: "root".into(), auth: SshAuth::Password, key_path: String::new() };
 
@@ -662,7 +662,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn shared_ssh_tunnel_survives_a_failed_db_and_reopens_after_the_session_ends() {
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let Some(pg) = crate::testenv::pg().map(|s| s.cfg) else { return };
         let to: std::net::SocketAddr = format!("{}:{}", pg.host, pg.port).parse().unwrap();
         let kh = tempfile::NamedTempFile::new().unwrap();
         unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", kh.path()) };
@@ -903,7 +903,7 @@ mod tests {
     async fn dead_ssh_tunnel_is_opened_again_once() {
         use std::sync::atomic::Ordering::SeqCst;
         use std::time::{Duration, Instant};
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let Some(pg) = crate::testenv::pg().map(|s| s.cfg) else { return };
         let kh = tempfile::NamedTempFile::new().unwrap();
         unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", kh.path()) };
         let (port, logins, sessions) = sshd(format!("{}:{}", pg.host, pg.port).parse().unwrap(), kh.path()).await;
@@ -968,7 +968,7 @@ mod tests {
     async fn ssh_tunnel_reconnects_after_wake() {
         use std::sync::atomic::Ordering::SeqCst;
         use std::time::{Duration, Instant};
-        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let Some(pg) = crate::testenv::pg().map(|s| s.cfg) else { return };
         let kh = tempfile::NamedTempFile::new().unwrap();
         unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", kh.path()) };
         let (port, logins, sessions) = sshd(format!("{}:{}", pg.host, pg.port).parse().unwrap(), kh.path()).await;

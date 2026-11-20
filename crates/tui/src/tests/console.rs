@@ -249,7 +249,7 @@ async fn production_confirm_lists_commented_statements_by_their_sql() {
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
     assert_eq!(
         text,
-        "Production data source \"PROD\" — this changes data:\n\n  CREATE TABLE public.orders ( id integer NOT NULL )\n    → schema change\n  INSERT INTO public.orders VALUES (1)\n    → can't count this statement\n\nRun it?"
+        "Production data source \"PROD\" — this changes data:\n\n  CREATE TABLE public.orders ( id integer NOT NULL )\n    → schema change\n  INSERT INTO public.orders VALUES (1)\n    → can't count\n\nRun it?"
     );
     let Some(Popup::Confirm { opened: Some(t), .. }) = &mut h.app.popup else { panic!("not a quiet confirm") };
     *t -= crate::app::App::TLS_ASK_GRACE;
@@ -264,6 +264,44 @@ async fn production_confirm_lists_commented_statements_by_their_sql() {
     let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!("not a console") };
     let place = qurry_core::sql::split_script(&sql, qurry_core::store::DbKind::Postgres).iter().position(|&(s, _)| sql[s..].trim_start().starts_with(select));
     assert_eq!(c.results.tabs.iter().map(|t| (t.stmt, t.title.as_str())).collect::<Vec<_>>(), [(place, "Name: list")]);
+}
+
+/// Production confirmation on a real PostgreSQL (QURRY_TEST_PG=host:port:user:db[:password]): the server counts the rows (SELECT count(*), nothing
+/// changes), lists only the writes in qurry_shared::production's words, and a no runs nothing
+#[tokio::test]
+#[ignore]
+async fn production_confirm_counts_on_a_real_server() {
+    let Some(pg) = qurry_core::testenv::pg() else { return };
+    let mut h = Harness::new().await;
+    let mut cfg = pg.cfg;
+    (cfg.id, cfg.name) = ("p".into(), "PROD".into());
+    cfg.options.confirm_changes = true;
+    let database = cfg.database.clone();
+    h.app.state.save_connection(cfg, pg.password, None).await.unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    let sql = "select 'delete' as action;\nupdate pg_am set amname = amname where amname = 'heap';\ndelete from pg_am where false;\ncreate table qurry_never (a int);\ninsert into qurry_never values (1);\ndelete from qurry_missing where id = 1;";
+    let id = h.app.restore_console("p", database, "console".into(), sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    h.key("F5");
+    for _ in 0..100 {
+        h.settle().await;
+        if h.app.popup.is_some() {
+            break;
+        }
+    }
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    let (head, rest) = text.split_once("  delete from qurry_missing where id = 1\n    → can't count: ").expect(text);
+    assert_eq!(
+        head,
+        "Production data source \"PROD\" — this changes data:\n\n  update pg_am set amname = amname where amname = 'heap'\n    → 1 row\n  delete from pg_am where false\n    → 0 rows\n  create table qurry_never (a int)\n    → schema change\n  insert into qurry_never values (1)\n    → can't count\n"
+    );
+    assert!(rest.contains("qurry_missing") && rest.ends_with("\n\nRun it?"), "{rest}");
+    h.key("Esc");
+    assert!(h.console_output().is_empty(), "a no runs nothing");
+    let _ = h.app.state.disconnect("p".into()).await;
 }
 
 /// Explain Analyze of a changing statement on PostgreSQL: BEGIN, the EXPLAIN and ROLLBACK all go through the same session (the fake here)
@@ -684,16 +722,16 @@ async fn production_console_starts_in_manual_and_says_so_once() {
     h.app.reload_conns();
     h.settle().await;
     let told = |h: &Harness| console(h).output.iter().any(|(_, l)| l == qurry_shared::errors::PRODUCTION_MANUAL);
-    h.app.open_console("p", None);
+    h.app.open_console("p", None, None);
     assert!(console(&h).tx_manual && told(&h));
     assert_eq!(h.app.status, qurry_shared::errors::PRODUCTION_MANUAL);
-    h.app.open_console("p", None);
+    h.app.open_console("p", None, None);
     assert!(console(&h).tx_manual && !told(&h), "once");
     cfg.options.production_manual = Some(false);
     h.app.state.store.save(&cfg).unwrap();
     h.app.reload_conns();
     h.settle().await;
-    h.app.open_console("p", None);
+    h.app.open_console("p", None, None);
     assert!(!console(&h).tx_manual);
     // The reminder about a transaction left open goes into that console and the status line
     let session = console(&h).session.clone();
@@ -1222,4 +1260,371 @@ async fn rerun_after_a_failed_load_with_pending_edits_asks_first() {
     assert!(h.console_output().len() > before, "it ran");
     assert_eq!(console(&h).grid().unwrap().pending(), 0);
     assert!(console(&h).results.grid().is_some_and(|g| g.more_error.is_none()));
+}
+
+/// The Parameters popup's names, and the value of each field
+fn params_fields(h: &Harness) -> Vec<(String, String)> {
+    let Some(Popup::Params { fields, .. }) = &h.app.popup else { panic!("no Parameters popup: {}", h.app.status) };
+    fields.iter().map(|(n, t)| (n.clone(), t.lines().join(""))).collect()
+}
+
+/// #173: `:id` in code asks before the run (not the `:x` in a string); Esc runs nothing and marks nothing; Enter runs the statement
+/// with the value as typed, Output echoes it, the editor keeps `:id`, and the next run offers the value again
+#[tokio::test]
+async fn params_ask_before_the_run_and_run_the_final_sql() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    let sql = "select * from t where id = :id and s = ':x'";
+    h.console_with(sql, 0, 0);
+    h.key("Ctrl+Enter");
+    assert_eq!(params_fields(&h), [("id".to_string(), String::new())]);
+    let s = h.screen(100, 30);
+    assert!(s.contains(" Parameters ") && s.contains(":id ▏") && s.contains(sql), "{s}");
+    h.key("Esc");
+    assert!(h.app.popup.is_none());
+    assert_eq!(h.app.status, "Cancelled: nothing ran");
+    h.settle().await;
+    assert!(SEEN.lock().unwrap().is_empty(), "nothing ran");
+    assert_eq!(console(&h).marks.at(0), None, "no mark");
+    assert!(h.console_output().is_empty());
+
+    h.key("Ctrl+Enter");
+    h.type_str("42");
+    h.key("Enter");
+    h.settle().await;
+    let ran = "select * from t where id = 42 and s = ':x'";
+    assert_eq!(*SEEN.lock().unwrap(), [ran]);
+    assert_eq!(h.console_output()[0], format!("> {ran}"));
+    assert_eq!(console(&h).marks.at(0), Some(crate::app::MarkState::Ok));
+    assert_eq!(h.console_text(), sql, "the editor keeps its text");
+    h.key("Ctrl+Enter");
+    assert_eq!(params_fields(&h), [("id".to_string(), "42".to_string())], "the last value is offered");
+    h.key("Esc");
+}
+
+/// Tab and ↑↓ move between the fields (around), and Enter runs from any of them with every value; a cast is not a parameter
+#[tokio::test]
+async fn params_fields_move_and_casts_dont_ask() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    h.console_with("select x::int from t", 0, 0);
+    h.key("Ctrl+Enter");
+    assert!(h.app.popup.is_none(), "x::int doesn't ask");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["select x::int from t"]);
+    SEEN.lock().unwrap().clear();
+
+    h.console_with("select * from t where a = :a and b = :b or a = :a", 0, 0);
+    h.key("Ctrl+Enter");
+    assert_eq!(params_fields(&h).iter().map(|f| f.0.as_str()).collect::<Vec<_>>(), ["a", "b"], "each name once, in order");
+    h.type_str("1");
+    h.key("Tab");
+    h.type_str("'b'");
+    h.key("Down");
+    let Some(Popup::Params { sel, .. }) = &h.app.popup else { panic!() };
+    assert_eq!(*sel, 0, "around to the first");
+    h.key("Up");
+    h.paste("x");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["select * from t where a = 1 and b = 'b'x or a = 1"]);
+}
+
+/// On a Production source the confirmation lists the statement with its value; on a read-only source core refuses the write as
+/// it would refuse it typed out
+#[tokio::test]
+async fn params_checks_see_the_final_sql() {
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+    }))
+    .unwrap();
+    cfg.options.confirm_changes = true;
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.fake_db = Some(fake);
+    let sql = "delete from t where id = :id";
+    let id = h.app.restore_console("p", "d".into(), "console".into(), sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    h.key("Ctrl+Enter");
+    h.type_str("7");
+    h.key("Enter");
+    h.settle().await;
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    assert!(text.contains("delete from t where id = 7") && !text.contains(":id"), "{text}");
+    h.key("Esc");
+    assert!(h.console_output().is_empty(), "nothing runs before the answer");
+
+    fn read_only(q: &str) -> Result<QueryResult, String> {
+        match qurry_core::guard::read_only_violation(q, qurry_core::store::DbKind::Postgres, false) {
+            Some(why) => Err(why),
+            None => fake(q),
+        }
+    }
+    h.app.fake_db = Some(read_only);
+    h.console_with(sql, 0, 0);
+    h.key("Ctrl+Enter");
+    h.type_str("7");
+    h.key("Enter");
+    h.settle().await;
+    let ran = "delete from t where id = 7";
+    let why = qurry_core::guard::read_only_violation(ran, qurry_core::store::DbKind::Postgres, false).unwrap();
+    assert_eq!(h.console_output(), [format!("> {ran}"), why]);
+}
+
+/// #173 on a real PostgreSQL (QURRY_TEST_PG=host:port:user:db[:password]): the value goes in as typed and the server answers the
+/// final statement, in the console's own session (its temp table)
+#[tokio::test]
+#[ignore]
+async fn params_substitute_on_a_real_server() {
+    let Some(pg) = qurry_core::testenv::pg() else { return };
+    let mut h = Harness::new().await;
+    let mut cfg = pg.cfg;
+    (cfg.id, cfg.name) = ("pg".into(), "PG".into());
+    let database = cfg.database.clone();
+    h.app.state.save_connection(cfg, pg.password, None).await.unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    let sql = "create temp table qurry_params (id int, s text);\ninsert into qurry_params values (1, 'one'), (42, 'forty-two');\nselect s from qurry_params where id = :id and s <> ':id'";
+    let id = h.app.restore_console("pg", database, "console".into(), sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    h.key("Ctrl+Enter");
+    assert_eq!(params_fields(&h), [("id".to_string(), String::new())]);
+    h.type_str("42");
+    h.key("Enter");
+    for _ in 0..100 {
+        h.settle().await;
+        if !console(&h).running {
+            break;
+        }
+    }
+    let out = h.console_output();
+    assert!(out.contains(&"PG> select s from qurry_params where id = 42 and s <> ':id'".to_string()), "{out:?}");
+    let g = console(&h).grid().unwrap_or_else(|| panic!("no result: {out:?}"));
+    assert_eq!(g.result.rows, [vec![serde_json::json!("forty-two")]]);
+    let _ = h.app.state.disconnect("pg".into()).await;
+}
+
+/// The Parameters popup at the smallest window: the focused field and the keys stay on screen with many names, a long value
+/// shows its caret's end, a long name ends in …
+#[tokio::test]
+async fn params_popup_fits_the_smallest_window() {
+    let mut h = Harness::new().await;
+    let names: Vec<String> = (1..=8).map(|i| format!(":p{i}")).collect();
+    h.console_with(&format!("select {}, :a_very_long_parameter_name_here, :created_before", names.join(", ")), 0, 0);
+    h.key("Ctrl+Enter");
+    for _ in 0..7 {
+        h.key("Tab");
+    }
+    h.type_str(&"x".repeat(60));
+    h.type_str("END");
+    let (w, ht) = crate::ui::MIN_SIZE;
+    let s = h.screen(w, ht);
+    assert!(s.contains(":p8") && s.contains("END▏") && s.contains("Esc"), "{s}");
+    h.key("Tab");
+    let s = h.screen(100, 30);
+    assert!(s.contains(" :a_very_long_p… ▏"), "{s}");
+    h.key("Tab");
+    let s = h.screen(100, 30);
+    assert!(s.contains(":created_before ▏"), "a name that fits is whole: {s}");
+}
+
+/// #173: Explain Analyze of a statement with `:name` is still Explain Analyze once the values are typed: BEGIN, the EXPLAIN with
+/// ANALYZE and ROLLBACK
+#[tokio::test]
+async fn params_keep_explain_analyze() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    h.console_with("delete from t where a = :a", 0, 0);
+    h.app.analyze_next = true;
+    h.app.execute(true);
+    h.app.analyze_next = false;
+    h.type_str("1");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["BEGIN", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) delete from t where a = 1", "ROLLBACK"]);
+    assert!(!h.app.analyze_next);
+}
+
+/// A Parameters value is one line: ⌃M adds nothing, so what the field shows is what runs
+#[tokio::test]
+async fn params_value_is_one_line() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    h.console_with("select * from t where id = :id", 0, 0);
+    h.key("Ctrl+Enter");
+    h.type_str("4");
+    h.key("Ctrl+m");
+    h.type_str("2");
+    let Some(Popup::Params { fields, .. }) = &h.app.popup else { panic!() };
+    assert_eq!(fields[0].1.lines(), ["42"]);
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["select * from t where id = 42"]);
+}
+
+/// A console on data source "test" of `kind` with Switch schema `mode`; the statements it sends go to `record`
+async fn schema_console(kind: &str, mode: Option<&str>, record: crate::app::FakeDb) -> Harness {
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "test", "name": "T", "kind": kind, "host": "127.0.0.1", "port": 1, "user": "u", "database": "shop"
+    }))
+    .unwrap();
+    cfg.options.switch_schema = mode.map(String::from);
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.fake_db = Some(record);
+    h.console_tab();
+    h
+}
+
+fn schemas(names: &[(&str, bool)]) -> Vec<qurry_core::meta::SchemaInfo> {
+    names.iter().map(|(n, s)| qurry_core::meta::SchemaInfo { name: (*n).into(), is_system: *s }).collect()
+}
+
+/// Switch Schema… lists the console's schemas without the system ones, the current one marked; picking one sets the session's
+/// search_path and the title shows it (#195)
+#[tokio::test]
+async fn switch_schema_picks_a_postgres_schema() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.into());
+        fake(q)
+    }
+    let mut h = schema_console("postgres", None, record).await;
+    let id = h.app.tabs[h.app.active].id;
+    h.app.console_schema_choices(id, schemas(&[("pg_catalog", true), ("public", false), ("billing", false)]));
+    let Some(Popup::Palette(p)) = &h.app.popup else { panic!("no picker: {}", h.app.status) };
+    let items: Vec<_> = p.items.iter().map(|i| (i.label.as_str(), i.hint.as_str())).collect();
+    assert_eq!(items, [("public", "current"), ("billing", "")]);
+    h.key("Down");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["SET search_path TO billing, public"]);
+    assert_eq!(console(&h).schema.as_deref(), Some("billing"));
+    assert_eq!(h.app.status, "search_path = billing, public");
+    let s = h.screen(120, 16);
+    assert!(s.contains("postgres · billing · Tx: Auto"), "{s}");
+    // The next time the picked one is the current one
+    h.app.console_schema_choices(id, schemas(&[("public", false), ("billing", false)]));
+    let Some(Popup::Palette(p)) = &h.app.popup else { panic!("no picker") };
+    assert_eq!((p.sel, p.items[1].hint.as_str()), (1, "current"));
+}
+
+/// On MySQL a schema is a database: the picker lists them and picking one sends USE on the console's session
+#[tokio::test]
+async fn switch_schema_on_mysql_uses_the_database() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.into());
+        fake(q)
+    }
+    let mut h = schema_console("mysql", None, record).await;
+    let id = h.app.tabs[h.app.active].id;
+    h.app.tabs[h.app.active].db = "shop".into();
+    h.app.console_schema_choices(id, schemas(&[("mysql", true), ("shop", false), ("app_db", false)]));
+    let Some(Popup::Palette(p)) = &h.app.popup else { panic!("no picker: {}", h.app.status) };
+    let items: Vec<_> = p.items.iter().map(|i| (i.label.as_str(), i.hint.as_str())).collect();
+    assert_eq!(items, [("shop", "current"), ("app_db", "")]);
+    h.key("Down");
+    h.key("Enter");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["USE app_db"]);
+    assert_eq!(console(&h).schema.as_deref(), Some("app_db"));
+    assert_eq!(h.app.status, "USE app_db");
+}
+
+/// Switch schema Disable: Switch Schema… says so and opens nothing; outside a console it says what it is for
+#[tokio::test]
+async fn switch_schema_disabled_or_outside_a_console() {
+    let mut h = schema_console("postgres", Some("disable"), fake).await;
+    h.app.run_action(crate::app::Action::SwitchSchema);
+    h.settle().await;
+    assert!(h.app.popup.is_none());
+    assert_eq!(h.app.status, "Schema switching is disabled for this data source");
+    let mut h = Harness::new().await;
+    h.app.run_action(crate::app::Action::SwitchSchema);
+    assert!(h.app.popup.is_none());
+    assert_eq!(h.app.status, "Switch Schema… is for a query console");
+}
+
+/// The title follows the session's transaction after a switch: the switch opens none (core runs it outside Manual mode's), and
+/// one the user already has open stays shown as pending (#195)
+#[tokio::test]
+async fn switch_schema_keeps_the_transaction_shown() {
+    fn open_tx(q: &str) -> Result<QueryResult, String> {
+        fake(q).map(|r| QueryResult { in_transaction: true, ..r })
+    }
+    let mut h = schema_console("postgres", None, open_tx).await;
+    let id = h.app.tabs[h.app.active].id;
+    h.app.switch_console_schema(id, "billing".into());
+    h.settle().await;
+    assert!(console(&h).in_tx);
+    assert!(h.screen(140, 16).contains("pending"));
+    h.app.fake_db = Some(fake);
+    h.app.switch_console_schema(id, "public".into());
+    h.settle().await;
+    assert!(!console(&h).in_tx);
+    assert!(!h.screen(140, 16).contains("pending"));
+}
+
+/// #194: a page of wide rows stops at the core's byte budget, so it can hold fewer rows than the page size and still have more
+/// (truncated): the grid offers loading more from `truncated`, not from the row count, and loads the next pages to the last
+#[tokio::test]
+async fn a_short_page_with_more_still_loads_the_next() {
+    fn page(from: i64, more: bool) -> Result<QueryResult, String> {
+        let rows = (from..from + 150).map(|i| vec![Value::from(i)]).collect();
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "id".into(), type_name: "int4".into() }], rows, rows_affected: 0, truncated: more, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None, notices: vec![], cut: vec![] })
+    }
+    static LOADS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(|_| page(1, true));
+    h.app.fake_more = Some(|_| {
+        let n = LOADS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        page(151 + n * 150, n == 0)
+    });
+    h.console_with("select * from logs", 0, 0);
+    h.key("F5");
+    h.settle().await;
+    let ids = |h: &Harness| console(h).results.grid().unwrap().result.rows.iter().map(|r| r[0].as_i64().unwrap()).collect::<Vec<_>>();
+    let more = |h: &Harness| console(h).results.grid().unwrap().result.truncated;
+    assert_eq!((ids(&h).len(), more(&h)), (150, true));
+    for (rows, truncated) in [(300, true), (450, false)] {
+        let g = console_mut(&mut h).results.grid_mut().unwrap();
+        g.row = g.rows() - 1;
+        assert!(g.wants_more(), "a page of {} rows with more offers loading more", g.rows());
+        h.app.fetch_more();
+        h.settle().await;
+        assert_eq!((ids(&h).len(), more(&h)), (rows, truncated));
+        assert_eq!(h.app.status, format!("{rows}{} rows", if truncated { "+" } else { "" }));
+    }
+    assert_eq!(ids(&h), (1..=450).collect::<Vec<_>>(), "no gap, nothing twice");
+    let g = console_mut(&mut h).results.grid_mut().unwrap();
+    g.row = g.rows() - 1;
+    assert!(!g.wants_more(), "the last page");
 }

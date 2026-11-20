@@ -133,6 +133,10 @@ impl App {
                 let mut g = Grid::new(res);
                 g.col = col.min(g.cols().saturating_sub(1));
                 g.row = row.min(g.rows().saturating_sub(1));
+                // The hidden and pinned columns stay over the refresh (the report runs again on its own)
+                if let Some(old) = &d.grid {
+                    g.set_layout(old.layout.clone());
+                }
                 let picked = picked.or(d.gone.take());
                 if let (Some(p), Some(c)) = (picked, pid_col(&g)) {
                     match (0..g.rows()).find(|&r| g.value(r, c).as_deref() == Some(p.as_str())) {
@@ -243,7 +247,7 @@ impl App {
     }
 
     fn dba_console(&mut self, conn: &str, db: String, q: String) {
-        self.open_console(conn, Some(db));
+        self.open_console(conn, Some(db), None);
         if let Some(Tab { kind: TabKind::Console(c), .. }) = self.tabs.get_mut(self.active) {
             c.editor.insert_str(q);
         }

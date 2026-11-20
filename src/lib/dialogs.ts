@@ -1,4 +1,5 @@
 import { confirm, type ConfirmOptions } from "../ui";
+import type { DbKind } from "./api";
 
 /**
  * Confirm·text input dialogs. In the real app (Tauri), the dialog plugin replaces window.confirm with an async function (returns a Promise):
@@ -41,5 +42,36 @@ export function askTextChoice(title: string, value: string, choices: string[], i
     const done = (v: string | null, choice?: number) => resolve(v === null ? null : { text: v, choice: choice ?? initial });
     if (show) show({ title, value, choices, choice: initial, resolve: done });
     else done(window.prompt(title, value));
+  });
+}
+
+/** User parameters to fill in before a console run (ParamsDialog, which App holds): each name once, in order of appearance */
+export interface ParamsRequest {
+  names: string[];
+  /** The console's last values, offered again */
+  last: Record<string, string>;
+  /** The statements that hold them, for the preview */
+  sql: string;
+  kind: DbKind;
+  resolve: (values: Record<string, string> | null) => void;
+}
+let showParams: ((r: ParamsRequest) => void) | null = null;
+
+/** App registers the function that shows the Parameters dialog */
+export function registerParamsDialog(fn: ((r: ParamsRequest) => void) | null) {
+  showParams = fn;
+}
+
+/** A value for each name. null if cancelled (without the dialog, as in tests: one prompt per name) */
+export function askParams(names: string[], last: Record<string, string>, sql: string, kind: DbKind): Promise<Record<string, string> | null> {
+  return new Promise((resolve) => {
+    if (showParams) return showParams({ names, last, sql, kind, resolve });
+    const values: Record<string, string> = {};
+    for (const n of names) {
+      const v = window.prompt(`:${n}`, last[n] ?? "");
+      if (v === null) return resolve(null);
+      values[n] = v;
+    }
+    resolve(values);
   });
 }

@@ -1,5 +1,4 @@
 import { setStatusNote } from "../lib/statusbar";
-import { fracWidth, isTimeType, padFrac } from "../lib/timeFrac";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
@@ -8,23 +7,25 @@ import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { type NewRow } from "../lib/gridEdit";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { EXTRACTORS, type Extractor, raw } from "../lib/extract";
-import { sharedOr, useSharedReady } from "../lib/shared";
+import { sharedOr } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
-import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
+import { CELL_KIND } from "../lib/gridAlign";
 import { type WidthsOf } from "../lib/columnWidths";
 import { jsonCell } from "../lib/jsonSpans";
-import { contains, extend, forEachCell, type Pos, selCols, selRows as rowsOf, type Selection, single, toggle } from "../lib/gridSelection";
+import { contains, extend, forEachCell, type Pos, remapCols, selCols, selRows as rowsOf, type Selection, single, toggle } from "../lib/gridSelection";
 
 import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/shortcuts";
 import { draftAt, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
 import { ResultChart } from "./ResultChart";
 import { SqlBlock } from "./SqlBlock";
 import { ValuePanel } from "./ValuePanel";
-import { Button, CellEditor, CutMark, cx, FixSql, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { Button, CellEditor, CheckListPopover, FixSql, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
-import { cellKey, cutLength, cutSet, cutTitle, display, keyColumns, keyed, type SortKey } from "../features/grid/shared";
+import { cellKey, cutLength, cutSet, cutTitle, keyColumns, keyed, type SortKey } from "../features/grid/shared";
+import { TransposedView } from "./TransposedView";
+import { useColumnLayout } from "../features/grid/useColumnLayout";
 import { useGridClipboard } from "../features/grid/useGridClipboard";
 import { useGridEdits } from "../features/grid/useGridEdits";
 import { useGridFind } from "../features/grid/useGridFind";
@@ -89,7 +90,8 @@ interface Props {
   rowActions?: { label: string; danger?: boolean; run: (row: Record<string, Cell>) => void }[];
   /** Table data (pgvector): find rows close to this row. row = column name → value */
   onFindSimilar?: (column: string, row: Record<string, Cell>) => void;
-  /** Whose column widths these are: a table tab's table (saved, shared with the TUI) or a console result's id; absent: this grid's own */
+  /** Whose column widths and hidden and pinned columns these are: a table tab's table (saved, shared with the TUI) or a console
+   *  result's id; absent: this grid's own */
   widthsOf?: WidthsOf;
   /** The data source (target id) the grid's table is in: the status bar's Size reads its columns' declared types from it */
   target?: string;
@@ -108,7 +110,7 @@ export function ResultGrid(p: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [sorts, setSorts] = useState<SortKey[]>([]);
   /** Selected ranges in display coordinates (lib/gridSelection.ts) */
-  const [sel, setSel] = useState<Selection | null>(null);
+  const [selState, setSel] = useState<Selection | null>(null);
   const [editing, setEditing] = useState<{ r: number; c: number; value: string; picker?: boolean } | null>(null);
   const [changes, setChanges] = useState<Record<number, Record<number, Cell>>>({});
   const [deleted, setDeleted] = useState<Set<number>>(new Set());
@@ -133,6 +135,8 @@ export function ResultGrid(p: Props) {
   const [panelError, setPanelError] = useState<string | null>(null);
   const valueLayout = useDefaultLayout({ id: "dbtool-value-panel", panelIds: panel && !chart ? ["grid", "value"] : ["grid"] });
   const [showQuery, setShowQuery] = useState(false);
+  /** Columns…: the list of every column, to show or hide them */
+  const [columnsOpen, setColumnsOpen] = useState(false);
   const dragging = useRef(false);
 
   const setExtractor = (x: Extractor) => {
@@ -235,11 +239,26 @@ export function ResultGrid(p: Props) {
   // Character widths below are for the default grid font size (12px)
   const em = useFonts().grid.size / DEFAULTS.grid.size;
   const rownumW = Math.max(ROWNUM_W, Math.round(ROWNUM_W * em));
-  const { wasmReady, setW, widths, total, shown, classOf, aligns, jsonCol, fitColumn, resetWidths, toggleFit, fitAll, stepColumn, startResize } = useGridWidths({
-    cols, em, rownumW, keyCols, pkIdx, join, result, firstRow, rowCount, valueAt, p,
+  const { wasmReady, setW, widths, shown, classOf, aligns, jsonCol, fitColumn, resetWidths, toggleFit, fitAll, stepColumn, startResize } = useGridWidths({
+    cols, em, keyCols, pkIdx, join, result, firstRow, rowCount, valueAt, p,
   });
-  /** The column header's menu: widths of this column or all of them */
-  const headerItems = (i: number): MenuItem[] => [
+  // Display column c shows result column view[c] (hidden ones left out, pinned ones first): the selection and the cursor are in
+  // display columns, edits, values and widths in result columns
+  const layout = useColumnLayout({ cols, widths, rownumW, scrollRef, wasmReady, layoutOf: p.widthsOf });
+  const { view, colVirt, shownCols, padR, total } = layout;
+  // Pin, Unpin or Hide: the selection and the cursor follow their columns (as rows follow dataIndex), set before this render paints
+  const [selView, setSelView] = useState(view);
+  const sel = selView === view ? selState : remapCols(selState, selView, view);
+  if (selView !== view) {
+    setSelView(view);
+    setSel(sel);
+  }
+  /** The column header's menu on display column c: hide or pin it, Columns…, widths of it or all of them */
+  const headerItems = (c: number, i = view[c]): MenuItem[] => [
+    { label: "Hide Column", ...cmd("grid.colHide"), action: () => layout.hide(i), disabled: view.length < 2 },
+    c < layout.pinned ? { label: "Unpin Column", ...cmd("grid.colPin"), action: () => layout.unpin(i) } : { label: "Pin Column", ...cmd("grid.colPin"), action: () => layout.pin(i) },
+    { label: "Columns…", ...cmd("grid.columns"), action: () => setColumnsOpen(true) },
+    { separator: true },
     { label: "Fit Column", ...cmd("grid.colFit"), shortcut: cmd("grid.colFit").shortcut ?? "double-click the edge", action: () => fitColumn(i) },
     { label: "Fit All Columns", ...cmd("grid.colFitAll"), action: fitAll },
     { label: "Reset Widths", ...cmd("grid.colReset"), shortcut: cmd("grid.colReset").shortcut ?? "computed widths", action: resetWidths, disabled: !Object.keys(setW).length },
@@ -249,12 +268,7 @@ export function ResultGrid(p: Props) {
   ];
 
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => scrollRef.current, estimateSize: () => ROW_H, overscan: 20 });
-  // Horizontally, render only visible columns too (tables with many columns). Blank cells fill the width on both sides
-  const colVirt = useVirtualizer({ horizontal: true, count: cols.length, getScrollElement: () => scrollRef.current, estimateSize: (i) => widths[i] ?? 64, paddingStart: rownumW, overscan: 4 });
-  useEffect(() => colVirt.measure(), [widths]);
-  const colItems = colVirt.getVirtualItems();
-  const padL = colItems.length ? colItems[0].start - rownumW : 0;
-  const padR = colItems.length ? colVirt.getTotalSize() - colItems[colItems.length - 1].end : 0;
+  // Horizontally only the visible columns are drawn (useColumnLayout); blank cells fill the width between and after them
   const spacer = (w: number) => (w > 0 ? <div style={{ flex: "none", width: w }} /> : null);
   const items = virt.getVirtualItems();
   const lastItem = items[items.length - 1];
@@ -267,24 +281,24 @@ export function ResultGrid(p: Props) {
   const cur = sel?.cur ?? null; // the last clicked cell: the active one, the Value Editor's
   const hasSel = !!sel?.ranges.length;
   const inSel = (d: number, c: number) => contains(sel, d, c);
-  const active = cur ? { r: dataIndex(cur.r), c: cur.c } : null; // data coordinates
+  const active = cur ? { r: dataIndex(cur.r), c: view[cur.c] } : null; // data coordinates
   const selRowSet = useMemo(() => new Set(rowsOf(sel)), [sel]);
   const selColSet = useMemo(() => new Set(selCols(sel)), [sel]);
   /** Data rows of every selected range, in grid order (the row-level edits: Delete Row, Revert Selected) */
   const selRows = (): number[] => rowsOf(sel).map(dataIndex);
   /** Every selected cell once, in data coordinates: the one path the cell edits (Set NULL, Revert Selected, …) take */
-  const forSelected = (fn: (r: number, c: number) => void | false) => forEachCell(sel, (d, c) => fn(dataIndex(d), c));
+  const forSelected = (fn: (r: number, c: number) => void | false) => forEachCell(sel, (d, c) => fn(dataIndex(d), view[c]));
   const selectCell = (pos: Pos, ext: boolean) => setSel((s) => (ext ? extend(s, pos) : single(pos)));
   /** A mouse click: ⇧ extends the last range to b, ⌘ adds a..b (a cell, a row, a column) or takes it out, a plain click starts over (DataGrip) */
   const clickSel = (e: React.MouseEvent, a: Pos, b: Pos = a) => setSel((s) => (e.shiftKey ? extend(s, b) : (isMac ? e.metaKey : e.ctrlKey) ? toggle(s, a, b) : single(a, b)));
 
   useGridStatus({
-    colVirt, scrollRef, wrapRef, chart, transposed, rownumW, hasSel, sel, cur, wasmReady, forSelected, valueAt,
-    result, changes, added, dataIndex, edit, tcol, cols, p,
+    colVirt, scrollRef, wrapRef, chart, transposed, pinned: layout.pinned, pinEdge: layout.pinEdge, hasSel, sel, cur, wasmReady, forSelected, valueAt,
+    result, changes, added, dataIndex, view, hidden: layout.hidden, edit, tcol, cols, p,
   });
 
   const { matches, isMatch, gotoMatch, openFind } = useGridFind({
-    findOpen, setFindOpen, findText, rowCount, dataIndex, cols, valueAt, result, changes, added, order, cur, selectCell, virt, colVirt, wrapRef,
+    findOpen, setFindOpen, findText, rowCount, dataIndex, view, valueAt, result, changes, added, order, cur, selectCell, virt, scrollToCol: layout.scrollToCol, wrapRef,
   });
 
   const { commitEdit, setCell, startEdit, setNull, setDefault, genUuid, addRow, cloneRow, deleteRows, revertSelected, submit, fix, previewPending, doSubmitPreview } = useGridEdits({
@@ -311,7 +325,7 @@ export function ResultGrid(p: Props) {
   useEffect(() => () => setStatusNote(undefined), []);
 
   const { copySelection, copyInList, paste } = useGridClipboard({
-    edit, quoteIdent, sel, hasSel, extractor, valueAt, dataIndex, pkIdx, cols, D, rowCount, anyEdit, cur, join, cellOk, joinRows, cellReason, setAdded, setCell,
+    edit, quoteIdent, sel, hasSel, extractor, valueAt, dataIndex, view, pkIdx, cols, D, rowCount, anyEdit, cur, join, cellOk, joinRows, cellReason, setAdded, setCell,
     cutAt, canFetch, fetchCells,
   });
 
@@ -328,7 +342,7 @@ export function ResultGrid(p: Props) {
     // Chart and Transpose have no cell selection: only the grid commands below
     const cells = !chart && !transposed;
     if (cells && mod && k === "a") {
-      setSel(single({ r: 0, c: 0 }, { r: rowCount - 1, c: cols.length - 1 }));
+      setSel(single({ r: 0, c: 0 }, { r: rowCount - 1, c: view.length - 1 }));
       return stop();
     }
     if (cells && mod && k === "c" && !e.shiftKey) return copySelection(false), stop();
@@ -349,10 +363,10 @@ export function ResultGrid(p: Props) {
     const m = move[e.key];
     if (m) {
       const r = Math.min(Math.max(cur.r + m[0], 0), rowCount - 1);
-      const c = Math.min(Math.max(cur.c + m[1], 0), cols.length - 1);
+      const c = Math.min(Math.max(cur.c + m[1], 0), view.length - 1);
       selectCell({ r, c }, e.shiftKey && e.key !== "Tab");
       virt.scrollToIndex(r);
-      colVirt.scrollToIndex(c);
+      layout.scrollToCol(c);
       return stop();
     }
     // Typing directly in a cell starts editing (DataGrip). A key with ⌃, ⌘ or ⌥ is a shortcut on every platform (⌃` Quick Switch Theme): left to the global keys
@@ -363,9 +377,9 @@ export function ResultGrid(p: Props) {
   };
 
   // ─── Cell context menu ───
-  /** The cell menu of display row d, column c. Grid command keys run its entries for the selected cell */
-  const cellItems = (d: number, c: number): MenuItem[] => {
-    const r = dataIndex(d);
+  /** The cell menu of display row d, display column dc. Grid command keys run its entries for the selected cell */
+  const cellItems = (d: number, dc: number): MenuItem[] => {
+    const [r, c] = [dataIndex(d), view[dc]];
     const v = valueAt(r, c);
     const k = isMac ? { copy: "⌘c", paste: "⌘v" } : { copy: "Ctrl+c", paste: "Ctrl+v" };
     const name = quoteIdent(cols[c].name);
@@ -450,7 +464,7 @@ export function ResultGrid(p: Props) {
   const optionItems = (): MenuItem[] => [
     ...(p.filterBar ? ([{ label: (showFilter ? "✓ " : "　") + "Show Filter", ...cmd("grid.showFilter"), action: () => setShowFilter((v) => !v) }] as MenuItem[]) : []),
     ...(p.onServerSort ? ([{ label: (sortViaOrderBy ? "✓ " : "　") + "Sort via ORDER BY", ...cmd("grid.sortOrderBy"), action: () => { setSorts([]); setSortViaOrderBy((v) => !v); } }] as MenuItem[]) : []),
-    { label: "Reset View", ...cmd("grid.resetView"), action: () => { setSorts([]); setTransposed(false); setChart(false); if (serverSort) p.onServerSort!(""); } },
+    { label: "Reset View", ...cmd("grid.resetView"), action: () => { setSorts([]); setTransposed(false); setChart(false); layout.reset(); if (serverSort) p.onServerSort!(""); } },
     { separator: true },
     { label: "View Query", ...cmd("grid.viewQuery"), action: () => setShowQuery(true), disabled: !p.query },
     ...(p.onCopyQueryToConsole ? ([{ label: "Copy Query to Console", ...cmd("grid.queryToConsole"), action: () => p.query && p.onCopyQueryToConsole!(p.query), disabled: !p.query }] as MenuItem[]) : []),
@@ -470,8 +484,9 @@ export function ResultGrid(p: Props) {
     { label: "Export Data…", ...cmd("grid.export"), action: p.onExport },
     ...viewItems(),
     ...optionItems(),
-    // The header menu's commands on the current column (the focused cell's, or the clicked header's); not in Transpose or Chart
-    ...(cur && !chart && !transposed ? headerItems(cur.c) : headerItems(0).map((x) => ({ ...x, disabled: true }))),
+    // The header menu's commands on the current column (the focused cell's, or the clicked header's); not in Transpose or Chart.
+    // Columns… needs no column
+    ...(cur && !chart && !transposed ? headerItems(cur.c) : headerItems(0).map((x) => ({ ...x, disabled: chart || transposed || !("label" in x && x.label === "Columns…") }))),
   ];
 
   /** An edit button's tooltip and description: the command, and why it's greyed out when the grid says so (a join's row buttons: why
@@ -585,33 +600,33 @@ export function ResultGrid(p: Props) {
                     <RowNumberCell
                       width={rownumW}
                       title="Select all (⌘a)"
-                      onMouseDown={() => setSel(single({ r: 0, c: 0 }, { r: rowCount - 1, c: cols.length - 1 }))}
+                      onMouseDown={() => setSel(single({ r: 0, c: 0 }, { r: rowCount - 1, c: view.length - 1 }))}
                     />
                   </GridHeaderRow>
                 }
               >
                 <GridHeaderRow width={total - rownumW} height={HEADER_H}>
-                  {spacer(padL)}
-                  {colItems.map(({ index: i }) => {
-                    const c = cols[i];
+                  {shownCols.map(({ c, i, pad, pin }) => {
                     const idx = sorts.findIndex((x) => x.col === i);
                     const key = sorts[idx];
                     return (
                       <GridHeaderCell
                         key={i}
-                        name={c.name}
-                        type={c.typeName}
+                        name={cols[i].name}
+                        type={cols[i].typeName}
                         pk={keyCols.includes(i)}
                         readOnly={colReason(i)}
                         width={widths[i]}
-                        colSelected={selColSet.has(i)}
+                        pin={pin}
+                        before={pad}
+                        colSelected={selColSet.has(c)}
                         sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}
                         // Header click = select the whole column (DataGrip)
-                        onMouseDown={(e) => clickSel(e, { r: 0, c: i }, { r: rowCount - 1, c: i })}
+                        onMouseDown={(e) => clickSel(e, { r: 0, c }, { r: rowCount - 1, c })}
                         onSortClick={(e) => clickSort(i, e.altKey)}
                         onContextMenu={(e) => {
                           e.preventDefault();
-                          setMenu({ x: e.clientX, y: e.clientY, items: headerItems(i) });
+                          setMenu({ x: e.clientX, y: e.clientY, items: headerItems(c) });
                         }}
                         onResize={(e) => startResize(e, i)}
                         onFit={() => toggleFit(i)}
@@ -652,12 +667,11 @@ export function ResultGrid(p: Props) {
                           width={rownumW}
                           selected={selRowSet.has(d)}
                           // Gutter number click = select the row
-                          onMouseDown={(e) => clickSel(e, { r: d, c: 0 }, { r: d, c: cols.length - 1 })}
+                          onMouseDown={(e) => clickSel(e, { r: d, c: 0 }, { r: d, c: view.length - 1 })}
                         >
                           {isNew ? "+" : d + 1}
                         </RowNumberCell>
-                        {spacer(padL)}
-                        {colItems.map(({ index: ci }) => {
+                        {shownCols.map(({ c, i: ci, pad, pin }) => {
                           const val = valueAt(r, ci);
                           const changed = !isNew && changes[r] && ci in changes[r];
                           if (editing && editing.r === r && editing.c === ci) {
@@ -666,6 +680,8 @@ export function ResultGrid(p: Props) {
                               <CellEditor
                                 key={ci}
                                 width={widths[ci]}
+                                pin={pin}
+                                before={pad}
                                 value={editing.value}
                                 onChange={(v) => setEditing({ ...editing, value: v })}
                                 onBlurOut={commitEdit}
@@ -673,7 +689,7 @@ export function ResultGrid(p: Props) {
                                   if (e.key === "Enter" || e.key === "Tab") {
                                     e.preventDefault();
                                     commitEdit();
-                                    if (e.key === "Tab") selectCell({ r: d, c: Math.min(ci + 1, cols.length - 1) }, false);
+                                    if (e.key === "Tab") selectCell({ r: d, c: Math.min(c + 1, view.length - 1) }, false);
                                   } else if (e.key === "Escape") {
                                     setEditing(null);
                                     scrollRef.current?.focus();
@@ -694,25 +710,27 @@ export function ResultGrid(p: Props) {
                             <GridCell
                               key={ci}
                               width={widths[ci]}
+                              pin={pin}
+                              before={pad}
                               kind={CELL_KIND[cls]}
                               align={aligns[ci][cls]}
-                              selected={inSel(d, ci)}
-                              active={cur?.r === d && cur?.c === ci}
+                              selected={inSel(d, c)}
+                              active={cur?.r === d && cur?.c === c}
                               changed={!!changed}
-                              match={isMatch(d, ci)}
+                              match={isMatch(d, c)}
                               // A join's cell that can't be edited: why, on hover (whole columns say it on their header too)
                               title={join && !isNew ? cellReason(r, ci) || undefined : undefined}
                               cut={isCut ? cutTitle(cutLength(val)) : undefined}
                               onMouseDown={(e) => {
                                 if (e.button !== 0) return;
                                 dragging.current = true;
-                                clickSel(e, { r: d, c: ci });
+                                clickSel(e, { r: d, c });
                               }}
                               onMouseEnter={() => {
-                                if (dragging.current) selectCell({ r: d, c: ci }, true);
+                                if (dragging.current) selectCell({ r: d, c }, true);
                               }}
                               onDoubleClick={() => startEdit(r, ci)}
-                              onContextMenu={(e) => openCellMenu(e, d, ci)}
+                              onContextMenu={(e) => openCellMenu(e, d, c)}
                             >
                               {cls === "jsonBinary" && jsonCol[ci] ? <JsonText {...jsonCell(String(val))} /> : shown(val, ci)}
                             </GridCell>
@@ -769,6 +787,10 @@ export function ResultGrid(p: Props) {
       )}
 
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
+      {columnsOpen && (
+        <CheckListPopover title="Columns…" items={layout.listItems()} onToggle={layout.setShown} onClose={() => (setColumnsOpen(false), focusGrid())}
+          action={{ label: "Show All", onClick: layout.showAll, disabled: !layout.hidden }} />
+      )}
 
       {showQuery && p.query && (
         <Modal
@@ -810,42 +832,6 @@ export function ResultGrid(p: Props) {
           {fix && <FixSql {...fix} />}
         </Modal>
       )}
-    </div>
-  );
-}
-
-/** View as | Transpose: swap rows and columns */
-function TransposedView({ cols, rows, cutAt }: { cols: QueryResult["columns"]; rows: Cell[][]; cutAt: (d: number, c: number) => boolean }) {
-  useSharedReady(); // time fractions and value classes come from the WASM module: render again once it has loaded
-  const fracW = cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(rows.map((r) => r[ci])) : 0));
-  const overrides = useGridAlign();
-  return (
-    <div className="grid-scroll transposed">
-      <table>
-        <tbody>
-          {cols.map((c, ci) => {
-            const classOf = cellClasses(c.typeName);
-            const aligns = alignTable(overrides, c.typeName, rows, ci);
-            return (
-              <tr key={ci}>
-                <th>
-                  <span className="col-name">{c.name}</span> <span className="col-type">{c.typeName.toLowerCase()}</span>
-                </th>
-                {rows.map((r, ri) => {
-                  const cls = classOf(r[ci]);
-                  const isCut = cutAt(ri, ci);
-                  return (
-                    <td key={ri} className={cx(CELL_KIND[cls], aligns[cls] && `al-${aligns[cls]}`)} title={isCut ? cutTitle(cutLength(r[ci])) : undefined}>
-                      {fracW[ci] && typeof r[ci] === "string" ? padFrac(r[ci] as string, fracW[ci]) : display(r[ci])}
-                      {isCut && <CutMark />}
-                    </td>
-                  );
-                })}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
     </div>
   );
 }

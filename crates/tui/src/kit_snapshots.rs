@@ -128,9 +128,9 @@ fn app_scene(h: &mut Harness, name: &str, desc: &str, w: u16, ht: u16) -> Value 
 
 /// Atoms: color tokens · text pieces (badge · key · muted text · icon · color swatch)
 fn atoms() -> Value {
-    scene("Atoms", "kit/atoms.rs: 색 토큰과 글자 조각 — badge · key · muted · icon · swatch", 110, 12, |f| {
+    scene("Atoms", "kit/atoms.rs: color tokens and text pieces — badge · key · muted · icon · swatch", 110, 12, |f| {
         let toks = [("ACCENT", ACCENT), ("SEL", SEL), ("SEL_BLUR", SEL_BLUR), ("SURFACE", SURFACE), ("POPUP_BG", POPUP_BG), ("OK", OK), ("WARN", WARN), ("DANGER", DANGER), ("NUMBER", NUMBER), ("C_DB", C_DB), ("C_VIEW", C_VIEW), ("C_SEQUENCE", C_SEQUENCE), ("C_ROUTINE", C_ROUTINE), ("C_KEYWORD", C_KEYWORD)];
-        let mut lines = vec![Line::from(muted("color tokens (GUI tokens.css 와 같은 값)"))];
+        let mut lines = vec![Line::from(muted("color tokens (the same values as the GUI's tokens.css)"))];
         for chunk in toks.chunks(5) {
             lines.push(Line::from(chunk.iter().flat_map(|(n, c)| [swatch(*c), Span::raw(" "), muted(format!("{n:<12}"))]).collect::<Vec<_>>()));
         }
@@ -138,25 +138,25 @@ fn atoms() -> Value {
         lines.push(Line::from(vec![muted("badge   "), badge("PROD", DANGER), Span::raw(" "), badge("READ-ONLY", SEL), Span::raw(" "), badge("STRING", Color::Rgb(95, 158, 160)), Span::raw(" "), badge("v0.2.5 available", WARN)]));
         lines.push(Line::from(vec![muted("key     "), key("⌃k"), Span::raw(" "), key("F5"), Span::raw(" "), key("⌥⇧N")]));
         lines.push(Line::from(vec![muted("icon    "), icon("◉", C_DB), icon("⛁", C_DB), icon("◇", Color::Gray), icon("▤", ACCENT), icon("▦", Color::Gray), icon("◫", C_VIEW), icon("#", C_SEQUENCE), icon("ƒ", C_ROUTINE)]));
-        lines.push(Line::from(vec![muted("muted   "), muted("설명 · 개수 · 위치")]));
+        lines.push(Line::from(vec![muted("muted   "), muted("description · count · position")]));
         f.render_widget(Paragraph::new(lines), f.area());
     })
 }
 
 /// Molecules: one line — Row (tree · palette · schema picker · Redis key), key_row, field_row, key_hints, section
 fn molecules() -> Value {
-    scene("Molecules", "kit/molecules.rs: 한 줄 조각 — Row (들여쓰기 · ▸ · 아이콘 · 설명 · 오른쪽 · 색 · 선택), key_row, field_row, key_hints, section", 110, 22, |f| {
+    scene("Molecules", "kit/molecules.rs: one-line pieces — Row (indent · ▸ · icon · description · right side · color · selection), key_row, field_row, key_hints, section", 110, 22, |f| {
         let w = 60;
         let prod = Some(Color::Rgb(0x6e, 0x2a, 0x2a));
         let lines = vec![
-            Line::from(muted("Row — 트리 (정확히 60칸, 줄 색 끝까지 · 끝에 걸린 한글은 빈칸)")),
+            Line::from(muted("Row — tree (exactly 60 cells, row color to the end · a wide character cut at the end is a space)")),
             Row::new("[PROD] shop").chevron(Some(true)).lead(icon("◉", C_DB)).bold().hint("postgres").bg(prod).fit(0, w),
             Row::new("tables").indent(2).chevron(Some(true)).lead(icon("▤", ACCENT)).hint("66").bg(prod).fit(0, w),
             Row::new("adjust").indent(3).chevron(Some(false)).lead(icon("▦", Color::Gray)).hint("정산 테이블 (주문 단위 정산) 매우 긴 설명").bg(prod).fit(0, w),
             Row::new("payment").indent(3).chevron(Some(false)).lead(icon("▦", Color::Gray)).hint("결제 카드 정보").bg(prod).selected(true, true).fit(0, w),
             Row::new("orders").indent(3).chevron(Some(false)).lead(icon("▦", Color::Gray)).selected(true, false).fit(0, w),
             Line::raw(""),
-            Line::from(muted("Row — 팔레트 · 스키마 고르기 · Redis 키 (오른쪽 맞춤)")),
+            Line::from(muted("Row — palette · schema picker · Redis key (right-aligned)")),
             Row::new("Database Admin…").hint(" sessions & locks, slow queries").selected(true, true).fit(0, w),
             Row::new("public").indent(1).chevron(None).lead(muted("[x] ")).bold().hint("(Default schema)").fit(0, w),
             Row::new("session:abc").chevron(None).lead(badge("STRING", Color::Rgb(95, 158, 160))).lead(Span::raw(" ")).trailing("3540s").fit(0, w),
@@ -175,10 +175,10 @@ fn molecules() -> Value {
 
 /// Organisms: panel (focused · not) · popup · danger popup (confirmation)
 fn organisms() -> Value {
-    scene("Organisms", "kit/organisms.rs: panel(포커스 · 아님) · popup · popup_danger + confirm_lines (행 수 색)", 120, 16, |f| {
+    scene("Organisms", "kit/organisms.rs: panel (focused · not) · popup · popup_danger + confirm_lines (row count colors)", 120, 16, |f| {
         let [a, b, c] = Layout::horizontal([Constraint::Percentage(28), Constraint::Percentage(30), Constraint::Percentage(42)]).areas(f.area());
-        f.render_widget(Paragraph::new(vec![Line::raw("panel(title, true)"), Line::from(muted("굵은 강조 테두리"))]).block(panel(" Focused ", true)), Rect { height: 6, ..a });
-        f.render_widget(Paragraph::new(vec![Line::raw("panel(title, false)"), Line::from(muted("흐린 얇은 테두리"))]).block(panel(" Not focused ", false)), Rect { y: a.y + 7, height: 6, ..a });
+        f.render_widget(Paragraph::new(vec![Line::raw("panel(title, true)"), Line::from(muted("bold accent border"))]).block(panel(" Focused ", true)), Rect { height: 6, ..a });
+        f.render_widget(Paragraph::new(vec![Line::raw("panel(title, false)"), Line::from(muted("dim thin border"))]).block(panel(" Not focused ", false)), Rect { y: a.y + 7, height: 6, ..a });
         let inner = popup(f, Rect { x: b.x + 1, width: b.width - 2, height: 7, ..b }, " Confirm ");
         f.render_widget(Paragraph::new(confirm_lines("Delete snippet \"user orders\"?")), inner);
         let text = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?";
@@ -212,7 +212,7 @@ async fn explorer(h: &mut Harness) {
     h.app.tree.children.insert(p.into(), vec![node("prod|shop", "shop", "default", NodeKind::Db, p)]);
     h.app.tree.children.insert("prod|shop".into(), vec![node("prod|shop|public", "public", "", NodeKind::Schema, p)]);
     h.app.tree.children.insert("prod|shop|public".into(), vec![node("prod|shop|public|g", "tables", "66", NodeKind::Group, p)]);
-    let tables = [("adjust", "정산 테이블 (주문 단위 정산)"), ("adjust_status_log", "정산 상태 로그"), ("admin_auth", "관리자 OTP 인증"), ("admin_role", ""), ("bank_info", "은행 정보 테이블"), ("contract", "월세 계약 테이블"), ("payment", "결제 카드 정보")];
+    let tables = [("cart", "장바구니 테이블 (주문 전 담기)"), ("cart_item", "장바구니 상품"), ("coupon", "쿠폰 정보"), ("category", ""), ("product", "상품 테이블"), ("review", "상품 후기 테이블"), ("payment", "결제 카드 정보")];
     h.app.tree.children.insert("prod|shop|public|g".into(), tables.iter().map(|(t, c)| Node { expandable: true, name: Some(t.to_string()), ..node(&format!("prod|shop|public|g|{t}"), t, c, NodeKind::Object("table".into()), p) }).collect());
     for k in ["prod", "prod|shop", "prod|shop|public", "prod|shop|public|g"] {
         h.app.tree.expanded.insert(k.into());
@@ -244,14 +244,14 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         notices: vec![], cut: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.results.ran(10, Some(0), None, String::new(), "payment".into(), crate::grid::Grid::new(res));
+        c.results.ran(10, Some(0), None, String::new(), String::new(), "payment".into(), crate::grid::Grid::new(res));
     }
     h.app.focus = crate::app::Focus::Editor;
     h.app.status = "4 row(s) retrieved in 18 ms".into();
-    scenes.push(app_scene(h, "Console & result", "콘솔 (위) · 결과 표 (아래) · F5 실행", 120, 26));
+    scenes.push(app_scene(h, "Console & result", "Console (top) · result grid (bottom) · F5 runs", 120, 26));
     // Chart
     h.app.chart_result();
-    scenes.push(app_scene(h, "Chart", "⌃k › Chart Result: 첫 글 컬럼별 수 컬럼의 합 (가로 막대)", 120, 26));
+    scenes.push(app_scene(h, "Chart", "⌃k › Chart Result: the sum of a number column per value of the first text column (horizontal bars)", 120, 26));
     h.app.popup = None;
     // Loading more (scrolled near the end of an unfinished result): the status line shows it as it shows a run
     if let Some(g) = h.app.grid_mut() {
@@ -291,7 +291,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         let mut g = crate::grid::Grid::new(wide);
         (g.row, g.col, g.col_off) = (2, 4, 2);
-        c.results.ran(10, Some(0), None, String::new(), "payment".into(), g);
+        c.results.ran(10, Some(0), None, String::new(), String::new(), "payment".into(), g);
     }
     let status = std::mem::replace(&mut h.app.status, "12 row(s) retrieved in 12 ms".into());
     use crate::theme::ColorMode;
@@ -345,7 +345,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         let mut g = crate::grid::Grid::new(users(qurry_core::editable::Editable::Table(target)));
         g.set_value(1, 1, "Lee".into());
         (g.row, g.col) = (1, 1);
-        c.results.ran(10, Some(0), None, String::new(), "users".into(), g);
+        c.results.ran(10, Some(0), None, String::new(), String::new(), "users".into(), g);
     }
     h.app.focus = crate::app::Focus::Grid;
     h.app.status = "3 row(s) retrieved in 3 ms".into();
@@ -366,13 +366,13 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
             let mut g = crate::grid::Grid::new(joined);
             g.set_value(0, 3, "admin".into());
             (g.row, g.col) = (1, 3);
-            c.results.ran(10, Some(0), None, String::new(), "crm.voc".into(), g);
+            c.results.ran(10, Some(0), None, String::new(), String::new(), "crm.voc".into(), g);
         }
     }
     h.key("Enter");
     scenes.push(app_scene(h, "Console result: join", "A join edits per table, each by its own primary key (users.role of voc 1 edited); a cell where no row of its table matched (outer join) is read-only, and the status line says why", 120, 22));
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.results.ran(10, Some(0), None, String::new(), "users".into(), crate::grid::Grid::new(users(qurry_core::editable::Editable::ReadOnly(qurry_shared::errors::edit_missing_pk("public.users", &["id".into()])))));
+        c.results.ran(10, Some(0), None, String::new(), String::new(), "users".into(), crate::grid::Grid::new(users(qurry_core::editable::Editable::ReadOnly(qurry_shared::errors::edit_missing_pk("public.users", &["id".into()])))));
     }
     h.key("a");
     scenes.push(app_scene(h, "Console result: read-only", "An edit key on a result Qurry can't tie to table rows: the status line says why (here the key isn't in the result)", 120, 22));
@@ -418,6 +418,16 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.key("Down");
     h.key("Down");
     scenes.push(app_scene(h, "Console: Execute chooser", "F5 inside one of several statements asks what to run; the editor highlights the text the selected option runs (↑↓ · Enter · Esc closes without running)", 120, 22));
+    h.key("Esc");
+    h.app.close_tab_now(h.app.active);
+    // ⌃k › Switch Schema… on a console opened in a schema (#195): the title shows it, the list marks it current
+    let id = h.console_with("select * from invoice;", 0, 22);
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.schema = Some("billing".into());
+    }
+    let schema = |n: &str, system: bool| qurry_core::meta::SchemaInfo { name: n.into(), is_system: system };
+    h.app.console_schema_choices(id, vec![schema("pg_catalog", true), schema("public", false), schema("billing", false), schema("audit", false)]);
+    scenes.push(app_scene(h, "Console: Switch Schema", "⌃k › Switch Schema…: the console's schemas without the system ones, the current one marked; Enter sets search_path on the console's session and the title shows it", 120, 22));
     h.key("Esc");
     h.app.close_tab_now(h.app.active);
     // Completion from the shared engine: FK joins, the signature hint line, unknown names underlined with their fixes (⌥↩)
@@ -502,7 +512,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         notices: vec![], cut: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.results.ran(10, Some(0), None, String::new(), "payment_check".into(), crate::grid::Grid::new(res));
+        c.results.ran(10, Some(0), None, String::new(), String::new(), "payment_check".into(), crate::grid::Grid::new(res));
     }
     scenes.push(app_scene(h, "Grid alignment", "Numbers and NULL on the right by default (a NULL stays in line with the numbers); text, dates, booleans and JSON on the left", 120, 22));
     // Value panel (v): the cell's whole value beside the grid, jsonb pretty-printed and coloured (the GUI's Value Editor panel)
@@ -569,6 +579,29 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.run_action(crate::app::Action::ColumnReset);
     h.app.status.clear();
     h.app.close_tab_now(h.app.active);
+    // Column layout (#178): H hides, P pins at the left, C Columns…; saved per table in settings.json "columnLayout" (shared with the GUI)
+    let rows: [&[&str]; 4] = [
+        &["486", "O-20261101", "paid", "12000", "call first", "2026-11-01 09:12", "2026-11-01 09:30", "card"],
+        &["487", "O-20261102", "sent", "800", "gift wrap", "2026-11-02 10:40", "2026-11-03 08:00", "card"],
+        &["488", "O-20261103", "paid", "45000", "-", "2026-11-03 14:05", "2026-11-03 14:05", "transfer"],
+        &["489", "O-20261104", "refunded", "3200", "wrong size", "2026-11-04 08:30", "2026-11-05 11:20", "card"],
+    ];
+    h.table_tab("orders", &["idx", "order_no", "status", "total", "memo", "created_at", "updated_at", "paid_by"], &rows, &["idx"]);
+    h.app.focus = crate::app::Focus::Grid;
+    h.key("Right");
+    h.key("Shift+P");
+    h.key("Right");
+    h.key("Right");
+    h.key("Shift+P");
+    h.key("End");
+    h.key("Shift+H");
+    h.key("End");
+    h.app.status.clear();
+    scenes.push(app_scene(h, "Column layout", "order_no and status pinned at the left (P) stay while the grid scrolls right; paid_by hidden (H), so the status line says 1 hidden; C opens Columns…", 100, 12));
+    h.key("Shift+C");
+    scenes.push(app_scene(h, "Columns…", "C (⌃k › Columns…): every column with its box; Space shows or hides, ⇥ pins, typing filters; Show All brings the hidden ones back", 100, 16));
+    h.app.popup = None;
+    h.app.close_tab_now(h.app.active);
     h.app.focus = crate::app::Focus::Editor;
     // JSON colors (the GUI's tokenizer, qurry_shared::format::json_spans): one line per cell, only what fits is read
     let id = h.console_with("select id, payload from webhook_event;", 1, 10);
@@ -591,7 +624,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         notices: vec![], cut: vec![],
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
-        c.results.ran(10, Some(0), None, String::new(), "webhook_event".into(), crate::grid::Grid::new(res));
+        c.results.ran(10, Some(0), None, String::new(), String::new(), "webhook_event".into(), crate::grid::Grid::new(res));
     }
     scenes.push(app_scene(h, "Grid: JSON", "json / jsonb cells in colors (keys · strings · numbers · true/false/null · punctuation), still one line; a large value reads only what fits; binary (bytea) stays plain", 120, 22));
     h.app.color = crate::theme::ColorMode::Ansi16;
@@ -630,10 +663,10 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         h.app.state.audit.add(e).unwrap();
     }
     h.app.production_log();
-    scenes.push(app_scene(h, "Production log", "⌃k › Production Log: 운영에서 실행한 변경 (↶ undo 가 있으면 ↩ 로 새 콘솔에)", 120, 22));
+    scenes.push(app_scene(h, "Production log", "⌃k › Production Log: changes run on Production (with ↶ undo, ↩ opens it in a new console)", 120, 22));
     // An entry without undo SQL: ↩ shows its note over the log, wrapped (Esc goes back to the same entry)
     h.key("Enter");
-    scenes.push(app_scene(h, "Production log · note", "Production Log › ↩ on COMMIT outcome unknown: 메모를 줄바꿈해 로그 위에 (Esc 로 같은 항목에)", 70, 22));
+    scenes.push(app_scene(h, "Production log · note", "Production Log › ↩ on COMMIT outcome unknown: the note, wrapped, over the log (Esc goes back to the same entry)", 70, 22));
     h.app.popup = None;
     // Table designer (modify)
     let col = |n: &str, t: &str, null: bool| ColumnDef { name: n.into(), orig: Some(n.into()), data_type: t.into(), nullable: null, ..Default::default() };
@@ -645,7 +678,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         primary_key_name: Some("payment_pkey".into()),
         indexes: vec![IndexDef { name: "payment_user_idx".into(), orig: Some("payment_user_idx".into()), columns: vec!["user_id".into()], ..Default::default() }],
         foreign_keys: vec![ForeignKeyDef { name: "payment_user_fk".into(), orig: Some("payment_user_fk".into()), columns: vec!["user_id".into()], ref_schema: "public".into(), ref_table: "users".into(), ref_columns: vec!["id".into()], on_delete: "CASCADE".into(), on_update: "NO ACTION".into() }],
-        comment: Some("결제".into()),
+        comment: Some("Payments".into()),
     };
     let mut def = before.clone();
     def.columns[3].name = "brand".into();
@@ -653,7 +686,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     let mut d = crate::designer::Designer { target: "prod".into(), conn: "prod".into(), kind: qurry_core::store::DbKind::Postgres, before: Some(before), def, sel: 4, sql: Ok(vec![]), message: None };
     d.refresh();
     h.app.designer = Some(d);
-    scenes.push(app_scene(h, "Table designer", "⌃F6 Modify Table: 컬럼 · 인덱스 · FK 를 한 줄씩 고치면 아래에 ALTER 가 바로 보인다", 120, 34));
+    scenes.push(app_scene(h, "Table designer", "⌃F6 Modify Table: edit columns · indexes · FKs one line at a time, and the ALTER shows below at once", 120, 34));
     h.app.designer = None;
     // Test data · copy related rows confirmation
     h.app.popup = Some(Popup::Confirm {
@@ -662,14 +695,14 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         text: "Insert 1,000 generated rows into public.payment?\n\n  id          left to the database (auto / generated)\n  user_id     picked from public.users (id)\n  amount      random values\n  card_brand  one of: VISA, MASTER, AMEX\n  created_at  random values\n\n⚠ Production data source \"[PROD] shop\"\n\nAll rows go in one transaction — if one fails, nothing is inserted.".into(),
         on_yes: Box::new(|_| {}),
     });
-    scenes.push(app_scene(h, "Generate test data", "⌃k › Generate Test Data: 컬럼마다 채우는 법을 보여 주고 확인", 120, 24));
+    scenes.push(app_scene(h, "Generate test data", "⌃k › Generate Test Data: shows how each column is filled, then confirms", 120, 24));
     h.app.popup = Some(Popup::Confirm {
         opened: None,
         sql: None,
         text: "Copy 29 rows into \"[DEV] shop\"? (in insert order)\n\n  users         1  start · masked: email, name, phone\n  contract      3  child of users\n  payment      25  child of contract\n\nOne transaction; rows already there are skipped. The tables must exist in the target.".into(),
         on_yes: Box::new(|_| {}),
     });
-    scenes.push(app_scene(h, "Copy related rows", "⌃k › Copy Related Rows To: FK 로 이어진 행 · 가린 개인정보 컬럼을 보여 주고 확인", 120, 22));
+    scenes.push(app_scene(h, "Copy related rows", "⌃k › Copy Related Rows To: shows the rows linked by FKs and the masked personal-data columns, then confirms", 120, 22));
     // Import Data Sources: the locations found (a fake home with DataGrip, IntelliJ and DBeaver settings), then the confirm
     h.app.import_home = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/tests/fixtures/import/home").canonicalize().unwrap();
     h.app.ds_import_start();
@@ -681,6 +714,18 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         p.toggle();
     }
     scenes.push(app_scene(h, "Import Data Sources — confirm", "One row per source: what is added and mapped (SSH, SSL, Read-only), password on connect or a warning, skipped ones with the reason; Space leaves a row out, y / Enter imports the checked ones", 120, 40));
+    // #196: the same in an 80×24 terminal, and a long message and confirm: the title and the keys stay, the rest scrolls or is cut
+    if let Some(Popup::ImportPick(p)) = &mut h.app.popup {
+        p.move_by(3);
+    }
+    scenes.push(app_scene(h, "Import Data Sources — confirm, 80×24", "In a small terminal the rows scroll to the selected one; the question and the keys stay", 80, 24));
+    let text = (1..=60).map(|i| format!("line {i}: connection refused (db.example.com:5432)")).collect::<Vec<_>>().join("\n");
+    h.app.popup = Some(Popup::Message { title: "Couldn't connect".into(), text });
+    h.app.popup_scroll = 20;
+    scenes.push(app_scene(h, "Long message, 80×24", "A message taller than the window: ↑↓ PgUp PgDn scroll it, the title and the keys stay", 80, 24));
+    let stmts = (1..=40).map(|i| format!("  update orders set status = 'paid' where id = {i}\n     → 1 row")).collect::<Vec<_>>().join("\n");
+    h.app.popup = Some(Popup::Confirm { opened: None, sql: Some(qurry_core::store::DbKind::Postgres), text: format!("These statements change data on \"[DEV] shop\":\n\n{stmts}\n\nRun them?"), on_yes: Box::new(|_| {}) });
+    scenes.push(app_scene(h, "Long confirm, 80×24", "A confirm of 40 statements: the ones that don't fit are counted with the rows they change; the question and y / Enter stay", 80, 24));
     h.app.popup = None;
     // Explain Analyze of several statements that need a look: each with its own reason, danger border
     let asks: Vec<(String, String)> = ["select nextval('payment_id_seq')", "delete from payment"]
@@ -689,10 +734,29 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         .collect();
     h.app.popup = Some(Popup::Confirm { opened: None, sql: Some(qurry_core::store::DbKind::Postgres), text: crate::app::explain_analyze_ask_text(&asks), on_yes: Box::new(|_| {}) });
     scenes.push(app_scene(h, "Explain Analyze confirm", "Explain Analyze of statements a rollback can't fully undo: each statement with its own reason", 120, 22));
+    // Parameters (#173): ⌃↩ on a statement with :name in code asks first; the console's last values are filled in
+    h.app.popup = None;
+    let (back, status) = (h.app.active, h.app.status.clone());
+    let id = h.console_with("select id, amount, status\nfrom payment\nwhere user_id = :user_id\n  and status = :status\n  and created_at >= :since;", 2, 0);
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tab_mut(id).map(|t| &mut t.kind) {
+        c.params = [("user_id", "42"), ("status", "'paid'")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    }
+    h.app.focus = crate::app::Focus::Editor;
+    h.app.execute(false);
+    h.key("Tab");
+    h.key("Tab");
+    h.type_str("now() - interval '7 days'");
+    scenes.push(app_scene(h, "Parameters", "⌃↩ on a statement with :name in code: a field per name with the console's last values, the statement below with the names marked; Tab / ⇧Tab / ↑↓ move, Enter runs from any field, Esc runs nothing", 120, 26));
+    h.app.popup = None;
+    if let Some(i) = h.app.tab_index(id) {
+        h.app.close_tab_now(i);
+    }
+    h.app.activate(back);
+    h.app.status = status;
     // TLS opt-in: a dev source's connect error that needs TLS (Production gets only a status line). It never replaces an open popup
     h.app.popup = None;
     h.app.offer_tls_opt_in("dev", &qurry_shared::errors::needs_tls_pg(), |_| {});
-    scenes.push(app_scene(h, "Allow unencrypted", "TLS 가 없는 원격 서버에 연결 실패: 개발 Data Source 는 이 Data Source 만 암호화 없이 허용할지 묻는다 (운영은 상태 줄 안내만)", 120, 22));
+    scenes.push(app_scene(h, "Allow unencrypted", "A remote server without TLS fails to connect: a non-Production data source asks whether to allow it unencrypted (Production only says so in the status line)", 120, 22));
     h.app.popup = None;
     // Database Admin: a refresh that ran into the time limit keeps the last sessions · a report the server can't run
     let sessions = qurry_core::db::QueryResult {
@@ -830,7 +894,7 @@ async fn all_scenes() -> Vec<Value> {
     let mut scenes = vec![atoms(), molecules(), organisms()];
     let mut h = Harness::new().await;
     explorer(&mut h).await;
-    scenes.push(app_scene(&mut h, "Explorer & table", "탐색기 (운영 색 · 왼쪽 끝까지 이어지는 줄 색 · 한글 설명), 표 탭, 상태 줄의 PROD 배지", 120, 22));
+    scenes.push(app_scene(&mut h, "Explorer & table", "Explorer (Production color · row color to the left edge · wide-character descriptions), table tab, PROD badge in the status line", 120, 22));
     // The same screen in each color mode (theme.rs maps the drawn frame; the mode comes from NO_COLOR · COLORTERM · TERM)
     use crate::theme::ColorMode;
     for (mode, name, desc) in [
@@ -941,7 +1005,7 @@ async fn all_scenes() -> Vec<Value> {
         text: "Production data source \"[PROD] shop\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?".into(),
         on_yes: Box::new(|_| {}),
     });
-    scenes.push(app_scene(&mut h, "Production confirm", "운영 Data Source 에서 바꾸는 문장: 바뀔 행 수를 보여 주고 묻는다", 120, 22));
+    scenes.push(app_scene(&mut h, "Production confirm", "A statement that changes data on a Production data source: shows the rows it changes and asks", 120, 22));
     h.app.themes.theme = Some("light".into());
     scenes.push(app_scene(&mut h, "Light: production confirm", "Theme Light: the Production question, the red row and the PROD badge on a light terminal", 120, 22));
     h.app.themes.theme = None;
@@ -963,17 +1027,26 @@ async fn all_scenes() -> Vec<Value> {
     h.app.popup = None;
     h.app.palette_actions();
     h.type_str("work");
-    scenes.push(app_scene(&mut h, "Actions palette", "⌃k: 모든 명령과 단축키 (입력으로 찾기)", 120, 22));
+    scenes.push(app_scene(&mut h, "Actions palette", "⌃k: every command and shortcut (type to find)", 120, 22));
     h.app.popup = None;
     h.app.conn_form(None);
-    scenes.push(app_scene(&mut h, "Data source form", "n (탐색기): 새 Data Source. Workspace · Color 칸은 ◂ ▸ 로 고른다", 120, 34));
+    scenes.push(app_scene(&mut h, "Data source form", "n (explorer): new data source. Workspace · Color fields are picked with ◂ ▸", 120, 36));
     h.key("Up");
     scenes.push(app_scene(&mut h, "Data source form: 80×24", "In a window too short for every field the fields scroll to the focused one (here the last); the key hints stay and the border says which field it is", 80, 24));
     h.app.popup = None;
     let ssm = serde_json::from_value(json!({ "id": "ssm", "name": "[PROD] orders (SSM)", "kind": "postgres", "host": "orders.cluster-abc.ap-northeast-2.rds.amazonaws.com", "port": 5432, "user": "app", "database": "orders",
         "ssm": { "enabled": true, "profile": "prod", "target": "i-0123456789abcdef0" } })).unwrap();
     h.app.conn_form(Some(ssm));
-    scenes.push(app_scene(&mut h, "Data source form: AWS SSM", "Tunnel ◂ aws ssm ▸: AWS profile · region (empty: the profile's) · SSM target (instance id). Host / Port are the database as seen from the instance; no AWS secrets are stored (the aws CLI uses your AWS config or SSO login)", 120, 34));
+    scenes.push(app_scene(&mut h, "Data source form: AWS SSM", "Tunnel ◂ aws ssm ▸: AWS profile · region (empty: the profile's) · SSM target (instance id). Host / Port are the database as seen from the instance; no AWS secrets are stored (the aws CLI uses your AWS config or SSO login)", 120, 36));
+    h.app.popup = None;
+    // #177: the password comes from a program run at each login (an RDS IAM token); Password is off meanwhile
+    let iam = serde_json::from_value(json!({ "id": "iam", "name": "[PROD] orders (IAM)", "kind": "postgres", "host": "orders.cluster-abc.ap-northeast-2.rds.amazonaws.com", "port": 5432, "user": "app_iam", "database": "orders",
+        "passwordCommand": "/opt/homebrew/bin/aws rds generate-db-auth-token --hostname %HOSTNAME% --port %PORT% --username %USERNAME% --region ap-northeast-2", "passwordReuseSecs": 600 })).unwrap();
+    h.app.conn_form(Some(iam));
+    if let Some(Popup::ConnForm(f)) = &mut h.app.popup {
+        f.sel = f.fields.iter().position(|x| x.label == "Password command").unwrap();
+    }
+    scenes.push(app_scene(&mut h, "Data source form: password command", "Password command: a program (full path, never through a shell) whose output is the password at each login, %HOSTNAME% %PORT% %USERNAME% %DATABASE% replaced; Password is off (dim) while it is set. Password reuse: seconds its output is used again (empty: every login)", 120, 36));
     h.app.popup = None;
     // #131: whether AI tools may read a Production source's admin reports (MCP dba_report); disabled with why elsewhere
     let cases = [("off", true, "read", false, false), ("on", true, "read", true, false), ("not Production", false, "read", false, false), ("MCP Off", true, "off", false, false), ("off", true, "read", false, true), ("on", true, "read", true, true)];
@@ -987,12 +1060,12 @@ async fn all_scenes() -> Vec<Value> {
             f.sel = if f.disabled("Admin reports").is_none() { at } else { at - 1 };
         }
         let l = if light { " (light)" } else { "" };
-        scenes.push(app_scene(&mut h, &format!("Data source form: admin reports, {name}{l}"), "Admin reports: AI tools may read this Production source's Database Admin reports (MCP dba_report), query values masked; off by default. Not Production (always readable) or MCP Off: disabled, dim", 120, 36));
+        scenes.push(app_scene(&mut h, &format!("Data source form: admin reports, {name}{l}"), "Admin reports: AI tools may read this Production source's Database Admin reports (MCP dba_report), query values masked; off by default. Not Production (always readable) or MCP Off: disabled, dim", 120, 38));
     }
     h.app.themes.theme = None;
     h.app.popup = None;
     h.app.popup = Some(Popup::Help { sel: 0, scroll: 0, record: None, message: None });
-    scenes.push(app_scene(&mut h, "Keymap (F1)", "F1: 처음 쓸 키 → 바꿀 수 있는 명령 → 고정 키", 120, 30));
+    scenes.push(app_scene(&mut h, "Keymap (F1)", "F1: keys to start with → commands you can rebind → fixed keys", 120, 30));
     // Recording a key for the explorer's c (Connect): pane keys follow every command, then the fixed keys
     let sel = crate::keys::COMMANDS.iter().position(|(s, _)| *s == crate::keys::Slot { action: crate::app::Action::Connect, pane: qurry_core::keymap::Scope::Tree }).unwrap();
     h.app.popup = Some(Popup::Help { sel, scroll: 0, record: Some(false), message: None });
@@ -1022,7 +1095,7 @@ async fn all_scenes() -> Vec<Value> {
     h.key("Alt+n");
     h.key("Enter");
     h.key("Alt+1");
-    scenes.push(app_scene(&mut h, "Workspaces", "워크스페이스가 둘 이상이면 위쪽 띠 (⌥1…9 · 눌러서 바꾸기)", 120, 22));
+    scenes.push(app_scene(&mut h, "Workspaces", "With more than one workspace, a strip at the top (⌥1…9 · click to switch)", 120, 22));
     h.app.palette_update_channel();
     scenes.push(app_scene(&mut h, "Update channel", "⌃k › Update Channel…: stable (version tags only, the default) or beta (also every merge to main), shared with the GUI", 120, 22));
     // Run from the palette; a test launches no browser (the opener is stubbed)

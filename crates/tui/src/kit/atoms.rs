@@ -33,7 +33,7 @@ pub const JSON_PUNCT: Color = Color::Rgb(139, 143, 149);
 /// their own, one step off NUMBER and the GUI's dark comment gray so a theme can draw them apart. Keywords, strings and functions
 /// are JSON_KEYWORD, JSON_STRING and C_ROUTINE (the same theme tokens)
 pub const SQL_NUMBER: Color = Color::Rgb(42, 172, 185);
-pub const SQL_COMMENT: Color = Color::Rgb(122, 126, 133);
+pub const SQL_COMMENT: Color = Color::Rgb(140, 144, 150);
 /// NULL in result cells and the value panel (GUI NULL color; dim gray in 16 colors, dim without colors)
 pub const NULL_TEXT: Color = Color::Rgb(139, 143, 148);
 // Tree · autocomplete icon colors
@@ -67,15 +67,28 @@ pub fn sql_style(class: qurry_shared::highlight::Class) -> Option<Style> {
 
 /// `text` as one line in the console's SQL colors (sql_style), the text unchanged
 pub fn sql_line(text: &str, kind: qurry_shared::DbKind) -> Line<'static> {
+    sql_line_marked(text, kind, &[])
+}
+
+/// sql_line with the byte ranges `marks` (sorted, apart) in the accent color, bold, over the SQL colors: the parameters the
+/// Parameters popup asks for
+pub fn sql_line_marked(text: &str, kind: qurry_shared::DbKind, marks: &[(usize, usize)]) -> Line<'static> {
+    let mark = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let mut pieces: Vec<(usize, usize, Style)> = qurry_shared::highlight::highlight(text, kind)
+        .into_iter()
+        .filter(|s| !marks.iter().any(|&(a, b)| s.start < b && a < s.end))
+        .filter_map(|s| sql_style(s.class).map(|st| (s.start, s.end, st)))
+        .chain(marks.iter().map(|&(a, b)| (a, b, mark)))
+        .collect();
+    pieces.sort_by_key(|p| p.0);
     let mut out = vec![];
     let mut at = 0;
-    for s in qurry_shared::highlight::highlight(text, kind) {
-        let Some(style) = sql_style(s.class) else { continue };
-        if s.start > at {
-            out.push(Span::raw(text[at..s.start].to_string()));
+    for (start, end, style) in pieces {
+        if start > at {
+            out.push(Span::raw(text[at..start].to_string()));
         }
-        out.push(Span::styled(text[s.start..s.end].to_string(), style));
-        at = s.end;
+        out.push(Span::styled(text[start..end].to_string(), style));
+        at = end;
     }
     if at < text.len() {
         out.push(Span::raw(text[at..].to_string()));

@@ -66,68 +66,15 @@ pub(super) fn draw_popup(f: &mut Frame, app: &mut App) {
             }
             let title = match message {
                 Some(m) => format!(" {m} "),
-                None => " Keymap — saved to keymap.json · PgUp PgDn · Esc close ".into(),
+                None => fit_hints("Keymap · saved to keymap.json · PgUp PgDn · Esc close", r.width.saturating_sub(2)),
             };
             let inner = popup(f, r, title);
             f.render_widget(Paragraph::new(lines).scroll((*scroll, 0)), inner);
         }
         // Drawn separately above
         Popup::Find(_) => {}
-        Popup::Message { title, text } | Popup::Note { title, text, .. } => {
-            // Sized by word wrap, so a long line isn't cut off in a narrow terminal
-            let lines: Vec<Line> = text.lines().map(|l| Line::raw(l.to_string())).collect();
-            let r = centered(area, 90, (wrapped_height(&lines, 90u16.min(area.width.saturating_sub(4)).saturating_sub(2)) + 4).min(30));
-            let inner = popup(f, r, format!(" {} (Esc) ", disp(title)));
-            f.render_widget(Paragraph::new(text.clone()).wrap(Wrap { trim: false }), inner);
-        }
-        Popup::Scope(e) => {
-            use crate::kit::Row as KRow;
-            use crate::scope::{Check, Row};
-            let name = app.conns.iter().find(|c| c.config.id == e.conn).map(|c| c.config.name.clone()).unwrap_or_default();
-            let rows = e.rows();
-            let r = centered(area, 70, (rows.len() as u16 + 4).min(area.height.saturating_sub(4)).max(8));
-            let inner_h = r.height.saturating_sub(3) as usize;
-            let top = e.sel.saturating_sub(inner_h.saturating_sub(1));
-            let mut lines: Vec<Line> = rows
-                .iter()
-                .enumerate()
-                .skip(top)
-                .take(inner_h)
-                .map(|(i, row)| {
-                    let box_ = muted(match e.check(row) {
-                        Check::On => "[x] ",
-                        Check::Implicit => "[~] ",
-                        Check::Off => "[ ] ",
-                    });
-                    let r = match row {
-                        Row::AllDbs => KRow::new("All databases").chevron(None).lead(box_),
-                        Row::DefaultDb => KRow::new("Default database").chevron(None).lead(box_).hint(format!("({})", e.default_db)),
-                        Row::Db(db) => {
-                            let open = rows.get(i + 1).is_some_and(|n| !matches!(n, Row::Db(_)));
-                            let on = e.check(row) != Check::Off;
-                            let r = KRow::new(db.clone()).chevron(Some(open)).lead(box_).hint(if *db == e.default_db { "(Default database)".to_string() } else { String::new() });
-                            if on {
-                                r.bold()
-                            } else {
-                                r
-                            }
-                        }
-                        Row::AllSchemas(_) => KRow::new("All schemas").indent(1).chevron(None).lead(box_),
-                        Row::DefaultSchema(_) => KRow::new("Default schema").indent(1).chevron(None).lead(box_).hint("(public)"),
-                        Row::Schema { name, system, .. } => {
-                            let r = KRow::new(name.clone()).indent(1).chevron(None).lead(box_);
-                            let r = if *system { r.label_style(Style::default().fg(Color::Yellow)).trailing("⚡ system") } else { r };
-                            r.hint(if name == "public" { "(Default schema)".to_string() } else { String::new() })
-                        }
-                        Row::Note(_, t) => KRow::new(String::new()).indent(2).hint(t.clone()),
-                    };
-                    r.selected(i == e.sel, true).line()
-                })
-                .collect();
-            lines.push(key_hints(&[("Space", "check"), ("→", "expand"), ("←", "collapse"), ("Enter", "apply"), ("Esc", "cancel")]));
-            let inner = popup(f, r, format!(" Manage Shown Schemas — {name} "));
-            f.render_widget(Paragraph::new(lines), inner);
-        }
+        Popup::Message { title, text } | Popup::Note { title, text, .. } => (app.popup_scroll, app.hits.popup_page) = draw_message(f, area, title, text, app.popup_scroll),
+        Popup::Scope(e) => draw_scope(f, area, app.conns.iter().find(|c| c.config.id == e.conn).map(|c| c.config.name.clone()).unwrap_or_default(), e),
         Popup::Confirm { text, sql, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Confirm ", text, *sql, key_hints(&[("y / Enter", "yes"), ("n / Esc", "no")])),
         Popup::ImportPick(p) => draw_import(f, area, p),
         // Like Confirm, but only y allows (no Enter): the popup opened on its own
@@ -142,8 +89,9 @@ pub(super) fn draw_popup(f: &mut Frame, app: &mut App) {
                 // A plain border: only the input above reads as focused
                 let br = Rect { y: r.bottom(), height: all.height - r.height, ..all };
                 clear(f, br);
-                let b = panel("", false).style(Style::default().bg(POPUP_BG));
-                f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }).block(b), br);
+                let (b, keep) = (panel("", false).style(Style::default().bg(POPUP_BG)), vec![false; body.len()]);
+                // Taller than the window: its first lines, then how many more
+                f.render_widget(Paragraph::new(cut_lines(body, &keep, br.width.saturating_sub(2), br.height.saturating_sub(2))).wrap(Wrap { trim: false }).block(b), br);
             }
             clear(f, r);
             let hint = if redis.is_some() { "Enter / Esc · Tab complete · ↑↓ history · HELP command" } else if filter.is_none() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
@@ -186,7 +134,8 @@ pub(super) fn draw_popup(f: &mut Frame, app: &mut App) {
             app.hits.palette = Block::default().borders(Borders::ALL).inner(list);
             // A search shows its scope (the GUI's scope picker)
             let scope = if crate::app::is_search(&p.title) { format!(" · {search_scope}") } else { String::new() };
-            let t = format!(" {}{scope}{} ", p.title, if p.loading > 0 { " — loading…" } else { "" });
+            let tail = format!("{scope}{}", if p.loading > 0 { " — loading…" } else { "" });
+            let t = format!(" {}{tail} ", fit_rows(&p.title, inp.width.saturating_sub(4 + tail.chars().count() as u16), 1));
             p.input.set_block(panel(t, true));
             p.input.set_cursor_line_style(Style::default());
             f.render_widget(&p.input, inp);
@@ -218,15 +167,133 @@ pub(super) fn draw_popup(f: &mut Frame, app: &mut App) {
                 let again = if p.title == "Search Everywhere" { crate::app::Action::SearchEverywhere } else { crate::app::Action::GoToObject };
                 let again = app.keys.keys(again).first().map(|k| disp(k)).unwrap_or_else(|| "—".into());
                 format!(" Enter open · {ddl} DDL · {again} scope · Esc ")
+            } else if p.title == crate::app::COLUMNS {
+                " ↑↓ move · Space show/hide · ⇥ pin · Esc close ".into()
             } else if check {
                 " ↑↓ move · Space toggle · Esc close ".into()
             } else {
                 " Enter · Esc ".into()
             };
-            f.render_widget(List::new(items).block(panel(hint, true)), list);
+            f.render_widget(List::new(items).block(panel(fit_hints(&hint, list.width.saturating_sub(2)), true)), list);
         }
         Popup::ConnForm(form) => draw_conn_form(f, area, form),
+        Popup::Params { fields, sel, preview, kind, .. } => draw_params(f, area, fields, *sel, preview, *kind),
     }
+}
+
+/// Manage Shown Schemas: a checkbox row per database and schema, the selected one kept in view; the keys at the bottom
+fn draw_scope(f: &mut Frame, area: Rect, name: String, e: &crate::scope::ScopeEditor) {
+    use crate::kit::Row as KRow;
+    use crate::scope::{Check, Row};
+    let rows = e.rows();
+    let r = centered(area, 70, (rows.len() as u16 + 4).min(area.height.saturating_sub(4)).max(8));
+    let inner = popup(f, r, format!(" Manage Shown Schemas — {name} "));
+    let list = keys_at_bottom(f, inner, key_hints(&[("Space", "check"), ("→", "expand"), ("←", "collapse"), ("Enter", "apply"), ("Esc", "cancel")]));
+    let inner_h = list.height as usize;
+    let top = e.sel.saturating_sub(inner_h.saturating_sub(1));
+    let lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .skip(top)
+        .take(inner_h)
+        .map(|(i, row)| {
+            let box_ = muted(match e.check(row) {
+                Check::On => "[x] ",
+                Check::Implicit => "[~] ",
+                Check::Off => "[ ] ",
+            });
+            let r = match row {
+                Row::AllDbs => KRow::new("All databases").chevron(None).lead(box_),
+                Row::DefaultDb => KRow::new("Default database").chevron(None).lead(box_).hint(format!("({})", e.default_db)),
+                Row::Db(db) => {
+                    let open = rows.get(i + 1).is_some_and(|n| !matches!(n, Row::Db(_)));
+                    let on = e.check(row) != Check::Off;
+                    let r = KRow::new(db.clone()).chevron(Some(open)).lead(box_).hint(if *db == e.default_db { "(Default database)".to_string() } else { String::new() });
+                    if on {
+                        r.bold()
+                    } else {
+                        r
+                    }
+                }
+                Row::AllSchemas(_) => KRow::new("All schemas").indent(1).chevron(None).lead(box_),
+                Row::DefaultSchema(_) => KRow::new("Default schema").indent(1).chevron(None).lead(box_).hint("(public)"),
+                Row::Schema { name, system, .. } => {
+                    let r = KRow::new(name.clone()).indent(1).chevron(None).lead(box_);
+                    let r = if *system { r.label_style(Style::default().fg(Color::Yellow)).trailing("⚡ system") } else { r };
+                    r.hint(if name == "public" { "(Default schema)".to_string() } else { String::new() })
+                }
+                Row::Note(_, t) => KRow::new(String::new()).indent(2).hint(t.clone()),
+            };
+            r.selected(i == e.sel, true).line()
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines), list);
+}
+
+/// A message, sized by word wrap so a long line isn't cut off in a narrow terminal. Text taller than the window scrolls from row
+/// `scroll` with the keys on the last line; returns the scroll used and the rows of text shown
+fn draw_message(f: &mut Frame, area: Rect, title: &str, text: &str, scroll: u16) -> (u16, u16) {
+    let lines: Vec<Line<'static>> = text.lines().map(|l| Line::raw(l.to_string())).collect();
+    let r = centered(area, 90, (wrapped_height(&lines, 90u16.min(area.width.saturating_sub(4)).saturating_sub(2)) + 4).min(30));
+    let mut body = popup(f, r, format!(" {} (Esc) ", disp(title)));
+    if wrapped_height(&lines, body.width) > body.height {
+        body = keys_at_bottom(f, body, key_hints(&[("↑↓ PgUp PgDn", "scroll"), ("Esc", "close")]));
+    }
+    (scrolled(f, body, lines, scroll), body.height)
+}
+
+/// Lines of the statements the Parameters popup shows under its fields
+const PARAMS_PREVIEW: usize = 6;
+
+/// Parameters (#173): a `:name` field per parameter (the data source form's field rows), the focused one with its caret; the
+/// statements under them in the console's colors with the names marked, their first lines; the keys at the bottom. Its size
+/// comes from the names and the statements, so typing never moves it; in a short window the fields keep the focused one in view
+fn draw_params(f: &mut Frame, area: Rect, fields: &[(String, tui_textarea::TextArea<'static>)], sel: usize, preview: &str, kind: qurry_shared::DbKind) {
+    let lines: Vec<&str> = preview.lines().collect();
+    let shown = lines.len().min(PARAMS_PREVIEW) + usize::from(lines.len() > PARAMS_PREVIEW);
+    let r = centered(area, 72, (fields.len() + 1 + shown + 1 + 1) as u16 + 2);
+    let inner = popup(f, r, " Parameters ");
+    let label_w = fields.iter().map(|(n, _)| n.chars().count() + 2).max().unwrap_or(0).min(16);
+    // The value's room right of its label: the focused one scrolls to keep its caret in view
+    let room = (inner.width as usize).saturating_sub(label_w + 2).max(1);
+    let rows: Vec<Line> = fields
+        .iter()
+        .enumerate()
+        .map(|(i, (name, input))| {
+            // A name longer than the label column ends in … (the statement below shows it whole)
+            let label = format!(":{name}");
+            let label = if label.chars().count() <= label_w { label } else { label.chars().take(label_w - 2).collect::<String>() + "…" };
+            let value = input.lines().first().cloned().unwrap_or_default();
+            if i != sel {
+                return Line::from(field_row(&label, label_w, value, false));
+            }
+            let caret = input.cursor().1;
+            let before: String = value.chars().take(caret).skip(caret.saturating_sub(room - 1)).collect();
+            let after: String = value.chars().skip(caret).collect();
+            Line::from(field_row(&label, label_w, format!("{before}▏{after}"), true))
+        })
+        .collect();
+    // The names marked where they are, line by line (found once in the whole text: a string or comment can span lines)
+    let mut marks = qurry_shared::params::find_params(preview, kind).into_iter().map(|p| (p.start, p.end)).peekable();
+    let mut code = vec![];
+    let mut at = 0;
+    for l in lines.iter().take(PARAMS_PREVIEW) {
+        let mut own = vec![];
+        while let Some((a, b)) = marks.next_if(|m| m.0 < at + l.len()) {
+            own.push((a - at, b.min(at + l.len()) - at));
+        }
+        code.push(sql_line_marked(l, kind, &own));
+        at += l.len() + 1;
+    }
+    if lines.len() > PARAMS_PREVIEW {
+        code.push(Line::styled("⋯", Style::default().fg(DIM)));
+    }
+    let hint = key_hints(&[("Enter", "run"), ("Tab ⇧Tab ↑↓", "move"), ("Esc", "cancel")]);
+    let [body, _, sql, _, keys] = Layout::vertical([Constraint::Length(rows.len() as u16), Constraint::Length(1), Constraint::Min(0), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    let top = (sel + 1).saturating_sub(body.height as usize) as u16;
+    f.render_widget(Paragraph::new(rows).scroll((top, 0)), body);
+    f.render_widget(Paragraph::new(code), Rect { x: sql.x + 2, width: sql.width.saturating_sub(2), ..sql });
+    f.render_widget(Paragraph::new(hint), keys);
 }
 
 /// tui-textarea's horizontal scroll after a frame: the first column stays until the caret leaves the view (its next_scroll_top)
@@ -329,9 +396,11 @@ fn draw_import(f: &mut Frame, area: Rect, p: &crate::import::ImportPick) {
         r = Rect { y: area.y, height: area.height, ..r };
     }
     let inner = popup(f, r, " Confirm ");
-    let [top, _, list, _, bottom] = Layout::vertical([Constraint::Length(mh.min(inner.height.saturating_sub(5))), Constraint::Length(1), Constraint::Min(2), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    let inner = keys_at_bottom(f, inner, hint);
+    // In a short window the blank lines go first, so the question keeps a line or two
+    let gap = u16::from(inner.height >= 8);
+    let [top, _, list, _] = Layout::vertical([Constraint::Length(mh.min(inner.height.saturating_sub(2 + 2 * gap))), Constraint::Length(gap), Constraint::Min(2), Constraint::Length(gap)]).areas(inner);
     f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: false }), top);
-    f.render_widget(Paragraph::new(hint), bottom);
     // Cut to n cells with … (a long warning or server name never runs into the other)
     let cut = |s: String, n: usize| if s.chars().count() <= n { s } else { s.chars().take(n.saturating_sub(1)).collect::<String>() + "…" };
     // Two lines a row, scrolled so the cursor row shows
@@ -401,6 +470,119 @@ mod tests {
         assert!(s.contains("1 row") && s.contains("Run it?"), "{s}");
         h.key("y");
         assert_eq!(h.app.status, "ran");
+    }
+
+    /// The sizes every popup is checked at (#196): the smallest the app draws in, and a common terminal
+    const SMALL: [(u16, u16); 2] = [MIN_SIZE, (80, 24)];
+
+    /// #196: a message taller than the window keeps its title and keys; ↓ and PgDn scroll it to its last line, Esc closes it
+    #[tokio::test]
+    async fn long_message_scrolls_in_small_windows() {
+        let mut h = crate::testkit::Harness::new().await;
+        let text = (1..=60).map(|i| format!("line {i}: connection refused (db.example.com:5432)")).collect::<Vec<_>>().join("\n");
+        for (w, ht) in SMALL {
+            h.app.popup = Some(Popup::Message { title: "Couldn't connect".into(), text: text.clone() });
+            let s = h.screen(w, ht);
+            assert!(s.contains("Couldn't connect (Esc)") && s.contains("line 1: ") && s.contains("Esc close"), "{w}×{ht}\n{s}");
+            h.key("Down");
+            let s = h.screen(w, ht);
+            assert!(!s.contains("line 1: ") && s.contains("Esc close"), "↓ scrolls a row: {w}×{ht}\n{s}");
+            for _ in 0..60 {
+                h.key("PgDn");
+                h.screen(w, ht);
+            }
+            let s = h.screen(w, ht);
+            assert!(s.contains("line 60: ") && s.contains("Couldn't connect (Esc)") && s.contains("Esc close"), "{w}×{ht}\n{s}");
+            h.key("Esc");
+            assert!(h.app.popup.is_none() && h.app.popup_scroll == 0);
+        }
+        // A notice that comes over a scrolled message is read from its first line
+        h.app.popup = Some(Popup::Message { title: "Couldn't connect".into(), text: text.clone() });
+        h.screen(80, 24);
+        for _ in 0..3 {
+            h.key("PgDn");
+        }
+        h.app.notice("Commit failed".into(), text.replace("line", "row"));
+        let s = h.screen(80, 24);
+        assert!(s.contains("Commit failed") && s.contains("row 1: "), "{s}");
+        h.app.popup = None;
+        // One that fits shows no keys line, as before
+        h.app.popup = Some(Popup::Message { title: "Saved".into(), text: "Saved to ~/qurry.csv".into() });
+        assert!(!h.screen(80, 24).contains("scroll"));
+    }
+
+    /// #196: an input's long explanation is cut with how many lines are hidden; the input line and its keys stay
+    #[tokio::test]
+    async fn input_with_a_long_body_keeps_its_input_in_small_windows() {
+        let mut h = crate::testkit::Harness::new().await;
+        h.app.input_with_body("Rename", &(1..=30).map(|i| format!("body line {i}")).collect::<Vec<_>>().join("\n"), |_, _| {});
+        h.type_str("orders_2026");
+        for (w, ht) in SMALL {
+            let s = h.screen(w, ht);
+            assert!(s.contains("Rename (Enter / Esc)") && s.contains("orders_2026") && s.contains("body line 1") && s.contains("lines hidden"), "{w}×{ht}\n{s}");
+        }
+    }
+
+    /// #196: a (not Production) confirm of 40 statements keeps its question and y / Enter
+    #[tokio::test]
+    async fn long_confirm_keeps_its_question_in_small_windows() {
+        let mut h = crate::testkit::Harness::new().await;
+        let stmts = (1..=40).map(|i| format!("  update orders set status = 'paid' where id = {i}")).collect::<Vec<_>>().join("\n");
+        h.app.popup = Some(Popup::Confirm { opened: None, sql: None, text: format!("Run these statements on \"[DEV] shop\"?\n\n{stmts}\n\nRun them?"), on_yes: Box::new(|a| a.status = "ran".into()) });
+        for (w, ht) in SMALL {
+            let s = h.screen(w, ht);
+            assert!(s.contains("Run these statements") && s.contains("Run them?") && s.contains("y / Enter") && s.contains("lines hidden"), "{w}×{ht}\n{s}");
+        }
+        h.key("y");
+        assert_eq!(h.app.status, "ran");
+    }
+
+    /// #196: Import Data Sources' confirm with 50 rows keeps its keys and scrolls to the selected row
+    #[tokio::test]
+    async fn import_pick_scrolls_to_the_selected_row_in_small_windows() {
+        let mut h = crate::testkit::Harness::new().await;
+        let dir = std::env::temp_dir().join(format!("qurry-import-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sources: String = (1..=50)
+            .map(|i| format!("<data-source source=\"LOCAL\" name=\"app_db_{i:02}\" uuid=\"00000000-0000-4000-8000-{i:012}\"><driver-ref>postgresql</driver-ref><jdbc-url>jdbc:postgresql://db.example.com:5432/app_{i}</jdbc-url></data-source>"))
+            .collect();
+        std::fs::write(dir.join("dataSources.xml"), format!("<project version=\"4\"><component name=\"DataSourceManagerImpl\">{sources}</component></project>")).unwrap();
+        h.app.ds_import_path();
+        h.type_str(&dir.join("dataSources.xml").display().to_string());
+        h.key("Enter");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(matches!(h.app.popup, Some(Popup::ImportPick(_))), "{}", h.app.status);
+        for _ in 0..4 {
+            h.key("PgDn");
+        }
+        let Some(Popup::ImportPick(p)) = &h.app.popup else { unreachable!() };
+        assert_eq!(p.sel, 40);
+        for (w, ht) in SMALL {
+            let s = h.screen(w, ht);
+            assert!(s.contains("y / Enter") && s.contains("cancel"), "{w}×{ht}\n{s}");
+            // The selected row's box is on screen (at the smallest size its name is cut)
+            assert!(s.contains(if w < 60 { "[x] + add \"app_db_" } else { "\"app_db_41\"" }), "{w}×{ht}\n{s}");
+        }
+    }
+
+    /// #196: Manage Shown Schemas with 60 schemas keeps its keys (wrapped in a narrow window) and the selected row in view
+    #[tokio::test]
+    async fn scope_editor_scrolls_to_the_selected_row_in_small_windows() {
+        let mut h = crate::testkit::Harness::new().await;
+        let mut e = crate::scope::ScopeEditor::new("c1".into(), vec!["app".into()], "app".into(), &Default::default(), None);
+        e.sel = 2;
+        e.expand();
+        e.set_schemas("app", Ok((1..=60).map(|i| qurry_core::meta::SchemaInfo { name: format!("schema_{i:02}"), is_system: false }).collect()));
+        h.app.popup = Some(Popup::Scope(e));
+        for _ in 0..3 {
+            h.key("PgDn");
+        }
+        let Some(Popup::Scope(e)) = &h.app.popup else { unreachable!() };
+        let crate::scope::Row::Schema { name, .. } = e.rows()[e.sel].clone() else { panic!("{:?}", e.rows()[e.sel]) };
+        for (w, ht) in SMALL {
+            let s = h.screen(w, ht);
+            assert!(s.contains("Manage Shown Schemas") && s.contains(&name) && s.contains("Enter apply") && s.contains("Esc"), "{w}×{ht}\n{s}");
+        }
     }
 
     /// A confirm of 1000 statements draws in a few ms, cut or not (each line wraps once per frame)

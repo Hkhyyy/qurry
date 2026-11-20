@@ -64,3 +64,18 @@ test("console result: the reason shows in full below the grid, and Run again run
   await scrollToEnd(page);
   await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows");
 });
+
+test("a page shorter than Page size that has more (#194: the core's byte budget) keeps loading to the last", async ({ page }) => {
+  await failLoads(page, null);
+  await openConsole(page);
+  await typeSql(page, "select * from logs_demo");
+  await page.keyboard.press("Meta+Enter");
+  const info = work(page).locator(".tb-info").first();
+  await expect(info).toHaveText("150+ rows");
+  await scrollToEnd(page);
+  await expect(info).toHaveText("300+ rows");
+  await scrollToEnd(page);
+  await expect(info).toHaveText("450 rows");
+  await scrollToEnd(page);
+  await expect(work(page).getByRole("gridcell", { name: "450", exact: true })).toBeVisible();
+});

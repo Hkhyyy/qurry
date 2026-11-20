@@ -39,6 +39,12 @@ pub fn default_port(kind: JsValue) -> Result<u16, JsError> {
     Ok(parse_kind(kind)?.default_port())
 }
 
+/// Databases the server keeps for itself (qurry_shared::kind::system_databases)
+#[wasm_bindgen(js_name = systemDatabases)]
+pub fn system_databases(kind: JsValue) -> Result<Vec<String>, JsError> {
+    Ok(qurry_shared::kind::system_databases(parse_kind(kind)?).iter().map(|d| d.to_string()).collect())
+}
+
 /// UI only, not a security check (the backend enforces read-only): the statement doesn't change data
 #[wasm_bindgen(js_name = isRead)]
 pub fn is_read(sql: &str, kind: JsValue) -> Result<bool, JsError> {
@@ -73,6 +79,19 @@ pub fn is_ddl(sql: &str, kind: JsValue) -> Result<bool, JsError> {
 #[wasm_bindgen(js_name = unsafeStatement)]
 pub fn unsafe_statement(sql: &str, kind: JsValue) -> Result<Option<String>, JsError> {
     Ok(qurry_shared::guard::unsafe_statement(sql, parse_kind(kind)?))
+}
+
+/// UI only: the statements of a run the Production confirmation lists (the writes; none for Explain), the TUI's rule
+#[wasm_bindgen(js_name = askedStatements)]
+pub fn asked_statements(stmts: JsValue, kind: JsValue, explain: bool) -> Result<JsValue, JsError> {
+    to(&qurry_shared::production::asked_statements(&from::<Vec<String>>(stmts)?, parse_kind(kind)?, explain))
+}
+
+/// UI only: what the Production confirmation says of a statement from its count ({ Ok: rows or null } or { Err: why counting
+/// failed }), as [line, "none" | "warn" | "danger"] (the TUI's words and thresholds)
+#[wasm_bindgen(js_name = impactLine)]
+pub fn impact_line(sql: &str, kind: JsValue, count: JsValue) -> Result<JsValue, JsError> {
+    to(&qurry_shared::production::impact_line(sql, parse_kind(kind)?, from(count)?))
 }
 
 /// The connect error asks for "Allow unencrypted connection" (the GUI then offers to turn it on)
@@ -329,6 +348,42 @@ pub fn without_comments(sql: &str, kind: JsValue) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = sqlLiteral)]
 pub fn sql_literal(kind: JsValue, value: Option<String>) -> Result<String, JsError> {
     Ok(qurry_shared::sql::literal(parse_kind(kind)?, value.as_deref()))
+}
+
+/// A `:name` user parameter (qurry_shared::params::Param), UTF-16 range from the `:` to the end of the name
+#[derive(Serialize)]
+struct JsParam {
+    name: String,
+    start: usize,
+    end: usize,
+}
+
+/// Every `:name` in the console's code, in text order (qurry_shared::params::find_params)
+#[wasm_bindgen(js_name = findParams)]
+pub fn find_params(sql: &str, kind: JsValue) -> Result<JsValue, JsError> {
+    let v = qurry_shared::params::find_params(sql, parse_kind(kind)?);
+    let r = utf16_ranges(sql, &v.iter().map(|p| (p.start, p.end)).collect::<Vec<_>>());
+    let out: Vec<JsParam> = v.into_iter().zip(r).map(|(p, [start, end])| JsParam { name: p.name, start, end }).collect();
+    Ok(serde_wasm_bindgen::to_value(&out)?)
+}
+
+/// `sql` with each `:name` replaced by its value as typed; `values` a { name: value } object (qurry_shared::params::substitute)
+#[wasm_bindgen(js_name = substituteParams)]
+pub fn substitute_params(sql: &str, kind: JsValue, values: JsValue) -> Result<String, JsError> {
+    let values: BTreeMap<String, String> = serde_wasm_bindgen::from_value(values)?;
+    Ok(qurry_shared::params::substitute(sql, parse_kind(kind)?, &values))
+}
+
+/// A PostgreSQL console's schema switch (qurry_shared::sql::search_path_sql)
+#[wasm_bindgen(js_name = searchPathSql)]
+pub fn search_path_sql(schema: &str) -> String {
+    qurry_shared::sql::search_path_sql(schema)
+}
+
+/// A MySQL console's schema switch (qurry_shared::sql::use_sql)
+#[wasm_bindgen(js_name = useSql)]
+pub fn use_sql(schema: &str) -> String {
+    qurry_shared::sql::use_sql(schema)
 }
 
 /// Statement at the caret (a UTF-16 offset, as in a JS string), trimmed; undefined if the text has none
@@ -638,6 +693,12 @@ pub fn text_width(values: JsValue) -> Result<usize, JsError> {
 pub fn column_keys(names: JsValue) -> Result<JsValue, JsError> {
     let v: Vec<String> = serde_wasm_bindgen::from_value(names)?;
     to(&qurry_shared::format::column_keys(v.iter().map(String::as_str)))
+}
+
+/// The order a grid shows its columns in under a layout ({hidden, pinned} by column key): {view: display → result index, pinned, hidden}
+#[wasm_bindgen(js_name = columnView)]
+pub fn column_view(keys: JsValue, layout: JsValue) -> Result<JsValue, JsError> {
+    to(&qurry_shared::format::column_view(&from::<Vec<String>>(keys)?, &qurry_shared::format::column_layout(&from(layout)?)))
 }
 
 #[derive(Serialize)]
@@ -973,6 +1034,15 @@ mod tests {
         let offs = [0, 9, 11, 12, 13, 15, caret, 10_000, 3];
         let pairs: Vec<(usize, usize)> = offs.windows(2).map(|w| (w[0], w[1])).collect();
         assert_eq!(byte_ranges(t, &pairs), pairs.iter().map(|&(a, b)| (byte_offset(t, a), byte_offset(t, b))).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn param_ranges_cross_as_utf16() {
+        let t = "select '😀', :이름";
+        let v = qurry_shared::params::find_params(t, DbKind::Postgres);
+        let r = utf16_ranges(t, &v.iter().map(|p| (p.start, p.end)).collect::<Vec<_>>());
+        let units: Vec<u16> = t.encode_utf16().collect();
+        assert_eq!(String::from_utf16(&units[r[0][0]..r[0][1]]).unwrap(), ":이름");
     }
 
     fn index() -> complete::Meta {

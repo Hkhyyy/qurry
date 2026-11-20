@@ -12,4 +12,6 @@ unmaintained = "workspace"
 ignore = [
   # rsa: no fixed release exists
   { id = "RUSTSEC-2023-0071", reason = "rsa (russh, sqlx-mysql): no fixed version. Qurry signs with the user's SSH key and encrypts a MySQL password with the server's public key; it never decrypts with a private key for a network peer" },
+  # chrono: unmaintained, no fixed version; replacing it is #199
+  { id = "RUSTSEC-2026-0543", reason = "chrono (core, sqlx, tiberius, arrow): unmaintained with no known vulnerability; only formats and parses date values. Replaced in #199" },
 ]

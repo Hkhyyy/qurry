@@ -1,5 +1,6 @@
 //! Wide rows through a slow link (#183): a console's first page and its load-mores of a table whose rows hold a ~30 KB JSON
 //! document and a ~2 KB note, read whole (gridCutChars = 0) and cut (4096), through a 300 KB/s proxy in front of the server.
+//! Read whole, a page stops at about 4 MB (#194), so it holds fewer than 500 rows.
 //! Prints, per cut: time to the first page, time per load-more (3 pages), bytes the server sent per page, ru_maxrss.
 //! #[ignore]d, on a scratch server (the table, about 160 MB, fills in under a minute and is dropped at the end):
 //! QURRY_TEST_PG=host:port:user:db[:password] cargo test --release -p qurry-core --test wide_rows -- --ignored --nocapture
@@ -84,7 +85,7 @@ fn max_rss_mb() -> f64 {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn wide_rows_through_a_slow_link() {
-    let Ok(env) = std::env::var("QURRY_TEST_PG") else { return };
+    let Some(env) = qurry_core::testenv::var("QURRY_TEST_PG") else { return };
     let mut p = env.splitn(5, ':');
     let (host, port, user, db, password) = (p.next().unwrap(), p.next().unwrap(), p.next().unwrap(), p.next().unwrap(), p.next().map(String::from));
     // The table, filled once on a direct connection
@@ -126,7 +127,9 @@ async fn wide_rows_through_a_slow_link() {
         let r = st.run_query("w".into(), "select * from qurry_demo_wide".into(), None, Some(tab.clone())).await.unwrap();
         let first = t.elapsed().as_secs_f64();
         bytes.push(wire.down.load(Relaxed) - mark);
-        assert_eq!((r.rows.len(), r.truncated), (500, true));
+        // Read whole, a page stops at about db::PAGE_BYTES (#194): fewer rows than the page size, and more to load
+        let page = if cut == 0 { r.rows.len() } else { 500 };
+        assert!(r.truncated && r.rows.len() == page && (cut != 0 || page < 500), "cut {cut}: {} rows", r.rows.len());
         assert_eq!(r.cut.is_empty(), cut == 0, "cut {cut}");
         let mut pages = Vec::new();
         for _ in 0..3 {
@@ -135,7 +138,7 @@ async fn wide_rows_through_a_slow_link() {
             let m = st.fetch_more(tab.clone(), None).await.unwrap();
             pages.push(t.elapsed().as_secs_f64());
             bytes.push(wire.down.load(Relaxed) - mark);
-            assert_eq!(m.rows.len(), 500);
+            assert!(m.rows.len() == 500 || (cut == 0 && (1..500).contains(&m.rows.len())), "cut {cut}: {} rows", m.rows.len());
         }
         st.close_session(tab).await.unwrap();
         let p: Vec<String> = pages.iter().map(|s| format!("{s:.2}")).collect();

@@ -3,6 +3,8 @@ import { ColorSwatches } from "../../components/ConnectionDialog";
 import { ConnOptions, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, KIND_LABEL, RedisMode } from "../../lib/api";
 import { Button, FormGrid, Named, Select, Text, TextInput } from "../../ui";
 
+const PASSWORD_COMMAND_EXAMPLE = "/opt/homebrew/bin/aws rds generate-db-auth-token --hostname %HOSTNAME% --port %PORT% --username %USERNAME% --region ap-northeast-2";
+
 /** The Data Source dialog's General tab: name, driver (and its plugin), where the database is, the login and the color */
 export function GeneralTab({
   cfg, setCfg, set, setOpt, opt, edit, ids, driver, installing, installDriver, fileDb, pickDbFile, ssmLocalHost, port, pwLabel, password, setPassword, rmode, setRedis,
@@ -27,8 +29,11 @@ export function GeneralTab({
   rmode: RedisMode;
   setRedis: <K extends keyof RedisMode>(k: K, v: RedisMode[K]) => void;
 }) {
+  // The password comes from the command: the Password field is off (the saved one stays as it is)
+  const fromCommand = !!cfg.passwordCommand?.trim();
   return (
-    <FormGrid>
+    // Room for "Password command" and its ⓘ
+    <FormGrid labelWidth={156}>
       <label>Name</label>
       <TextInput value={cfg.name} placeholder={`${cfg.user || "user"}@${cfg.host}`} onChange={(e) => set("name", e.target.value)} />
       <label>Driver</label>
@@ -86,7 +91,40 @@ export function GeneralTab({
           <label htmlFor={`${ids}-pw`}>
             <Named info={["Saved passwords are encrypted in secrets.json; its key is in the config folder or in the system keychain (Settings › Passwords)."]}>{pwLabel}</Named>
           </label>
-          <TextInput id={`${ids}-pw`} aria-label={pwLabel} type="password" value={password ?? ""} placeholder={edit?.hasPassword ? "<saved — leave empty to keep>" : ""} onChange={(e) => setPassword(e.target.value)} />
+          <TextInput
+            id={`${ids}-pw`}
+            aria-label={pwLabel}
+            type="password"
+            disabled={fromCommand}
+            value={fromCommand ? "" : (password ?? "")}
+            placeholder={fromCommand ? "(from the command)" : edit?.hasPassword ? "<saved — leave empty to keep>" : ""}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <label htmlFor={`${ids}-pwcmd`}>
+            <Named
+              info={[
+                `Runs at every login and uses its output as the password. Full program path (apps started from Finder don't get the shell's PATH). %HOSTNAME% %PORT% %USERNAME% %DATABASE% are replaced; arguments are passed as they are, never through a shell. Example: ${PASSWORD_COMMAND_EXAMPLE}`,
+              ]}
+            >
+              Password command
+            </Named>
+          </label>
+          <div className="ui-row">
+            <TextInput grow id={`${ids}-pwcmd`} aria-label="Password command" value={cfg.passwordCommand ?? ""} placeholder={PASSWORD_COMMAND_EXAMPLE} onChange={(e) => set("passwordCommand", e.target.value)} />
+            <Text tone="muted">Reuse for</Text>
+            <TextInput
+              className="w-port"
+              aria-label="Reuse for seconds"
+              inputMode="numeric"
+              value={cfg.passwordReuseSecs ?? ""}
+              placeholder="—"
+              onChange={(e) => {
+                const v = e.target.value.replace(/\D/g, "");
+                set("passwordReuseSecs", v ? Number(v) : null);
+              }}
+            />
+            <Text tone="muted">sec.</Text>
+          </div>
         </>
       )}
       {cfg.kind === "redis" && (

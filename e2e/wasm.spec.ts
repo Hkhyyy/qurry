@@ -15,6 +15,13 @@ async function openConsoleNoWasm(page: Page, conn = "[DEV] shop_app") {
   await editor(page).click();
 }
 
+/** Without the module no statement can be checked for danger (stmtKind unsafeReason), so a run asks first: run it anyway */
+async function runUnchecked(page: Page) {
+  const ask = dialog(page).filter({ hasText: "can't check this statement" });
+  await ask.getByRole("button", { name: "Run Anyway" }).click();
+  await expect(ask).toHaveCount(0);
+}
+
 test("⌘↩ while the WebAssembly module is still loading runs once it has loaded", async ({ page }) => {
   let release = () => {};
   const gate = new Promise<void>((r) => (release = r));
@@ -126,6 +133,7 @@ test("a run started while a ⌘↩ waits for the module replaces it", async ({ p
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+A");
   await page.keyboard.press("Meta+Enter");
+  await runUnchecked(page);
   await expect(resultTabs(page)).toHaveText(["Output", /^1: users/]);
   await release();
   await page.waitForTimeout(500);
@@ -173,6 +181,7 @@ test("without the WebAssembly module a selection run as one statement still runs
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+A");
   await page.keyboard.press("Meta+Enter");
+  await runUnchecked(page);
   await expect(resultTabs(page)).toHaveText(["Output", /^1: users/]);
 });
 
@@ -207,5 +216,6 @@ test("without the WebAssembly module, a DDL on Production may change the schema 
   await typeSql(page, "alter table users add column x int");
   await page.keyboard.press("Meta+A");
   await page.keyboard.press("Meta+Enter");
+  await runUnchecked(page);
   await expect(dialog(page).locator(".ui-detail-value")).toHaveText("can't count · may change the schema");
 });

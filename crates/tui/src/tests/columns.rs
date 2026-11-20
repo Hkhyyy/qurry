@@ -1,6 +1,6 @@
 //! Column widths (#109): < > = on the current column, Fit All / Reset from the palette; a table tab's widths are kept per table in
 //! settings.json "columnWidths", where the GUI reads and writes them too
-use crate::app::{Action, Focus, TabKind};
+use crate::app::{Action, Focus, Popup, TabKind};
 use crate::testkit::Harness;
 use qurry_core::format::ColumnWidths;
 use qurry_core::store::{Store, TableRef};
@@ -86,7 +86,7 @@ async fn console_result_widths_are_not_saved() {
 #[tokio::test]
 #[ignore]
 async fn pg_table_tab_widths_are_shared_with_the_gui() {
-    let e = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG");
+    let Some(e) = qurry_core::testenv::var("QURRY_TEST_PG") else { return };
     let p: Vec<&str> = e.split(':').collect();
     let mut h = Harness::new().await;
     let cfg = serde_json::from_value(serde_json::json!({ "id": "test", "name": "pg", "kind": "postgres", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[3] })).unwrap();
@@ -172,6 +172,254 @@ async fn unsaved_widths_last_until_the_tab_closes() {
     h.settle().await;
     assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Table(tt) if tt.error.is_some()), "the reload ran");
     assert_eq!(widths(&h)[1], 45);
+}
+
+// ───────── Column layout (#178): hide and pin columns, kept per table in settings.json "columnLayout" with the GUI ─────────
+
+fn orders() -> TableRef {
+    TableRef { source: "test".into(), database: "postgres".into(), schema: "public".into(), table: "orders".into() }
+}
+
+/// A table tab `orders` with wide columns, so only a few fit at 80 cells; focus in its grid
+fn wide_orders(h: &mut Harness) -> u64 {
+    let id = h.table_tab("orders", &["id", "order_no", "memo", "note", "status", "total"], &[&["486", "O-20261101", MEMO, MEMO, "paid", "12000"], &["487", "O-20261102", "gift wrap", "-", "sent", "800"]], &["id"]);
+    h.app.focus = Focus::Grid;
+    id
+}
+
+/// The header line of the grid (the line with its column names, under its title)
+fn header(s: &str) -> String {
+    s.lines().skip_while(|l| !l.contains("public.orders")).nth(1).unwrap_or_default().to_string()
+}
+
+/// Shift+H hides the cursor's column: the header no longer has it, the status line says 1 hidden, the cursor is on the next
+/// column; the layout is saved for the table, where the GUI (another Store) reads it. Columns… › Show All brings it back
+#[tokio::test]
+async fn hide_the_current_column() {
+    let mut h = Harness::new().await;
+    wide_orders(&mut h);
+    h.key("Right");
+    assert!(header(&h.screen(170, 12)).contains("order_no"));
+    h.key("Shift+H");
+    let s = h.screen(170, 12);
+    assert!(!header(&s).contains("order_no"), "hidden:\n{s}");
+    assert!(s.contains("1 hidden"), "the status line counts it:\n{s}");
+    let status = std::mem::take(&mut h.app.status);
+    let wide = h.screen(260, 12);
+    h.app.status = status;
+    assert!(wide.contains("x export · H P C columns"), "the key bar has the keys:\n{wide}");
+    assert_eq!(grid(&h).result.columns[grid(&h).col].name, "memo", "the cursor moves to the next column");
+    assert!(h.app.status.starts_with("order_no hidden · Columns… (C) shows it again"), "{}", h.app.status);
+    let saved = std::fs::read_to_string(h.app.state.store.dir().join("settings.json")).unwrap();
+    assert!(saved.contains("\"columnLayout\""), "{saved}");
+    assert_eq!(Store::new(h.app.state.store.dir()).column_layout(&orders()).hidden, ["order_no"]);
+
+    // Columns… lists every column, the hidden one unchecked; Show All brings it back and saves that
+    h.key("Shift+C");
+    let Some(Popup::Palette(p)) = &h.app.popup else { panic!("no Columns…: {}", h.app.status) };
+    let labels: Vec<&str> = p.items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(labels, ["[x] id", "[ ] order_no", "[x] memo", "[x] note", "[x] status", "[x] total", "    Show All"]);
+    h.type_str("show all");
+    h.key("Enter");
+    assert!(matches!(&h.app.popup, Some(Popup::Palette(p)) if p.items[1].label == "[x] order_no"), "stays open, checked again");
+    h.key("Esc");
+    assert!(header(&h.screen(170, 12)).contains("order_no"));
+    assert!(Store::new(h.app.state.store.dir()).column_layout(&orders()).is_empty());
+}
+
+/// In Columns…, Space hides or shows the row's column and ⇥ pins it, typing filters; the last shown column can't be hidden
+#[tokio::test]
+async fn columns_picker_hides_and_pins() {
+    let mut h = Harness::new().await;
+    h.table_tab("orders", &["id", "memo"], &[&["486", MEMO]], &["id"]);
+    h.app.focus = Focus::Grid;
+    h.key("Shift+C");
+    h.type_str("mem");
+    h.key("Tab");
+    assert!(grid(&h).is_pinned(1), "memo pinned");
+    h.key("Space");
+    assert_eq!(grid(&h).view.view, [0], "memo hidden (and so not pinned)");
+    assert!(!grid(&h).is_pinned(1));
+    // The filter stays: one row and Show All
+    let Some(Popup::Palette(p)) = &h.app.popup else { panic!() };
+    assert_eq!(p.input.lines().concat(), "mem");
+    h.key("Esc");
+    h.key("Shift+H");
+    assert_eq!(grid(&h).view.view, [0], "the only column shown stays");
+    assert_eq!(h.app.status, "id is the only column shown");
+}
+
+/// Two pinned columns stay at the left while the others scroll (> keys, the wheel); the line after them is heavier
+#[tokio::test]
+async fn pinned_columns_stay_while_scrolling() {
+    let mut h = Harness::new().await;
+    wide_orders(&mut h);
+    // total, then status: pinned in that order
+    h.key("End");
+    h.key("Shift+P");
+    h.key("End");
+    h.key("Shift+P");
+    assert_eq!(grid(&h).view.view, [5, 4, 0, 1, 2, 3]);
+    assert_eq!(Store::new(h.app.state.store.dir()).column_layout(&orders()).pinned, ["total", "status"]);
+    let s = h.screen(80, 12);
+    assert!(header(&s).trim_start_matches(|c: char| !c.is_alphabetic()).starts_with("total"), "pinned first:\n{s}");
+    assert!(header(&s).contains("║"), "the pinned columns' edge:\n{s}");
+    // To the last column and scroll: the screen still starts with the pinned ones
+    h.key("End");
+    for _ in 0..3 {
+        h.key("Right");
+    }
+    let s = h.screen(80, 12);
+    let head = header(&s);
+    assert!(head.contains("note") && !head.contains("order_no"), "scrolled right:\n{s}");
+    assert!(head.find("total") < head.find("status") && head.find("status") < head.find("note"), "pinned ones first:\n{s}");
+    grid_mut(&mut h).hscroll(-10);
+    grid_mut(&mut h).hscroll(10);
+    let s = h.screen(80, 12);
+    assert!(header(&s).find("total") < header(&s).find("status"), "the wheel keeps them:\n{s}");
+    // Unpin: back in result order
+    h.key("Home");
+    h.key("Shift+P");
+    assert_eq!(grid(&h).view.view, [4, 0, 1, 2, 3, 5]);
+}
+
+/// A saved layout is read when the table loads (here the load fails without a server and keeps the columns); a key the result
+/// doesn't have (a column renamed since) is ignored
+#[tokio::test]
+async fn saved_layout_applies_when_the_table_loads() {
+    let mut h = Harness::new().await;
+    let id = wide_orders(&mut h);
+    let layout = qurry_core::format::ColumnLayout { hidden: vec!["memo".into(), "renamed".into()], pinned: vec!["gone".into(), "total".into()] };
+    Store::new(h.app.state.store.dir()).set_column_layout(&orders(), &layout).unwrap();
+    h.app.reload_table(id);
+    h.settle().await;
+    assert_eq!(grid(&h).view.view, [5, 0, 1, 3, 4]);
+    assert_eq!((grid(&h).view.pinned, grid(&h).view.hidden), (1, 1));
+    assert!(h.screen(170, 12).contains("1 hidden"));
+}
+
+/// Pinned columns that fill the grid leave room for the cursor's column: past them it is still drawn (the pinned ones scroll away
+/// while it is there, as DataGrip's frozen area does), and they come back with the cursor
+#[tokio::test]
+async fn cursor_column_shows_when_pinned_ones_fill_the_grid() {
+    let mut h = Harness::new().await;
+    h.table_tab("orders", &["id", "memo", "note", "status", "total"], &[&["486", MEMO, "-", "paid", "12000"]], &["id"]);
+    h.app.focus = Focus::Grid;
+    h.key("Right");
+    h.key("Shift+P");
+    h.key("Right");
+    h.key("Shift+P");
+    assert_eq!(grid(&h).view.view, [1, 0, 2, 3, 4], "memo, id pinned");
+    h.key("End");
+    for w in [80, 60] {
+        let s = h.screen(w, 12);
+        assert!(header(&s).contains("total"), "the cursor's column at {w}:\n{s}");
+        assert!(!header(&s).contains("║"), "the pinned ones scrolled away:\n{s}");
+    }
+    h.key("Home");
+    let s = h.screen(80, 12);
+    assert!(header(&s).contains("memo") && header(&s).contains("║"), "pinned again on a pinned column:\n{s}");
+}
+
+/// A DBA report's auto-refresh keeps its hidden and pinned columns (it runs again on its own)
+#[tokio::test]
+async fn dba_refresh_keeps_the_column_layout() {
+    use qurry_core::db::{ColumnInfo, QueryResult};
+    let mut h = Harness::new().await;
+    let res = || QueryResult {
+        columns: ["pid", "state", "query"].iter().map(|n| ColumnInfo { name: (*n).into(), type_name: "TEXT".into() }).collect(),
+        rows: vec![vec!["10".into(), "active".into(), "select 1".into()]],
+        rows_affected: 0,
+        truncated: false,
+        elapsed_ms: 0,
+        has_result_set: true,
+        in_transaction: false,
+        warning: None,
+        editable: None,
+        notices: vec![],
+        cut: vec![],
+    };
+    let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
+    let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res())), loaded: None, error: None, running: false, run: 0, auto: true };
+    let id = h.app.push_tab("test", "postgres".into(), "Sessions".into(), TabKind::Dba(d));
+    h.app.focus = Focus::Grid;
+    h.key("End");
+    h.key("Shift+H");
+    h.key("Right");
+    h.key("Shift+P");
+    for _ in 0..2 {
+        h.app.dba_apply(id, 0, Ok(res()));
+        let g = h.app.grid_mut().unwrap();
+        assert_eq!((g.view.view.clone(), g.view.pinned), (vec![1, 0], 1), "query hidden, state pinned");
+    }
+}
+
+/// A layout the GUI reset (Show All removes the table's entry) is what the tab's reload shows; the tab's own stays only while
+/// saving it failed
+#[tokio::test]
+async fn reload_takes_the_saved_layout_unless_saving_failed() {
+    let mut h = Harness::new().await;
+    let id = wide_orders(&mut h);
+    h.key("Right");
+    h.key("Shift+H");
+    assert_eq!(Store::new(h.app.state.store.dir()).column_layout(&orders()).hidden, ["order_no"]);
+    Store::new(h.app.state.store.dir()).set_column_layout(&orders(), &Default::default()).unwrap();
+    h.app.reload_table(id);
+    h.settle().await;
+    assert_eq!(grid(&h).view.hidden, 0, "the GUI's reset");
+
+    // A folder where the settings file was: saving fails
+    std::fs::remove_file(h.app.state.store.dir().join("settings.json")).unwrap();
+    std::fs::create_dir_all(h.app.state.store.dir().join("settings.json")).unwrap();
+    h.key("Shift+H");
+    assert!(h.app.status.starts_with("Couldn't save the column layout"), "{}", h.app.status);
+    h.app.reload_table(id);
+    h.settle().await;
+    assert_eq!(grid(&h).view.hidden, 1, "kept while unsaved");
+}
+
+/// A saved layout that hides every column shows them all and is kept so: H then hides the cursor's column
+#[tokio::test]
+async fn layout_hiding_every_column_shows_them_and_hide_works() {
+    let mut h = Harness::new().await;
+    let id = h.table_tab("orders", &["id", "memo"], &[&["486", "a"]], &["id"]);
+    h.app.focus = Focus::Grid;
+    let all = qurry_core::format::ColumnLayout { hidden: vec!["id".into(), "memo".into()], pinned: vec![] };
+    Store::new(h.app.state.store.dir()).set_column_layout(&orders(), &all).unwrap();
+    h.app.reload_table(id);
+    h.settle().await;
+    assert_eq!(grid(&h).view.view, [0, 1]);
+    assert!(grid(&h).layout.hidden.is_empty());
+    h.key("Right");
+    h.key("Shift+H");
+    assert_eq!(grid(&h).view.view, [0], "memo hidden");
+    assert_eq!(Store::new(h.app.state.store.dir()).column_layout(&orders()).hidden, ["memo"]);
+}
+
+/// A copy skips hidden columns: a range across one, and a marked row; the IN list of a range too
+#[tokio::test]
+async fn copied_selection_skips_the_hidden_column() {
+    let mut h = Harness::new().await;
+    h.table_tab("orders", &["id", "memo", "total"], &[&["486", "a", "10"], &["487", "b", "20"]], &["id"]);
+    h.app.focus = Focus::Grid;
+    h.key("Right");
+    h.key("Shift+H");
+    h.key("Home");
+    h.key("Shift+Down");
+    h.key("Shift+Right");
+    assert_eq!(grid(&h).selection_tsv(), "486\t10\n487\t20");
+    assert_eq!(grid(&h).in_list(qurry_core::store::DbKind::Postgres).0, "(('486', '10'), ('487', '20'))");
+    h.key("Esc");
+    h.key("g");
+    h.key("m");
+    assert_eq!(grid(&h).selection_tsv(), "486\t10");
+    // A paste from the first cell fills the shown columns
+    h.key("Home");
+    assert_eq!(grid(&h).paste_spots("x\ty"), [(0, 0), (0, 2)]);
+}
+
+fn grid_mut(h: &mut Harness) -> &mut crate::grid::Grid {
+    h.app.grid_mut().unwrap()
 }
 
 // ───────── Cut values (#183): read whole by the table's key before an edit, a copy, the value panel ─────────

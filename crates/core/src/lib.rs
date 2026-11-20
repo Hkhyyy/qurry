@@ -1,6 +1,8 @@
 //! Qurry engine. The GUI (Tauri) · TUI · MCP server all use this crate's `app::AppState`.
 /// Turn off diagnostic logs on stderr (the TUI owns the screen, MCP stdout is the protocol); the log file (logfile) still has them
 pub static QUIET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// qurry-core's version (Copy Diagnostics shows it next to the app's)
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// MCP server: open drivers so they can't touch anything outside the server (local files·URLs·extension installs) (DuckDB enable_external_access = false)
 pub static SANDBOX: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -17,6 +19,7 @@ pub mod backup;
 mod backend;
 pub use backend::{db, redisdb};
 pub mod dba;
+pub mod diagnostics;
 pub mod dsn;
 pub mod ddl;
 pub mod editable;
@@ -37,6 +40,7 @@ pub mod plugin;
 pub mod migrate;
 pub use backend::mysql_db as mysql;
 pub mod notice;
+mod password_command;
 pub mod plan;
 pub mod rag;
 pub mod search_cache;
@@ -45,10 +49,11 @@ pub mod session;
 pub mod sql;
 pub mod ssm;
 pub mod ssh_config;
-#[cfg(test)]
-mod testenv;
+#[cfg(any(test, feature = "testenv"))]
+pub mod testenv;
 pub mod store;
 pub mod subset;
+pub mod theme_images;
 pub mod transfer;
 pub mod tunnel;
 pub mod update;

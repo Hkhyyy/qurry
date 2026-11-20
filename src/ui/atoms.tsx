@@ -173,6 +173,8 @@ export function Checkbox({ checked, onChange, children, disabled, title, indeter
     <label className="ui-check" title={title} onMouseDown={(e) => e.stopPropagation()}>
       <input
         type="checkbox"
+        // Without text of its own (a list row's checkbox) it is named by its title
+        aria-label={children ? undefined : title}
         checked={checked}
         disabled={disabled}
         ref={(el) => {

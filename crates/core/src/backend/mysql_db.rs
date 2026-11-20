@@ -7,15 +7,13 @@ use crate::meta::{
     ColumnMeta, CompletionTable, ConstraintMeta, FtsHit, FtsRequest, IndexEntry, IndexMeta, RelationInfo, RoutineInfo, SchemaInfo,
     SchemaObjects, TableDetail, TableStructure, ForeignKeyMeta, TriggerMeta,
 };
-use crate::session::{is_select_like, strip_comments_lead};
+use crate::session::{cut_cells, is_select_like, strip_comments_lead, CutAs};
 use futures::TryStreamExt;
 use serde_json::Value;
 use sqlx::mysql::{MySqlPool, MySqlRow};
 use sqlx::pool::PoolConnection;
 use sqlx::{Column, Either, Executor, MySql, Row, TypeInfo, ValueRef};
 use std::time::Instant;
-
-pub const SYSTEM_DBS: [&str; 4] = ["information_schema", "performance_schema", "mysql", "sys"];
 
 pub fn ident(s: &str) -> String {
     format!("`{}`", s.replace('`', "``"))
@@ -291,13 +289,27 @@ pub struct MySession {
     more: Option<(String, usize)>,
     /// Session::abandoned
     abandoned: bool,
+    /// Characters of a long value a console page reads from now (store::grid_cut_chars, Session::set_cut), 0 = whole values
+    cut: usize,
+    /// How the pages of `more` read each column (cut_projection), empty when they read whole values; cut_at = the cut they were
+    /// planned with, cut_list = their select list (`*` for whole values)
+    cut_cols: Vec<CutAs>,
+    cut_at: usize,
+    cut_list: String,
+    /// db::row_bound of the pages of `more`: their columns described and each of a bounded size (db::PageBudget)
+    row_bound: Option<usize>,
+    /// The server is MariaDB, which drops an ORDER BY in a derived table: a first page isn't wrapped there (first_page)
+    mariadb: bool,
 }
 
 impl MySession {
     pub async fn open(p: &MySqlPool) -> AppResult<Self> {
         let mut conn = p.acquire().await?;
-        let id: u64 = sqlx::query_scalar("select connection_id()").fetch_one(&mut *conn).await?;
-        let mut s = Self { conn, id: id as i64, manual: false, in_tx: false, changed: false, reads_outside_tx: false, ended: None, probe: true, more: None, abandoned: false };
+        let (id, version): (u64, String) = sqlx::query_as("select connection_id(), cast(version() as char)").fetch_one(&mut *conn).await?;
+        let mut s = Self {
+            conn, id: id as i64, manual: false, in_tx: false, changed: false, reads_outside_tx: false, ended: None, probe: true, more: None, abandoned: false,
+            cut: 0, cut_cols: Vec::new(), cut_at: 0, cut_list: "*".into(), row_bound: None, mariadb: version.contains("MariaDB"),
+        };
         // Best effort: a MySQL-protocol server without transactions (ClickHouse, older StarRocks / Doris) still opens, without the probe
         let began = s.conn.execute("START TRANSACTION").await.is_ok();
         s.probe = began && s.tx_open().await != Some(false);
@@ -475,7 +487,12 @@ impl MySession {
         if !self.in_tx {
             self.changed = false;
         }
-        let mut r = match run_on(&mut self.conn, sql, limit).await {
+        self.plan_page(None);
+        let r = match self.first_page(sql, limit).await {
+            Some(r) => r,
+            None => run_on(&mut self.conn, sql, limit).await,
+        };
+        let mut r = match r {
             Ok(r) => r,
             Err(e) => {
                 let s = strip_comments_lead(sql);
@@ -520,7 +537,7 @@ impl MySession {
         }
         self.changed |= self.in_tx && crate::audit::is_change(sql, crate::store::DbKind::Mysql);
         if r.truncated && is_select_like(sql) {
-            self.more = Some((sql.trim().trim_end_matches(';').trim().to_string(), limit));
+            self.more = Some((page_query(sql).to_string(), r.rows.len()));
         } else {
             r.truncated = false;
         }
@@ -605,21 +622,31 @@ impl MySession {
         sqlx::query_scalar::<_, Option<String>>("select cast(database() as char)").fetch_one(&mut *self.conn).await.ok().map(Option::unwrap_or_default)
     }
 
-    /// Open `m` on this new session after the rows its old session read, in the database it ran in (Session::reopen)
+    /// Open `m` on this new session after the rows its old session read, in the database it ran in (Session::reopen), with long
+    /// values cut as this session cuts them
     pub async fn reopen(&mut self, m: &crate::session::More, limit: usize) -> AppResult<QueryResult> {
         if let Some(db) = m.schema.as_ref().filter(|d| !d.is_empty()) {
             self.conn.execute(format!("USE {}", qurry_shared::sql::quote_ident(crate::store::DbKind::Mysql, db)).as_str()).await?;
         }
+        let columns = match self.wraps(&m.sql) {
+            true => match describe(&mut self.conn, &m.sql).await {
+                Ok(c) => Some(c),
+                Err(e) if crate::app::is_conn_lost(&e) => return Err(e),
+                Err(_) => None,
+            },
+            false => None,
+        };
+        self.plan_page(columns.as_deref());
         self.more = Some((m.sql.clone(), m.fetched));
         self.fetch(limit).await
     }
 
+    /// The next page of the result: up to `limit` rows, fewer when their values reach db::PAGE_BYTES first
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
         let Some((sql, offset)) = self.more.clone() else { return Err(AppError::Msg("No more rows".into())) };
-        let paged = format!("SELECT * FROM ({sql}) AS dbtool_page LIMIT {limit} OFFSET {offset}");
         // The page of a read outside the user's transaction (reading_first) runs as the read did
         let read_first = self.reading_first() && self.begin_read().await;
-        let r = run_on(&mut self.conn, &paged, limit).await;
+        let r = self.read_page(&sql, offset, limit).await;
         let mut r = match read_first {
             true => {
                 self.end_read().await;
@@ -627,11 +654,186 @@ impl MySession {
             }
             false => r?,
         };
-        r.truncated = r.rows.len() >= limit;
-        self.more = if r.truncated { Some((sql, offset + limit)) } else { None };
+        self.more = if r.truncated { Some((sql, offset + r.rows.len())) } else { None };
         r.in_transaction = self.in_tx;
         Ok(r)
     }
+
+    /// How the pages of the next result read their columns: cut (cut_projection) when they are known (described), else whole;
+    /// and the widest row they can give (db::row_bound)
+    fn plan_page(&mut self, columns: Option<&[ColumnInfo]>) {
+        (self.cut_cols, self.cut_at, self.cut_list) = match columns.and_then(|c| cut_projection(c, self.cut)) {
+            Some((list, how)) => (how, self.cut, list),
+            None => (Vec::new(), 0, "*".into()),
+        };
+        self.row_bound = columns.and_then(|c| crate::db::row_bound(c, &self.cut_cols, self.cut_at, fixed_bytes));
+    }
+
+    /// Whether a statement's pages can be read wrapped (wrappable) on this server
+    fn wraps(&self, sql: &str) -> bool {
+        !self.mariadb && wrappable(sql)
+    }
+
+    /// The first page of a console read, wrapped (#194, read_page): `limit` rows at most, so the rows past them never come over
+    /// the wire (the text protocol sends the whole result, which the connection must read to its end) and a page of wide rows
+    /// stops at db::PAGE_BYTES; long values cut. None: the statement runs as it is, with whole values: it isn't wrappable, it
+    /// can't be described (several statements, a syntax error: its own run says so), or the wrapped form failed (duplicate
+    /// column names, a statement MySQL takes only on its own), unless it was cancelled, timed out or lost the connection
+    async fn first_page(&mut self, sql: &str, limit: usize) -> Option<AppResult<QueryResult>> {
+        if !self.wraps(sql) {
+            return None;
+        }
+        let q = page_query(sql);
+        let columns = match describe(&mut self.conn, q).await {
+            Ok(c) => c,
+            // The server's word on it (a session ended for sitting idle: 4031), not the next statement's
+            Err(e) if crate::app::is_conn_lost(&e) => return Some(Err(e)),
+            Err(_) => return None,
+        };
+        self.plan_page(Some(&columns));
+        match self.read_page(q, 0, limit).await {
+            Err(e) if error_number(&e).is_some_and(|n| !matches!(n, 1205 | 1213 | 1317 | 3024)) && !crate::app::is_conn_lost(&e) => {
+                self.plan_page(None);
+                None
+            }
+            // The described types, not the wrap's (a JSON column read cut is text)
+            Ok(mut r) if !self.cut_cols.is_empty() => {
+                r.columns = columns;
+                Some(Ok(r))
+            }
+            r => Some(r),
+        }
+    }
+
+    /// Up to `limit` rows of `sql` after `offset`, in chunks of `SELECT <cut_list> FROM (<sql>) … LIMIT n OFFSET o` until `limit`
+    /// rows are in or their values reach db::PAGE_BYTES (db::PageBudget): one chunk, so one run of the statement, when the
+    /// described columns bound the row size and the whole page fits at that size. Several chunks get no transaction of their own:
+    /// in Auto mode START TRANSACTION would release the user's LOCK TABLES, so another session's change between chunks can lose
+    /// or repeat a row, as it can between pages. truncated: the last chunk was full
+    async fn read_page(&mut self, sql: &str, offset: usize, limit: usize) -> AppResult<QueryResult> {
+        let start = Instant::now();
+        let mut budget = crate::db::PageBudget::new(self.row_bound);
+        let (mut columns, mut rows, mut done) = (Vec::new(), Vec::new(), false);
+        while let Some(n) = budget.next(limit - rows.len()) {
+            let chunk = run_on(&mut self.conn, &page_sql(sql, &self.cut_list, n, offset + rows.len()), n).await?;
+            if columns.is_empty() {
+                columns = chunk.columns;
+            }
+            budget.add(&chunk.rows);
+            done = chunk.rows.len() < n;
+            rows.extend(chunk.rows);
+            if done {
+                break;
+            }
+        }
+        let cut = cut_cells(&mut rows, &self.cut_cols, self.cut_at);
+        Ok(QueryResult { cut, ..query_result(columns, rows, 0, !done, start, true) })
+    }
+
+    /// Characters of a long value the pages read from the next result on (Session::set_cut)
+    pub(crate) fn set_cut(&mut self, chars: usize) {
+        self.cut = chars;
+    }
+
+    /// A read of whole values (AppState::fetch_values) in the session, so its open transaction's changes too: under a savepoint
+    /// in that transaction; in Manual mode with none open, in a read-only one of its own (autocommit=0 would open the user's)
+    pub(crate) async fn read_values(&mut self, sql: &str) -> AppResult<QueryResult> {
+        let [set, undo, release] = crate::session::VALUES_SAVEPOINT;
+        if self.in_tx {
+            self.conn.execute(set).await?;
+            let r = run_on(&mut self.conn, sql, usize::MAX).await;
+            if r.is_ok() {
+                self.conn.execute(release).await?;
+            } else {
+                // A deadlock ended the transaction, and the savepoint with it
+                let _ = self.conn.execute(undo).await;
+            }
+            return r;
+        }
+        let own = self.manual && self.begin_read().await;
+        let r = run_on(&mut self.conn, sql, usize::MAX).await;
+        if own {
+            self.end_read().await;
+        }
+        r
+    }
+}
+
+/// db::row_bound's width of a MySQL column read whole: numbers, dates and times, BIT (a number), ENUM (a member: 255 characters
+/// at most). Not GEOMETRY: any size over the wire, however short its text
+fn fixed_bytes(ty: &str) -> Option<usize> {
+    match ty {
+        "BOOLEAN" | "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" | "BIGINT" | "TINYINT UNSIGNED" | "SMALLINT UNSIGNED"
+        | "MEDIUMINT UNSIGNED" | "INT UNSIGNED" | "BIGINT UNSIGNED" | "YEAR" | "FLOAT" | "DOUBLE" | "DECIMAL" | "DATE" | "TIME"
+        | "DATETIME" | "TIMESTAMP" | "BIT" => Some(crate::db::FIXED_BYTES),
+        "ENUM" => Some(255 * 4),
+        _ => None,
+    }
+}
+
+/// A statement as a page wraps it: without the `;` it ends with
+fn page_query(sql: &str) -> &str {
+    sql.trim().trim_end_matches(';').trim()
+}
+
+/// One chunk of a page of `sql` (page_query), the statement on lines of its own: a `--` comment at its end ends there
+fn page_sql(sql: &str, list: &str, n: usize, offset: usize) -> String {
+    format!("SELECT {list} FROM (\n{sql}\n) AS dbtool_page LIMIT {n} OFFSET {offset}")
+}
+
+/// The statement's columns as the server describes it (a prepare, closed right after)
+async fn describe(conn: &mut sqlx::MySqlConnection, sql: &str) -> AppResult<Vec<ColumnInfo>> {
+    let d = conn.describe(sql).await?;
+    Ok(d.columns().iter().map(|c| ColumnInfo { name: c.name().to_string(), type_name: c.type_info().name().to_string() }).collect())
+}
+
+/// Whether a console read's pages can be read wrapped, chunk by chunk (MySession::first_page): one plain read (no INTO, no
+/// FOR UPDATE / LOCK IN SHARE MODE, no call with side effects: session::plain_read) that gives the same rows each time it runs:
+/// no SQL_CALC_FOUND_ROWS (FOUND_ROWS() would count the last chunk), no RAND(), no variable set in it (`:=`), no executable
+/// comment (`/*! … */` hides what it runs), no optimizer hint (`/*+ … */`: MAX_EXECUTION_TIME, SET_VAR act on the outer SELECT
+/// only, which the wrap makes another). SHOW, EXPLAIN and CALL aren't select-like
+fn wrappable(sql: &str) -> bool {
+    let kind = crate::store::DbKind::Mysql;
+    let s = strip_comments_lead(sql);
+    is_select_like(sql)
+        && crate::sql::split_statements(sql, kind).len() == 1
+        && crate::session::plain_read(sql, kind)
+        && !s.contains("sql_calc_found_rows")
+        && !s.contains("rand(")
+        && !sql.contains(":=")
+        && !sql.contains("/*!")
+        && !sql.contains("/*M!")
+        && !sql.contains("/*+")
+}
+
+/// MySQL twin of session::cut_projection (#194): the select list a page reads long values with, each column by its described
+/// name (a derived table refuses duplicate names: MySession::first_page then reads whole values), one CutAs per column. Text
+/// types read their first cut + 1 characters, JSON its text's; binary strings their first 65 bytes (`value` shows 64 and …, so
+/// nothing changes and nothing is flagged); numbers, dates and times, ENUM, BIT and GEOMETRY as they are (sqlx names a SET
+/// column CHAR: it reads as text, cut when longer than the cut). None when cut is 0 or no column needs it
+pub(crate) fn cut_projection(columns: &[ColumnInfo], cut: usize) -> Option<(String, Vec<CutAs>)> {
+    if cut == 0 {
+        return None;
+    }
+    let k = cut + 1;
+    let (exprs, how): (Vec<String>, Vec<CutAs>) = columns
+        .iter()
+        .map(|c| {
+            let n = ident(&c.name);
+            let (e, how) = match c.type_name.as_str() {
+                "CHAR" | "VARCHAR" | "TINYTEXT" | "TEXT" | "MEDIUMTEXT" | "LONGTEXT" => (format!("LEFT({n}, {k})"), CutAs::Text),
+                // Its text is the whole value's (the server's form): a JSON value that isn't cut reads as it does whole
+                "JSON" => (format!("LEFT(CAST({n} AS CHAR), {k})"), CutAs::Text),
+                "BINARY" | "VARBINARY" | "TINYBLOB" | "BLOB" | "MEDIUMBLOB" | "LONGBLOB" => (format!("LEFT({n}, 65)"), CutAs::Bytes),
+                _ => return (n, CutAs::Whole),
+            };
+            (format!("{e} AS {n}"), how)
+        })
+        .unzip();
+    if how.iter().all(|h| *h == CutAs::Whole) {
+        return None;
+    }
+    Some((exprs.join(", "), how))
 }
 
 // ───────── Metadata (information_schema) ─────────
@@ -643,7 +845,7 @@ pub async fn list_databases(p: &MySqlPool) -> AppResult<Vec<String>> {
 
 pub async fn list_schemas(p: &MySqlPool) -> AppResult<Vec<SchemaInfo>> {
     let db: Option<String> = sqlx::query_scalar("select cast(database() as char)").fetch_one(p).await?;
-    Ok(db.map(|name| SchemaInfo { is_system: SYSTEM_DBS.contains(&name.as_str()), name }).into_iter().collect())
+    Ok(db.map(|name| SchemaInfo { is_system: qurry_shared::kind::system_databases(crate::store::DbKind::Mysql).contains(&name.as_str()), name }).into_iter().collect())
 }
 
 pub async fn list_objects(p: &MySqlPool, schema: &str) -> AppResult<SchemaObjects> {
@@ -1041,6 +1243,70 @@ mod tests {
         }
     }
 
+    fn cols(v: &[(&str, &str)]) -> Vec<ColumnInfo> {
+        v.iter().map(|(n, t)| ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect()
+    }
+
+    /// The cut per described type (#194): text types and JSON read their first cut + 1 characters, binary strings their first 65
+    /// bytes; numbers, dates, ENUM, BIT and GEOMETRY as they are; every column by its name in backticks
+    #[test]
+    fn cut_projection_per_type() {
+        let c = cols(&[
+            ("v", "VARCHAR"), ("c", "CHAR"), ("t", "TEXT"), ("tt", "TINYTEXT"), ("mt", "MEDIUMTEXT"), ("lt", "LONGTEXT"), ("j", "JSON"),
+            ("b", "BLOB"), ("vb", "VARBINARY"), ("bi", "BINARY"), ("lb", "LONGBLOB"), ("i", "INT"), ("dt", "DATETIME"), ("g", "GEOMETRY"),
+            ("e", "ENUM"), ("bit", "BIT"), ("d", "DECIMAL"), ("Note `x`", "TEXT"), ("select", "INT"),
+        ]);
+        let (list, how) = cut_projection(&c, 64).unwrap();
+        assert_eq!(
+            list,
+            "LEFT(`v`, 65) AS `v`, LEFT(`c`, 65) AS `c`, LEFT(`t`, 65) AS `t`, LEFT(`tt`, 65) AS `tt`, LEFT(`mt`, 65) AS `mt`, LEFT(`lt`, 65) AS `lt`, \
+             LEFT(CAST(`j` AS CHAR), 65) AS `j`, LEFT(`b`, 65) AS `b`, LEFT(`vb`, 65) AS `vb`, LEFT(`bi`, 65) AS `bi`, LEFT(`lb`, 65) AS `lb`, \
+             `i`, `dt`, `g`, `e`, `bit`, `d`, LEFT(`Note ``x```, 65) AS `Note ``x```, `select`"
+        );
+        use CutAs::*;
+        assert_eq!(how, [Text, Text, Text, Text, Text, Text, Text, Bytes, Bytes, Bytes, Bytes, Whole, Whole, Whole, Whole, Whole, Whole, Text, Whole]);
+        assert_eq!(cut_projection(&cols(&[("i", "INT"), ("g", "GEOMETRY"), ("e", "ENUM")]), 64), None, "nothing to cut: whole values");
+        assert_eq!(cut_projection(&c, 0), None);
+    }
+
+    /// A page's chunk: the statement without its `;`, on lines of its own (a trailing comment ends there)
+    #[test]
+    fn page_sql_keeps_the_semicolon_out() {
+        let q = page_query("  select * from t -- note\n ; ");
+        assert_eq!(q, "select * from t -- note");
+        assert_eq!(page_sql(q, "*", 64, 0), "SELECT * FROM (\nselect * from t -- note\n) AS dbtool_page LIMIT 64 OFFSET 0");
+        assert_eq!(page_sql("select 1", "LEFT(`a`, 9) AS `a`", 30, 64), "SELECT LEFT(`a`, 9) AS `a` FROM (\nselect 1\n) AS dbtool_page LIMIT 30 OFFSET 64");
+    }
+
+    /// One plain read that gives the same rows each time it runs is read wrapped; everything else runs as it is
+    #[test]
+    fn wrappable_reads() {
+        for q in ["select * from logs", "SELECT * FROM `demo`.`logs`;", "with x as (select 1) select * from x", "(select 1) union (select 2)", "select a, 2 as a from t", "-- x\nselect 1"] {
+            assert!(wrappable(q), "{q}");
+        }
+        for q in [
+            "select * from t for update", "select * from t lock in share mode", "select * from t for share", "select sql_calc_found_rows * from t limit 5",
+            "select 1 into @a", "select * from t into outfile '/tmp/x'", "select @n := @n + 1 from t", "show tables", "explain select 1", "call p()",
+            "select 1; select 2", "select /*!50000 sleep(1) */ 1", "select get_lock('x', 1)", "update t set a = 1", "desc t",
+            "select /*+ MAX_EXECUTION_TIME(1000) */ * from t", "SELECT /*+ SET_VAR(sort_buffer_size = 16M) */ * from t order by a",
+            "select * from t order by RAND() limit 5",
+        ] {
+            assert!(!wrappable(q), "{q}");
+        }
+    }
+
+    /// A page assembled from chunks: its cut cells are numbered by their row in the page, not in their chunk
+    #[test]
+    fn cut_cells_across_chunks() {
+        use CutAs::*;
+        let long = "x".repeat(70);
+        let mut page: Vec<Vec<Value>> = (0..64).map(|i| vec![Value::from(i), Value::from(if i == 63 { long.as_str() } else { "a" })]).collect();
+        page.extend((64..100).map(|i| vec![Value::from(i), Value::from(if i % 10 == 0 { long.as_str() } else { "b" })]));
+        let cut = cut_cells(&mut page, &[Whole, Text], 64);
+        assert_eq!(cut, [[63, 1], [70, 1], [80, 1], [90, 1]]);
+        assert_eq!(page[70][1], Value::from("x".repeat(64)));
+    }
+
     /// QURRY_TEST_MY=host:port:user:password:db (crate::testenv): the data source and its password
     fn server() -> Option<(ConnectionConfig, String)> {
         let crate::testenv::Server { mut cfg, password } = crate::testenv::my()?;
@@ -1075,6 +1341,100 @@ mod tests {
         assert!(p.execute_batch(&["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true, &[]).await.is_err());
         assert_eq!(p.execute_batch(&["insert into qurry_prep values (1)".into()], false, true, &[]).await.unwrap().0, 1);
         sqlx::raw_sql("drop table qurry_prep").execute(&p).await.unwrap();
+    }
+
+    /// A console's first page (#194): read wrapped, long values cut (JSON, BLOB and the others as they are whole, the described
+    /// types); what the wrap can't take runs as before, with whole values and nothing flagged: FOR UPDATE, SHOW, duplicate names,
+    /// SQL_CALC_FOUND_ROWS (FOUND_ROWS() counts its rows). QURRY_TEST_MY=… cargo test -p qurry-core mysql_first_page -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_first_page_wraps_or_falls_back() {
+        let Some((cfg, pw)) = server() else { return };
+        let Pool::My(p) = crate::db::connect(&cfg, Some(pw.as_str())).await.expect("connect") else { unreachable!() };
+        let mut s = MySession::open(&p).await.unwrap();
+        for q in [
+            "drop table if exists qurry_first",
+            "create table qurry_first (id int primary key, t text, v varchar(200), j json, b blob, e enum('x', 'y'), d datetime, g geometry)",
+            "insert into qurry_first values (1, repeat('é', 100), 'short', json_object('a', repeat('x', 100)), repeat(x'AB', 100), 'x', '2026-01-02 03:04:05', point(1, 2)), \
+             (2, 'short', repeat('v', 64), '{\"b\": [1, 2], \"a\": null}', x'0102', 'y', null, null), (3, null, null, null, null, null, null, null)",
+        ] {
+            s.run(q, 10).await.unwrap();
+        }
+        let sql = "select * from qurry_first order by id;";
+        let whole = s.run(sql, 500).await.unwrap();
+        s.set_cut(64);
+        let cut = s.run(sql, 500).await.unwrap();
+        let types = |r: &QueryResult| r.columns.iter().map(|c| (c.name.clone(), c.type_name.clone())).collect::<Vec<_>>();
+        assert_eq!(types(&cut), types(&whole), "the described names and types");
+        assert_eq!(cut.columns[3].type_name, "JSON");
+        assert_eq!((cut.cut.clone(), whole.cut.is_empty()), (vec![[0, 1], [0, 3]], true));
+        for (r, row) in whole.rows.iter().enumerate() {
+            for (c, v) in row.iter().enumerate() {
+                match cut.cut.contains(&[r, c]) {
+                    true => assert_eq!(cut.rows[r][c].as_str().unwrap(), v.as_str().unwrap().chars().take(64).collect::<String>(), "{r} {c}"),
+                    false => assert_eq!(&cut.rows[r][c], v, "row {r} column {} as without the cut", whole.columns[c].name),
+                }
+            }
+        }
+        // Not wrapped: as before, whole values
+        for q in ["select * from qurry_first order by id for update", "select t, t from qurry_first order by id", "select t as a, v as a from qurry_first order by id", "select sql_calc_found_rows * from qurry_first order by id limit 1"] {
+            let r = s.run(q, 500).await.unwrap_or_else(|e| panic!("{q}: {e}"));
+            assert!(r.cut.is_empty(), "{q}");
+            assert_eq!(r.rows[0][if q.contains('*') { 1 } else { 0 }], whole.rows[0][1], "{q}");
+        }
+        assert_eq!(s.run("select found_rows()", 10).await.unwrap().rows[0][0], Value::from(3), "counted by the statement as it is");
+        let show = s.run("show tables", 500).await.unwrap();
+        assert!(!show.rows.is_empty() && show.cut.is_empty());
+        let dup = s.run("select 1 as a, 2 as a", 500).await.unwrap();
+        assert_eq!(dup.rows, [[Value::from(1), Value::from(2)]]);
+        s.run("drop table qurry_first", 10).await.unwrap();
+    }
+
+    /// A page runs its statement once when the described columns bound the row size to fit db::PAGE_BYTES (#194 review: a
+    /// GROUP BY ran twice per page): numbers and dates, and text cut at 64; text read whole (cut 0) runs in chunks, and the page
+    /// leaves no transaction open. MySQL 8.0 and later (the setup uses WITH RECURSIVE).
+    /// QURRY_TEST_MY=… cargo test -p qurry-core mysql_page_runs -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_page_runs_once_when_bounded() {
+        let Some((cfg, pw)) = server() else { return };
+        let Pool::My(p) = crate::db::connect(&cfg, Some(pw.as_str())).await.expect("connect") else { unreachable!() };
+        let mut s = MySession::open(&p).await.unwrap();
+        if crate::testenv::mysql_older_than(&mut s.conn, [8, 0, 0]).await {
+            println!("skipped: mysql_page_runs_once_when_bounded needs MySQL 8.0 (WITH RECURSIVE)");
+            return;
+        }
+        for q in [
+            "drop table if exists qurry_once",
+            "create table qurry_once (id int primary key, n decimal(10, 2), d datetime, t text)",
+            "insert into qurry_once with recursive x(i) as (select 1 union all select i + 1 from x where i < 600) select i, i / 3, '2026-01-02', repeat('a', 100) from x",
+        ] {
+            s.run(q, 10).await.unwrap();
+        }
+        // The session's SELECTs, counted from another connection
+        let count = format!(
+            "select cast(count_star as signed) from performance_schema.events_statements_summary_by_thread_by_event_name \
+             join performance_schema.threads using (thread_id) where processlist_id = {} and event_name = 'statement/sql/select'",
+            s.id
+        );
+        let selects = async || -> i64 { sqlx::query_scalar(&count).fetch_one(&p).await.unwrap() };
+        let runs = async |s: &mut MySession, sql: &str| {
+            let before = selects().await;
+            let r = s.run(sql, 500).await.unwrap();
+            (r.rows.len(), r.truncated, selects().await - before)
+        };
+        s.set_cut(64);
+        assert_eq!(runs(&mut s, "select id, n, d from qurry_once order by id").await, (500, true, 1), "numbers and dates");
+        assert_eq!(runs(&mut s, "select id, count(*), sum(n) from qurry_once group by id order by id").await, (500, true, 1));
+        let (rows, more, n) = runs(&mut s, "select id, t from qurry_once order by id").await;
+        assert_eq!((rows, more, n), (500, true, 1), "text cut at 64");
+        let before = selects().await;
+        assert_eq!(s.fetch(500).await.unwrap().rows.len(), 100);
+        assert_eq!(selects().await - before, 1, "the load-more too");
+        s.set_cut(0);
+        assert_eq!(runs(&mut s, "select id, t from qurry_once order by id").await, (500, true, 3), "text read whole: 64, 128, 308");
+        assert_eq!((s.in_tx, s.tx_open().await), (false, Some(false)), "a page opens no transaction");
+        s.run("drop table qurry_once", 10).await.unwrap();
     }
 
     #[tokio::test]

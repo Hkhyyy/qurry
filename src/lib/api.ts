@@ -38,6 +38,10 @@ export interface ConnectionConfig {
   ssl?: SslConfig | null;
   /** Redis connection mode */
   redis?: RedisMode | null;
+  /** A program whose output is the password at each login (RDS / Cloud SQL IAM tokens). Never exported */
+  passwordCommand?: string;
+  /** Seconds the command's output is used again (empty = every login) */
+  passwordReuseSecs?: number | null;
 }
 
 export interface SslConfig {
@@ -65,7 +69,7 @@ export interface ConnOptions {
   singleDb?: boolean;
   /** Production: modifying statements show the affected row count and ask for confirmation */
   confirmChanges?: boolean;
-  /** Production: consoles start in Manual transaction mode (unset = on; core ConnOptions::starts_manual) */
+  /** Production: consoles start in Manual transaction mode (unset = on; core ConnectionConfig::production_starts_manual) */
   productionManual?: boolean | null;
   /** Remote MySQL with SSL unset may connect in plain text if it can't do TLS */
   allowPlaintext?: boolean;
@@ -101,6 +105,10 @@ export interface SsmConfig {
 export interface ConnectionView extends ConnectionConfig {
   hasPassword: boolean;
   connected: boolean;
+  /** A new console starts in Manual transaction mode (core ConnectionConfig::starts_manual) */
+  startsManual?: boolean;
+  /** Manual only because it is Production: the console says so once (core ConnectionConfig::production_starts_manual) */
+  productionStartsManual?: boolean;
 }
 
 export interface ColumnInfo {
@@ -189,6 +197,11 @@ export interface TableRef {
 
 /** Column widths a user set, by column name, in characters (qurry_shared::format::ColumnWidths) */
 export type ColumnWidths = Record<string, number>;
+/** The columns a user hid and pinned in a table tab, by the keys widths are kept under; pinned in the order they show (qurry_shared::format::ColumnLayout) */
+export interface ColumnLayout {
+  hidden: string[];
+  pinned: string[];
+}
 
 export interface UpdateInfo {
   current: string;
@@ -274,14 +287,24 @@ export const api = {
   importTheme: () => invoke<CustomTheme | null>("import_theme"),
   /** The path written, null if cancelled */
   exportTheme: (theme: CustomTheme) => invoke<string | null>("export_theme", { theme }),
+  /** Settings › Theme › Images › Choose…: the picker, then the image copied into the config folder; its file name, null if cancelled */
+  importThemeImage: () => invoke<string | null>("import_theme_image"),
+  /** A theme image's bytes */
+  themeImage: (file: string) => invoke<ArrayBuffer>("theme_image", { file }),
   /** Column widths a user gave a table tab's columns, shared with the TUI; setting merges into what is saved and returns it */
   columnWidths: (table: TableRef) => invoke<ColumnWidths>("column_widths", { table }),
   setColumnWidths: (table: TableRef, widths: ColumnWidths) => invoke<ColumnWidths>("set_column_widths", { table, widths }),
   resetColumnWidths: (table: TableRef) => invoke<void>("reset_column_widths", { table }),
+  /** A table tab's hidden and pinned columns (settings.json "columnLayout", shared with the TUI) */
+  columnLayout: (table: TableRef) => invoke<ColumnLayout>("column_layout", { table }),
+  /** Replaces them; the default layout (nothing hidden or pinned) removes the table's entry */
+  setColumnLayout: (table: TableRef, layout: ColumnLayout) => invoke<void>("set_column_layout", { table, layout }),
   /** Download the new version, swap it in, and restart the app (progress via the "update-progress" event) */
   installUpdate: () => invoke<void>("install_update"),
   /** Help › Show Log: reveals the log file in Finder (its folder until the file exists) */
   showLog: () => invoke<void>("show_log"),
+  /** Help › Copy Diagnostics: versions, OS, driver plugins, data source counts and the log's end, redacted (no names, hosts or secrets) */
+  diagnostics: () => invoke<string>("diagnostics"),
   /** A front-end error into qurry.log (message and stacks only; the backend redacts, cuts and rate limits it) */
   logFrontendError: (e: { source: "boundary" | "error" | "unhandledrejection"; message: string; stack?: string; componentStack?: string }) => invoke<void>("log_frontend_error", e),
   /** Open tabs·splits (restored on restart) */
@@ -355,7 +378,6 @@ export const api = {
   /** Whether the driver plugin is installed (null for built-in DBs) · download and install */
   driverStatus: (kind: DbKind) => invoke<boolean | null>("driver_status", { kind }),
   installDriver: (kind: DbKind) => invoke<string>("install_driver", { kind }),
-  unsafeReason: (kind: DbKind, sql: string) => invoke<string | null>("unsafe_reason", { kind, sql }),
 };
 
 /** A data source that reconnects (core app::Reconnecting): what to say meanwhile, after 10 s (`slow`), when its load fails and after Cancel */
@@ -712,7 +734,9 @@ const REST: Dialect = {
 };
 export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && VECTOR_KINDS.includes(kind) ? REST : kind && PLUGIN_KINDS.includes(kind) ? GEN[kind] : PG);
 /** A PostgreSQL console's schema: the picker's switch, and a console opened from a schema (#191) */
-export const searchPathSql = (schema: string) => `SET search_path TO ${PG.q(schema)}, public`;
+export const searchPathSql = (schema: string) => sharedOr(`SET search_path TO ${PG.q(schema)}, public`, (s) => s.searchPathSql(schema));
+/** A MySQL console's schema, which is a database there */
+export const useSql = (schema: string) => sharedOr(`USE ${MY.q(schema)}`, (s) => s.useSql(schema));
 
 /** Backend connection target: Data Source id + DB name */
 export const targetId = (connId: string, database?: string | null) => (database ? `${connId}::${database}` : connId);
@@ -734,9 +758,11 @@ export function dbVisible(scope: Scope | undefined, db: string, defaultDb: strin
 export const defaultDbOf = (c: Pick<ConnectionView, "database" | "kind">) =>
   sharedOr(c.database || (c.kind === "postgres" ? "postgres" : ""), (s) => s.defaultDb(c.kind, c.database ?? ""));
 
-const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
+/** A database the server keeps for itself (qurry_shared::kind::system_databases). Before the module has loaded, or if it failed,
+ *  none is: the tree and pickers call this while they draw, which must not throw */
+export const systemDatabases = (kind: DbKind): string[] => sharedOr([], (s) => s.systemDatabases(kind));
 /** A system database the explorer hides unless asked (MySQL's system schemas) */
-export const isSystemDb = (kind: DbKind, d: string) => kind === "mysql" && MY_SYS.includes(d);
+export const isSystemDb = (kind: DbKind, d: string) => kind === "mysql" && systemDatabases(kind).includes(d);
 /** A database the explorer lists: one fixed database, or the shown-database scope (MySQL system schemas only with showSystem) */
 export const dbShown = (c: ConnectionView, d: string, defaultDb: string, showSystem = false) =>
   c.options?.singleDb ? d === defaultDb : (showSystem || !isSystemDb(c.kind, d) || d === defaultDb) && dbVisible(c.scope, d, defaultDb);

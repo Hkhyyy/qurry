@@ -160,6 +160,9 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `click header · ⌥ click` | Sort · add to multi-column sort |
 | `⌃⌥←` | Narrow Column |
 | `⌃⌥→` | Widen Column |
+| `—` | Hide Column |
+| `—` | Pin Column |
+| `—` | Columns… |
 | `drag · double-click a header's right edge` | Resize the column · fit it to its content (right-click a header: Fit All Columns, Reset Widths) |
 
 ## Query history & Redis browser
@@ -178,6 +181,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 |---|---|
 | `—` | Edit Keymap… |
 | `—` | Show Log |
+| `—` | Copy Diagnostics |
 | `—` | Export Data Sources… |
 | `—` | Import Data Sources… |
 | `—` | Theme: Dark |

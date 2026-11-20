@@ -142,7 +142,7 @@ async fn custom_theme_tints_the_production_row_and_colors_null() {
         tt.grid.as_mut().unwrap().result.rows[0][1] = serde_json::Value::Null;
     }
     let colors = [("prodTint".to_string(), "#5a1e2a".to_string()), ("nullText".to_string(), "#a0a4c0".to_string())].into();
-    h.app.themes.custom = vec![CustomTheme { id: "c-prod".into(), name: "Mine".into(), base: "dracula".into(), colors }];
+    h.app.themes.custom = vec![CustomTheme { id: "c-prod".into(), name: "Mine".into(), base: "dracula".into(), colors, ..Default::default() }];
     h.app.themes.theme = Some("c-prod".into());
     h.app.color = ColorMode::TrueColor;
     // The first cell of `text` on the screen

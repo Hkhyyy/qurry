@@ -1049,15 +1049,15 @@ mod tests {
     use crate::db::Pool;
     use crate::store::DbKind;
 
-    /// docker run -d --name dbtool-redis-test -p 16379:6379 redis:7-alpine
-    /// (another server: QURRY_TEST_REDIS=host:port)
+    /// docker run -d --name dbtool-redis-test -p 16379:6379 redis:7-alpine, QURRY_TEST_REDIS=127.0.0.1:16379 (the tests on it skip
+    /// when it is unset; the TLS, Sentinel and Cluster tests use 127.0.0.1 and their own ports)
     fn cfg(db: &str) -> ConnectionConfig {
         let addr = std::env::var("QURRY_TEST_REDIS").unwrap_or_else(|_| "127.0.0.1:16379".into());
         let (host, port) = addr.rsplit_once(':').expect("QURRY_TEST_REDIS=host:port");
         ConnectionConfig {
             id: "rd".into(), name: "rd".into(), kind: DbKind::Redis, host: host.into(), port: port.parse().expect("QURRY_TEST_REDIS port"), user: String::new(),
             database: db.into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(),
-            read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         }
     }
 
@@ -1066,6 +1066,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn production_redis_console_refuses_manual_and_still_runs() {
+        if crate::testenv::var("QURRY_TEST_REDIS").is_none() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
         let mut c = cfg("0");
@@ -1101,6 +1104,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn redis_browser_database_switch_and_config_check() {
+        if crate::testenv::var("QURRY_TEST_REDIS").is_none() {
+            return;
+        }
         let dir = std::env::temp_dir().join(format!("qurry-rbrowser-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir.clone())).unwrap();
         st.save_connection(cfg("db0"), None, None).await.unwrap();
@@ -1140,6 +1146,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn redis_big_values_are_not_read_whole() {
+        if crate::testenv::var("QURRY_TEST_REDIS").is_none() {
+            return;
+        }
         let dir = std::env::temp_dir().join(format!("qurry-rbig-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
         st.save_connection(cfg("db4"), None, None).await.unwrap();
@@ -1172,6 +1181,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn redis_read_only_refuses_writes_before_running() {
+        if crate::testenv::var("QURRY_TEST_REDIS").is_none() {
+            return;
+        }
         let dir = std::env::temp_dir().join(format!("qurry-rro-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir.clone())).unwrap();
         st.save_connection(cfg("db14"), None, None).await.unwrap();
@@ -1200,6 +1212,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn redis_whole_key_reads_need_a_small_key() {
+        if crate::testenv::var("QURRY_TEST_REDIS").is_none() {
+            return;
+        }
         let dir = std::env::temp_dir().join(format!("qurry-rwhole-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
         st.save_connection(cfg("db5"), None, None).await.unwrap();
@@ -1236,6 +1251,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn redis_repeated_options_are_refused() {
+        if crate::testenv::var("QURRY_TEST_REDIS").is_none() {
+            return;
+        }
         let dir = std::env::temp_dir().join(format!("qurry-rrep-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
         st.save_connection(cfg("db6"), None, None).await.unwrap();
@@ -1270,6 +1288,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn redis_size_check_counts_every_element() {
+        if crate::testenv::var("QURRY_TEST_REDIS").is_none() {
+            return;
+        }
         let dir = std::env::temp_dir().join(format!("qurry-rmem-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
         st.save_connection(cfg("db7"), None, None).await.unwrap();
@@ -1297,6 +1318,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn redis_string_size_check_does_not_walk_other_types() {
+        if crate::testenv::var("QURRY_TEST_REDIS").is_none() {
+            return;
+        }
         let dir = std::env::temp_dir().join(format!("qurry-rstr-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
         st.save_connection(cfg("db8"), None, None).await.unwrap();
@@ -1334,6 +1358,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn redis_end_to_end() {
+        if crate::testenv::var("QURRY_TEST_REDIS").is_none() {
+            return;
+        }
         let pool = crate::db::connect(&cfg("db3"), None).await.expect("connect");
         assert!(pool.server_version().await.unwrap().starts_with("Redis 7"));
         let Pool::Redis(m, 3) = &pool else { panic!("db index") };

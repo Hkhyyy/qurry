@@ -300,7 +300,7 @@ pub(crate) mod tests {
             serde_json::from_value(json!({ "id": id, "name": name, "kind": "postgres", "host": "db.internal", "port": 5432, "user": "admin" })).unwrap();
         config.options.mcp = mcp.map(String::from);
         config.options.confirm_changes = production;
-        ConnectionView { config, has_password: true, connected: false, temporary: false }
+        ConnectionView::new(config, true, false, false)
     }
 
     pub(crate) fn server_with(sources: &[ConnectionView]) -> (Server, std::path::PathBuf) {

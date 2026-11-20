@@ -46,6 +46,33 @@ export function toggle(sel: Selection | null, a: Pos, b: Pos = a): Selection {
 
 export const contains = (sel: Selection | null, r: number, c: number) => !!sel && sel.ranges.some((x) => inRect(x, r, c));
 
+/** `sel`, made over the display columns `from`, over `to` (Pin, Unpin or Hide changed them; both list result columns): every
+ *  selected column stays selected where it is drawn now and the cursor stays on its cell; null when the cursor's column is hidden */
+export function remapCols(sel: Selection | null, from: number[], to: number[]): Selection | null {
+  if (!sel) return sel;
+  const at = new Map(to.map((i, c) => [i, c]));
+  const map = (c: number) => at.get(from[c]);
+  const cur = map(sel.cur.c);
+  if (cur === undefined) return null;
+  const ranges = sel.ranges.flatMap((x) => {
+    const cs: number[] = [];
+    for (let c = x.c0; c <= x.c1; c++) {
+      const n = map(c);
+      if (n !== undefined) cs.push(n);
+    }
+    // A range whose columns are no longer side by side splits into runs of adjacent ones
+    const runs: Rect[] = [];
+    for (const c of cs.sort((a, b) => a - b)) {
+      const last = runs[runs.length - 1];
+      if (last && last.c1 === c - 1) last.c1 = c;
+      else runs.push({ r0: x.r0, r1: x.r1, c0: c, c1: c });
+    }
+    return runs;
+  });
+  const anchor = map(sel.anchor.c);
+  return { ranges, anchor: anchor === undefined ? { ...sel.cur, c: cur } : { ...sel.anchor, c: anchor }, cur: { ...sel.cur, c: cur } };
+}
+
 /** One cell selected (copy writes its raw value; Copy as IN List takes its whole column) */
 export const isSingle = (sel: Selection | null) => !!sel && sel.ranges.length === 1 && sel.ranges[0].r0 === sel.ranges[0].r1 && sel.ranges[0].c0 === sel.ranges[0].c1;
 

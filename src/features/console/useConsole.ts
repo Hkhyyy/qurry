@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { analyzePlan, api, auditLog, ConnectionView, defaultDbOf, dialectOf, DbKind, meta, previewImpact, QueryResult, searchPathSql, targetId } from "../../lib/api";
-import { ask, notice } from "../../lib/dialogs";
+import { analyzePlan, api, auditLog, ConnectionView, defaultDbOf, dialectOf, DbKind, meta, previewImpact, QueryResult, searchPathSql, targetId, useSql } from "../../lib/api";
+import { ask, askParams, notice } from "../../lib/dialogs";
+import { findParams, substituteParams } from "../../lib/params";
 import { pushHistory } from "../../components/HistoryDialog";
 import type { OutputLine } from "../../components/ConsolePane";
 import { ran, type Content, type RunStmt } from "../../lib/resultTabs";
@@ -11,7 +12,7 @@ import { schemaChanged } from "../../components/SchemaTree";
 import { commitNoticeTitle } from "../../lib/commitNotice";
 import { sharedOr } from "../../lib/shared";
 import { cancelTableLoad, loadTableTab } from "../explorer/tableTab";
-import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "../../lib/stmtKind";
+import { askedStatements, explainAnalyzeAsk, explainAnalyzeNote, impactLine, isDdl, isRead, unsafeReason } from "../../lib/stmtKind";
 import { explainSql } from "../../lib/explain";
 import { withoutComments } from "../../lib/sqlSplit";
 import { noticeLines } from "./notices";
@@ -92,7 +93,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
       const c = conns.find((x) => x.id === tab.connId);
       if (c?.kind === "mysql") {
         // In MySQL, schema = database
-        await api.runQuery(tab.target, `USE ${dialectOf("mysql").q(schema)}`, tab.id);
+        await api.runQuery(tab.target, useSql(schema), tab.id);
         patch(tab.id, { schema });
         setStatus(`USE ${schema}`);
         return;
@@ -157,18 +158,28 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
    *  statements (running, then done or failed; none for those after a failure) */
   const executeConsole = async (tabId: string, run: RunStmt[], explain?: "plan" | "analyze", mark?: MarkStmt) => {
     const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId);
-    const stmts = run.map((r) => r.sql);
+    let stmts = run.map((r) => r.sql);
     if (!tab || !stmts.length) return;
     // The script may be edited until the results come (while rows are counted, while it runs): their places follow it (edited)
     updTab(tabId, (t) => ({ ...t, pending: run }));
     const drop = () => updTab(tabId, (t) => ({ ...t, pending: undefined }));
     const c = conns.find((x) => x.id === tab.connId);
     const kind = c?.kind ?? "postgres";
+    // User parameters (:name, lib/params): asked once, then every check below, the run, History and Output see the final SQL (the
+    // editor keeps its text); Cancel runs nothing. The values are the console's, offered again next time
+    const found = stmts.map((s) => findParams(s, kind));
+    const names = [...new Set(found.flat().map((p) => p.name))];
+    if (names.length) {
+      const values = await askParams(names, tab.params ?? {}, stmts.filter((_, i) => found[i].length).join("\n"), kind);
+      if (!values) return drop();
+      updTab(tabId, (t) => ({ ...t, params: { ...t.params, ...values } }));
+      stmts = stmts.map((s) => substituteParams(s, kind, values));
+    }
     // Confirm dangerous statements (UPDATE/DELETE without WHERE, DROP, TRUNCATE — same rules as the core guard). Not for Explain:
     // Explain Analyse asks its own question below, with this reason when there is one (one dialog, as in the TUI)
     if (!explain) {
       for (const s of stmts) {
-        const why = await api.unsafeReason(kind, s).catch(() => null);
+        const why = unsafeReason(kind, s);
         if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: withoutComments(s, kind).slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return drop();
       }
     }
@@ -196,19 +207,15 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     if (explain === "analyze" && !(await askExplainAnalyze(c?.name, kind, stmts))) return drop();
     // Production: for data-changing statements, count the rows that will change, show it and ask (counted with SELECT count(*))
     if (c?.options?.confirmChanges && !explain) {
-      // Same check as the TUI (core guard): a write keyword only inside a string or a comment (MySQL # too) doesn't make a read a write
-      const writes = stmts.filter((s) => !isRead(kind, s));
+      // The TUI's rule and words (qurry_shared::production): a write keyword only inside a string or a comment (MySQL # too) doesn't
+      // make a read a write; 0 rows normal, 1~99 warning, 100+ · uncountable · DDL danger
+      const writes = askedStatements(kind, stmts, !!explain);
       if (writes.length) {
         setStatus("Counting the rows this will change…");
         const detail: { text: string; value: string; tone?: "danger" | "warn" }[] = [];
         for (const w of writes) {
-          const n = await previewImpact(tab.target, w).catch((e) => `can't count: ${String(e).split("\n")[0]}`);
-          // isDdl is null while the WASM module isn't loaded
-          const ddl = n === null ? isDdl(kind, w) : false;
-          const value = typeof n === "number" ? `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}` : n === null ? (ddl ? "schema change" : ddl === null ? "can't count · may change the schema" : "can't count") : n;
-          // More rows changed = more prominent: 0 rows normal, 1~99 warning, 100+ · uncountable · DDL danger
-          const tone = typeof n === "number" ? (n >= 100 ? "danger" : n > 0 ? "warn" : undefined) : "danger";
-          detail.push({ text: withoutComments(w, kind).slice(0, 300), value, tone });
+          const n = await previewImpact(tab.target, w).then((n): { Ok: number | null } => ({ Ok: n }), (e): { Err: string } => ({ Err: String(e) }));
+          detail.push({ text: withoutComments(w, kind).slice(0, 300), ...impactLine(kind, w, n) });
         }
         setStatus("Ready");
         if (!(await ask("These statements change data. Run them?", { title: `Production: ${c.name}`, detail, okLabel: "Run", danger: true }))) return drop();
@@ -296,9 +303,11 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
         }
       } catch (e) {
         log(tabId, "error", String(e));
-        // The server's spot, in the statement's own text (Explain sent it after its EXPLAIN …)
+        // The server's spot, in the statement's own text (Explain sent it after its EXPLAIN …); past a parameter's value it no longer
+        // matches the editor's text, so only the statement is marked
         const pos = sharedOr(undefined, (s) => s.errorPosition(String(e), sql));
-        mark?.(i, { state: "error", out, ts, text: sharedOr(String(e), (s) => s.withoutPosition(String(e))), at: pos !== undefined && pos >= pre ? pos - pre : undefined });
+        const at = pos !== undefined && pos >= pre && pos - pre < (found[i][0]?.start ?? Infinity) ? pos - pre : undefined;
+        mark?.(i, { state: "error", out, ts, text: sharedOr(String(e), (s) => s.withoutPosition(String(e))), at });
         if (committed > 0) log(tabId, "error", `Note: ${committed} earlier statement${committed > 1 ? "s" : ""} of this run ${committed > 1 ? "were" : "was"} already committed (Auto mode) and ${committed > 1 ? "were" : "was"} not rolled back`);
         // Even on error a transaction may be open (e.g. first statement fails in Manual) → sync the Commit/Roll back buttons
         syncTx(tabId);

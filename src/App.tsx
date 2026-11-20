@@ -32,11 +32,12 @@ import { useJobs } from "./features/jobs/useJobs";
 import { useConnActions } from "./features/conns/useConnActions";
 import { useExplorer } from "./features/explorer/useExplorer";
 import { useEditorGroups } from "./features/editorGroups/useEditorGroups";
-import { useSearch } from "./features/search/useSearch";
+import { copyDiagnostics, useSearch } from "./features/search/useSearch";
 import { Dialogs, TopDialogs } from "./features/dialogs/Dialogs";
 import { useGlobalShortcuts } from "./features/shortcuts/useGlobalShortcuts";
 import { setDialog, setKeymapOpen, setSettingsOpen, setUpdate, setUpdateOpen, useDialogsStore } from "./features/dialogs/store";
 import { moveOldLayout } from "./lib/panelLayout";
+import { ThemeCorner } from "./features/settings/ThemeImages";
 import "./App.css";
 
 // Splitter sizes saved before 0.3.4, before the first render reads them (#192)
@@ -145,6 +146,14 @@ export default function App() {
   useEffect(() => {
     let off: (() => void) | undefined;
     listen("open-keymap", () => setKeymapOpen(true))
+      .then((u) => (off = u))
+      .catch(() => {});
+    return () => off?.();
+  }, []);
+  // Help menu › Copy Diagnostics
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    listen("copy-diagnostics", () => copyDiagnostics(setStatus))
       .then((u) => (off = u))
       .catch(() => {});
     return () => off?.();
@@ -375,6 +384,8 @@ export default function App() {
       {tabMenu && <ContextMenu menu={tabMenu} onClose={() => setTabMenu(null)} />}
 
       <TopDialogs conns={conns} setStatus={setStatus} refresh={refresh} openConsole={openConsole} />
+      {/* The theme's Corner image: in front of the window, under menus, dialogs, toasts and popups; clicks pass through */}
+      <ThemeCorner />
     </div>
   );
 }

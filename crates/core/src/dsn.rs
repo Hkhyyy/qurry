@@ -521,19 +521,18 @@ mod tests {
         let var = |k: &str| (k == "USER").then(|| "me".to_string());
         let env = Env { var: &var, home: None };
         let mut urls = vec![];
-        if let Ok(pg) = std::env::var("QURRY_TEST_PG") {
+        if let Some(pg) = crate::testenv::var("QURRY_TEST_PG") {
             let p: Vec<&str> = pg.splitn(5, ':').collect();
             let pw = p.get(4).map(|s| format!(":{s}")).unwrap_or_default();
             urls.push((format!("postgres://{}{pw}@{}:{}/{}", p[2], p[0], p[1], p[3]), "create table if not exists tui_url_connect (id int)", "insert into tui_url_connect values (1)", "drop table tui_url_connect"));
         }
-        if let Ok(my) = std::env::var("QURRY_TEST_MY") {
+        if let Some(my) = crate::testenv::var("QURRY_TEST_MY") {
             let p: Vec<&str> = my.splitn(5, ':').collect();
             urls.push((format!("mysql://{}:{}@{}:{}/{}", p[2], p[3], p[0], p[1], p[4]), "create table if not exists tui_url_connect (id int)", "insert into tui_url_connect values (1)", "drop table tui_url_connect"));
         }
-        if let Ok(r) = std::env::var("QURRY_TEST_REDIS") {
+        if let Some(r) = crate::testenv::var("QURRY_TEST_REDIS") {
             urls.push((format!("redis://{r}/9"), "", "SET tui_url_connect:k v", "DEL tui_url_connect:k"));
         }
-        assert!(!urls.is_empty(), "set QURRY_TEST_PG / QURRY_TEST_MY / QURRY_TEST_REDIS");
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
         for (url, setup, write, cleanup) in urls {

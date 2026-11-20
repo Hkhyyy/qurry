@@ -248,3 +248,99 @@ async fn refresh_without_a_node_reloads_the_data_sources() {
     h.settle().await;
     assert_eq!(rows(&h), ["first", "second"]);
 }
+
+/// F4 on a PostgreSQL schema opens a console in it: with Switch schema Auto its session's search_path is set first and the title
+/// shows the schema; with Manual or Disable it opens in the default schema and nothing is sent (#195)
+#[tokio::test]
+async fn f4_on_a_schema_opens_a_console_in_it() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<qurry_core::db::QueryResult, String> {
+        SEEN.lock().unwrap().push(q.into());
+        Ok(qurry_core::db::QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: false, in_transaction: false, warning: None, editable: None, notices: vec![], cut: vec![] })
+    }
+    for mode in [None, Some("manual"), Some("disable")] {
+        let mut h = explorer().await;
+        h.app.fake_db = Some(record);
+        h.app.conns[0].config.options.switch_schema = mode.map(String::from);
+        let mut billing = h.app.tree.children["pg|shop"][0].clone();
+        (billing.key, billing.label, billing.schema) = ("pg|shop|billing".into(), "billing".into(), Some("billing".into()));
+        h.app.tree.children.get_mut("pg|shop").unwrap().push(billing);
+        for k in ["pg", "pg|shop"] {
+            h.app.tree.expanded.insert(k.into());
+        }
+        assert!(h.app.tree.select_key("pg|shop|billing"));
+        SEEN.lock().unwrap().clear();
+        h.key("F4");
+        h.settle().await;
+        let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!("no console") };
+        let schema = c.schema.clone();
+        let s = h.screen(120, 16);
+        if mode.is_none() {
+            assert_eq!(*SEEN.lock().unwrap(), ["SET search_path TO billing, public"]);
+            assert_eq!(schema.as_deref(), Some("billing"));
+            assert!(s.contains("shop · billing · Tx: Auto"), "{s}");
+            // ⌃l with a table selected: a console in the table's schema
+            for k in ["pg|shop|public", "pg|shop|public|g:tables"] {
+                h.app.tree.expanded.insert(k.into());
+            }
+            assert!(h.app.tree.select_key("pg|shop|public|g:tables|o:users"));
+            h.app.focus = Focus::Tree;
+            h.key("Ctrl+L");
+            h.settle().await;
+            assert_eq!(SEEN.lock().unwrap().last().map(String::as_str), Some("SET search_path TO public, public"));
+        } else {
+            assert!(SEEN.lock().unwrap().is_empty(), "{mode:?}");
+            assert_eq!(schema, None);
+            assert!(s.contains("shop · Tx: Auto"), "{s}");
+        }
+    }
+}
+
+/// A console opened from a schema that can't be switched to stays in the default schema, and the status says how to pick one
+#[tokio::test]
+async fn a_failed_schema_switch_on_open_says_how_to_pick_one() {
+    fn refuse(_: &str) -> Result<qurry_core::db::QueryResult, String> {
+        Err("ERROR: permission denied".into())
+    }
+    let mut h = explorer().await;
+    h.app.fake_db = Some(refuse);
+    for k in ["pg", "pg|shop"] {
+        h.app.tree.expanded.insert(k.into());
+    }
+    assert!(h.app.tree.select_key("pg|shop|public"));
+    h.key("F4");
+    h.settle().await;
+    let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!("no console") };
+    assert_eq!(c.schema, None);
+    assert_eq!(h.app.status, "ERROR: permission denied — the console is in the default schema (⌃k › Switch Schema… picks one)");
+}
+
+/// The table designer's `o` opens its SQL in a console in the designed table's schema, as the GUI's object editor does
+#[tokio::test]
+async fn designer_console_opens_in_the_tables_schema() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<qurry_core::db::QueryResult, String> {
+        SEEN.lock().unwrap().push(q.into());
+        Ok(qurry_core::db::QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: false, in_transaction: false, warning: None, editable: None, notices: vec![], cut: vec![] })
+    }
+    let mut h = explorer().await;
+    h.app.fake_db = Some(record);
+    let mut billing = h.app.tree.children["pg|shop"][0].clone();
+    (billing.key, billing.label, billing.schema) = ("pg|shop|billing".into(), "billing".into(), Some("billing".into()));
+    h.app.tree.children.get_mut("pg|shop").unwrap().push(billing);
+    for k in ["pg", "pg|shop"] {
+        h.app.tree.expanded.insert(k.into());
+    }
+    assert!(h.app.tree.select_key("pg|shop|billing"));
+    h.app.new_table();
+    h.app.popup = None;
+    let d = h.app.designer.as_mut().expect("designer");
+    d.def.name = "invoice".into();
+    d.refresh();
+    h.key("o");
+    h.settle().await;
+    let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!("no console") };
+    assert!(c.editor.lines().join("\n").contains("billing.invoice"), "{:?}", c.editor.lines());
+    assert_eq!(c.schema.as_deref(), Some("billing"));
+    assert_eq!(*SEEN.lock().unwrap(), ["SET search_path TO billing, public"]);
+}

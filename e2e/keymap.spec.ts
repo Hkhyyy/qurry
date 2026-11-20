@@ -97,6 +97,35 @@ test("a key given to a grid toolbar command runs it in the focused grid", async 
   await expect(work(page).locator(".grid-scroll.transposed")).toBeVisible();
 });
 
+test("keys given to Columns… and Pin Column: the list opens before a cell is focused, the cursor stays on its cell, the key again unpins", async ({ page }) => {
+  await openApp(page);
+  await bind(page, "Data Grid", "Columns…", "Meta+KeyJ", "⌘j");
+  await bind(page, "Data Grid", "Pin Column", "Meta+KeyK", "⌘k");
+  await treeItem(page, "users").first().dblclick();
+  const heads = () => work(page).locator(".grid-head [role=columnheader] .col-name").allTextContents();
+  const selected = () => work(page).locator('[role=gridcell][aria-selected="true"]').allTextContents();
+  const list = page.locator(".ui-checklist");
+  await work(page).getByRole("gridcell", { name: "user_1", exact: true }).waitFor();
+  await work(page).locator(".grid-scroll").focus();
+  await page.keyboard.press("Meta+KeyJ");
+  await list.getByRole("checkbox", { name: "id" }).click();
+  await page.keyboard.press("Escape");
+  await expect.poll(heads).toEqual(["user_name", "amount", "created_at", "memo"]);
+  // id shown again before the cursor's column: the cursor stays on its cell
+  await work(page).getByRole("gridcell", { name: "user_2", exact: true }).click();
+  await page.keyboard.press("Meta+KeyJ");
+  await list.getByRole("checkbox", { name: "id" }).click();
+  await page.keyboard.press("Escape");
+  await expect.poll(heads).toEqual(["id", "user_name", "amount", "created_at", "memo"]);
+  await expect.poll(selected).toEqual(["user_2"]);
+  await page.keyboard.press("Meta+KeyK");
+  await expect.poll(heads).toEqual(["user_name", "id", "amount", "created_at", "memo"]);
+  await expect.poll(selected).toEqual(["user_2"]);
+  await page.keyboard.press("Meta+KeyK");
+  await expect.poll(heads).toEqual(["id", "user_name", "amount", "created_at", "memo"]);
+  await expect.poll(selected).toEqual(["user_2"]);
+});
+
 test("in search results only command shortcuts act: Backspace given to Go to DDL still edits the search text", async ({ page }) => {
   await openApp(page);
   await bind(page, "Database Explorer", "Go to DDL", "Backspace", "⌫", "⌘b×");

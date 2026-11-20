@@ -43,9 +43,19 @@ The selection the items read is the marked rows (`m`) in the cursor's column, or
 
 When the line is too narrow, the screen's keys go first, then the common keys but `⌃k actions`, then the items (the column limit, Max, Min, Avg, Sum, Not null, Size, Shown columns), then `⌃k actions`; Position stays. The status text keeps up to half the line, as without items; only when an item would otherwise go does it give way down to a third (cut with `…`). A run's or a transfer's line is never cut to make room for items.
 
+## User parameters
+
+A statement with `:name` in code ([which ones count](getting-started.md#user-parameters)) asks before it runs: `⌃↩` or `F5` opens **Parameters**, a field per name in order with the value you gave last time in this console, and the statements under it with the names marked. `Tab` / `⇧Tab` or `↑` `↓` move between the fields, `Enter` runs from any of them, `Esc` runs nothing (`Cancelled: nothing ran`). A value goes in as typed, so type the quotes yourself (`'paid'`). The values stay with the console until it is closed (not saved with the workspace). The editor keeps `:name`; Output, History, the read-only check, the Production confirmation and the dangerous-statement ask all get the statement with the values in. Text that only looks like a parameter: `Esc`, then put it in a string or a quoted name.
+
+## Console schema
+
+A console opened from a PostgreSQL schema (F4 on it, or `⌃l` with the schema or a table in it selected) starts in that schema: its session's `search_path` is set to it, then `public`, and the console's title shows it (`shop · billing · Tx: Auto`), as in the GUI. **⌃k › Switch Schema…** picks another of the data source's schemas (system schemas left out, the current one marked); on MySQL, where a schema is a database, it sends `USE`. The data source's Switch schema option (Options tab) decides: Auto does both, Manual keeps a console opened from a schema in the default one while Switch Schema… still works, Disable turns both off and Switch Schema… says so. If the switch fails, the status line says why and the console stays in the default schema.
+
 ## Log file
 
 **⌃k › Show Log** reveals the log file in Finder (on Linux it opens its folder) and puts its path on the status line ([where it is and what it holds](getting-started.md#where-qurry-keeps-your-settings)). Over SSH nothing opens on your screen; read that path there (`tail -f`). The GUI's is **Help › Show Log**.
+
+**⌃k › Copy Diagnostics** copies what a bug report needs and also saves it to `qurry-diagnostics.txt` in the temp folder (0600; the status line says where): over SSH the terminal may not pass the copy on, the file is there. It holds the versions, the OS, the installed driver plugins, how many data sources of each kind (and how many are Production, Read-only, behind an SSH tunnel or SSM) and the log's last 200 lines, never data source names, hosts, users, databases or secrets ([what exactly](getting-started.md#where-qurry-keeps-your-settings)). The GUI's is **Help › Copy Diagnostics**.
 
 ## Colors
 
@@ -77,6 +87,8 @@ The TUI draws the GUI's themes: the seven built-in ones (Dark, Light, High contr
 
 In truecolor a Data Source colored **Red** (Production) or **Green** takes the theme's Production or Green tint, as in the GUI (custom themes' too; the active tab a stronger one), NULL the theme's NULL color, and a range in the grid the selection's color halfway to the background; 256 and 16 colors keep the Data Source color's own hue, which their palettes can show. A light theme takes the GUI's light colors: the other Data Source colors become pale tints of the same hue, so icons and dim text on them stay readable (the active tab is the stronger one; 256 and 16 colors, which have no pale hues, keep a stronger tint so the hue survives), selections, edited cells and badges stay apart from each other, JSON cells use the theme's JSON colors, and production keeps its red. Every theme works in every color mode above: 256 colors map it to the nearest palette colors (a status line or header never lands on the background's color), 16 colors keep the terminal's own background and use the normal (not the bright) terminal colors in a light theme, and `NO_COLOR` stays monochrome with the same rules in every theme. The tree's object icons and Redis key types keep the TUI's own colors.
 
+A custom theme's images (its Background and Corner pictures, set in the GUI's theme editor: [Settings › Themes](settings.md#themes)) are GUI only: the TUI keeps them in `settings.json` when it saves and never draws them. For a picture behind the TUI, use your terminal's own background image setting (iTerm2, WezTerm, kitty and others have one).
+
 The console draws its SQL in the theme's colors, as the GUI console and the `w` / `o` inputs do: keywords, functions, numbers, strings and comments, a block comment or a `$$` body on every line it spans, with selections, search matches, the caret and error marks drawn over them.
 
 Terminals such as iTerm2, rxvt and Konsole set `COLORFGBG` from their background color; many others (kitty, WezTerm, Ghostty, Alacritty) don't, so on a light background there pick a light theme yourself. Up to 0.3.1 the TUI saved its pick as `"tuiTheme"` (Auto, Dark or Light): it is used until a theme is picked in either app (Auto is Sync with OS).
@@ -107,7 +119,11 @@ The terminal draws the TUI's text, so its font and size are the terminal's: Qurr
 
 ## Long values
 
-In PostgreSQL results a long text, JSON or XML value comes cut, ending with a dim `…`. The value panel (`v`), `Enter` and `y` / `Y` read the whole value by the result's primary key; without a key it stays cut and read-only. **⌃k › Grid Long Values…** sets where values are cut (4,096 characters by default, 0 = never), the same setting as the GUI's ([Settings › Long values](settings.md#long-values)).
+In PostgreSQL and MySQL results a long text, JSON or XML value comes cut, ending with a dim `…`. The value panel (`v`), `Enter` and `y` / `Y` read the whole value by the result's primary key; without a key it stays cut and read-only. **⌃k › Grid Long Values…** sets where values are cut (4,096 characters by default, 0 = never), the same setting as the GUI's ([Settings › Long values](settings.md#long-values)).
+
+## Hidden and pinned columns
+
+In a table tab or a result grid, `H` hides the current column and `P` pins it at the left (again: unpins it); pinned columns stay in view while the grid scrolls, after a double line `║` (when they leave no room for the current column, they scroll away until the cursor is back on one). `C` opens **Columns…** (also **⌃k › Columns…**): every column with its box, `Space` / `Enter` shows or hides one, `⇥` pins it, typing filters, and **Show All** brings back every hidden column. The status line says how many are hidden (`cols 3–8 of 14 · 1 hidden`). A table tab's layout is kept for its table in settings.json `"columnLayout"`, which the GUI reads and writes too; a console result keeps it until it runs again, a Database Admin report while it refreshes. The keys are in F1 › Data grid keys.
 
 ## Small windows
 

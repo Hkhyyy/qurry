@@ -53,6 +53,13 @@ pub struct ConnectionConfig {
     /// kept in connection-tunnels.json too (Store::list), and the DB password of an SSM source is saved under a key they don't read
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssm: Option<SsmConfig>,
+    /// A program whose output is the DB password, run at each login (crate::password_command: RDS / Cloud SQL IAM tokens, #177).
+    /// Never exported or imported (export_to, merge_import). Older apps drop it when they save: the source then asks for a password
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub password_command: String,
+    /// Seconds the command's output is used again for the next login (None = the command runs at every login)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_reuse_secs: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -225,7 +232,7 @@ impl ConnectionConfig {
     }
 
     /// Whether a new console starts in Manual transaction mode: the source's Transaction control, or Production with
-    /// production_manual on (the default). The GUI has the same rule (src/features/tabs/ops.ts startsManual)
+    /// production_manual on (the default). The GUI reads it from ConnectionView::starts_manual (src/features/tabs/ops.ts)
     pub fn starts_manual(&self) -> bool {
         (self.supports_manual() && self.options.tx_manual) || self.production_starts_manual()
     }
@@ -400,7 +407,7 @@ struct Access {
     allow_plaintext: bool,
 }
 
-/// The table a table tab shows, which its column widths are kept for (settings.json "columnWidths"): data source id, database
+/// The table a table tab shows, which its column widths and layout are kept for (settings.json "columnWidths", "columnLayout"): data source id, database
 /// (empty: the source's default, which the store names), schema, table
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TableRef {
@@ -411,7 +418,7 @@ pub struct TableRef {
 }
 
 impl TableRef {
-    /// A saved "columnWidths" entry is this table's
+    /// A saved "columnWidths" or "columnLayout" entry is this table's
     fn is(&self, e: &serde_json::Value) -> bool {
         let f = |k: &str| e.get(k).and_then(|v| v.as_str());
         f("source") == Some(&self.source) && f("database") == Some(&self.database) && f("schema") == Some(&self.schema) && f("table") == Some(&self.table)
@@ -573,7 +580,12 @@ impl Store {
     }
 
     pub fn export_to(&self, path: &std::path::Path) -> AppResult<usize> {
-        let connections = self.saved()?;
+        let mut connections = self.saved()?;
+        // A password command runs a program on the computer that imports the file: never shared (merge_import clears it too)
+        for c in &mut connections {
+            c.password_command.clear();
+            c.password_reuse_secs = None;
+        }
         let n = connections.len();
         let file = ExportFile { app: "dbtool".into(), version: 1, connections };
         crate::secrets::write_private(path, serde_json::to_string_pretty(&file)?.as_bytes())?;
@@ -729,6 +741,9 @@ impl Store {
             if c.id.is_empty() {
                 c.id = uuid::Uuid::new_v4().to_string();
             }
+            // A file never brings a password command (a program to run here): an updated source keeps its own, a new one has none
+            let own = all.iter().find(|e| e.id == c.id).map(|e| (e.password_command.clone(), e.password_reuse_secs));
+            (c.password_command, c.password_reuse_secs) = own.unwrap_or_default();
             match all.iter_mut().find(|e| e.id == c.id) {
                 Some(e) => {
                     // A file without an MCP setting keeps what the source has now (not the legacy default for unset)
@@ -870,9 +885,9 @@ impl Store {
         Ok(next)
     }
 
-    /// Characters of a long text / JSON / XML value a console's PostgreSQL cursor result reads (the whole value comes on demand:
+    /// Characters of a long text / JSON / XML value a console's PostgreSQL cursor or MySQL page reads (the whole value comes on demand:
     /// AppState::fetch_values). 0 = never cut. settings.json "gridCutChars", the GUI and the TUI (AppState::cut_grids); 4096 unless set. At most
-    /// i32::MAX - 1: the cut reads cut + 1 characters with PostgreSQL's left(text, int)
+    /// i32::MAX - 1: the cut reads cut + 1 characters with left(text, int)
     pub fn grid_cut_chars(&self) -> usize {
         self.settings().get("gridCutChars").and_then(|v| v.as_u64()).map_or(4096, |n| n.min(i32::MAX as u64 - 1) as usize)
     }
@@ -899,12 +914,32 @@ impl Store {
         Ok(self.status_bar_items())
     }
 
-    /// The settings.json "columnWidths" entries: one per table that has set widths
-    fn column_width_entries(&self) -> Vec<serde_json::Value> {
-        match self.settings().remove("columnWidths") {
+    /// The entries of a per-table settings.json list ("columnWidths", "columnLayout"): one per table that has some
+    fn table_entries(&self, key: &str) -> Vec<serde_json::Value> {
+        match self.settings().remove(key) {
             Some(serde_json::Value::Array(v)) => v,
             _ => vec![],
         }
+    }
+
+    /// The entry of `t` in a per-table list, found as saved
+    fn table_entry(&self, key: &str, t: &TableRef) -> Option<serde_json::Value> {
+        let t = self.table_ref(t);
+        self.table_entries(key).into_iter().find(|e| t.is(e))
+    }
+
+    /// Replaces `t`'s entry in a per-table list with `fields` (an object) and the table's names, or removes it when None
+    fn save_table_entry(&self, key: &str, t: &TableRef, fields: Option<serde_json::Value>) -> AppResult<()> {
+        let t = self.table_ref(t);
+        let mut all = self.table_entries(key);
+        all.retain(|e| !t.is(e));
+        if let Some(serde_json::Value::Object(mut e)) = fields {
+            for (k, v) in [("source", &t.source), ("database", &t.database), ("schema", &t.schema), ("table", &t.table)] {
+                e.insert(k.into(), v.as_str().into());
+            }
+            all.push(e.into());
+        }
+        self.set_setting(key, all.into())
     }
 
     /// `t` with its database named: a tab on the source's default database may name none (the GUI's), or the default (the TUI's)
@@ -917,8 +952,7 @@ impl Store {
 
     /// The widths a user gave a table tab's columns (GUI and TUI), empty when none; the others keep their computed widths
     pub fn column_widths(&self, t: &TableRef) -> crate::format::ColumnWidths {
-        let t = self.table_ref(t);
-        self.column_width_entries().iter().find(|e| t.is(e)).and_then(|e| e.get("widths")).map(crate::format::column_widths).unwrap_or_default()
+        self.table_entry("columnWidths", t).and_then(|e| e.get("widths").map(crate::format::column_widths)).unwrap_or_default()
     }
 
     /// Set some of a table's column widths, on what the file holds now (the GUI and the TUI may both have changed it); returns what is saved.
@@ -942,25 +976,31 @@ impl Store {
     }
 
     fn save_column_widths(&self, t: &TableRef, widths: &crate::format::ColumnWidths) -> AppResult<()> {
-        let t = self.table_ref(t);
-        let mut all = self.column_width_entries();
-        all.retain(|e| !t.is(e));
-        if !widths.is_empty() {
-            all.push(serde_json::json!({ "source": t.source, "database": t.database, "schema": t.schema, "table": t.table, "widths": widths }));
-        }
-        self.set_setting("columnWidths", all.into())
+        self.save_table_entry("columnWidths", t, (!widths.is_empty()).then(|| serde_json::json!({ "widths": widths })))
+    }
+
+    /// The columns a user hid and pinned in a table tab (GUI and TUI; settings.json "columnLayout"), the default when none.
+    /// Reset Widths leaves it alone
+    pub fn column_layout(&self, t: &TableRef) -> crate::format::ColumnLayout {
+        self.table_entry("columnLayout", t).map(|e| crate::format::column_layout(&e)).unwrap_or_default()
+    }
+
+    /// Replaces a table's hidden and pinned columns; the default layout removes its entry
+    pub fn set_column_layout(&self, t: &TableRef, l: &crate::format::ColumnLayout) -> AppResult<()> {
+        self.save_table_entry("columnLayout", t, (!l.is_empty()).then(|| serde_json::json!({ "hidden": l.hidden, "pinned": l.pinned })))
     }
 
     /// The theme settings the GUI and the TUI share: "theme" (a theme id or "system"), "themeSync" and "customThemes". Before
     /// 0.3.2 only the TUI kept its theme here ("tuiTheme": auto · dark · light, auto being Sync with OS); it stands in until a
-    /// theme is picked. A custom theme this version can't read is left out
+    /// theme is picked. A custom theme this version can't read is left out (and kept in the file); of one it can, an image slot it
+    /// can't draw
     pub fn theme_settings(&self) -> ThemeSettings {
         let mut all = self.settings();
         let str_of = |v: Option<serde_json::Value>| v.and_then(|v| v.as_str().map(String::from));
         let theme = str_of(all.remove("theme")).or_else(|| str_of(all.remove("tuiTheme")).map(|t| if t == "auto" { theme::SYSTEM.into() } else { t }));
         let sync = all.remove("themeSync").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
         let custom = match all.remove("customThemes") {
-            Some(serde_json::Value::Array(v)) => v.into_iter().filter_map(|t| serde_json::from_value::<CustomTheme>(t).ok()).filter(|t| theme::check(t).is_ok()).collect(),
+            Some(serde_json::Value::Array(v)) => v.iter().filter_map(theme::custom_from_value).collect(),
             _ => vec![],
         };
         ThemeSettings { theme, sync, custom }
@@ -988,34 +1028,71 @@ impl Store {
     pub fn save_custom_theme(&self, t: &CustomTheme) -> AppResult<CustomTheme> {
         theme::check(t).map_err(AppError::Msg)?;
         let mut t = CustomTheme { name: t.name.trim().to_string(), ..t.clone() };
-        let mut list = self.theme_settings().custom;
+        // The file's entries as they are: one this version can't read, and fields it doesn't know, stay
+        let mut list = self.custom_entries();
+        let id_of = |v: &serde_json::Value| v.get("id").and_then(|i| i.as_str()).map(String::from);
         if t.id.is_empty() {
-            t.id = (1..).map(|n| format!("custom-{n}")).find(|id| !list.iter().any(|c| &c.id == id)).unwrap_or_default();
+            t.id = (1..).map(|n| format!("custom-{n}")).find(|id| !list.iter().any(|v| id_of(v).as_ref() == Some(id))).unwrap_or_default();
         } else if !t.id.starts_with("custom-") {
             return Err(AppError::Msg(format!("A custom theme's id starts with \"custom-\", not \"{}\"", t.id)));
         }
-        match list.iter_mut().find(|c| c.id == t.id) {
-            Some(c) => *c = t.clone(),
-            None => list.push(t.clone()),
+        match list.iter_mut().find(|v| id_of(v).as_ref() == Some(&t.id)) {
+            Some(v) => *v = theme::custom_to_value(Some(v), &t),
+            None => list.push(theme::custom_to_value(None, &t)),
         }
-        self.set_setting("customThemes", serde_json::to_value(&list)?)?;
+        self.set_setting("customThemes", list.into())?;
+        self.prune_theme_images();
         Ok(t)
+    }
+
+    /// settings.json "customThemes" as written
+    fn custom_entries(&self) -> Vec<serde_json::Value> {
+        match self.settings().remove("customThemes") {
+            Some(serde_json::Value::Array(v)) => v,
+            _ => vec![],
+        }
     }
 
     /// Delete a custom theme; where it is picked (the theme, or a Sync with OS side) its base takes its place
     pub fn delete_custom_theme(&self, id: &str) -> AppResult<()> {
         let s = self.theme_settings();
-        let Some(gone) = s.custom.iter().find(|c| c.id == id) else { return Ok(()) };
-        let list: Vec<_> = s.custom.iter().filter(|c| c.id != id).collect();
-        self.set_setting("customThemes", serde_json::to_value(&list)?)?;
+        let mut list = self.custom_entries();
+        let Some(at) = list.iter().position(|v| v.get("id").and_then(|i| i.as_str()) == Some(id)) else { return Ok(()) };
+        let gone = list.remove(at);
+        let base = gone.get("base").and_then(|b| b.as_str()).filter(|b| theme::builtin(b).is_some()).unwrap_or("dark").to_string();
+        self.set_setting("customThemes", list.into())?;
         if s.theme.as_deref() == Some(id) {
-            self.set_setting("theme", gone.base.clone().into())?;
+            self.set_setting("theme", base.clone().into())?;
         }
         if s.sync.dark == id || s.sync.light == id {
-            let side = |v: &String| if v == id { gone.base.clone() } else { v.clone() };
+            let side = |v: &String| if v == id { base.clone() } else { v.clone() };
             self.set_setting("themeSync", serde_json::to_value(theme::ThemeSync { dark: side(&s.sync.dark), light: side(&s.sync.light) })?)?;
         }
+        self.prune_theme_images();
         Ok(())
+    }
+
+    fn theme_images_dir(&self) -> PathBuf {
+        self.dir().join(crate::theme_images::DIR)
+    }
+
+    /// Settings › Theme › Images › Choose…: the picked image copied into the config folder (PNG, JPEG, GIF or WebP; 4 MB still,
+    /// 8 MB animated); its file name, for the theme to keep
+    pub fn import_theme_image(&self, src: &Path) -> AppResult<String> {
+        crate::theme_images::import(&self.theme_images_dir(), src)
+    }
+
+    /// A theme image's bytes (a name `import_theme_image` gave)
+    pub fn theme_image(&self, name: &str) -> AppResult<Vec<u8>> {
+        crate::theme_images::read(&self.theme_images_dir(), name)
+    }
+
+    /// After a custom theme is saved or deleted: the images no theme uses go (not ones copied in the last hour, which a theme being
+    /// edited may use). Saving the theme doesn't wait on it or fail with it. A file named in a theme this version can't read is kept
+    fn prune_theme_images(&self) {
+        let entries = self.custom_entries();
+        let files: Vec<String> = entries.iter().flat_map(|e| e.get("images").and_then(|i| i.as_object()).into_iter().flat_map(|i| i.values().filter_map(|s| s.get("file")?.as_str().map(String::from)))).collect();
+        let _ = crate::theme_images::prune(&self.theme_images_dir(), files.iter().map(String::as_str));
     }
 
     /// Settings › Appearance › Theme › Import…: the file read and checked (a large one is refused unread), not saved yet
@@ -1098,6 +1175,78 @@ mod tests {
         assert_eq!(saved, serde_json::json!({ "updateChannel": "beta", "later": 1 }));
     }
 
+    /// A custom theme's images (#202) survive everything else that rewrites settings.json (the TUI picks a theme, Sync with OS,
+    /// another theme saved or deleted); an image no theme uses goes once its theme is deleted (after its hour of grace)
+    #[test]
+    fn theme_images_are_kept_by_every_settings_write_and_pruned_when_unused() {
+        use qurry_shared::theme::{BackgroundImage, CornerImage, ThemeImages, ThemeSync};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let pick = |name: &str, bytes: &[u8]| {
+            let p = dir.path().join(name);
+            fs::write(&p, bytes).unwrap();
+            store.import_theme_image(&p).unwrap()
+        };
+        let bg = pick("big.png", b"\x89PNG\r\n\x1a\nillustration");
+        let corner = pick("small.gif", b"GIF89a\x01\x00\x01\x00\x00\x00\x00\x3b");
+        assert!(store.import_theme_image(&dir.path().join("nothing.png")).is_err());
+        let images = ThemeImages {
+            background: Some(BackgroundImage { file: bg.clone(), opacity: 15, fill: "contain".into(), anchor: "right bottom".into() }),
+            corner: Some(CornerImage { file: corner.clone(), corner: "right bottom".into(), size: 20, opacity: 100 }),
+        };
+        let pics = store.save_custom_theme(&CustomTheme { name: "Pics".into(), base: "dark".into(), images: images.clone(), ..Default::default() }).unwrap();
+        let plain = store.save_custom_theme(&CustomTheme { name: "Plain".into(), base: "light".into(), ..Default::default() }).unwrap();
+        // What the TUI and the GUI's other settings do
+        store.set_theme(&plain.id).unwrap();
+        store.set_theme_sync(&ThemeSync { dark: pics.id.clone(), light: plain.id.clone() }).unwrap();
+        store.save_custom_theme(&CustomTheme { name: "Plain 2".into(), ..plain.clone() }).unwrap();
+        let other = store.save_custom_theme(&CustomTheme { name: "Gone".into(), base: "hc".into(), ..Default::default() }).unwrap();
+        store.delete_custom_theme(&other.id).unwrap();
+        let read = Store::new(dir.path().join("cfg")).theme_settings();
+        assert_eq!(read.custom.iter().find(|t| t.id == pics.id).unwrap().images, images);
+        assert_eq!(store.theme_image(&bg).unwrap(), b"\x89PNG\r\n\x1a\nillustration");
+        assert!(store.theme_image("../settings.json").is_err());
+        // Deleted: its images go, unless copied within the hour
+        let images_dir = dir.path().join("cfg").join(crate::theme_images::DIR);
+        store.delete_custom_theme(&pics.id).unwrap();
+        assert!(images_dir.join(&bg).exists(), "an hour of grace");
+        for f in [&bg, &corner] {
+            fs::File::options().write(true).open(images_dir.join(f)).unwrap().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200)).unwrap();
+        }
+        store.save_custom_theme(&CustomTheme { name: "Plain 3".into(), ..plain }).unwrap();
+        assert!(!images_dir.join(&bg).exists() && !images_dir.join(&corner).exists());
+    }
+
+    /// What a later version wrote in "customThemes" survives this one: a theme it can't read stays in the file (and its id taken), and
+    /// of one it can, an image slot it can't draw is left out of the theme and kept in the file when the theme is saved
+    #[test]
+    fn custom_themes_this_version_cant_read_are_kept_in_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let later = serde_json::json!([
+            { "id": "custom-1", "name": "Later base", "base": "monokai", "colors": {} },
+            { "id": "custom-2", "name": "Later fill", "base": "dark", "colors": { "bg": "#101010" }, "glow": true,
+              "images": { "background": { "file": "0123456789abcdef.png", "opacity": 15, "fill": "stretch", "anchor": "center" },
+                          "corner": { "file": "fedcba9876543210.gif", "corner": "right bottom", "size": 20, "opacity": 100 } } }
+        ]);
+        store.set_setting("customThemes", later.clone()).unwrap();
+        let read = store.theme_settings().custom;
+        assert_eq!(read.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["custom-2"], "the theme with the later fill is kept");
+        assert!(read[0].images.background.is_none() && read[0].images.corner.is_some());
+        // The GUI saves it (renamed) and adds a theme: the unread entry, field and slot stay; the new id doesn't take custom-1
+        store.save_custom_theme(&CustomTheme { name: "Renamed".into(), ..read[0].clone() }).unwrap();
+        let added = store.save_custom_theme(&CustomTheme { name: "New".into(), base: "light".into(), ..Default::default() }).unwrap();
+        assert_eq!(added.id, "custom-3");
+        let file = store.custom_entries();
+        assert_eq!(file[0], later[0]);
+        assert_eq!((file[1]["name"].as_str(), &file[1]["glow"]), (Some("Renamed"), &serde_json::json!(true)));
+        assert_eq!(file[1]["images"]["background"], later[1]["images"]["background"]);
+        assert_eq!(file[1]["images"]["corner"], later[1]["images"]["corner"]);
+        // Deleting another theme leaves them too
+        store.delete_custom_theme(&added.id).unwrap();
+        assert_eq!(store.custom_entries()[..2], file[..2]);
+    }
+
     /// Theme, Sync with OS and custom themes round trip through settings.json for both apps; the TUI's older "tuiTheme" stands in
     /// until a theme is picked; deleting the picked custom theme leaves its base picked; theme files are checked
     #[test]
@@ -1112,7 +1261,7 @@ mod tests {
         assert_eq!(store.theme_settings().theme.as_deref(), Some(SYSTEM), "the TUI's Auto is Sync with OS");
         store.set_theme("dracula").unwrap();
         assert!(store.set_theme("monokai").unwrap_err().to_string().contains("no theme"));
-        let mine = CustomTheme { id: String::new(), name: " Night ".into(), base: "dracula".into(), colors: [("bg".into(), "#101010".into())].into() };
+        let mine = CustomTheme { id: String::new(), name: " Night ".into(), base: "dracula".into(), colors: [("bg".into(), "#101010".into())].into(), ..Default::default() };
         let saved = store.save_custom_theme(&mine).unwrap();
         assert_eq!((saved.id.as_str(), saved.name.as_str()), ("custom-1", "Night"));
         assert_eq!(store.save_custom_theme(&mine).unwrap().id, "custom-2", "Save as new theme twice: two themes");
@@ -1309,6 +1458,46 @@ mod tests {
         assert_eq!(store.column_widths(&t("orders")).len(), 1);
     }
 
+    /// Hidden and pinned columns per table: none until set, other tables and databases untouched, the other app reads it, Reset
+    /// Widths leaves it, the default layout removes the entry
+    #[test]
+    fn column_layout_setting() {
+        use crate::format::{ColumnLayout, ColumnWidths};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let t = |table: &str| TableRef { source: "pg".into(), database: "shop".into(), schema: "public".into(), table: table.into() };
+        let l = |hidden: &[&str], pinned: &[&str]| ColumnLayout { hidden: hidden.iter().map(|s| s.to_string()).collect(), pinned: pinned.iter().map(|s| s.to_string()).collect() };
+        assert_eq!(store.column_layout(&t("orders")), ColumnLayout::default());
+        store.set_update_channel(crate::update::Channel::Beta).unwrap();
+        store.set_column_layout(&t("orders"), &l(&["memo"], &["order_no", "id"])).unwrap();
+        store.set_column_layout(&t("users"), &l(&[], &["name"])).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), l(&["memo"], &["order_no", "id"]));
+        // The other app (the TUI) reads it, and its change replaces the table's layout
+        let other = Store::new(dir.path().join("cfg"));
+        assert_eq!(other.column_layout(&t("orders")), l(&["memo"], &["order_no", "id"]));
+        other.set_column_layout(&t("orders"), &l(&["memo", "note"], &[])).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), l(&["memo", "note"], &[]));
+        assert_eq!(store.column_layout(&t("users")), l(&[], &["name"]), "another table keeps its own");
+        assert_eq!(store.column_layout(&TableRef { database: "postgres".into(), ..t("orders") }), ColumnLayout::default(), "another database's table of the same name");
+        // Widths and their Reset don't touch it
+        store.set_column_widths(&t("orders"), &ColumnWidths::from([("memo".into(), 20)])).unwrap();
+        store.reset_column_widths(&t("orders")).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), l(&["memo", "note"], &[]));
+        // The default layout removes the entry
+        store.set_column_layout(&t("orders"), &ColumnLayout::default()).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), ColumnLayout::default());
+        let file = fs::read_to_string(dir.path().join("cfg/settings.json")).unwrap();
+        assert!(!file.contains("\"orders\""), "{file}");
+        assert_eq!(store.update_channel(), crate::update::Channel::Beta);
+        // A file an older or broken app wrote: what can't be read is skipped
+        fs::write(dir.path().join("cfg/settings.json"), r#"{"columnLayout": [3, {"source": "pg", "database": "shop", "schema": "public", "table": "orders", "hidden": "memo", "pinned": ["id", 2]}]}"#).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), l(&[], &["id"]));
+        fs::write(dir.path().join("cfg/settings.json"), r#"{"columnLayout": {"not": "a list"}}"#).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), ColumnLayout::default());
+        store.set_column_layout(&t("orders"), &l(&["memo"], &[])).unwrap();
+        assert_eq!(store.column_layout(&t("orders")), l(&["memo"], &[]));
+    }
+
     #[test]
     fn saved_secrets_follow_the_server() {
         let a: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "x", "name": "a", "kind": "postgres", "host": "db.internal", "port": 5432, "user": "app",
@@ -1458,7 +1647,7 @@ mod tests {
             ssh: None,
             password_saved: false,
             ssh_secret_saved: false,
-            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         }
     }
 
@@ -1516,6 +1705,38 @@ mod tests {
         let names: Vec<_> = b.list().unwrap().into_iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["PROD", "DEV"]);
         assert_eq!(b.get("1").unwrap().unwrap().color.as_deref(), Some("#5c2b2b"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A password command (#177) never leaves in an export, and a file that has one (hand-edited, another tool) can't bring it:
+    /// a new source gets none, an updated one keeps its own
+    #[test]
+    fn password_commands_are_not_exported_or_imported() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let a = Store::new(base.join("a"));
+        let mut c = conn("1", "IAM");
+        (c.password_command, c.password_reuse_secs) = ("/opt/homebrew/bin/aws rds generate-db-auth-token".into(), Some(600));
+        a.save(&c).unwrap();
+        assert_eq!(a.get("1").unwrap().unwrap().password_command, c.password_command, "kept in connections.json");
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("export.json");
+        a.export_to(&file).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(!text.contains("passwordCommand") && !text.contains("passwordReuseSecs") && !text.contains("generate-db-auth-token"), "{text}");
+        // A file carrying one anyway
+        let carried = base.join("carried.json");
+        std::fs::write(&carried, text.replacen(r#""name": "IAM""#, r#""name": "IAM", "passwordCommand": "/bin/sh -c id", "passwordReuseSecs": 5"#, 1)).unwrap();
+        assert!(std::fs::read_to_string(&carried).unwrap().contains("passwordCommand"));
+        let b = Store::new(base.join("b"));
+        assert_eq!(import_all(&b, &carried), (1, 0, vec![]));
+        let got = b.get("1").unwrap().unwrap();
+        assert!(got.password_command.is_empty() && got.password_reuse_secs.is_none());
+        let mut own = c.clone();
+        own.password_command = "/usr/local/bin/mine".into();
+        b.save(&own).unwrap();
+        assert_eq!(import_all(&b, &carried), (0, 1, vec![]));
+        let got = b.get("1").unwrap().unwrap();
+        assert_eq!((got.password_command.as_str(), got.password_reuse_secs), ("/usr/local/bin/mine", Some(600)));
         let _ = std::fs::remove_dir_all(&base);
     }
 

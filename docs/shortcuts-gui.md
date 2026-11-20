@@ -160,6 +160,9 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `click header · ⌥ click` | Sort · add to multi-column sort |
 | `⌃⌥←` | Narrow Column |
 | `⌃⌥→` | Widen Column |
+| `—` | Hide Column |
+| `—` | Pin Column |
+| `—` | Columns… |
 | `drag · double-click a header's right edge` | Resize the column · fit it to its content (right-click a header: Fit All Columns, Reset Widths) |
 
 ## Query history & Redis browser
@@ -178,6 +181,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 |---|---|
 | `—` | Edit Keymap… |
 | `—` | Show Log |
+| `—` | Copy Diagnostics |
 | `—` | Export Data Sources… |
 | `—` | Import Data Sources… |
 | `—` | Theme: Dark |

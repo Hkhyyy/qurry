@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::{PAction, COLUMNS};
 
 /// A yes pressed during a quiet confirm's pause (TLS_ASK_GRACE) doesn't count: say so instead of ignoring it
 const TOO_SOON: &str = "Wait a moment, then answer (n / Esc cancels)";
@@ -75,23 +76,7 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
             }
             app.popup = Some(Popup::Help { sel, scroll, record, message });
         }
-        Popup::Message { .. } => {
-            if !matches!(k.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1)) {
-                app.popup = Some(popup);
-            }
-        }
-        // Closing it goes back to what it was opened from. A question under it comes up quiet, so a second press meant for the
-        // notice (or typing that goes on) doesn't answer it
-        Popup::Note { title, text, back } => {
-            app.popup = match k.code {
-                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1) => Some(match *back {
-                    Popup::Confirm { text, sql, on_yes, .. } => Popup::Confirm { text, sql, on_yes, opened: Some(Instant::now()) },
-                    Popup::AllowPlaintext { text, on_yes, .. } => Popup::AllowPlaintext { text, on_yes, opened: Instant::now() },
-                    back => back,
-                }),
-                _ => Some(Popup::Note { title, text, back }),
-            };
-        }
+        p @ (Popup::Message { .. } | Popup::Note { .. }) => message_key(app, p, k),
         // n / Esc always cancel. A confirm that came up on its own (`opened`) takes y / Enter only after a pause, like AllowPlaintext below
         Popup::Confirm { text, sql, on_yes, opened } => match k.code {
             KeyCode::Char('n') | KeyCode::Esc => {}
@@ -246,8 +231,18 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                 KeyCode::Up => p.sel = p.sel.saturating_sub(1),
                 KeyCode::PageDown => p.sel = (p.sel + 15).min(n.saturating_sub(1)),
                 KeyCode::PageUp => p.sel = p.sel.saturating_sub(15),
-                // A checklist (⌃k › Status Bar Items…): Space toggles as Enter does, unless a filter is being typed
-                KeyCode::Enter | KeyCode::Char(' ') if k.code == KeyCode::Enter || (p.input.lines().concat().is_empty() && p.items.iter().all(|i| matches!(i.action, crate::app::PAction::StatusItem(_)))) => {
+                // Columns…: ⇥ pins or unpins the row's column
+                KeyCode::Tab if p.title == COLUMNS => {
+                    if let Some(PAction::Column(c)) = App::palette_matches(&p).get(p.sel).map(|x| x.action.clone()) {
+                        app.popup = Some(Popup::Palette(p));
+                        return app.pick_column(c, true);
+                    }
+                }
+                // A checklist (⌃k › Status Bar Items…): Space toggles as Enter does, unless a filter is being typed. In Columns… always
+                // (column names have no spaces to type)
+                KeyCode::Enter | KeyCode::Char(' ')
+                    if k.code == KeyCode::Enter || p.title == COLUMNS || (p.input.lines().concat().is_empty() && p.items.iter().all(|i| matches!(i.action, PAction::StatusItem(_)))) =>
+                {
                     if let Some(it) = App::palette_matches(&p).get(p.sel).map(|x| (*x).clone()) {
                         // Shown while it runs, as on a click: an item can come back to it (Production Log's note)
                         app.popup = Some(Popup::Palette(p));
@@ -350,7 +345,56 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
             }
             app.popup = Some(Popup::ConnForm(form));
         }
+        p @ Popup::Params { .. } => params_key(app, p, k),
     }
+}
+
+/// A Message or Note: Esc / Enter / q / F1 close it, ↑↓ PgUp PgDn Home End scroll a text taller than the window (the draw keeps
+/// the scroll in range). A Note closing goes back to what it was opened from; a question under it comes up quiet, so a second
+/// press meant for the notice (or typing that goes on) doesn't answer it
+fn message_key(app: &mut App, p: Popup, k: KeyEvent) {
+    let page = app.hits.popup_page.max(1);
+    let s = app.popup_scroll;
+    app.popup_scroll = match k.code {
+        KeyCode::Down | KeyCode::Char('j') => s.saturating_add(1),
+        KeyCode::Up | KeyCode::Char('k') => s.saturating_sub(1),
+        KeyCode::PageDown | KeyCode::Char(' ') => s.saturating_add(page),
+        KeyCode::PageUp => s.saturating_sub(page),
+        KeyCode::Home => 0,
+        KeyCode::End => u16::MAX,
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1) => {
+            app.popup_scroll = 0;
+            if let Popup::Note { back, .. } = p {
+                app.popup = Some(match *back {
+                    Popup::Confirm { text, sql, on_yes, .. } => Popup::Confirm { text, sql, on_yes, opened: Some(Instant::now()) },
+                    Popup::AllowPlaintext { text, on_yes, .. } => Popup::AllowPlaintext { text, on_yes, opened: Instant::now() },
+                    back => back,
+                });
+            }
+            return;
+        }
+        _ => s,
+    };
+    app.popup = Some(p);
+}
+
+/// The Parameters popup (#173): Tab / ↓ the next field, ⇧Tab / ↑ the one before (around), Enter runs with every value from any
+/// field, Esc runs nothing; other keys edit the focused field
+fn params_key(app: &mut App, p: Popup, k: KeyEvent) {
+    let Popup::Params { mut fields, mut sel, preview, kind, on_ok } = p else { return };
+    let n = fields.len();
+    match k.code {
+        KeyCode::Esc => return app.status = "Cancelled: nothing ran".into(),
+        KeyCode::Enter => return on_ok(app, fields.into_iter().map(|(name, input)| (name, input.lines().join(""))).collect()),
+        KeyCode::Tab | KeyCode::Down => sel = (sel + 1) % n,
+        KeyCode::BackTab | KeyCode::Up => sel = (sel + n - 1) % n,
+        // A value is one line (⌃M would add a second one the field doesn't show)
+        KeyCode::Char('m') if k.modifiers.contains(KeyModifiers::CONTROL) => {}
+        _ => {
+            fields[sel].1.input(k);
+        }
+    }
+    app.popup = Some(Popup::Params { fields, sel, preview, kind, on_ok });
 }
 
 #[cfg(test)]
@@ -430,7 +474,7 @@ mod tests {
         let mut h = Harness::new().await;
         let cfg = ConnectionConfig {
             id: "c1".into(), name: "pg".into(), kind: DbKind::Postgres, host: "localhost".into(), port: 5432, user: "postgres".into(), database: "postgres".into(),
-            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         h.app.state.store.save(&cfg).unwrap();
         h.app.reload_conns();
@@ -534,7 +578,7 @@ mod tests {
         let mut h = Harness::new().await;
         let cfg = ConnectionConfig {
             id: "c1".into(), name: "pg".into(), kind: DbKind::Postgres, host: "qurry.invalid".into(), port: 1, user: "postgres".into(), database: "postgres".into(),
-            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None, password_command: String::new(), password_reuse_secs: None,
         };
         h.app.conn_form(Some(cfg));
         h.key("Ctrl+t");
@@ -731,7 +775,7 @@ mod tests {
         let light_bg = status_bg(&mut h);
         assert!(h.app.startup_notice().unwrap().contains("⌃k › Theme… › Dark"), "{:?}", h.app.startup_notice());
         // A custom theme saved by the GUI meanwhile shows up when the list opens
-        let mine = CustomTheme { id: String::new(), name: "Night shift".into(), base: "dracula".into(), colors: [("sel".into(), "#123456".into())].into() };
+        let mine = CustomTheme { id: String::new(), name: "Night shift".into(), base: "dracula".into(), colors: [("sel".into(), "#123456".into())].into(), ..Default::default() };
         h.app.state.store.save_custom_theme(&mine).unwrap();
         h.app.palette_theme();
         let s = h.screen(120, 30);

@@ -93,6 +93,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | Key | Action |
 |---|---|
 | — | Show Log |
+| — | Copy Diagnostics |
 | — | Import Data Sources… (DataGrip, IntelliJ, DBeaver, a Qurry export) |
 | — | Data Source Properties… |
 | — | New Data Source… |
@@ -106,8 +107,12 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | — | Fit Column to its content (the rows loaded so far; again: back to the width before) |
 | — | Fit All Columns |
 | — | Reset Column Widths (back to the computed widths) |
+| — | Hide Column (the current one) |
+| — | Pin Column at the left (again: unpin) |
+| — | Columns… (show, hide and pin each column) |
 | — | Explain Analyze (runs the statement: real times and row counts) |
 | — | Query Execution Settings (what ⌃Enter runs) |
+| — | Switch Schema… |
 | — | Clear Console (delete all text) |
 | — | Edit Data (open table) |
 | — | Revert Changes |
@@ -159,7 +164,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | — | Keyword Case… (UPPER or lower SQL keywords as you type and in Reformat Code; shared with the GUI) |
 | — | Result Tabs… |
 | — | Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI) |
-| — | Grid Long Values… (where long text, JSON and XML values are cut in PostgreSQL results, 0 = never; shared with the GUI) |
+| — | Grid Long Values… (where long text, JSON and XML values are cut in PostgreSQL and MySQL results, 0 = never; shared with the GUI) |
 | — | Status Bar Items… (what the status line shows for a grid: position, shown columns, Sum, Size …; shared with the GUI) |
 | — | Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background) |
 | — | Check for Updates |
@@ -191,6 +196,9 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `<` | Narrow Column (the current one) |
 | `>` | Widen Column (the current one) |
 | `=` | Fit Column to its content (the rows loaded so far; again: back to the width before) |
+| `H` | Hide Column (the current one) |
+| `P` | Pin Column at the left (again: unpin) |
+| `C` | Columns… (show, hide and pin each column) |
 | `⌃z` | Revert Changes |
 | `a / Insert` | Add Row |
 | `d / Delete` | Delete Row |
@@ -250,7 +258,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `r` | Reload (table data) |
 | `y  ⌘c` | Copy cell value (a selected range or marked rows: as TSV, pastes into spreadsheets as cells) |
 | `⌘v` | Paste into cells from the selected one (TSV or CSV fills several, an empty field is NULL; extra lines add rows; table data) |
-| `…  (dim, at a value's end)` | Cut at ⌃k › Grid Long Values… (PostgreSQL): v, Enter and y read the whole value by the primary key |
+| `…  (dim, at a value's end)` | Cut at ⌃k › Grid Long Values… (PostgreSQL, MySQL): v, Enter and y read the whole value by the primary key |
 | `Esc` | Back (query results: to the editor) |
 
 ## DDL / routine view

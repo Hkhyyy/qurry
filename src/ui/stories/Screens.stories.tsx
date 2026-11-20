@@ -6,6 +6,7 @@ import "../../lib/mock";
 import { monaco } from "../../lib/monaco";
 import App from "../../App";
 import { ResultTabsField, SettingsDialog, type SettingsPage } from "../../features/settings/SettingsDialog";
+import { askTextChoice } from "../../lib/dialogs";
 import { setFont } from "../../lib/prefs";
 import { saveCustomTheme, setThemeSync } from "../../lib/theme";
 import { dialectOf, type ConnectionView, type QueryResult, type SearchScope } from "../../lib/api";
@@ -32,6 +33,7 @@ import { TableEditor } from "../../components/TableEditor";
 import { TableStructureView } from "../../components/TableStructure";
 import { Switcher } from "../../components/Switcher";
 import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Transfer";
+import { TextDialog } from "../../components/TextDialog";
 import { UpdateDialog } from "../../components/UpdateDialog";
 import { WorkspaceBar } from "../../components/WorkspaceBar";
 import { StatusBar } from "../../features/settings/StatusBar";
@@ -40,6 +42,10 @@ import { ConfirmHost, Menu, TabItem, TabStrip, Text, Toasts } from "..";
 import { ReconnectToastView } from "../../components/ReconnectToasts";
 import type { ReconnectToast } from "../../lib/reconnect";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
+import { inSmallWindow } from "./SmallWindow";
+import { BackgroundWindow, InEditor, SAMPLE_BACKGROUND, SAMPLE_CORNER } from "./BackgroundWindow";
+import { MOCK_IMAGES } from "../../lib/mock";
+import { newBackgroundSlot, type ThemeImages } from "../../lib/themeImages";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
 const meta: Meta = { title: "GUI/5 Screens", parameters: { layout: "fullscreen" } };
@@ -197,6 +203,49 @@ export const QuickSwitchTheme: S = {
   },
 };
 
+/** Theme images (#202). A custom theme carries up to two images (PNG, JPEG, WebP or GIF, each
+ *  copied into the config folder), in two independent slots of the section over the editor's preview, each optional, both can be on:
+ *  Background, drawn as it is (DataGrip's Set Background Image, 15% by default) behind the SQL editor and the result grid only; a mark
+ *  on its slider shows the opacity up to which every color keeps its contrast minimum over the image's lightest and darkest pixels
+ *  (0–3% in the built-in themes, 20% in High contrast), and above it the colors that fall below are counted (listed in Opacity's ⓘ),
+ *  saved with their warning, never changed. Corner, scaled down (10–40% of the window's height) in front of the window, 16 px from the
+ *  edges, under every menu, dialog, toast and popup; clicks pass through it; no contrast warning (it is placed on purpose). A slot
+ *  without an image is one line (Choose…). The images apply live to the window behind Settings; hold Peek (or Space on it) to fade
+ *  Settings and see it. GIF and animated WebP play in either slot, and stop on their first frame while Reduce motion is on or the
+ *  window isn't active: in Storybook it plays once the canvas has focus (click into it), and the Reduce motion control stands in for
+ *  the system setting. GUI only: the TUI keeps the field and never draws it (a terminal draws characters; its own background image shows
+ *  there). The images are the mock's made-up ones (src/lib/mock-images) */
+const bgEditor = (initial: ThemeImages): S => ({ render: () => <InEditor initial={initial} /> });
+const motion = { args: { reduceMotion: false }, argTypes: { reduceMotion: { control: "boolean", name: "Reduce motion" } } };
+const bgWindow = (theme: string, images: ThemeImages): S => ({
+  ...motion,
+  globals: { theme },
+  render: (args) => <BackgroundWindow images={images} still={!!(args as { reduceMotion?: boolean }).reduceMotion} />,
+});
+const BOTH: ThemeImages = { background: SAMPLE_BACKGROUND, corner: SAMPLE_CORNER };
+const BG: ThemeImages = { background: SAMPLE_BACKGROUND };
+const CORNER: ThemeImages = { corner: SAMPLE_CORNER };
+export const ThemeImagesEditor = bgEditor(BOTH);
+export const ThemeImagesEditorBackgroundOnly = bgEditor(BG);
+export const ThemeImagesEditorNoImages = bgEditor({});
+/** Peek held: Settings fades and the window behind it shows the images as they are now */
+export const ThemeImagesEditorPeek: S = {
+  ...bgEditor(BOTH),
+  play: async ({ canvasElement }) => {
+    const peek = await within(canvasElement.ownerDocument.body).findByRole("button", { name: "Peek" });
+    fireEvent.pointerDown(peek, { button: 0 });
+  },
+};
+export const ThemeImagesBothDark = bgWindow("dark", BOTH);
+export const ThemeImagesBackgroundDark = bgWindow("dark", BG);
+export const ThemeImagesBackgroundLight = bgWindow("light", BG);
+export const ThemeImagesBackgroundHighContrast = bgWindow("hc", BG);
+/** An animated image in the Background (tiled): it plays, and stops on its first frame with Reduce motion or when the window isn't active */
+export const ThemeImagesBackgroundAnimated = bgWindow("dark", { background: { ...newBackgroundSlot(MOCK_IMAGES.beacon), fill: "tile" } });
+export const ThemeImagesCornerDark = bgWindow("dark", CORNER);
+export const ThemeImagesCornerLight = bgWindow("light", { corner: { ...SAMPLE_CORNER, corner: "left top" } });
+export const ThemeImagesCornerHighContrast = bgWindow("hc", { corner: { ...SAMPLE_CORNER, size: 35 } });
+
 /** Settings › Keymap: every menu, toolbar and Find Action command by scope (Global, Database Explorer, Query Console, Data Grid), "none" where it has no key yet */
 export const SettingsKeymap: S = { name: "Settings — Keymap", render: () => <SettingsDialog initialPage="keymap" onClose={noop} onUpdate={noop} onChannel={noop} /> };
 
@@ -224,6 +273,29 @@ export const NewDataSourceSchemasConnecting: S = {
   },
 };
 export const EditDataSource: S = { name: "Data Source — edit (SSH)", render: () => <ConnectionDialog edit={{ ...PROD, ssh: { enabled: true, host: "bastion.example.com", port: 22, user: "ec2-user", auth: "key", keyPath: "~/.ssh/id_ed25519" } } as ConnectionView} onClose={noop} onSaved={noop} /> };
+/** General tab with a password command (#177): the ⓘ says what it runs, Reuse for keeps its output 600 s, Password is off */
+const passwordCommand = (theme: "dark" | "light" | "hc"): S => ({
+  name: `Data Source — password command (${theme === "hc" ? "high contrast" : theme})`,
+  globals: { theme },
+  render: () => (
+    <ConnectionDialog
+      edit={
+        {
+          ...PROD,
+          host: "orders.cluster-abc.ap-northeast-2.rds.amazonaws.com",
+          user: "app_iam",
+          passwordCommand: "/opt/homebrew/bin/aws rds generate-db-auth-token --hostname %HOSTNAME% --port %PORT% --username %USERNAME% --region ap-northeast-2",
+          passwordReuseSecs: 600,
+        } as ConnectionView
+      }
+      onClose={noop}
+      onSaved={noop}
+    />
+  ),
+});
+export const PasswordCommandDark = passwordCommand("dark");
+export const PasswordCommandLight = passwordCommand("light");
+export const PasswordCommandHc = passwordCommand("hc");
 /** SSH/SSL tab with Tunnel = AWS SSM: profile · region · instance id. Test Connection answers "(via AWS SSM i-…)" */
 export const EditDataSourceSsm: S = {
   name: "Data Source — edit (AWS SSM)",
@@ -472,7 +544,7 @@ const orders: QueryResult = {
     { name: "created_at", typeName: "TIMESTAMPTZ" },
   ],
   rows: [
-    [486, "O-20261101", "김현교", "first order after the promotion; the customer asked for a call before delivery, then changed the address twice and asked for gift wrap", "2026-11-01 10:10:00 +09:00"],
+    [486, "O-20261101", "김민지", "first order after the promotion; the customer asked for a call before delivery, then changed the address twice and asked for gift wrap", "2026-11-01 10:10:00 +09:00"],
     [487, "O-20261102", "이수진", null, "2026-11-02 10:11:00 +09:00"],
     [488, "O-20261103", "박민수 (배송 전 전화 요청, 경비실 보관)", "refund requested", "2026-11-03 10:12:00 +09:00"],
     [489, "O-20261104", "최지우", "gift wrap", "2026-11-04 10:13:00 +09:00"],
@@ -740,7 +812,7 @@ export const Update: S = {
   name: "Update available",
   render: () => (
     <UpdateDialog
-      info={{ current: "0.2.5", latest: { version: "0.2.6", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.2.6", notes: "", assets: [] }, changes: [{ version: "0.2.6", changes: ["[feat] 데이터 작업 · 결과 차트 · 운영 안전", "[fix] 탐색기 가로 스크롤"] }] } as never}
+      info={{ current: "0.2.5", latest: { version: "0.2.6", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.2.6", notes: "", assets: [] }, changes: [{ version: "0.2.6", changes: ["[feat] Data tools · result charts · Production safety", "[fix] Explorer horizontal scroll"] }] } as never}
       onClose={noop}
     />
   ),
@@ -1430,3 +1502,38 @@ export const ReconnectFailed = reconnectStory("failed, reason and Retry", "faile
 export const ReconnectFailedLight = reconnectStory("failed, reason and Retry", "failed", true);
 export const ReconnectCancelled = reconnectStory("cancelled", "cancelled", false);
 export const ReconnectCancelledLight = reconnectStory("cancelled", "cancelled", true);
+
+// ───────── Dialogs in a small window (#196) ─────────
+// Each dialog in an 800×500 window (1024×600 in Controls) with long content: the title and the footer's buttons stay in view and
+// only the body scrolls, also for the fixed-size dialogs
+// The theme is the toolbar's (not the story's), to see each one in every theme
+const small = (name: string, s: S): S => ({ ...s, ...inSmallWindow, globals: undefined, name: `Small window — ${name}` });
+export const SmallDataSourceSsmError = small("Data Source, long Test Connection error", EditDataSourceSsmError);
+export const SmallDataSourceOptions = small("Data Source, Options tab", AdminReportsOnDark);
+export const SmallSettingsDataGrid = small("Settings, Data grid", SettingsDataGrid);
+export const SmallSettingsKeymap = small("Settings, Keymap", SettingsKeymap);
+export const SmallKeymap = small("Keymap Reference", Keymap);
+export const SmallHistory = small("Query History, 60 queries", {
+  ...History,
+  beforeEach: () => {
+    (globalThis as any).__mockHistoryRows = 60;
+    return () => void delete (globalThis as any).__mockHistoryRows;
+  },
+});
+export const SmallExport = small("Export Data", Export);
+export const SmallGenerateData = small("Generate Test Data", GenerateData);
+export const SmallFindInData = small("Full-text Search", FindInData);
+export const SmallImport = small("Import Data", Import);
+export const SmallUpdate = small("Update, many versions", {
+  render: () => (
+    <UpdateDialog
+      info={{ current: "0.2.5", latest: { version: "0.3.9", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.3.9", notes: "", assets: [] }, changes: Array.from({ length: 10 }, (_, i) => ({ version: `0.3.${9 - i}`, changes: ["[feat] Data tools, result chart and Production safety", "[fix] The explorer scrolls sideways", "[fix] A long Test Connection error stays inside the dialog"] })) } as never}
+      onClose={noop}
+    />
+  ),
+});
+export const SmallTextInput = small("Text input (askTextChoice)", { render: () => <OpenTextDialog /> });
+function OpenTextDialog() {
+  useEffect(() => void askTextChoice("Save as Snippet", "orders of one user", ["This data source", "Every data source", "This workspace"]), []);
+  return <TextDialog />;
+}

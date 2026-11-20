@@ -20,6 +20,14 @@ export const ScreenExplorerTemporary = { ...by("Explorer: temporary source"), na
 export const ScreenExplorerMarked = { ...by("Explorer: marked nodes"), name: "Screen · Explorer: marked nodes (m)" };
 export const ScreenExplorerDropMarked = { ...by("Explorer: drop marked objects"), name: "Screen · Explorer: drop marked objects" };
 export const ScreenProductionConfirm = { ...by("Production confirm"), name: "Screen · Production confirm" };
+export const ScreenParameters = { ...by("Parameters"), name: "Screen · Parameters (:name in a console run)" };
+export const ScreenColumnLayout = { ...by("Column layout"), name: "Screen · Column layout (pinned and hidden)" };
+export const ScreenColumns = { ...by("Columns…"), name: "Screen · Columns…" };
+export const ScreenConsoleSwitchSchema = { ...by("Console: Switch Schema"), name: "Screen · Console: Switch Schema" };
+export const ScreenPasswordCommand = { ...by("Data source form: password command"), name: "Screen · Data source form: password command" };
+export const SmallLongConfirm = { ...by("Long confirm, 80×24"), name: "Small · Long confirm (80×24)" };
+export const SmallLongMessage = { ...by("Long message, 80×24"), name: "Small · Long message (80×24)" };
+export const SmallImportConfirm = { ...by("Import Data Sources — confirm, 80×24"), name: "Small · Import Data Sources confirm (80×24)" };
 export const ScreenActionsPalette = { ...by("Actions palette"), name: "Screen · Actions palette" };
 export const ScreenDataSourceForm = { ...by("Data source form"), name: "Screen · Data source form" };
 // #131: Admin reports (MCP dba_report) for Production sources; disabled with why on other sources and with MCP Off
