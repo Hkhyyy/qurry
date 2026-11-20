@@ -239,7 +239,7 @@ fn corner_ok(c: &CornerImage) -> bool {
 /// A theme's image settings are ones the GUI can draw: known file names, positions and fills, sizes and opacities in range
 fn check_images(i: &ThemeImages) -> Result<(), String> {
     if let Some(f) = i.files().find(|f| !image_name_ok(f)) {
-        return Err(format!("\"{f}\" isn't a theme image's file name"));
+        return Err(format!("\"{}\" isn't a theme image's file name", cut(f)));
     }
     if i.background.as_ref().is_some_and(|b| !background_ok(b)) {
         return Err("The background image's opacity, fill, placement or span isn't one Qurry knows".into());
@@ -439,6 +439,15 @@ pub const fn b64_len(n: usize) -> usize {
 pub const FILE_IMAGES_MAX: usize = 2 * b64_len(ANIMATED_MAX) + FILE_MAX;
 const NAME_MAX: usize = 64;
 
+/// Text from a file, as an error shows it: at most 200 characters (a theme file may be megabytes)
+fn cut(s: &str) -> String {
+    const MAX: usize = 200;
+    match s.char_indices().nth(MAX) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
+}
+
 /// The name, base and colors are the ones a custom theme may have: a known built-in, known tokens, #rrggbb only
 pub fn check(t: &CustomTheme) -> Result<(), String> {
     let name = t.name.trim();
@@ -447,14 +456,14 @@ pub fn check(t: &CustomTheme) -> Result<(), String> {
     }
     if builtin(&t.base).is_none() {
         let ids: Vec<_> = table().themes.iter().map(|t| t.id.as_str()).collect();
-        return Err(format!("\"base\" must be a built-in theme ({}), not \"{}\"", ids.join(", "), t.base));
+        return Err(format!("\"base\" must be a built-in theme ({}), not \"{}\"", ids.join(", "), cut(&t.base)));
     }
     for (k, v) in &t.colors {
         if !table().tokens.iter().any(|t| &t.key == k) {
-            return Err(format!("Unknown color \"{k}\" (Settings › Appearance › Theme lists the colors a theme has)"));
+            return Err(format!("Unknown color \"{}\" (Settings › Appearance › Theme lists the colors a theme has)", cut(k)));
         }
         if rgb(v).is_none() {
-            return Err(format!("\"{k}\" is \"{v}\": colors are written #rrggbb"));
+            return Err(format!("\"{}\" is \"{}\": colors are written #rrggbb", cut(k), cut(v)));
         }
     }
     check_images(&t.images)
@@ -553,7 +562,7 @@ pub fn parse_file(text: &str) -> Result<(CustomTheme, FileImages), String> {
         colors: BTreeMap<String, String>,
         images: Option<FileImages>,
     }
-    let f: File = serde_json::from_str(text).map_err(|e| format!("Not a Qurry theme file ({e})"))?;
+    let f: File = serde_json::from_str(text).map_err(|e| format!("Not a Qurry theme file ({})", cut(&e.to_string())))?;
     let images = match (f.qurry_theme, f.images) {
         (FILE_VERSION, None) if text.len() <= FILE_MAX => FileImages::default(),
         (FILE_VERSION, None) => return Err(too_large(FILE_MAX)),
@@ -948,6 +957,28 @@ mod tests {
         assert_eq!((read.background.unwrap().play, read.corner.unwrap().play), ("always".to_string(), "focused".to_string()));
         assert!(!file.contains(r#""play": "always",
   "background""#), "no theme-wide play");
+    }
+
+
+    #[test]
+    fn errors_show_at_most_200_characters_of_what_the_file_says() {
+        assert_eq!(cut("abc"), "abc");
+        assert_eq!(cut(&"é".repeat(250)).chars().count(), 201);
+        assert!(cut(&"é".repeat(250)).ends_with("é…"));
+        let long = "k".repeat(10_000);
+        let short = |e: String| {
+            assert!(e.chars().count() < 400, "{} chars", e.chars().count());
+            e
+        };
+        let e = short(parse_file(&format!(r##"{{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {{"{long}": "#123456"}}}}"##)).unwrap_err());
+        assert!(e.starts_with("Unknown color \"kkk") && e.contains("…\""), "{e}");
+        short(parse_file(&format!(r##"{{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {{"bg": "{long}"}}}}"##)).unwrap_err());
+        short(parse_file(&format!(r##"{{"qurryTheme": 1, "name": "A", "base": "{long}", "colors": {{}}}}"##)).unwrap_err());
+        // A serde error quoting an unknown field
+        let e = short(parse_file(&format!(r##"{{"qurryTheme": 1, "name": "A", "base": "dark", "colors": {{}}, "{long}": 1}}"##)).unwrap_err());
+        assert!(e.starts_with("Not a Qurry theme file (unknown field") && e.ends_with("…)"), "{e}");
+        let t = CustomTheme { name: "A".into(), base: "dark".into(), images: ThemeImages { background: Some(BackgroundImage { file: long.clone(), opacity: 1, fill: "cover".into(), anchor: "center".into(), span: "area".into(), play: "focused".into() }), corner: None }, ..Default::default() };
+        short(check(&t).unwrap_err());
     }
 
 }
