@@ -245,6 +245,24 @@ export const ThemeImagesBackgroundAnimated = bgWindow("dark", { background: { ..
 export const ThemeImagesCornerDark = bgWindow("dark", CORNER);
 export const ThemeImagesCornerLight = bgWindow("light", { corner: { ...SAMPLE_CORNER, corner: "left top" } });
 export const ThemeImagesCornerHighContrast = bgWindow("hc", { corner: { ...SAMPLE_CORNER, size: 35 } });
+/** A table tab and a console with a Background image, the grid's colors drawn as tints over it (#205): the odd-row stripe at 50%, the
+ *  header, row numbers and the pinned column at 85%, the selection and the edited, new and deleted rows at 70%, so the image shows
+ *  behind the data. "Before" draws the grid as before #205 (opaque but for the odd rows) to compare; the "Tints (#205)" control
+ *  switches it in any of these stories (story-only, not an app setting). Without an image nothing changes */
+const tintArgs = { args: { tints: true }, argTypes: { tints: { control: "boolean", name: "Tints (#205)" } } };
+const STRONG: ThemeImages = { background: { ...SAMPLE_BACKGROUND, opacity: 35 } };
+const tinted = (theme: string, view: "table" | "console", images: ThemeImages, tints = true): S => ({
+  ...tintArgs,
+  args: { tints },
+  globals: { theme },
+  render: (args) => <BackgroundWindow view={view} images={images} menu={false} tints={(args as { tints?: boolean }).tints !== false} />,
+});
+export const ThemeImagesTableAfter = tinted("dark", "table", STRONG);
+export const ThemeImagesTableBefore = tinted("dark", "table", STRONG, false);
+export const ThemeImagesTableLight = tinted("light", "table", STRONG);
+export const ThemeImagesTableNoImage = tinted("dark", "table", {});
+export const ThemeImagesConsoleAfter = tinted("dark", "console", STRONG);
+export const ThemeImagesConsoleBefore = tinted("dark", "console", STRONG, false);
 
 /** Settings › Keymap: every menu, toolbar and Find Action command by scope (Global, Database Explorer, Query Console, Data Grid), "none" where it has no key yet */
 export const SettingsKeymap: S = { name: "Settings — Keymap", render: () => <SettingsDialog initialPage="keymap" onClose={noop} onUpdate={noop} onChannel={noop} /> };
