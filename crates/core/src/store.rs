@@ -1034,6 +1034,13 @@ impl Store {
     /// colors, #rrggbb only. Returns the saved theme
     pub fn save_custom_theme(&self, t: &CustomTheme) -> AppResult<CustomTheme> {
         theme::check(t).map_err(AppError::Msg)?;
+        // Its images must be there (a theme deleted meanwhile may have taken them)
+        let dir = self.theme_images_dir();
+        for (slot, file) in [("background", t.images.background.as_ref().map(|b| &b.file)), ("corner", t.images.corner.as_ref().map(|c| &c.file))] {
+            if file.is_some_and(|f| !dir.join(f).is_file()) {
+                return Err(AppError::Msg(format!("The {slot} image is missing: choose it again")));
+            }
+        }
         let mut t = CustomTheme { name: t.name.trim().to_string(), ..t.clone() };
         // The file's entries as they are: one this version can't read, and fields it doesn't know, stay
         let mut list = self.custom_entries();
@@ -1298,6 +1305,9 @@ mod tests {
                           "corner": { "file": "fedcba9876543210.gif", "corner": "right bottom", "size": 20, "opacity": 100 } } }
         ]);
         store.set_setting("customThemes", later.clone()).unwrap();
+        // The corner's copy is there (a save checks)
+        fs::create_dir_all(store.theme_images_dir()).unwrap();
+        fs::write(store.theme_images_dir().join("fedcba9876543210.gif"), b"GIF89a").unwrap();
         let read = store.theme_settings().custom;
         assert_eq!(read.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["custom-2"], "the theme with the later fill is kept");
         assert!(read[0].images.background.is_none() && read[0].images.corner.is_some());
@@ -1384,6 +1394,24 @@ mod tests {
         // A file over the version 2 cap: refused unread
         fs::write(&file, vec![b' '; qurry_shared::theme::FILE_IMAGES_MAX + 1]).unwrap();
         assert!(b.read_theme_file(&file).unwrap_err().to_string().contains(&format!("at most {} KB", qurry_shared::theme::FILE_IMAGES_MAX / 1024)));
+    }
+
+    /// A theme whose image file is gone (a theme deleted meanwhile pruned it) isn't saved: the message names the slot
+    #[test]
+    fn a_theme_with_a_missing_image_is_not_saved() {
+        use qurry_shared::theme::{BackgroundImage, CornerImage, ThemeImages};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        let src = dir.path().join("a.png");
+        fs::write(&src, b"\x89PNG\r\n\x1a\nthere").unwrap();
+        let there = store.import_theme_image(&src).unwrap();
+        let bg = BackgroundImage { file: there, opacity: 15, fill: "cover".into(), anchor: "center".into(), span: "area".into(), play: "focused".into() };
+        let gone = CornerImage { file: "0123456789abcdef.gif".into(), corner: "right bottom".into(), size: 20, opacity: 100, play: "focused".into() };
+        let t = |corner: Option<CornerImage>| CustomTheme { name: "Pics".into(), base: "dark".into(), images: ThemeImages { background: Some(bg.clone()), corner }, ..Default::default() };
+        let e = store.save_custom_theme(&t(Some(gone))).unwrap_err().to_string();
+        assert_eq!(e, "The corner image is missing: choose it again");
+        assert!(store.theme_settings().custom.is_empty());
+        assert!(store.save_custom_theme(&t(None)).is_ok());
     }
 
     /// Theme, Sync with OS and custom themes round trip through settings.json for both apps; the TUI's older "tuiTheme" stands in

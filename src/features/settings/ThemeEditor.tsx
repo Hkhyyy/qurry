@@ -91,9 +91,14 @@ export function ThemeEditor({ start, onBack, onDirty, commit }: { start: string;
   const changed = Object.keys(over).filter((k) => over[k] !== base.colors[k]).sort();
   // Saved colors come back sorted by name (settings.json): compare in that order
   const savedColors = saved && Object.keys(saved.colors).sort().map((k) => [k, saved.colors[k]]);
-  const dirty = saved
-    ? saved.name !== name.trim() || saved.base !== baseId || JSON.stringify(savedColors) !== JSON.stringify(changed.map((k) => [k, over[k]])) || !sameImages(saved.images, images)
-    : changed.length > 0 || hasImages;
+  /** What the editor shows when it was last left with nothing to save (after Delete): clean until the next edit */
+  const [cleanAt, setCleanAt] = useState<string | null>(null);
+  const shown = JSON.stringify([baseId, over, name, images]);
+  const dirty =
+    cleanAt !== shown &&
+    (saved
+      ? saved.name !== name.trim() || saved.base !== baseId || JSON.stringify(savedColors) !== JSON.stringify(changed.map((k) => [k, over[k]])) || !sameImages(saved.images, images)
+      : changed.length > 0 || hasImages);
   const ready = useSharedReady();
   const warnings = useMemo(() => sharedOr<ThemeWarning[]>([], (s) => s.themeWarnings(colors)), [JSON.stringify(colors), ready]);
   const warnOf = (k: string) => warnings.find((w) => w.token === k);
@@ -147,6 +152,8 @@ export function ThemeEditor({ start, onBack, onDirty, commit }: { start: string;
     try {
       await deleteCustomTheme(saved.id);
       setEditing(null);
+      // Nothing to save until the next edit: OK closes, it doesn't bring the deleted theme back
+      setCleanAt(shown);
       setMsg({ tone: "ok", text: `Deleted "${saved.name}"; its colors stay here as a new theme until you leave` });
     } catch (e) {
       setMsg({ tone: "danger", text: `Not deleted: ${e}` });

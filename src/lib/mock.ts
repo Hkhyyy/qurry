@@ -927,6 +927,8 @@ const handlers: Record<string, (a: any) => unknown> = {
   save_custom_theme: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
     checkTheme(a.theme);
+    // As the core: its images must be there
+    for (const slot of ["background", "corner"]) if (a.theme.images?.[slot] && !themeImages[a.theme.images[slot].file]) throw `The ${slot} image is missing: choose it again`;
     const s = themeSettings();
     const t = { ...a.theme, name: a.theme.name.trim() };
     if (!t.id) for (let n = 1; !t.id; n++) if (!s.custom.some((c: any) => c.id === `custom-${n}`)) t.id = `custom-${n}`;

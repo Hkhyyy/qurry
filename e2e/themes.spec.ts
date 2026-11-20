@@ -398,3 +398,16 @@ test("starting from a built-in theme there is no Save: Save as new theme is the 
   await expect(actions.getByRole("button", { name: "Save", exact: true })).toHaveCount(0);
   await expect(actions.getByRole("button", { name: "Save as new theme" })).toHaveClass(/ui-btn-primary/);
 });
+
+// Delete leaves the editor with nothing to save: OK then closes and doesn't bring the theme back
+test("Delete, then OK: the deleted theme stays deleted", async ({ page }) => {
+  await openInTheme(page, "custom-1", [{ id: "custom-1", name: "Night shift", base: "dracula", colors: { accent: "#9580ff" } }]);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("button", { name: "Delete", exact: true }).click();
+  await page.locator(".ui-modal", { hasText: "Delete the custom theme" }).getByRole("button", { name: "Delete" }).click();
+  await expect(dialog(page).locator(".theme-editor-msg")).toHaveText(/Deleted "Night shift"/);
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  expect((await saved(page)).custom).toEqual([]);
+});
