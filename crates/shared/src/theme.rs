@@ -191,22 +191,73 @@ pub fn check_image(bytes: &[u8], shown: &str) -> Result<&'static str, String> {
     Ok(ext)
 }
 
+fn background_ok(b: &BackgroundImage) -> bool {
+    image_name_ok(&b.file) && b.opacity <= 100 && FILLS.contains(&b.fill.as_str()) && ANCHORS.contains(&b.anchor.as_str())
+}
+
+fn corner_ok(c: &CornerImage) -> bool {
+    image_name_ok(&c.file) && c.opacity <= 100 && (SIZE_MIN..=SIZE_MAX).contains(&c.size) && CORNERS.contains(&c.corner.as_str())
+}
+
 /// A theme's image settings are ones the GUI can draw: known file names, positions and fills, sizes and opacities in range
 fn check_images(i: &ThemeImages) -> Result<(), String> {
     if let Some(f) = i.files().find(|f| !image_name_ok(f)) {
         return Err(format!("\"{f}\" isn't a theme image's file name"));
     }
-    if let Some(b) = &i.background
-        && (b.opacity > 100 || !FILLS.contains(&b.fill.as_str()) || !ANCHORS.contains(&b.anchor.as_str()))
-    {
+    if i.background.as_ref().is_some_and(|b| !background_ok(b)) {
         return Err("The background image's opacity, fill or placement isn't one Qurry knows".into());
     }
-    if let Some(c) = &i.corner
-        && (c.opacity > 100 || !(SIZE_MIN..=SIZE_MAX).contains(&c.size) || !CORNERS.contains(&c.corner.as_str()))
-    {
+    if i.corner.as_ref().is_some_and(|c| !corner_ok(c)) {
         return Err("The corner image's corner, size or opacity isn't one Qurry knows".into());
     }
     Ok(())
+}
+
+/// An image slot of a settings.json entry this version can draw
+fn slot_from_value(images: &serde_json::Value, key: &str) -> Option<ThemeImages> {
+    let v = images.get(key)?.clone();
+    match key {
+        "background" => serde_json::from_value(v).ok().filter(background_ok).map(|b| ThemeImages { background: Some(b), corner: None }),
+        "corner" => serde_json::from_value(v).ok().filter(corner_ok).map(|c| ThemeImages { background: None, corner: Some(c) }),
+        _ => None,
+    }
+}
+
+/// A custom theme from its settings.json entry; None when this version can't use it (an unknown base, a bad color …). An image slot
+/// it can't draw (a later version's fill or file type) is left out of the theme, which keeps its colors and other slot
+pub fn custom_from_value(v: &serde_json::Value) -> Option<CustomTheme> {
+    let mut plain = v.clone();
+    let images = plain.as_object_mut()?.remove("images").unwrap_or_default();
+    let mut t: CustomTheme = serde_json::from_value(plain).ok()?;
+    t.images = ThemeImages {
+        background: slot_from_value(&images, "background").and_then(|i| i.background),
+        corner: slot_from_value(&images, "corner").and_then(|i| i.corner),
+    };
+    check(&t).is_ok().then_some(t)
+}
+
+/// A custom theme's settings.json entry, written over its old one (`old`): what this version doesn't know stays as it was, the other
+/// fields of the entry and an image slot it couldn't read (so the GUI never showed it, and saving can't have removed it)
+pub fn custom_to_value(old: Option<&serde_json::Value>, t: &CustomTheme) -> serde_json::Value {
+    let mut entry = old.and_then(|o| o.as_object().cloned()).unwrap_or_default();
+    let new = serde_json::to_value(t).unwrap_or_default();
+    for k in ["id", "name", "base", "colors"] {
+        entry.insert(k.into(), new[k].clone());
+    }
+    let mut images = new.get("images").and_then(|i| i.as_object().cloned()).unwrap_or_default();
+    if let Some(old_images) = old.and_then(|o| o.get("images")).and_then(|i| i.as_object()) {
+        for (k, v) in old_images {
+            if !images.contains_key(k) && slot_from_value(&serde_json::Value::Object(old_images.clone()), k).is_none() {
+                images.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    if images.is_empty() {
+        entry.remove("images");
+    } else {
+        entry.insert("images".into(), images.into());
+    }
+    entry.into()
 }
 
 /// Sync with OS: the theme for a dark and for a light system appearance (the TUI: terminal background, COLORFGBG)
@@ -597,6 +648,47 @@ mod tests {
         assert!(with(ThemeImages { background: None, corner: Some(CornerImage { size: 41, ..cn.clone() }) }).is_err());
         assert!(with(ThemeImages { background: None, corner: Some(CornerImage { size: 9, ..cn.clone() }) }).is_err());
         assert!(with(ThemeImages { background: None, corner: Some(CornerImage { corner: "center".into(), ..cn }) }).is_err());
+    }
+
+
+    #[test]
+    fn an_image_slot_this_version_cant_draw_is_left_out_on_read_and_kept_on_write() {
+        let entry = serde_json::json!({
+            "id": "custom-1", "name": "Later", "base": "dark", "colors": { "bg": "#101010" }, "tags": ["mine"],
+            "images": {
+                "background": { "file": "0123456789abcdef.avif", "opacity": 15, "fill": "cover", "anchor": "center" },
+                "corner": { "file": "fedcba9876543210.gif", "corner": "right bottom", "size": 20, "opacity": 100 },
+                "frame": { "file": "1111111111111111.png" }
+            }
+        });
+        // Read: the theme and its colors and corner; the background (an .avif) and the unknown "frame" left out
+        let t = custom_from_value(&entry).unwrap();
+        assert_eq!(t.colors["bg"], "#101010");
+        assert!(t.images.background.is_none());
+        assert_eq!(t.images.corner.as_ref().unwrap().file, "fedcba9876543210.gif");
+        // A new fill in the background: also left out, the theme kept
+        let mut later = entry.clone();
+        later["images"]["background"]["file"] = "0123456789abcdef.png".into();
+        later["images"]["background"]["fill"] = "stretch".into();
+        assert!(custom_from_value(&later).unwrap().images.background.is_none());
+        // Written back after a change (name, corner moved): the unread slots and the unknown field stay as they were
+        let changed = CustomTheme { name: "Later 2".into(), images: ThemeImages { corner: Some(CornerImage { corner: "left top".into(), ..t.images.corner.clone().unwrap() }), ..t.images.clone() }, ..t.clone() };
+        let back = custom_to_value(Some(&entry), &changed);
+        assert_eq!(back["name"], "Later 2");
+        assert_eq!(back["tags"], serde_json::json!(["mine"]));
+        assert_eq!(back["images"]["background"], entry["images"]["background"]);
+        assert_eq!(back["images"]["frame"], entry["images"]["frame"]);
+        assert_eq!(back["images"]["corner"]["corner"], "left top");
+        // A slot this version reads and the user removed stays removed
+        let removed = custom_to_value(Some(&entry), &CustomTheme { images: ThemeImages::default(), ..t.clone() });
+        assert!(removed["images"].get("corner").is_none() && removed["images"].get("background").is_some());
+        // A theme this version can't use at all (a later base) isn't read
+        let mut unknown_base = entry.clone();
+        unknown_base["base"] = "monokai".into();
+        assert!(custom_from_value(&unknown_base).is_none());
+        // A new theme has no old entry
+        let fresh = custom_to_value(None, &CustomTheme { id: "custom-2".into(), name: "New".into(), base: "light".into(), ..Default::default() });
+        assert_eq!(fresh, serde_json::json!({ "id": "custom-2", "name": "New", "base": "light", "colors": {} }));
     }
 
 }
