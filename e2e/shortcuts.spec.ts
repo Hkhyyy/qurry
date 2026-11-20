@@ -508,4 +508,48 @@ test.describe("fixed keys", () => {
       await page.getByRole("tab", { name: /contracts/ }).click();
     }
   });
+
+  test("holding ⌃, ⇥ / ⇧⇥ / ↑↓ move the Switcher's selection (wrapping) and releasing ⌃ opens it; ⎋ closes; a click opens", async ({ page }) => {
+    await twoTabs(page);
+    await treeItem(page, "payments").first().dblclick();
+    await expect.poll(() => tabStrips(page)).toEqual(["users | contracts | payments"]);
+    // Most recently used first: payments, contracts, users
+    const selected = page.locator(".ui-popover [role=listbox] .selected");
+    await page.keyboard.down("Control");
+    await page.keyboard.press("Tab");
+    await expect(selected).toContainText("contracts");
+    await page.keyboard.press("Tab");
+    await expect(selected).toContainText("users");
+    await page.keyboard.up("Control");
+    await expect(popoverTitle(page)).toHaveCount(0);
+    await expect(selectedTab(page)).toContainText("users");
+    // MRU now: users, payments, contracts. ⇥⇥⇥ wraps to users, ⇧⇥ goes back to contracts, ↓ wraps to users, ↑ back to contracts
+    await page.keyboard.down("Control");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await expect(selected).toContainText("users");
+    await page.keyboard.press("Shift+Tab");
+    await expect(selected).toContainText("contracts");
+    await page.keyboard.press("ArrowDown");
+    await expect(selected).toContainText("users");
+    await page.keyboard.press("ArrowUp");
+    await expect(selected).toContainText("contracts");
+    await page.keyboard.up("Control");
+    await expect(selectedTab(page)).toContainText("contracts");
+    // ⎋ closes without switching; a click on an entry opens it
+    await page.keyboard.down("Control");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Escape");
+    await page.keyboard.up("Control");
+    await expect(popoverTitle(page)).toHaveCount(0);
+    await expect(selectedTab(page)).toContainText("contracts");
+    await page.keyboard.down("Control");
+    await page.keyboard.press("Tab");
+    await page.locator(".ui-popover [role=listbox] > *", { hasText: "payments" }).click();
+    await expect(popoverTitle(page)).toHaveCount(0);
+    await expect(selectedTab(page)).toContainText("payments");
+    await page.keyboard.up("Control");
+    await expect(selectedTab(page)).toContainText("payments");
+  });
 });
