@@ -251,3 +251,26 @@ test("a theme the GUI kept in the webview before 0.3.2 moves to the shared setti
   expect((await saved(page)).theme).toBe("light");
   expect(await page.evaluate(() => localStorage.getItem("dbtool.theme"))).toBeNull();
 });
+
+// #204: the editor's action row wraps instead of being cut, also for a saved theme (Delete, Save) in the smallest window
+for (const theme of ["dark", "light"]) {
+  test(`the theme editor's buttons, name and message all show for a saved theme at 800×500 (${theme})`, async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 500 });
+    await openInTheme(page, "custom-1", [{ id: "custom-1", name: "Night shift", base: theme, colors: { accent: "#9580ff" } }]);
+    await settings(page);
+    await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+    const actions = dialog(page).locator(".theme-editor-actions");
+    await dialog(page).getByRole("textbox", { name: "Theme name" }).fill("Night shift 2");
+    for (const name of ["Import…", "Export…", "Reset to base", "Delete", "Save", "Save as new theme"]) {
+      const b = actions.getByRole("button", { name, exact: true });
+      await expect(b, name).toBeInViewport({ ratio: 1 });
+      // Not covered or cut: a click at its middle lands on it
+      const box = (await b.boundingBox())!;
+      expect(await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.textContent?.trim(), [box.x + box.width / 2, box.y + box.height / 2]), name).toBe(name);
+    }
+    await expect(actions.getByRole("textbox", { name: "Theme name" })).toBeInViewport({ ratio: 1 });
+    await actions.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(dialog(page).locator(".theme-editor-msg")).toHaveText(/Saved "Night shift 2"/);
+    await expect(dialog(page).locator(".theme-editor-msg .ui-notice")).toBeInViewport({ ratio: 1 });
+  });
+}

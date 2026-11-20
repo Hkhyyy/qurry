@@ -491,8 +491,8 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-advanced .theme-warn { margin-left: auto; }
 .theme-editor-actions { display: flex; flex-direction: column; gap: var(--ui-sp-2); padding: var(--ui-sp-3) 0; border-top: 1px solid var(--ui-border); }
 .theme-editor-actions > .ui-row { flex-wrap: wrap; gap: var(--ui-sp-2); }
-/* Fixed height: a message under the buttons doesn't move the token list */
-.theme-editor-actions > :last-child { height: 34px; overflow: hidden; }
+/* The message line keeps its height when empty, so a message doesn't move the color list; the rows above wrap and nothing is cut (#204) */
+.theme-editor-msg { min-height: 34px; }
 .theme-editor-preview { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--ui-sp-2); padding: var(--ui-sp-3) 0 0 var(--ui-sp-4); overflow: auto; }
 .theme-preview { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; font-size: 12px; }
 .theme-preview-top { display: flex; height: 150px; border-bottom: 1px solid var(--border); }

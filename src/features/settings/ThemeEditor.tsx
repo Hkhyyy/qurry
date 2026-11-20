@@ -264,7 +264,10 @@ export function ThemeEditor({ start, onBack, onDirty }: { start: string; onBack:
                 Save as new theme
               </Button>
             </div>
-            {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+            {/* Its own line, kept (an empty one too) so a message doesn't move the color list; it is never cut */}
+            <div className="theme-editor-msg" role="status">
+              {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+            </div>
           </div>
         </div>
         <div className="theme-editor-preview">
