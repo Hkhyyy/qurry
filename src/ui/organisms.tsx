@@ -99,6 +99,20 @@ export function Modal(p: {
   useEffect(() => {
     if (box.current && !box.current.contains(document.activeElement)) box.current.focus();
   }, []);
+  // Esc closes the top window also when nothing has the focus (the focused button went away, e.g. one that switched the page)
+  const close = useRef(p.onClose);
+  close.current = p.onClose;
+  useEffect(() => {
+    const key = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || (document.activeElement && document.activeElement !== document.body)) return;
+      const open = document.querySelectorAll(".ui-modal[aria-modal='true']");
+      if (open[open.length - 1] !== box.current) return;
+      e.preventDefault();
+      close.current();
+    };
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, []);
   const drag = useDrag(box);
   return (
     <div className={cx("ui-backdrop", "for-modal", p.layer === "dialog" && "layer-dialog")} onMouseDown={p.stickyBackdrop ? undefined : p.onClose}>

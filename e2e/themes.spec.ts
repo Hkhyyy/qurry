@@ -300,6 +300,26 @@ test("Esc in the theme editor with nothing changed closes Settings at once", asy
   await expect(dialog(page)).toHaveCount(0);
 });
 
+// The button that opened the editor goes away with the page, leaving the focus on the body: Esc still reaches Settings
+test("Esc closes Settings when nothing has the focus, and asks first with unsaved colors", async ({ page }) => {
+  await openApp(page);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  // Chromium leaves it there by itself; WebKit doesn't focus a clicked button, so it is put there
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+  await settings(page);
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  await dialog(page).getByRole("textbox", { name: "Text hex", exact: true }).fill("#ff0000");
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".ui-modal", { hasText: "Discard them?" })).toBeVisible();
+  await page.getByRole("button", { name: "Discard" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+});
+
 // #204: the editor's action row wraps instead of being cut, also for a saved theme (Delete, Save) in the smallest window
 for (const theme of ["dark", "light"]) {
   test(`the theme editor's buttons, name and message all show for a saved theme at 800×500 (${theme})`, async ({ page }) => {
