@@ -3,14 +3,19 @@ import { test as base, expect, type Page } from "@playwright/test";
 /** Every spec runs the app as on macOS (the shipped platform): ⌘⌥⌃⇧ labels and ⌘ shortcuts on any OS */
 export const test = base.extend({
   page: async ({ page }, use) => {
-    await page.addInitScript(() => {
-      const ua = navigator.userAgent.replace(/\([^)]*\)/, "(Macintosh; Intel Mac OS X 10_15_7)");
-      Object.defineProperty(navigator, "platform", { get: () => "MacIntel" });
-      Object.defineProperty(navigator, "userAgent", { get: () => ua });
-    });
+    await asMac(page);
     await use(page);
   },
 });
+
+/** A page the app takes for macOS: the fixture's page, and any page a test opens itself (another context, another computer) */
+export async function asMac(page: Page) {
+  await page.addInitScript(() => {
+    const ua = navigator.userAgent.replace(/\([^)]*\)/, "(Macintosh; Intel Mac OS X 10_15_7)");
+    Object.defineProperty(navigator, "platform", { get: () => "MacIntel" });
+    Object.defineProperty(navigator, "userAgent", { get: () => ua });
+  });
+}
 export { expect };
 
 /** Open the mock app and wait for the explorer */

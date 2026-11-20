@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, expect, menuItem, openApp, openConsole, openInTheme, runAll, test, treeItem, typeSql, work } from "./app";
+import { asMac, dialog, expect, menuItem, openApp, openConsole, openInTheme, runAll, test, treeItem, typeSql, work } from "./app";
 
 // Theme images (#202): a custom theme's Background (behind the SQL editor and the result grid) and Corner (scaled down in front of the
 // window, under menus and dialogs, clicks passing through) images, set in Settings › Appearance › Theme › Edit Colors… › Images. The
@@ -230,8 +230,6 @@ test.describe("with Reduce motion on", () => {
 });
 
 test("Export… carries the images (version 2) and Import… on another computer brings both back and draws them", async ({ page, browser }) => {
-  // Two app loads (this computer and another one) and two image round trips: past the default 30 s on CI's shared runners
-  test.slow();
   const bg = { file: RIDGES, opacity: 25, fill: "contain", anchor: "right bottom", span: "pane" };
   await openInTheme(page, "custom-1", pictures({ background: bg, corner: CORNER }));
   await openEditor(page);
@@ -248,6 +246,7 @@ test("Export… carries the images (version 2) and Import… on another computer
   expect(text).not.toContain(BEACON);
   // Another computer: a fresh mock without these images
   const other = await (await browser.newContext()).newPage();
+  await asMac(other);
   await openApp(other);
   await openEditor(other);
   await other.evaluate((f) => ((window as any).__mockThemeFile = f), text);
