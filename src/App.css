@@ -385,13 +385,12 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 
 /* ── Console ── */
 .console-pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
-.console-pane > [data-group] { flex: 1; min-height: 0; }
 .console-toolbar .tb.run { color: var(--ok); font-size: 12px; }
 .console-toolbar .cb-ds { color: var(--muted); font-size: 12px; margin-right: 4px; }
 .console-toolbar .cb-sel { height: 22px; padding: 0 6px; font-size: 12px; max-width: 200px; margin-left: 4px; text-overflow: ellipsis; }
 .editor-area { position: relative; }
 /* At the bottom (as the TUI's): the text an option runs, highlighted in the editor, is usually near the top and stays in view */
-.stmt-chooser { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: 30; min-width: 420px; max-width: 80%; background: var(--c-2b2d30); border: 1px solid var(--c-4e5157); border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,.5); padding: 4px; outline: none; }
+.stmt-chooser { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: var(--ui-z-popup-in-window); min-width: 420px; max-width: 80%; background: var(--c-2b2d30); border: 1px solid var(--c-4e5157); border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,.5); padding: 4px; outline: none; }
 .sc-title { padding: 4px 10px 6px; color: var(--muted); font-size: 12px; }
 .sc-item { padding: 4px 10px; border-radius: 4px; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
 .sc-item.on { background: var(--accent); color: var(--c-fff); }
@@ -512,8 +511,8 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
    positioned, so they paint over the layer, unless they place themselves); with an image their surfaces are clear (Monaco's background
    and gutter, the editor and result areas, the grid's odd rows a half tint) and headers, toolbars, menus and dialogs keep their own.
    No stacking context of its own: the menus and popups inside stay above the Corner sticker, which is in front of the window's
-   content (its layers stay below 20) and under every popup (30 and up: menus, dialogs, toasts, the statement chooser …); clicks pass
-   through it */
+   content (its layers stay below --ui-z-sticker) and under every popup (--ui-z-popup-in-window and up: menus, dialogs, toasts, the
+   statement chooser …); clicks pass through it */
 .theme-backdrop-host { position: relative; background: var(--bg); }
 .theme-backdrop { position: absolute; inset: 0; pointer-events: none; }
 :where(.theme-backdrop-host) > :where(:not(.theme-backdrop)) { position: relative; }
@@ -529,7 +528,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-preview.has-image .grid-row.odd { background: color-mix(in srgb, var(--c-222326) 50%, transparent); }
 .console-images { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .console-images > [data-group] { flex: 1; min-height: 0; }
-.theme-sticker { position: fixed; z-index: 20; pointer-events: none; user-select: none; object-fit: contain; }
+.theme-sticker { position: fixed; z-index: var(--ui-z-sticker); pointer-events: none; user-select: none; object-fit: contain; }
 .theme-sticker.in-preview { position: absolute; z-index: 1; }
 /* Peek (held): Settings fades so the window behind it shows */
 :root.theme-peek .ui-backdrop { background: transparent; }
@@ -671,7 +670,7 @@ button.tb.danger:hover:not(:disabled) { color: var(--danger); }
 /* The arguments still to type, after the text: a hidden copy of the text pushes them there */
 .rd-term-ghost { position: absolute; left: 0; top: 50%; transform: translateY(-50%); white-space: pre; color: var(--muted); pointer-events: none; overflow: hidden; max-width: 100%; }
 .rd-term-ghost .pad { visibility: hidden; }
-.rd-term-pop { position: absolute; left: -6px; bottom: calc(100% + 6px); min-width: 320px; max-width: min(640px, 90vw); max-height: 220px; overflow-y: auto; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); box-shadow: var(--ui-shadow-pop); z-index: 2; }
+.rd-term-pop { position: absolute; left: -6px; bottom: calc(100% + 6px); min-width: 320px; max-width: min(640px, 90vw); max-height: 220px; overflow-y: auto; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); box-shadow: var(--ui-shadow-pop); z-index: var(--ui-z-popup-in-window); }
 .rd-term-choice { display: flex; gap: 8px; align-items: baseline; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
 .rd-term-choice.sel { background: var(--sel); }
 .rd-term-choice .args { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
@@ -824,7 +823,7 @@ html, body, #root, * { overscroll-behavior: none; }
 .chart-hover { fill: var(--ui-hover); opacity: .5; }
 .chart-slice { stroke: var(--ui-bg); stroke-width: 1; }
 .chart-slice.on { opacity: .8; }
-.chart-tip { position: absolute; pointer-events: none; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); box-shadow: var(--ui-shadow-pop); padding: var(--ui-sp-2) var(--ui-sp-3); font-size: var(--ui-fs-sm); max-width: 260px; z-index: 1; }
+.chart-tip { position: absolute; pointer-events: none; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); box-shadow: var(--ui-shadow-pop); padding: var(--ui-sp-2) var(--ui-sp-3); font-size: var(--ui-fs-sm); max-width: 260px; z-index: var(--ui-z-popup-in-window); }
 .chart-tip b { display: block; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chart-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
 .chart-empty { padding: var(--ui-sp-6); color: var(--ui-text-muted); text-align: center; }

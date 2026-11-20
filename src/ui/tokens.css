@@ -32,6 +32,9 @@
   /* The line after a result grid's pinned columns: muted text toward the background (at least 3:1 on the grid in the built-in themes) */
   --ui-grid-pin-edge: color-mix(in srgb, var(--ui-text-muted) 85%, var(--ui-bg));
 
+  /* The theme's Corner image: over the window's content (its layers stay below), under every popup (in-window ones use popup-in-window) */
+  --ui-z-sticker: 20;
+  --ui-z-popup-in-window: 30;
   --ui-z-modal: 100;
   --ui-z-menu: 200;
   --ui-z-popover: 300;
