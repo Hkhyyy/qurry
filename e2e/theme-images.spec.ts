@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, expect, openApp, openConsole, openInTheme, runAll, test, treeItem, typeSql, work } from "./app";
+import { dialog, expect, menuItem, openApp, openConsole, openInTheme, runAll, test, treeItem, typeSql, work } from "./app";
 
 // Theme images (#202): a custom theme's Background (behind the SQL editor and the result grid) and Corner (scaled down in front of the
 // window, under menus and dialogs, clicks passing through) images, set in Settings › Appearance › Theme › Edit Colors… › Images. The
@@ -16,7 +16,8 @@ const openEditor = async (page: Page) => {
   await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
 };
 /** The window's Background layer behind the open table, and the Corner sticker (not the preview's) */
-const windowLayer = (page: Page) => work(page).locator(".theme-backdrop");
+/** The window's Background layer: the editor area's (span "area", the default) or the open tab's own (span "pane") */
+const windowLayer = (page: Page) => page.locator(".theme-editor-area > .theme-backdrop").or(work(page).locator(".theme-backdrop"));
 const windowSticker = (page: Page) => page.locator("img.theme-sticker:not(.in-preview)");
 const pictures = (images: unknown) => [{ id: "custom-1", name: "Pictures", base: "dark", colors: {}, images }];
 const CORNER = { file: BEACON, corner: "right bottom", size: 40, opacity: 100 };
@@ -50,7 +51,7 @@ test("an image in each slot is drawn live in the window and the preview, saved w
   await dialog(page).getByRole("textbox", { name: "Theme name" }).fill("Pictures");
   await dialog(page).getByRole("button", { name: "Save as new theme" }).click();
   await expect.poll(async () => (await saved(page))?.custom?.[0]?.images).toEqual({
-    background: { file: RIDGES, opacity: 15, fill: "cover", anchor: "center" },
+    background: { file: RIDGES, opacity: 15, fill: "cover", anchor: "center", span: "area" },
     corner: { file: BEACON, corner: "right bottom", size: 20, opacity: 100 },
   });
   // Removed: gone from the window and the preview
@@ -269,4 +270,54 @@ test("started from a built-in theme, Images says it is saved with a new custom t
   await expect(dialog(page).locator(".theme-bg-bar-title")).not.toContainText("Saved with");
   await dialog(page).locator(".theme-bg-bar-title").getByRole("button", { name: "About Theme images" }).click();
   await expect(page.getByRole("note", { name: "About Theme images" })).not.toContainText("Images belong to a custom theme");
+});
+
+// The Background's span: "area" (the default) is one picture behind every split together, "pane" one in each console or table
+const split = async (page: Page) => {
+  await treeItem(page, "users").first().dblclick();
+  await treeItem(page, "contracts").first().dblclick();
+  await page.getByRole("tab", { name: /contracts/ }).click({ button: "right" });
+  await menuItem(page, "Split Right").click();
+  await expect(page.locator(".editor-group")).toHaveCount(2);
+};
+/** The image layers drawn (not those of hidden tabs) */
+const layers = (page: Page) => page.locator(".theme-backdrop:visible");
+const box = async (l: import("@playwright/test").Locator) => (await l.boundingBox())!;
+
+test("spanning the editor area, one picture lies behind both split panes; per pane, each visible pane has its own", async ({ page }) => {
+  const bg = { file: RIDGES, opacity: 40, fill: "cover", anchor: "center" };
+  await openInTheme(page, "custom-1", pictures({ background: bg }));
+  await split(page);
+  // Saved without a span (0.3.5-beta.1): the whole area. One layer, covering both groups
+  await expect(layers(page)).toHaveCount(1);
+  const [layer, left, right] = [await box(layers(page)), await box(page.locator(".editor-group").first()), await box(page.locator(".editor-group").last())];
+  expect(layer.x).toBeLessThanOrEqual(left.x + 1);
+  expect(layer.x + layer.width).toBeGreaterThanOrEqual(right.x + right.width - 1);
+  expect(layer.y).toBeLessThanOrEqual(Math.min(left.y, right.y) + 1);
+  // The panes' grids let it through: their hosts are clear
+  for (const host of await page.locator(".table-body.theme-backdrop-host:visible").all()) await expect(host).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  // Per pane: a layer in each visible table, inside its own pane
+  await openInTheme(page, "custom-1", pictures({ background: { ...bg, span: "pane" } }));
+  await split(page);
+  await expect(layers(page)).toHaveCount(2);
+  const [a, b] = [await box(layers(page).first()), await box(layers(page).last())];
+  expect(a.x + a.width).toBeLessThanOrEqual(b.x + 1);
+});
+
+test("Span switches live in the editor and OK keeps it", async ({ page }) => {
+  await openInTheme(page, "custom-1", pictures({ background: { file: RIDGES, opacity: 40, fill: "cover", anchor: "center", span: "area" } }));
+  await split(page);
+  await openEditor(page);
+  const span = slot(page, "Background").getByRole("combobox", { name: "Span" });
+  await expect(span).toHaveValue("area");
+  await span.selectOption("pane");
+  // Drawn at once in the window behind Settings
+  await expect(page.locator(".work-area .theme-backdrop:visible")).toHaveCount(2);
+  await expect(page.locator(".theme-editor-area > .theme-backdrop")).toHaveCount(0);
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await expect.poll(async () => (await saved(page)).custom[0].images.background.span).toBe("pane");
+  await expect(layers(page)).toHaveCount(2);
+  await openEditor(page);
+  await expect(slot(page, "Background").getByRole("combobox", { name: "Span" })).toHaveValue("pane");
 });

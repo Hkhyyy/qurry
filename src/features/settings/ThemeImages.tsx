@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import { sharedOr, useSharedReady } from "../../lib/shared";
 import { TOKENS, useThemeState, type Palette, type ThemeWarning } from "../../lib/theme";
 import { api } from "../../lib/api";
-import { ANCHORS, backdropStyle, CORNERS, FILLS, holdImage, mayMove, newBackgroundSlot, newCornerSlot, opacityCap, releaseImage, SIZE_MAX, SIZE_MIN, stickerStyle, stillFrame, warningsOver, type BackgroundSlot, type CornerSlot, type Fill, type ThemeImages } from "../../lib/themeImages";
+import { ANCHORS, backdropStyle, CORNERS, FILLS, holdImage, mayMove, newBackgroundSlot, newCornerSlot, opacityCap, releaseImage, SIZE_MAX, SIZE_MIN, SPANS, stickerStyle, stillFrame, warningsOver, type BackgroundSlot, type CornerSlot, type Fill, type Span, type ThemeImages } from "../../lib/themeImages";
 import { Button, cx, Named, Select } from "../../ui";
 
 // Settings › Appearance › Theme › Edit Colors… › Images (#202, a mockup until it goes into the editor): two slots, each optional with
@@ -67,21 +67,35 @@ function useThemeImage(file: string | undefined, still?: boolean): { url: string
 type Shown = { still?: boolean };
 
 /** Background: a surface the image is drawn behind: Background, the image layer, then the children (with clear surfaces) over it */
-export function ThemeBackdrop({ slot, still, className, style, children }: Shown & { slot?: BackgroundSlot; className?: string; style?: CSSProperties; children?: ReactNode }) {
+export function ThemeBackdrop({ slot, still, seeThrough, className, style, children }: Shown & { slot?: BackgroundSlot; /** No layer here: a host around it draws the picture, this one's surfaces let it through */ seeThrough?: boolean; className?: string; style?: CSSProperties; children?: ReactNode }) {
   const { url } = useThemeImage(slot?.file, still);
   return (
-    <div className={cx("theme-backdrop-host", slot && "has-image", className)} style={style}>
+    <div className={cx("theme-backdrop-host", (slot || seeThrough) && "has-image", seeThrough && "see-through", className)} style={style}>
       {slot && url && <div className="theme-backdrop" aria-hidden style={backdropStyle(slot, url)} />}
       {children}
     </div>
   );
 }
 
-/** The theme in use's Background behind children: subscribed here, so a change of the theme (the editor's every tick) redraws this host
- *  and not the children, which keep their element and bail out */
+/** A console's or table's pane with the theme in use's Background: its own picture with span "pane"; with "area" (the default) the
+ *  editor area's picture (ThemeEditorArea) shows through it. Subscribed here, so a change of the theme (the editor's every tick)
+ *  redraws this host and not the children, which keep their element and bail out */
 export function ThemeBackground({ className, children }: { className?: string; children?: ReactNode }) {
+  const bg = useThemeState().current.images?.background;
+  const pane = bg?.span === "pane";
   return (
-    <ThemeBackdrop slot={useThemeState().current.images?.background} className={className}>
+    <ThemeBackdrop slot={pane ? bg : undefined} seeThrough={!!bg && !pane} className={className}>
+      {children}
+    </ThemeBackdrop>
+  );
+}
+
+/** The whole editor area (every split): one picture behind all its panes, when the Background spans the area */
+export function ThemeEditorArea({ children }: { children?: ReactNode }) {
+  const bg = useThemeState().current.images?.background;
+  const area = !!bg && bg.span !== "pane";
+  return (
+    <ThemeBackdrop slot={area ? bg : undefined} className={cx("theme-editor-area", area && "span-area")}>
       {children}
     </ThemeBackdrop>
   );
@@ -277,6 +291,18 @@ export function ThemeImagesSection({ images, p, onChange, newTheme }: { images: 
                 {FILLS.map((f) => (
                   <option key={f.id} value={f.id}>
                     {f.label}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="theme-bg-row">
+              <Named about="Span" info={["Whole editor area: one picture behind all the split panes together.", "Each pane: one picture in each console and table pane."]}>
+                Span
+              </Named>
+              <Select aria-label="Span" value={bg.span === "pane" ? "pane" : "area"} onChange={(e) => setBg({ span: e.target.value as Span })}>
+                {SPANS.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.label}
                   </option>
                 ))}
               </Select>

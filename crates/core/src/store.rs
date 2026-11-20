@@ -1191,7 +1191,7 @@ mod tests {
         let corner = pick("small.gif", b"GIF89a\x01\x00\x01\x00\x00\x00\x00\x3b");
         assert!(store.import_theme_image(&dir.path().join("nothing.png")).is_err());
         let images = ThemeImages {
-            background: Some(BackgroundImage { file: bg.clone(), opacity: 15, fill: "contain".into(), anchor: "right bottom".into() }),
+            background: Some(BackgroundImage { file: bg.clone(), opacity: 15, fill: "contain".into(), anchor: "right bottom".into(), span: "pane".into() }),
             corner: Some(CornerImage { file: corner.clone(), corner: "right bottom".into(), size: 20, opacity: 100 }),
         };
         let pics = store.save_custom_theme(&CustomTheme { name: "Pics".into(), base: "dark".into(), images: images.clone(), ..Default::default() }).unwrap();

@@ -43,7 +43,7 @@ import { ReconnectToastView } from "../../components/ReconnectToasts";
 import type { ReconnectToast } from "../../lib/reconnect";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 import { inSmallWindow } from "./SmallWindow";
-import { BackgroundWindow, InEditor, SAMPLE_BACKGROUND, SAMPLE_CORNER } from "./BackgroundWindow";
+import { BackgroundWindow, InEditor, SAMPLE_BACKGROUND, SAMPLE_CORNER, SplitWindow } from "./BackgroundWindow";
 import { MOCK_IMAGES } from "../../lib/mock";
 import { newBackgroundSlot, type ThemeImages } from "../../lib/themeImages";
 
@@ -275,6 +275,18 @@ export const ThemeImagesTableLight = tinted("light", "table", STRONG);
 export const ThemeImagesTableNoImage = tinted("dark", "table", {});
 export const ThemeImagesConsoleAfter = tinted("dark", "console", STRONG);
 export const ThemeImagesConsoleBefore = tinted("dark", "console", STRONG, false);
+/** The Background's span, four tables split 2×2: "Whole editor area" (the default) draws one picture behind all of them, "Each pane"
+ *  one in each table. A theme saved without it (0.3.5-beta.1) spans the area */
+const SPLIT_AREA: ThemeImages = { background: { ...SAMPLE_BACKGROUND, opacity: 35 } };
+export const ThemeImagesSplitArea: S = { globals: { theme: "dark" }, render: () => <SplitWindow images={SPLIT_AREA} /> };
+export const ThemeImagesSplitPane: S = { globals: { theme: "dark" }, render: () => <SplitWindow images={{ background: { ...SPLIT_AREA.background!, span: "pane" } }} /> };
+/** The editor's Span control (Background › Span), in a custom theme with a Background image */
+export const ThemeImagesEditorSpan: S = {
+  ...bgEditor({ background: SAMPLE_BACKGROUND }),
+  play: async ({ canvasElement }) => {
+    await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Span" });
+  },
+};
 
 /** Settings › Keymap: every menu, toolbar and Find Action command by scope (Global, Database Explorer, Query Console, Data Grid), "none" where it has no key yet */
 export const SettingsKeymap: S = { name: "Settings — Keymap", render: () => <SettingsDialog initialPage="keymap" onClose={noop} onUpdate={noop} onChannel={noop} /> };

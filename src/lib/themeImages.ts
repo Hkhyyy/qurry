@@ -25,12 +25,19 @@ export type Corner = (typeof CORNERS)[number];
 export const SIZE_MIN = 10;
 export const SIZE_MAX = 40;
 
+/** "area": one picture behind the whole editor area (all splits together); "pane": one in each console or table pane */
+export type Span = "area" | "pane";
+export const SPANS: { id: Span; label: string }[] = [
+  { id: "area", label: "Whole editor area" },
+  { id: "pane", label: "Each pane" },
+];
 /** file: the copy in the config folder; opacity 0–100 */
 export interface BackgroundSlot {
   file: string;
   opacity: number;
   fill: Fill;
   anchor: Anchor;
+  span: Span;
 }
 export interface CornerSlot {
   file: string;
@@ -49,7 +56,7 @@ export function sameImages(a: ThemeImages | undefined, b: ThemeImages | undefine
   return key(a) === key(b);
 }
 /** A new image's settings: DataGrip's 15% in the background; a corner sticker bottom right, fully opaque */
-export const newBackgroundSlot = (file: string): BackgroundSlot => ({ file, opacity: 15, fill: "cover", anchor: "center" });
+export const newBackgroundSlot = (file: string): BackgroundSlot => ({ file, opacity: 15, fill: "cover", anchor: "center", span: "area" });
 export const newCornerSlot = (file: string): CornerSlot => ({ file, corner: "right bottom", size: 20, opacity: 100 });
 
 /** The grid's colors drawn as tints over the image (App.css, :is(.theme-backdrop-host, .theme-preview).has-image): how much of each

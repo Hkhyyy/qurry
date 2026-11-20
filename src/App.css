@@ -539,6 +539,12 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-preview-images { position: absolute; left: 0; right: 0; pointer-events: none; }
 .theme-preview.has-image > :not(.theme-preview-images, .theme-sticker) { position: relative; }
 .theme-preview.has-image .monaco-editor { --vscode-editor-background: transparent; --vscode-editorGutter-background: transparent; }
+/* Span "area": the editor area's host draws one picture behind every split; the panes' hosts and the group's work area let it through,
+   the tab strips keep the panel's color */
+.theme-editor-area { height: 100%; }
+.theme-backdrop-host.see-through { background: transparent; }
+.theme-editor-area.span-area .editor-group, .theme-editor-area.span-area .work-area { background: transparent; }
+.theme-editor-area.span-area .editor-group > .tabs { background: var(--panel); }
 .console-images { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .console-images > [data-group] { flex: 1; min-height: 0; }
 .theme-sticker { position: fixed; z-index: var(--ui-z-sticker); pointer-events: none; user-select: none; object-fit: contain; }

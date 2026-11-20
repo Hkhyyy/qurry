@@ -90,13 +90,20 @@ impl ThemeImages {
     }
 }
 
-/// opacity 0–100; fill one of FILLS; anchor one of ANCHORS (CSS background-position)
+/// opacity 0–100; fill one of FILLS; anchor one of ANCHORS (CSS background-position); span one of SPANS: "area", one picture behind
+/// the whole editor area (all splits together), or "pane", one per console or table pane. Saved without it (0.3.5-beta.1): "area"
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BackgroundImage {
     pub file: String,
     pub opacity: u8,
     pub fill: String,
     pub anchor: String,
+    #[serde(default = "span_area")]
+    pub span: String,
+}
+
+fn span_area() -> String {
+    "area".into()
 }
 
 /// corner one of CORNERS; size SIZE_MIN–SIZE_MAX (% of the window's height); opacity 0–100
@@ -111,6 +118,7 @@ pub struct CornerImage {
 pub const FILLS: [&str; 4] = ["cover", "contain", "tile", "center"];
 pub const ANCHORS: [&str; 9] = ["left top", "center top", "right top", "left center", "center", "right center", "left bottom", "center bottom", "right bottom"];
 pub const CORNERS: [&str; 4] = ["left top", "right top", "left bottom", "right bottom"];
+pub const SPANS: [&str; 2] = ["area", "pane"];
 pub const SIZE_MIN: u8 = 10;
 pub const SIZE_MAX: u8 = 40;
 /// The largest still image a theme takes, and the largest animated one (GIF, animated WebP)
@@ -207,7 +215,7 @@ pub fn check_image(bytes: &[u8], shown: &str) -> Result<&'static str, String> {
 }
 
 fn background_ok(b: &BackgroundImage) -> bool {
-    image_name_ok(&b.file) && b.opacity <= 100 && FILLS.contains(&b.fill.as_str()) && ANCHORS.contains(&b.anchor.as_str())
+    image_name_ok(&b.file) && b.opacity <= 100 && FILLS.contains(&b.fill.as_str()) && ANCHORS.contains(&b.anchor.as_str()) && SPANS.contains(&b.span.as_str())
 }
 
 fn corner_ok(c: &CornerImage) -> bool {
@@ -220,7 +228,7 @@ fn check_images(i: &ThemeImages) -> Result<(), String> {
         return Err(format!("\"{f}\" isn't a theme image's file name"));
     }
     if i.background.as_ref().is_some_and(|b| !background_ok(b)) {
-        return Err("The background image's opacity, fill or placement isn't one Qurry knows".into());
+        return Err("The background image's opacity, fill, placement or span isn't one Qurry knows".into());
     }
     if i.corner.as_ref().is_some_and(|c| !corner_ok(c)) {
         return Err("The corner image's corner, size or opacity isn't one Qurry knows".into());
@@ -670,7 +678,7 @@ mod tests {
     #[test]
     fn a_custom_themes_images_are_checked_kept_in_settings_and_left_out_of_its_file() {
         let images = ThemeImages {
-            background: Some(BackgroundImage { file: "0123456789abcdef.png".into(), opacity: 15, fill: "cover".into(), anchor: "right bottom".into() }),
+            background: Some(BackgroundImage { file: "0123456789abcdef.png".into(), opacity: 15, fill: "cover".into(), anchor: "right bottom".into(), span: "pane".into() }),
             corner: Some(CornerImage { file: "fedcba9876543210.gif".into(), corner: "right bottom".into(), size: 20, opacity: 100 }),
         };
         let t = CustomTheme { id: "custom-1".into(), name: "Pics".into(), base: "dark".into(), colors: BTreeMap::new(), images: images.clone() };
@@ -737,6 +745,26 @@ mod tests {
         // A new theme has no old entry
         let fresh = custom_to_value(None, &CustomTheme { id: "custom-2".into(), name: "New".into(), base: "light".into(), ..Default::default() });
         assert_eq!(fresh, serde_json::json!({ "id": "custom-2", "name": "New", "base": "light", "colors": {} }));
+    }
+
+
+    #[test]
+    fn the_background_spans_the_editor_area_unless_saved_per_pane() {
+        let slot = |extra: &str| serde_json::from_str::<serde_json::Value>(&format!(r#"{{"id": "custom-1", "name": "A", "base": "dark", "images": {{"background": {{"file": "0123456789abcdef.png", "opacity": 15, "fill": "cover", "anchor": "center"{extra}}}}}}}"#)).unwrap();
+        // Saved without it (0.3.5-beta.1): the whole area
+        assert_eq!(custom_from_value(&slot("")).unwrap().images.background.unwrap().span, "area");
+        let pane = custom_from_value(&slot(r#", "span": "pane""#)).unwrap();
+        assert_eq!(pane.images.background.as_ref().unwrap().span, "pane");
+        // Written back as read, and kept by the settings.json round trip
+        let back = custom_to_value(Some(&slot(r#", "span": "pane""#)), &pane);
+        assert_eq!(back["images"]["background"]["span"], "pane");
+        assert_eq!(custom_from_value(&back).unwrap(), pane);
+        // An unknown span: the slot is left out (and kept in the file), the theme read
+        let later = slot(r#", "span": "window""#);
+        let t = custom_from_value(&later).unwrap();
+        assert!(t.images.background.is_none());
+        assert_eq!(custom_to_value(Some(&later), &t)["images"]["background"]["span"], "window");
+        assert!(check(&CustomTheme { images: ThemeImages { background: Some(BackgroundImage { span: "window".into(), ..pane.images.background.clone().unwrap() }), corner: None }, ..pane.clone() }).is_err());
     }
 
 }

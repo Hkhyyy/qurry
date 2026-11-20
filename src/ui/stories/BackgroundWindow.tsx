@@ -6,7 +6,7 @@ import { MONACO_THEME, connStripe, connTabVars, previewTheme, saveCustomTheme, s
 import { newBackgroundSlot, newCornerSlot, type ThemeImages } from "../../lib/themeImages";
 import { SettingsDialog } from "../../features/settings/SettingsDialog";
 import { ThemeBackdrop, ThemeSticker } from "../../features/settings/ThemeImages";
-import { GridCell, GridHeaderRow, IconButton, Menu, RowNumberCell, Spacer, TreeRow } from "..";
+import { cx, GridCell, GridHeaderRow, IconButton, Menu, RowNumberCell, Spacer, TreeRow } from "..";
 import { DatabaseIcon, IcExport, IcFilter, IcMinus, IcOrder, IcPlus, IcReload, IcRevert, IcSubmit, PgIcon, TableIcon } from "../icons";
 
 // Theme image stories (#202): the main window with a Background image behind the SQL editor and the result grid (and nowhere else:
@@ -67,11 +67,11 @@ const TROWS = Array.from({ length: 18 }, (_, i) => [String(i + 1), `user_${i + 1
 
 /** A table tab: its toolbar, WHERE / ORDER BY, and the grid with a pinned key column, a selected cell, an edited cell, a new and a
  *  deleted row, the image behind the grid as TableEditor draws it (the real grid cells and CSS) */
-function TableView({ slot, still }: { slot?: ThemeImages["background"]; still?: boolean }) {
+function TableView({ slot, still, seeThrough }: { slot?: ThemeImages["background"]; still?: boolean; seeThrough?: boolean }) {
   const RN = 44;
   return (
     <div className="table-editor" style={{ position: "relative", flex: 1, minHeight: 0 }}>
-      <ThemeBackdrop slot={slot} still={still} className="table-body">
+      <ThemeBackdrop slot={slot} still={still} seeThrough={seeThrough} className="table-body">
         <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column" }}>
           <div className="grid-toolbar">
             <IconButton title="Reload" size="sm">
@@ -236,6 +236,57 @@ export function BackgroundWindow({
           items={[{ label: "Copy", shortcut: "⌘c", action: noop }, { label: "Edit Cell", shortcut: "↩", action: noop }, { separator: true }, { label: "Delete Row", shortcut: "⌘⌫", danger: true, action: noop }]}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Four tables split 2×2, as the editor area draws them with a Background image: with span "area" one picture behind all four (the
+ * editor area's host draws it, the panes let it through), with "pane" one in each table. Tab strips, toolbars, the WHERE / ORDER BY
+ * bars, headers and the split lines keep their own surface
+ */
+export function SplitWindow({ images, still }: { images: ThemeImages; still?: boolean }) {
+  const bg = images.background;
+  const area = !!bg && bg.span !== "pane";
+  const group = (name: string, focused: boolean) => (
+    <div className={cx("panel editor-group", focused ? "focused" : "unfocused")} style={{ minWidth: 0, minHeight: 0 }}>
+      <div className="tabs ui-row" style={{ gap: 0 }}>
+        <div className="tab active">
+          <span className="tab-label">{name}</span>
+        </div>
+      </div>
+      <div className="work-area" style={{ display: "flex", flexDirection: "column" }}>
+        <TableView slot={area ? undefined : bg} seeThrough={area} still={still} />
+      </div>
+    </div>
+  );
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--text)" }}>
+      <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+        <div style={{ width: 180, flex: "none", background: "var(--panel)", borderRight: "1px solid var(--border)", paddingTop: 4 }}>
+          <TreeRow depth={0} open icon={<PgIcon />} label="[DEV] shop_app" />
+          {["customers", "orders", "products", "users"].map((t) => (
+            <TreeRow key={t} depth={1} leaf icon={<TableIcon />} label={t} />
+          ))}
+        </div>
+        <ThemeBackdrop slot={area ? bg : undefined} still={still} className={cx("theme-editor-area", area && "span-area")} style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ height: "100%", display: "grid", gridTemplateColumns: "1fr 1px 1fr", gridTemplateRows: "1fr 1px 1fr" }}>
+            {group("users", true)}
+            <div className="resize-h" />
+            {group("orders", false)}
+            <div className="resize-v" />
+            <div className="resize-v" />
+            <div className="resize-v" />
+            {group("customers", false)}
+            <div className="resize-h" />
+            {group("products", false)}
+          </div>
+        </ThemeBackdrop>
+      </div>
+      <div className="statusbar">
+        <span>[DEV] shop_app · 4 tables</span>
+      </div>
+      <ThemeSticker slot={images.corner} still={still} />
     </div>
   );
 }

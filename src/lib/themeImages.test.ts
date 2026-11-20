@@ -45,7 +45,7 @@ describe("theme background image", () => {
     expect(warningsOver(p, 50, warn).map((w) => w.token)).not.toContain("comment");
   });
   it("draws the background's fill, placement and opacity as CSS", () => {
-    const b = { file: "x.webp", opacity: 40, fill: "tile", anchor: "right bottom" } as const;
+    const b = { file: "x.webp", opacity: 40, fill: "tile", anchor: "right bottom", span: "area" } as const;
     expect(backdropStyle(b, "x.webp")).toMatchObject({ backgroundRepeat: "repeat", backgroundSize: "auto", backgroundPosition: "right bottom", opacity: 0.4 });
     expect(backdropStyle({ ...b, fill: "cover" }, "x.webp")).toMatchObject({ backgroundRepeat: "no-repeat", backgroundSize: "cover" });
   });
@@ -56,12 +56,12 @@ describe("theme background image", () => {
     expect(s).not.toHaveProperty("right");
   });
   it("starts a new background image at 15%, a new corner image bottom right at 20% and fully opaque", () => {
-    expect(newBackgroundSlot("a.png")).toEqual({ file: "a.png", opacity: 15, fill: "cover", anchor: "center" });
+    expect(newBackgroundSlot("a.png")).toEqual({ file: "a.png", opacity: 15, fill: "cover", anchor: "center", span: "area" });
     expect(newCornerSlot("a.gif")).toEqual({ file: "a.gif", corner: "right bottom", size: 20, opacity: 100 });
   });
   it("compares two themes' images whatever order their fields come in", () => {
     const bg = newBackgroundSlot("0123456789abcdef.png");
-    expect(sameImages({ background: bg }, { background: { anchor: bg.anchor, fill: bg.fill, opacity: bg.opacity, file: bg.file } })).toBe(true);
+    expect(sameImages({ background: bg }, { background: { span: bg.span, anchor: bg.anchor, fill: bg.fill, opacity: bg.opacity, file: bg.file } })).toBe(true);
     expect(sameImages(undefined, {})).toBe(true);
     expect(sameImages({}, { background: undefined })).toBe(true);
     expect(sameImages({ background: bg }, { background: { ...bg, opacity: 16 } })).toBe(false);
