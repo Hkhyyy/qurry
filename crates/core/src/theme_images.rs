@@ -107,6 +107,14 @@ mod tests {
         let name = import(&dir, &picked(&src, "Cat Picture.png", PNG)).unwrap();
         assert!(theme::image_name_ok(&name) && name.ends_with(".png"), "{name}");
         assert_eq!(read(&dir, &name).unwrap(), PNG);
+        // An animated PNG is kept as .apng
+        // signature, IHDR (13 bytes and a CRC), then acTL before any IDAT
+        let mut apng = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        apng.extend([0; 13 + 4]);
+        apng.extend(b"\0\0\0\x08acTL\0\0\0\x02\0\0\0\0\0\0\0\0");
+        let apng = apng.as_slice();
+        assert!(import(&dir, &picked(&src, "moving.png", apng)).unwrap().ends_with(".apng"));
+        std::fs::remove_file(dir.join(import(&dir, &picked(&src, "moving.png", apng)).unwrap())).unwrap();
         // The same bytes under another name: the same file
         assert_eq!(import(&dir, &picked(&src, "again.png", PNG)).unwrap(), name);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);

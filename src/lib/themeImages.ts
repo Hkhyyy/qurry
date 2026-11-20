@@ -101,9 +101,9 @@ export function stickerStyle(c: CornerSlot, margin = 16, unit: "vh" | "%" = "vh"
   return { [x]: margin, [y]: margin, height: `${c.size}${unit}`, maxWidth: `calc(100${unit === "vh" ? "vw" : "%"} - ${2 * margin}px)`, opacity: c.opacity / 100 };
 }
 
-const MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
-/** A GIF or WebP may move (they are frozen while motion is paused); a PNG or JPEG is drawn as it is */
-export const mayMove = (file: string) => /\.(gif|webp)$/.test(file);
+const MIME: Record<string, string> = { png: "image/png", apng: "image/apng", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+/** A GIF, WebP or animated PNG (kept as .apng) may move (they are frozen while motion is paused); a PNG or JPEG is drawn as it is */
+export const mayMove = (file: string) => /\.(gif|webp|apng)$/.test(file);
 
 /** Each image in use: its blob URL, its still once made, and how many drawings use it. The last one to let go frees both */
 const images = new Map<string, { url: Promise<string>; still?: Promise<string>; users: number }>();

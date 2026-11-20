@@ -79,9 +79,12 @@ describe("theme background image", () => {
     await expect(holdImage(png)).rejects.toMatch(/missing/);
     expect(await holdImage(png)).toBe("blob:3");
     expect(made[2].type).toBe("image/png");
+    releaseImage(png);
+    expect(await holdImage("2222222222222222.apng")).toBe("blob:4");
+    expect(made[3].type).toBe("image/apng");
     vi.unstubAllGlobals();
   });
   it("freezes only a GIF or a WebP: a PNG or JPEG is drawn as it is", () => {
-    expect(["a.gif", "a.webp", "a.png", "a.jpg"].map(mayMove)).toEqual([true, true, false, false]);
+    expect(["a.gif", "a.webp", "a.apng", "a.png", "a.jpg"].map(mayMove)).toEqual([true, true, true, false, false]);
   });
 });

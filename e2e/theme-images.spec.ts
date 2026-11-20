@@ -7,6 +7,7 @@ import { dialog, expect, openApp, openInTheme, test, treeItem, work } from "./ap
 
 const RIDGES = "a1b2c3d4e5f60718.png";
 const BEACON = "0f1e2d3c4b5a6978.gif";
+const BEACON_APNG = "1a2b3c4d5e6f7081.apng";
 const pickNext = (page: Page, file: string | null) => page.evaluate((f) => ((window as any).__mockThemeImagePick = f), file);
 const slot = (page: Page, name: "Background" | "Corner") => dialog(page).getByRole("group", { name, exact: true });
 const saved = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem("mock-themeSettings") ?? "null"));
@@ -145,6 +146,13 @@ test.describe("with Reduce motion on", () => {
     expect(at[2]).toBeGreaterThan(170);
     // and nothing yet where the late frames draw it: the badge's green
     expect(at[4]).toBeLessThan(100);
+  });
+  test("an animated PNG (kept as .apng) is drawn as its first frame too", async ({ page }) => {
+    await openInTheme(page, "custom-1", pictures({ corner: { ...CORNER, file: BEACON_APNG } }));
+    await expect(windowSticker(page)).toBeVisible();
+    // The file is an image/apng blob; what is drawn is the canvas still, an image/png
+    const type = await page.evaluate(async (u) => (await (await fetch(u)).blob()).type, (await windowSticker(page).getAttribute("src"))!);
+    expect(type).toBe("image/png");
   });
   test("a PNG is drawn as it is, never re-encoded into a still", async ({ page }) => {
     await openInTheme(page, "custom-1", pictures({ background: { file: RIDGES, opacity: 15, fill: "cover", anchor: "center" } }));

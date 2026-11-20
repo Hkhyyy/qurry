@@ -117,7 +117,7 @@ pub const SIZE_MAX: u8 = 40;
 pub const IMAGE_MAX: usize = 4 * 1024 * 1024;
 pub const ANIMATED_MAX: usize = 8 * 1024 * 1024;
 /// The extensions a theme image is kept under
-pub const IMAGE_EXTS: [&str; 4] = ["png", "jpg", "gif", "webp"];
+pub const IMAGE_EXTS: [&str; 5] = ["png", "apng", "jpg", "gif", "webp"];
 
 /// A theme image's file name as the core names it: 16 lowercase hex digits (its content's hash) and a known extension. So a name
 /// that comes back from the GUI can't be a path (no `/`, `\` or `..`)
@@ -125,10 +125,11 @@ pub fn image_name_ok(name: &str) -> bool {
     name.split_once('.').is_some_and(|(stem, ext)| stem.len() == 16 && stem.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) && IMAGE_EXTS.contains(&ext))
 }
 
-/// The extension an image is kept under, from its first bytes: PNG, JPEG, GIF or WebP (never SVG or anything else)
+/// The extension an image is kept under, from its first bytes: PNG (an animated one, APNG, as apng), JPEG, GIF or WebP (never SVG
+/// or anything else)
 pub fn image_ext(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        Some("png")
+        Some(if png_animated(bytes) { "apng" } else { "png" })
     } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
         Some("jpg")
     } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
@@ -140,9 +141,23 @@ pub fn image_ext(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// A GIF with more than one frame, or a WebP with its animation flag (VP8X)
+/// A PNG with an animation control chunk (acTL) before its first image data (IDAT): an APNG
+fn png_animated(b: &[u8]) -> bool {
+    let mut i = 8;
+    while let (Some(len), Some(kind)) = (b.get(i..i + 4), b.get(i + 4..i + 8)) {
+        match kind {
+            b"acTL" => return true,
+            b"IDAT" | b"IEND" => return false,
+            _ => i += 12 + u32::from_be_bytes([len[0], len[1], len[2], len[3]]) as usize,
+        }
+    }
+    false
+}
+
+/// A GIF with more than one frame, an APNG, or a WebP with its animation flag (VP8X)
 pub fn is_animated(bytes: &[u8]) -> bool {
     match image_ext(bytes) {
+        Some("apng") => true,
         Some("gif") => gif_frames(bytes) > 1,
         Some("webp") => bytes.len() > 20 && &bytes[12..16] == b"VP8X" && bytes[20] & 0x02 != 0,
         _ => false,
@@ -579,6 +594,39 @@ mod tests {
         assert_eq!(image_ext(b"PNG"), None);
         assert_eq!(image_ext(b""), None);
         assert_eq!(image_ext(b"RIFF\0\0\0\0WAVE"), None);
+    }
+
+    /// A PNG of these chunks (length, type, data, a dummy CRC)
+    fn png(chunks: &[(&[u8; 4], &[u8])]) -> Vec<u8> {
+        let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
+        for (kind, data) in chunks {
+            b.extend((data.len() as u32).to_be_bytes());
+            b.extend(*kind);
+            b.extend(*data);
+            b.extend([0; 4]);
+        }
+        b
+    }
+
+    #[test]
+    fn an_animated_png_is_kept_as_apng_and_capped_as_animated() {
+        let ihdr: (&[u8; 4], &[u8]) = (b"IHDR", &[0; 13]);
+        let still = png(&[ihdr, (b"IDAT", b"x"), (b"IEND", b"")]);
+        let apng = png(&[ihdr, (b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0]), (b"IDAT", b"x"), (b"IEND", b"")]);
+        // acTL after the image data isn't an APNG (a viewer draws it still)
+        let late = png(&[ihdr, (b"IDAT", b"x"), (b"acTL", &[0; 8]), (b"IEND", b"")]);
+        assert_eq!([image_ext(&still), image_ext(&apng), image_ext(&late)], [Some("png"), Some("apng"), Some("png")]);
+        assert!(!is_animated(&still) && is_animated(&apng));
+        assert!(image_name_ok("0123456789abcdef.apng"));
+        let pad = |mut b: Vec<u8>, to: usize| {
+            b.resize(to, 0);
+            b
+        };
+        assert!(check_image(&pad(still, IMAGE_MAX + 1), "a.png").unwrap_err().ends_with("a still image can be at most 4 MB"));
+        assert_eq!(check_image(&pad(apng.clone(), IMAGE_MAX + 1), "a.png"), Ok("apng"));
+        assert!(check_image(&pad(apng, ANIMATED_MAX + 1), "a.png").unwrap_err().ends_with("an animated image can be at most 8 MB"));
+        // Cut short: no panic
+        assert_eq!(image_ext(&png(&[ihdr])[..20]), Some("png"));
     }
 
     #[test]
