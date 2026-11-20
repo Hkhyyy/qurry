@@ -663,7 +663,7 @@ mod tests {
         // A custom theme's colors reach the TUI
         let s = ThemeSettings {
             theme: Some("custom-1".into()),
-            custom: vec![qurry_shared::theme::CustomTheme { id: "custom-1".into(), name: "Mine".into(), base: "dark".into(), colors: [("sel".into(), "#123456".into())].into() }],
+            custom: vec![qurry_shared::theme::CustomTheme { id: "custom-1".into(), name: "Mine".into(), base: "dark".into(), colors: [("sel".into(), "#123456".into())].into(), ..Default::default() }],
             ..Default::default()
         };
         assert_eq!(at(&Look::of(&s, false), ColorMode::TrueColor, Style::default().bg(SEL)).1, Color::Rgb(0x12, 0x34, 0x56));

@@ -233,6 +233,8 @@ pub fn run() {
             commands::delete_custom_theme,
             commands::import_theme,
             commands::export_theme,
+            commands::import_theme_image,
+            commands::theme_image,
             commands::column_widths,
             commands::set_column_widths,
             commands::reset_column_widths,

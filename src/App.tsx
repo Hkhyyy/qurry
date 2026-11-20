@@ -37,6 +37,7 @@ import { Dialogs, TopDialogs } from "./features/dialogs/Dialogs";
 import { useGlobalShortcuts } from "./features/shortcuts/useGlobalShortcuts";
 import { setDialog, setKeymapOpen, setSettingsOpen, setUpdate, setUpdateOpen, useDialogsStore } from "./features/dialogs/store";
 import { moveOldLayout } from "./lib/panelLayout";
+import { ThemeCorner } from "./features/settings/ThemeImages";
 import "./App.css";
 
 // Splitter sizes saved before 0.3.4, before the first render reads them (#192)
@@ -383,6 +384,8 @@ export default function App() {
       {tabMenu && <ContextMenu menu={tabMenu} onClose={() => setTabMenu(null)} />}
 
       <TopDialogs conns={conns} setStatus={setStatus} refresh={refresh} openConsole={openConsole} />
+      {/* The theme's Corner image: in front of the window, under menus, dialogs, toasts and popups; clicks pass through */}
+      <ThemeCorner />
     </div>
   );
 }

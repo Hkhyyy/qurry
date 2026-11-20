@@ -287,6 +287,10 @@ export const api = {
   importTheme: () => invoke<CustomTheme | null>("import_theme"),
   /** The path written, null if cancelled */
   exportTheme: (theme: CustomTheme) => invoke<string | null>("export_theme", { theme }),
+  /** Settings › Theme › Images › Choose…: the picker, then the image copied into the config folder; its file name, null if cancelled */
+  importThemeImage: () => invoke<string | null>("import_theme_image"),
+  /** A theme image's bytes */
+  themeImage: (file: string) => invoke<ArrayBuffer>("theme_image", { file }),
   /** Column widths a user gave a table tab's columns, shared with the TUI; setting merges into what is saved and returns it */
   columnWidths: (table: TableRef) => invoke<ColumnWidths>("column_widths", { table }),
   setColumnWidths: (table: TableRef, widths: ColumnWidths) => invoke<ColumnWidths>("set_column_widths", { table, widths }),

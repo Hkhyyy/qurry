@@ -4,6 +4,7 @@
 import { useSyncExternalStore, type CSSProperties } from "react";
 import TABLE from "../../crates/shared/src/themes.json";
 import { api } from "./api";
+import type { ThemeImages } from "./themeImages";
 
 export type Kind = "dark" | "light" | "hc";
 
@@ -26,13 +27,16 @@ export interface ThemeDef {
   kind: Kind;
   custom: boolean;
   colors: Palette;
+  /** A custom theme's images (the GUI draws them) */
+  images?: ThemeImages;
 }
-/** A built-in theme and the colors changed from it (qurry_shared::theme::CustomTheme) */
+/** A built-in theme and the colors changed from it, and its images (qurry_shared::theme::CustomTheme) */
 export interface CustomTheme {
   id: string;
   name: string;
   base: string;
   colors: Palette;
+  images?: ThemeImages;
 }
 export interface ThemeSync {
   dark: string;
@@ -112,7 +116,7 @@ export function findTheme(s: ThemeSettings, id: string): ThemeDef | undefined {
   if (!c || !base) return undefined;
   const colors = { ...base.colors };
   for (const [k, v] of Object.entries(c.colors)) if (k in colors) colors[k] = v;
-  return { id: c.id, name: c.name, kind: base.kind, custom: true, colors };
+  return { id: c.id, name: c.name, kind: base.kind, custom: true, colors, images: c.images };
 }
 
 /** The built-in themes, then the custom ones */

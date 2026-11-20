@@ -14,6 +14,7 @@ import { ask } from "../lib/dialogs";
 import { planText } from "../lib/planText";
 import { explainSql } from "../lib/explain";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
+import { ThemeBackground } from "../features/settings/ThemeImages";
 import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep, TxPending } from "../ui";
 
 const SETTINGS_KEY = "dbtool.execSettings";
@@ -427,139 +428,142 @@ export function ConsolePane(p: Props) {
         </Select>
       </Toolbar>
 
-      <Group orientation="vertical" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
-        <Panel id="editor" defaultSize="58%" minSize="15%">
-          <div className="editor-area">
-            <ConsoleEditor
-              tabId={p.tabId}
-              connId={p.target}
-              database={p.database}
-              initialSql={p.initialSql}
-              language={p.dialect?.monaco ?? "pgsql"}
-              kind={p.dialect?.quoting ?? "postgres"}
-              onChange={p.onChange}
-              onRun={onRun}
-              split={splitFn}
-              // A caret move never asks to discard a grid's pending edits: the tab stays until it is picked (or the edits are done)
-              onCaret={(stmt) => edits.current === 0 && p.onCaret(stmt)}
-              onStatements={(before, after) => p.onStatements(before, after, edits.current > 0 ? shown : undefined)}
-              onMarkClick={(out) => {
-                p.onSetActiveResult("output");
-                setMarkedOut({ out });
-              }}
-              registerApi={(id, a) => {
-                setApi(a);
-                p.registerApi(id, { ...a, loading: () => pending.current !== null, cancelPending });
-              }}
-            />
-            {chooser && (
-              // A menu: it has the keys while open (↑↓ Enter; any other key, Esc included, closes it and does nothing else),
-              // and focus leaving it (a click outside, another tab) closes it without running
-              <div className="stmt-chooser" role="menu" tabIndex={-1} ref={(el) => el?.focus()} onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setChooser(null)} onKeyDown={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (e.key === "ArrowDown") setChooser({ ...chooser, idx: Math.min(chooser.idx + 1, chooser.options.length - 1) });
-                else if (e.key === "ArrowUp") setChooser({ ...chooser, idx: Math.max(chooser.idx - 1, 0) });
-                else if (e.key === "Enter") pickChoice(chooser.idx);
-                else if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) { setChooser(null); api?.focus(); }
-              }}>
-                <div className="sc-title">Statements</div>
-                {chooser.options.map((o, i) => (
-                  <div key={i} className={"sc-item" + (i === chooser.idx ? " on" : "")} onMouseEnter={() => setChooser({ ...chooser, idx: i })} onClick={() => pickChoice(i)}>
-                    {o.label}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </Panel>
-        <Separator className="resize-v" />
-        <Panel id="results" defaultSize="42%" minSize="10%">
-          <div className="panel results-panel">
-            {/* Result tabs: Output + result sets (Services results area) */}
-            <div className="result-tabs">
-              <TabStrip
-                activeKey={shown}
-                overflow={[{ key: "output", label: "Output", active: shown === "output", onSelect: () => void showResult("output") }, ...p.results.map((r) => ({ key: r.id, label: resultLabel(r), active: shown === r.id, onSelect: () => void showResult(r.id) }))]}
-                style={{ flex: 1, minWidth: 0 }}
-              >
-              <TabItem variant="result" label="Output" active={shown === "output"} onClick={() => void showResult("output")} />
-              {p.results.map((r) => (
-                <TabItem
-                  key={r.id}
-                  variant="result"
-                  label={resultLabel(r)}
-                  active={shown === r.id}
-                  pinned={r.pinned}
-                  onPin={() => p.onPin(r.id, false)}
-                  onClose={() => void closeResult(r.id)}
-                  onClick={() => void showResult(r.id)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setMenu({
-                      x: e.clientX,
-                      y: e.clientY,
-                      items: resultMenu(r),
-                    });
-                  }}
-                  title={r.sql}
-                  data-result={r.id}
-                />
-              ))}
-              </TabStrip>
-              {shown === "output" && (
-                <IconButton title={keyTitle("Clear All", "output.clear")} onClick={p.onClearOutput}><IcReload /></IconButton>
-              )}
-            </div>
-            <div className="result-area">
-              {shown === "output" && (
-                <div
-                  className="output-log"
-                  ref={outputRef}
-                  onScroll={(e) => {
-                    const el = e.currentTarget;
-                    follow.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 4;
-                    if (follow.current) followedTop.current = el.scrollTop;
-                  }}
-                >
-                  {p.output.length === 0 && <EmptyState>Execute a statement{cmd("editor.run").shortcut ? ` (${cmd("editor.run").shortcut})` : ""} to see the output.</EmptyState>}
-                  {p.output.map((l, i) => (
-                    <div key={i} className={"ol " + l.level + (l.stmt && l.stmt === markedOut?.out ? " on" : "")}>
-                      <span className="ts">[{l.ts}]</span> {l.text}
+      {/* The theme's Background image: behind the editor and the results, as one picture */}
+      <ThemeBackground className="console-images">
+        <Group orientation="vertical" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
+          <Panel id="editor" defaultSize="58%" minSize="15%">
+            <div className="editor-area">
+              <ConsoleEditor
+                tabId={p.tabId}
+                connId={p.target}
+                database={p.database}
+                initialSql={p.initialSql}
+                language={p.dialect?.monaco ?? "pgsql"}
+                kind={p.dialect?.quoting ?? "postgres"}
+                onChange={p.onChange}
+                onRun={onRun}
+                split={splitFn}
+                // A caret move never asks to discard a grid's pending edits: the tab stays until it is picked (or the edits are done)
+                onCaret={(stmt) => edits.current === 0 && p.onCaret(stmt)}
+                onStatements={(before, after) => p.onStatements(before, after, edits.current > 0 ? shown : undefined)}
+                onMarkClick={(out) => {
+                  p.onSetActiveResult("output");
+                  setMarkedOut({ out });
+                }}
+                registerApi={(id, a) => {
+                  setApi(a);
+                  p.registerApi(id, { ...a, loading: () => pending.current !== null, cancelPending });
+                }}
+              />
+              {chooser && (
+                // A menu: it has the keys while open (↑↓ Enter; any other key, Esc included, closes it and does nothing else),
+                // and focus leaving it (a click outside, another tab) closes it without running
+                <div className="stmt-chooser" role="menu" tabIndex={-1} ref={(el) => el?.focus()} onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setChooser(null)} onKeyDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (e.key === "ArrowDown") setChooser({ ...chooser, idx: Math.min(chooser.idx + 1, chooser.options.length - 1) });
+                  else if (e.key === "ArrowUp") setChooser({ ...chooser, idx: Math.max(chooser.idx - 1, 0) });
+                  else if (e.key === "Enter") pickChoice(chooser.idx);
+                  else if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) { setChooser(null); api?.focus(); }
+                }}>
+                  <div className="sc-title">Statements</div>
+                  {chooser.options.map((o, i) => (
+                    <div key={i} className={"sc-item" + (i === chooser.idx ? " on" : "")} onMouseEnter={() => setChooser({ ...chooser, idx: i })} onClick={() => pickChoice(i)}>
+                      {o.label}
                     </div>
                   ))}
-                  {p.errorAction}
                 </div>
               )}
-              {active?.kind === "result" && active.result && (
-                <ResultGrid
-                  result={active.result}
-                  // One table with its key, or a join per table (the backend says so). In Manual mode or an open transaction Submit
-                  // runs in it, and the edits stay pending until Commit / Roll back (useConsole submitEdits)
-                  edit={active.result.edit}
-                  editJoin={active.result.editJoin}
-                  readOnly={p.readOnly}
-                  readOnlyReason={!active.result.edit && !active.result.editJoin ? (active.result.readOnlyReason ?? CONSOLE_READ_ONLY) : "Data source is read-only"}
-                  onPendingChange={(n) => (edits.current = n)}
-                  running={p.running}
-                  loadingMore={p.loadingMore}
-                  query={active.sql}
-                  onFetchMore={() => p.onFetchMore(active.id)}
-                  onFetchFull={p.onFetchFull && ((cells) => p.onFetchFull!(active.id, cells))}
-                  onSubmit={(st) => p.onSubmit(active.id, st)}
-                  onReload={() => execute([{ sql: active.sql, stmt: active.stmt, into: active.id }])}
-                  onCancel={p.onCancel}
-                  onExport={() => p.onExport(active.sql)}
-                  dialect={p.dialect}
-                  widthsOf={active.id}
-                  target={p.target}
-                />
-              )}
-              {active?.kind === "plan" && active.plan && <PlanView plan={active.plan} json={active.planJson} />}
             </div>
-          </div>
-        </Panel>
-      </Group>
+          </Panel>
+          <Separator className="resize-v" />
+          <Panel id="results" defaultSize="42%" minSize="10%">
+            <div className="panel results-panel">
+              {/* Result tabs: Output + result sets (Services results area) */}
+              <div className="result-tabs">
+                <TabStrip
+                  activeKey={shown}
+                  overflow={[{ key: "output", label: "Output", active: shown === "output", onSelect: () => void showResult("output") }, ...p.results.map((r) => ({ key: r.id, label: resultLabel(r), active: shown === r.id, onSelect: () => void showResult(r.id) }))]}
+                  style={{ flex: 1, minWidth: 0 }}
+                >
+                <TabItem variant="result" label="Output" active={shown === "output"} onClick={() => void showResult("output")} />
+                {p.results.map((r) => (
+                  <TabItem
+                    key={r.id}
+                    variant="result"
+                    label={resultLabel(r)}
+                    active={shown === r.id}
+                    pinned={r.pinned}
+                    onPin={() => p.onPin(r.id, false)}
+                    onClose={() => void closeResult(r.id)}
+                    onClick={() => void showResult(r.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        items: resultMenu(r),
+                      });
+                    }}
+                    title={r.sql}
+                    data-result={r.id}
+                  />
+                ))}
+                </TabStrip>
+                {shown === "output" && (
+                  <IconButton title={keyTitle("Clear All", "output.clear")} onClick={p.onClearOutput}><IcReload /></IconButton>
+                )}
+              </div>
+              <div className="result-area">
+                {shown === "output" && (
+                  <div
+                    className="output-log"
+                    ref={outputRef}
+                    onScroll={(e) => {
+                      const el = e.currentTarget;
+                      follow.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 4;
+                      if (follow.current) followedTop.current = el.scrollTop;
+                    }}
+                  >
+                    {p.output.length === 0 && <EmptyState>Execute a statement{cmd("editor.run").shortcut ? ` (${cmd("editor.run").shortcut})` : ""} to see the output.</EmptyState>}
+                    {p.output.map((l, i) => (
+                      <div key={i} className={"ol " + l.level + (l.stmt && l.stmt === markedOut?.out ? " on" : "")}>
+                        <span className="ts">[{l.ts}]</span> {l.text}
+                      </div>
+                    ))}
+                    {p.errorAction}
+                  </div>
+                )}
+                {active?.kind === "result" && active.result && (
+                  <ResultGrid
+                    result={active.result}
+                    // One table with its key, or a join per table (the backend says so). In Manual mode or an open transaction Submit
+                    // runs in it, and the edits stay pending until Commit / Roll back (useConsole submitEdits)
+                    edit={active.result.edit}
+                    editJoin={active.result.editJoin}
+                    readOnly={p.readOnly}
+                    readOnlyReason={!active.result.edit && !active.result.editJoin ? (active.result.readOnlyReason ?? CONSOLE_READ_ONLY) : "Data source is read-only"}
+                    onPendingChange={(n) => (edits.current = n)}
+                    running={p.running}
+                    loadingMore={p.loadingMore}
+                    query={active.sql}
+                    onFetchMore={() => p.onFetchMore(active.id)}
+                    onFetchFull={p.onFetchFull && ((cells) => p.onFetchFull!(active.id, cells))}
+                    onSubmit={(st) => p.onSubmit(active.id, st)}
+                    onReload={() => execute([{ sql: active.sql, stmt: active.stmt, into: active.id }])}
+                    onCancel={p.onCancel}
+                    onExport={() => p.onExport(active.sql)}
+                    dialect={p.dialect}
+                    widthsOf={active.id}
+                    target={p.target}
+                  />
+                )}
+                {active?.kind === "plan" && active.plan && <PlanView plan={active.plan} json={active.planJson} />}
+              </div>
+            </div>
+          </Panel>
+        </Group>
+      </ThemeBackground>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   );

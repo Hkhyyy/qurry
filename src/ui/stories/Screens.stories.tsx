@@ -43,6 +43,9 @@ import { ReconnectToastView } from "../../components/ReconnectToasts";
 import type { ReconnectToast } from "../../lib/reconnect";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 import { inSmallWindow } from "./SmallWindow";
+import { BackgroundWindow, InEditor, SAMPLE_BACKGROUND, SAMPLE_CORNER } from "./BackgroundWindow";
+import { MOCK_IMAGES } from "../../lib/mock";
+import { newBackgroundSlot, type ThemeImages } from "../../lib/themeImages";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
 const meta: Meta = { title: "GUI/5 Screens", parameters: { layout: "fullscreen" } };
@@ -199,6 +202,49 @@ export const QuickSwitchTheme: S = {
     fireEvent.keyDown(canvasElement.ownerDocument.body, { key: "`", code: "Backquote", ctrlKey: true });
   },
 };
+
+/** Theme images (#202). A custom theme carries up to two images (PNG, JPEG, WebP or GIF, each
+ *  copied into the config folder), in two independent slots of the section over the editor's preview, each optional, both can be on:
+ *  Background, drawn as it is (DataGrip's Set Background Image, 15% by default) behind the SQL editor and the result grid only; a mark
+ *  on its slider shows the opacity up to which every color keeps its contrast minimum over the image's lightest and darkest pixels
+ *  (0–3% in the built-in themes, 20% in High contrast), and above it the colors that fall below are counted (listed in Opacity's ⓘ),
+ *  saved with their warning, never changed. Corner, scaled down (10–40% of the window's height) in front of the window, 16 px from the
+ *  edges, under every menu, dialog, toast and popup; clicks pass through it; no contrast warning (it is placed on purpose). A slot
+ *  without an image is one line (Choose…). The images apply live to the window behind Settings; hold Peek (or Space on it) to fade
+ *  Settings and see it. GIF and animated WebP play in either slot, and stop on their first frame while Reduce motion is on or the
+ *  window isn't active: in Storybook it plays once the canvas has focus (click into it), and the Reduce motion control stands in for
+ *  the system setting. GUI only: the TUI keeps the field and never draws it (a terminal draws characters; its own background image shows
+ *  there). The images are the mock's made-up ones (src/lib/mock-images) */
+const bgEditor = (initial: ThemeImages): S => ({ render: () => <InEditor initial={initial} /> });
+const motion = { args: { reduceMotion: false }, argTypes: { reduceMotion: { control: "boolean", name: "Reduce motion" } } };
+const bgWindow = (theme: string, images: ThemeImages): S => ({
+  ...motion,
+  globals: { theme },
+  render: (args) => <BackgroundWindow images={images} still={!!(args as { reduceMotion?: boolean }).reduceMotion} />,
+});
+const BOTH: ThemeImages = { background: SAMPLE_BACKGROUND, corner: SAMPLE_CORNER };
+const BG: ThemeImages = { background: SAMPLE_BACKGROUND };
+const CORNER: ThemeImages = { corner: SAMPLE_CORNER };
+export const ThemeImagesEditor = bgEditor(BOTH);
+export const ThemeImagesEditorBackgroundOnly = bgEditor(BG);
+export const ThemeImagesEditorNoImages = bgEditor({});
+/** Peek held: Settings fades and the window behind it shows the images as they are now */
+export const ThemeImagesEditorPeek: S = {
+  ...bgEditor(BOTH),
+  play: async ({ canvasElement }) => {
+    const peek = await within(canvasElement.ownerDocument.body).findByRole("button", { name: "Peek" });
+    fireEvent.pointerDown(peek, { button: 0 });
+  },
+};
+export const ThemeImagesBothDark = bgWindow("dark", BOTH);
+export const ThemeImagesBackgroundDark = bgWindow("dark", BG);
+export const ThemeImagesBackgroundLight = bgWindow("light", BG);
+export const ThemeImagesBackgroundHighContrast = bgWindow("hc", BG);
+/** An animated image in the Background (tiled): it plays, and stops on its first frame with Reduce motion or when the window isn't active */
+export const ThemeImagesBackgroundAnimated = bgWindow("dark", { background: { ...newBackgroundSlot(MOCK_IMAGES.beacon), fill: "tile" } });
+export const ThemeImagesCornerDark = bgWindow("dark", CORNER);
+export const ThemeImagesCornerLight = bgWindow("light", { corner: { ...SAMPLE_CORNER, corner: "left top" } });
+export const ThemeImagesCornerHighContrast = bgWindow("hc", { corner: { ...SAMPLE_CORNER, size: 35 } });
 
 /** Settings › Keymap: every menu, toolbar and Find Action command by scope (Global, Database Explorer, Query Console, Data Grid), "none" where it has no key yet */
 export const SettingsKeymap: S = { name: "Settings — Keymap", render: () => <SettingsDialog initialPage="keymap" onClose={noop} onUpdate={noop} onChannel={noop} /> };

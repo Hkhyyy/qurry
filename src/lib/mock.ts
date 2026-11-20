@@ -2,6 +2,10 @@
 // A real font file for the added custom fonts (FontFace has to load something): Monaco's icon font (by path: the package exports only .js)
 import fontBytesUrl from "/node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.ttf?url";
 import { shared } from "./shared";
+// Made-up theme images (#202): a landscape and an animated badge, drawn for the mock
+import ridgesUrl from "./mock-images/ridges.png?url";
+import beaconUrl from "./mock-images/beacon.gif?url";
+import beaconApngUrl from "./mock-images/beacon.apng?url";
 import THEMES from "../../crates/shared/src/themes.json";
 const conns = [
   { id: "dev", name: "[DEV] shop_app", kind: "postgres", host: "dev-db.example.com", port: 5432, user: "app", database: "shop_app", color: "#5f5b24", hasPassword: true, connected: true },
@@ -145,6 +149,21 @@ let flakyLoads = 0;
 let updateChannel = "stable";
 /** Font files added in Settings: each "Add Font File…" adds "Fira Code" (then "Fira Code 2"…, as the backend names a taken name) */
 let customFonts: { name: string; file: string }[] = [];
+/** Theme images (#202): the copies in the config folder, by the names the core gives them (a hash and the type), as URLs to read */
+export const MOCK_IMAGES = { ridges: "a1b2c3d4e5f60718.png", beacon: "0f1e2d3c4b5a6978.gif", beaconApng: "1a2b3c4d5e6f7081.apng" };
+const themeImages: Record<string, string> = { [MOCK_IMAGES.ridges]: ridgesUrl, [MOCK_IMAGES.beacon]: beaconUrl, [MOCK_IMAGES.beaconApng]: beaconApngUrl };
+/** The picked files the mock knows, as the core answers them: a name, or why it is refused */
+const THEME_IMAGE_PICKS: Record<string, string | { refused: string }> = {
+  "ridges.png": MOCK_IMAGES.ridges,
+  "beacon.gif": MOCK_IMAGES.beacon,
+  // An animated PNG: kept as .apng, as the core keeps one
+  "beacon.png": MOCK_IMAGES.beaconApng,
+  "logo.svg": { refused: "logo.svg isn't a PNG, JPEG, GIF or WebP image" },
+  "big.png": { refused: "big.png is 5.0 MB: a still image can be at most 4 MB" },
+};
+/** A story's own image, read like a copy in the config folder (the local previews) */
+export const mockThemeImage = (file: string, url: string) => void (themeImages[file] = url);
+
 /** settings.json "theme" / "themeSync" / "customThemes" (kept across a reload, as the file is; read on each call, so a test can change
  *  it as the TUI would). Custom themes are checked as the core checks them (the shared WASM's theme file rules) */
 const themeSettings = () => JSON.parse(localStorage.getItem("mock-themeSettings") ?? "null") ?? { theme: null, sync: { dark: "dark", light: "light" }, custom: [] };
@@ -914,6 +933,19 @@ const handlers: Record<string, (a: any) => unknown> = {
     checkTheme(a.theme);
     (window as any).__mockThemeExported = shared().themeFileText(a.theme);
     return `/Users/me/Downloads/${a.theme.name}.qurry-theme.json`;
+  },
+  // window.__mockThemeImagePick: the file picked ("ridges.png" unset; "beacon.gif", "beacon.png" (animated), "logo.svg", "big.png"; null: cancelled)
+  import_theme_image: () => {
+    const pick = (window as any).__mockThemeImagePick;
+    if (pick === null) return null;
+    const r = THEME_IMAGE_PICKS[pick ?? "ridges.png"];
+    if (typeof r !== "string") throw r.refused;
+    return r;
+  },
+  theme_image: (a: any) => {
+    const url = themeImages[a.file];
+    if (!url) throw `The theme image ${a.file} is missing: choose it again`;
+    return fetch(url).then((r) => r.arrayBuffer());
   },
   keyword_case: () => keywordCase,
   set_keyword_case: (a: any) => {

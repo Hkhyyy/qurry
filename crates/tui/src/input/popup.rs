@@ -775,7 +775,7 @@ mod tests {
         let light_bg = status_bg(&mut h);
         assert!(h.app.startup_notice().unwrap().contains("⌃k › Theme… › Dark"), "{:?}", h.app.startup_notice());
         // A custom theme saved by the GUI meanwhile shows up when the list opens
-        let mine = CustomTheme { id: String::new(), name: "Night shift".into(), base: "dracula".into(), colors: [("sel".into(), "#123456".into())].into() };
+        let mine = CustomTheme { id: String::new(), name: "Night shift".into(), base: "dracula".into(), colors: [("sel".into(), "#123456".into())].into(), ..Default::default() };
         h.app.state.store.save_custom_theme(&mine).unwrap();
         h.app.palette_theme();
         let s = h.screen(120, 30);

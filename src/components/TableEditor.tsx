@@ -6,6 +6,7 @@ import { sharedOr, useSharedReady, type CompletionItem } from "../lib/shared";
 import { EditTarget, ResultGrid } from "./ResultGrid";
 import { ColumnIcon, IcFilter, IcOrder, SchemaIcon, TableIcon } from "../ui/icons";
 import { HighlightInput, IconButton, ListItem, listKey, Notice, PopupList, Text } from "../ui";
+import { ThemeBackground } from "../features/settings/ThemeImages";
 
 /** What the WHERE / ORDER BY fields complete against: the console's index of `target`, the tab's table and database */
 export interface FilterCompletion {
@@ -75,7 +76,8 @@ export function TableEditor(p: Props) {
 
   return (
     <div className="table-editor">
-      <div className="table-body">
+      {/* The theme's Background image: behind the grid */}
+      <ThemeBackground className="table-body">
         <ResultGrid
           result={p.result ?? empty}
           edit={p.edit}
@@ -117,7 +119,7 @@ export function TableEditor(p: Props) {
             {p.errorAction}
           </Notice>
         )}
-      </div>
+      </ThemeBackground>
     </div>
   );
 }
