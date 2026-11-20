@@ -1113,11 +1113,27 @@ impl Store {
     /// file's images go the way Choose…'s do (checked by their first bytes and size, copied into theme-images); one that doesn't is
     /// left out, and `dropped` says which and why, the colors and the other image coming in
     pub fn read_theme_file(&self, path: &Path) -> AppResult<ImportedTheme> {
-        let size = fs::metadata(path)?.len();
-        if size > theme::FILE_IMAGES_MAX as u64 {
-            return Err(AppError::Msg(format!("Not a Qurry theme: the file is {} KB, a theme file is at most {} KB", size.div_ceil(1024), theme::FILE_IMAGES_MAX / 1024)));
+        use std::io::Read;
+        let not_a_file = || AppError::Msg("Not a Qurry theme: that isn't a file".into());
+        // A regular file only (not a device, a pipe or a link to one), opened without waiting on a pipe, and read no further than the
+        // largest theme file: its own size can't be trusted (a link to /dev/zero says 0 bytes)
+        if !fs::metadata(path)?.is_file() {
+            return Err(not_a_file());
         }
-        let (mut theme, images) = theme::parse_file(&fs::read_to_string(path)?).map_err(AppError::Msg)?;
+        let mut open = fs::OpenOptions::new();
+        open.read(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut open, libc::O_NONBLOCK);
+        let file = open.open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(not_a_file());
+        }
+        let mut text = String::new();
+        file.take(theme::FILE_IMAGES_MAX as u64 + 1).read_to_string(&mut text).map_err(|e| AppError::Msg(format!("Not a Qurry theme file ({})", e.kind())))?;
+        if text.len() > theme::FILE_IMAGES_MAX {
+            return Err(AppError::Msg(format!("Not a Qurry theme: a theme file is at most {} KB", theme::FILE_IMAGES_MAX / 1024)));
+        }
+        let (mut theme, images) = theme::parse_file(&text).map_err(AppError::Msg)?;
         let mut dropped = Vec::new();
         const SETTINGS: &str = "settings aren't ones Qurry knows";
         if let Some(b) = images.background {
@@ -1391,9 +1407,20 @@ mod tests {
         // Unknown fields refused, as in version 1
         let e = v2(serde_json::json!({ "type": "png", "data": b64(&png), "opacity": 15, "fill": "cover", "anchor": "center", "file": "../../x" }), good_corner).unwrap_err().to_string();
         assert!(e.contains("unknown field"), "{e}");
-        // A file over the version 2 cap: refused unread
+        // A file over the version 2 cap: read no further than it
         fs::write(&file, vec![b' '; qurry_shared::theme::FILE_IMAGES_MAX + 1]).unwrap();
         assert!(b.read_theme_file(&file).unwrap_err().to_string().contains(&format!("at most {} KB", qurry_shared::theme::FILE_IMAGES_MAX / 1024)));
+        // Not a file: a link to a device that never ends, a pipe nobody writes to (refused at once, not read or waited on)
+        #[cfg(unix)]
+        {
+            let zero = from.path().join("zero.json");
+            std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+            assert_eq!(b.read_theme_file(&zero).unwrap_err().to_string(), "Not a Qurry theme: that isn't a file");
+            let fifo = from.path().join("fifo.json");
+            let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+            assert_eq!(b.read_theme_file(&fifo).unwrap_err().to_string(), "Not a Qurry theme: that isn't a file");
+        }
     }
 
     /// A theme whose image file is gone (a theme deleted meanwhile pruned it) isn't saved: the message names the slot
