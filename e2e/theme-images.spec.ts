@@ -230,6 +230,8 @@ test.describe("with Reduce motion on", () => {
 });
 
 test("Export… carries the images (version 2) and Import… on another computer brings both back and draws them", async ({ page, browser }) => {
+  // Two app loads (this computer and another one) and two image round trips: past the default 30 s on CI's shared runners
+  test.slow();
   const bg = { file: RIDGES, opacity: 25, fill: "contain", anchor: "right bottom", span: "pane" };
   await openInTheme(page, "custom-1", pictures({ background: bg, corner: CORNER }));
   await openEditor(page);
