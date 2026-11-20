@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import TABLE from "../../crates/shared/src/themes.json";
 import { shared } from "./shared";
-import { backdropStyle, holdImage, mayMove, mixHex, releaseImage, newBackgroundSlot, newCornerSlot, opacityCap, sameImages, stickerStyle, warningsOver } from "./themeImages";
+import { backdropStyle, holdImage, TINTS, mayMove, mixHex, releaseImage, newBackgroundSlot, newCornerSlot, opacityCap, sameImages, stickerStyle, warningsOver } from "./themeImages";
 
 const api = vi.hoisted(() => ({ themeImage: vi.fn() }));
 vi.mock("./api", () => ({ api }));
@@ -24,6 +24,20 @@ describe("theme background image", () => {
     expect(warningsOver(dark, cap + 1, warn).length).toBeGreaterThan(0);
     // High contrast has more room than Dark
     expect(opacityCap(colors("hc"), warn)).toBeGreaterThan(cap);
+  });
+  it("checks the grid's tints as they are drawn: each laid over Background mixed toward the image's worst pixels", () => {
+    const p = colors("dark");
+    const seen: Record<string, string>[] = [];
+    warningsOver(p, 40, (q) => (seen.push(q), []));
+    // The palette as is, then over a black and a white pixel
+    expect(seen).toHaveLength(3);
+    for (const [q, x] of [[seen[1], "#000000"], [seen[2], "#ffffff"]] as const) {
+      const bg = mixHex(p.bg, x, 0.4);
+      expect(q.bg).toBe(bg);
+      for (const s of ["odd", "panel", "panel2", "sel", "changed", "added", "deleted", "match"]) expect(q[s], s).toBe(mixHex(bg, p[s], TINTS[s]));
+      // A surface not drawn over the image is left as it is
+      expect(q.hover).toBe(p.hover);
+    }
   });
   it("doesn't count a pair the palette already fails", () => {
     const p = { ...colors("dark"), comment: "#3a3c40" };

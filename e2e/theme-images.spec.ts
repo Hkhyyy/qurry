@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, expect, openApp, openInTheme, test, treeItem, work } from "./app";
+import { dialog, expect, openApp, openConsole, openInTheme, runAll, test, treeItem, typeSql, work } from "./app";
 
 // Theme images (#202): a custom theme's Background (behind the SQL editor and the result grid) and Corner (scaled down in front of the
 // window, under menus and dialogs, clicks passing through) images, set in Settings › Appearance › Theme › Edit Colors… › Images. The
@@ -111,6 +111,69 @@ test("the Corner image doesn't take a click on the grid cell under it, and stays
   const [menuZ, stickerZ] = await Promise.all([menu.evaluate((e) => +getComputedStyle(e).zIndex), windowSticker(page).evaluate((e) => +getComputedStyle(e).zIndex)]);
   expect(menuZ).toBeGreaterThan(stickerZ);
 });
+
+/** A pixel of the page as drawn (a 1×1 screenshot read back in the page) */
+async function pixel(page: Page, x: number, y: number): Promise<number[]> {
+  const png = (await page.screenshot({ clip: { x: Math.round(x), y: Math.round(y), width: 1, height: 1 } })).toString("base64");
+  return page.evaluate(async (d) => {
+    const img = new Image();
+    img.src = d;
+    await img.decode();
+    const c = document.createElement("canvas");
+    c.width = c.height = 1;
+    const g = c.getContext("2d")!;
+    g.drawImage(img, 0, 0);
+    return [...g.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+  }, `data:image/png;base64,${png}`);
+}
+const far = (a: number[], b: number[]) => Math.max(...a.map((v, i) => Math.abs(v - b[i]))) > 8;
+/** The same pixels drawn without the image (the host's image class off and its layer gone), then with it again */
+async function withoutImage<T>(page: Page, f: () => Promise<T>): Promise<T> {
+  const toggle = (on: boolean) =>
+    page.evaluate((on) => document.querySelectorAll<HTMLElement>(".theme-backdrop-host").forEach((h) => {
+      h.classList.toggle("has-image", on);
+      h.querySelector<HTMLElement>(":scope > .theme-backdrop")?.style.setProperty("visibility", on ? "" : "hidden");
+    }), on);
+  await toggle(false);
+  try {
+    return await f();
+  } finally {
+    await toggle(true);
+  }
+}
+/** A point in a cell's empty right part (its text is on the left) */
+const blank = async (page: Page, name: string) => {
+  const r = (await work(page).getByRole("gridcell", { name, exact: true }).first().boundingBox())!;
+  return [r.x + r.width - 8, r.y + r.height / 2] as const;
+};
+
+for (const where of ["table tab", "console result"] as const) {
+  test(`the Background image shows through the grid's rows and cells in a ${where}; the selection stays visible`, async ({ page }) => {
+    await openInTheme(page, "custom-1", pictures({ background: { file: RIDGES, opacity: 60, fill: "cover", anchor: "center" } }));
+    if (where === "table tab") {
+      await treeItem(page, "users").first().dblclick();
+    } else {
+      await openConsole(page);
+      await typeSql(page, "select * from users limit 10");
+      await runAll(page);
+    }
+    await expect(work(page).getByRole("gridcell", { name: "user_2", exact: true })).toBeVisible();
+    await expect(windowLayer(page)).toHaveCount(1);
+    // An even row (user_2) and an odd row (user_3): the image, not the opaque row color
+    const [a, b] = [await blank(page, "user_2"), await blank(page, "user_3")];
+    const [even, odd] = [await pixel(page, ...a), await pixel(page, ...b)];
+    const [evenPlain, oddPlain] = await withoutImage(page, async () => [await pixel(page, ...a), await pixel(page, ...b)]);
+    expect(far(even, evenPlain), `even row ${even} vs ${evenPlain}`).toBe(true);
+    expect(far(odd, oddPlain), `odd row ${odd} vs ${oddPlain}`).toBe(true);
+    // The selection: a tint over the image, still set apart from the row
+    await work(page).getByRole("gridcell", { name: "user_2", exact: true }).click();
+    await expect(work(page).getByRole("gridcell", { name: "user_2", exact: true })).toHaveAttribute("aria-selected", "true");
+    const sel = await pixel(page, ...a);
+    const selPlain = await withoutImage(page, () => pixel(page, ...a));
+    expect(far(sel, even), `selected ${sel} vs the row ${even}`).toBe(true);
+    expect(far(sel, selPlain), `selected ${sel} vs opaque ${selPlain}`).toBe(true);
+  });
+}
 
 test.describe("with Reduce motion on", () => {
   test.use({ reducedMotion: "reduce" });
