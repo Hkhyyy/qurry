@@ -12,30 +12,33 @@ use std::time::{Duration, SystemTime};
 pub const DIR: &str = "theme-images";
 /// A file this new is never pruned: it may be in a theme being edited, not saved yet
 const GRACE: Duration = Duration::from_secs(60 * 60);
+/// A copy being written (import); one left behind by a crash is pruned after GRACE
+const TMP: &str = ".tmp-";
 
 /// Copy the picked image `src` into `dir`, checked by its first bytes and size; its file name. The same image picked twice is
 /// one file
 pub fn import(dir: &Path, src: &Path) -> AppResult<String> {
     let shown = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "The file".into());
+    let cant_read = |e: std::io::Error| AppError::Msg(format!("Couldn't read {shown} ({})", e.kind()));
+    let mut file = std::fs::File::open(src).map_err(cant_read)?;
+    // Read no further than the largest image allowed; past it, the file's own size is the one to tell
     let mut bytes = Vec::new();
-    std::fs::File::open(src)
-        .and_then(|f| f.take(theme::ANIMATED_MAX as u64 + 1).read_to_end(&mut bytes))
-        .map_err(|e| AppError::Msg(format!("Couldn't read {shown} ({})", e.kind())))?;
+    (&mut file).take(theme::ANIMATED_MAX as u64 + 1).read_to_end(&mut bytes).map_err(cant_read)?;
+    if bytes.len() > theme::ANIMATED_MAX && theme::image_ext(&bytes).is_some() {
+        let size = file.metadata().map(|m| m.len() as f64 / (1024.0 * 1024.0)).map_err(cant_read)?;
+        return Err(AppError::Msg(format!("{shown} is {size:.1} MB: an animated image can be at most 8 MB, a still one 4 MB")));
+    }
     let ext = theme::check_image(&bytes, &shown).map_err(AppError::Msg)?;
     let hash = Sha256::digest(&bytes);
     let name = format!("{}.{ext}", hash[..8].iter().map(|b| format!("{b:02x}")).collect::<String>());
     std::fs::create_dir_all(dir).map_err(|e| AppError::Msg(format!("Couldn't create the theme images folder ({})", e.kind())))?;
-    let path = dir.join(&name);
-    // create_new: an existing file with this name is this image already
-    match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-        Ok(mut f) => {
-            if let Err(e) = f.write_all(&bytes) {
-                let _ = std::fs::remove_file(&path);
-                return Err(AppError::Msg(format!("Couldn't copy {shown} ({})", e.kind())));
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(AppError::Msg(format!("Couldn't copy {shown} ({})", e.kind()))),
+    // Written whole under a temporary name, then renamed over the name: a copy is never half written, and the same image picked
+    // again replaces a damaged copy and starts its hour of grace again
+    let tmp = dir.join(format!("{TMP}{}", uuid::Uuid::new_v4()));
+    let copied = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).and_then(|mut f| f.write_all(&bytes)).and_then(|()| std::fs::rename(&tmp, dir.join(&name)));
+    if let Err(e) = copied {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(AppError::Msg(format!("Couldn't copy {shown} ({})", e.kind())));
     }
     Ok(name)
 }
@@ -56,8 +59,8 @@ pub fn read(dir: &Path, name: &str) -> AppResult<Vec<u8>> {
     })
 }
 
-/// Delete the images no theme uses (`used`), except ones copied in the last hour; how many were deleted. Files with other names
-/// are left alone
+/// Delete the images no theme uses (`used`), and copies left half written, except ones from the last hour; how many were deleted.
+/// Files with other names are left alone
 pub fn prune<'a>(dir: &Path, used: impl IntoIterator<Item = &'a str>) -> AppResult<usize> {
     let used: Vec<&str> = used.into_iter().collect();
     let Ok(entries) = std::fs::read_dir(dir) else { return Ok(0) };
@@ -67,10 +70,11 @@ pub fn prune<'a>(dir: &Path, used: impl IntoIterator<Item = &'a str>) -> AppResu
         let Ok(name) = e.file_name().into_string() else { continue };
         let Ok(meta) = e.metadata() else { continue };
         let fresh = meta.modified().ok().and_then(|m| now.duration_since(m).ok()).is_none_or(|age| age < GRACE);
-        if !meta.is_file() || !theme::image_name_ok(&name) || used.contains(&name.as_str()) || fresh {
+        let tmp = name.starts_with(TMP);
+        if !meta.is_file() || !(tmp || theme::image_name_ok(&name)) || used.contains(&name.as_str()) || fresh {
             continue;
         }
-        if std::fs::remove_file(path_of(dir, &name)?).is_ok() {
+        if std::fs::remove_file(dir.join(&name)).is_ok() {
             gone += 1;
         }
     }
@@ -119,12 +123,35 @@ mod tests {
         big.resize(theme::IMAGE_MAX + 1, 0);
         let e = import(&dir, &picked(&src, "big.png", &big)).unwrap_err().to_string();
         assert!(e.starts_with("big.png is 4.0 MB: a still image can be at most 4 MB"), "{e}");
-        // Larger than the animated cap: read no further than it
-        big.resize(theme::ANIMATED_MAX + 100, 0);
-        assert!(import(&dir, &picked(&src, "huge.png", &big)).is_err());
+        // Larger than the animated cap: read no further than it, and say the file's own size
+        big.resize(20 * 1024 * 1024, 0);
+        let e = import(&dir, &picked(&src, "huge.png", &big)).unwrap_err().to_string();
+        assert_eq!(e, "huge.png is 20.0 MB: an animated image can be at most 8 MB, a still one 4 MB");
+        let e = import(&dir, &picked(&src, "huge.svg", &vec![b'<'; 20 * 1024 * 1024])).unwrap_err().to_string();
+        assert_eq!(e, "huge.svg isn't a PNG, JPEG, GIF or WebP image");
         let e = import(&dir, &src.join("gone.png")).unwrap_err().to_string();
         assert!(e.starts_with("Couldn't read gone.png") && !e.contains(src.to_str().unwrap()), "{e}");
         assert_eq!(std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0), 0, "nothing copied");
+    }
+
+    #[test]
+    fn picking_an_image_again_mends_a_damaged_copy_and_restarts_its_grace() {
+        let (src, dir) = (tmp("src"), tmp("dir"));
+        let name = import(&dir, &picked(&src, "a.png", PNG)).unwrap();
+        // Cut short (a crash of an older version) and old
+        std::fs::write(dir.join(&name), &PNG[..4]).unwrap();
+        age(&dir.join(&name), 2 * 3600);
+        assert_eq!(import(&dir, &picked(&src, "a.png", PNG)).unwrap(), name);
+        assert_eq!(read(&dir, &name).unwrap(), PNG);
+        assert_eq!(prune(&dir, []).unwrap(), 0, "picked again: a new hour of grace");
+        // Only the copy: no temporary file is left
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        // A temporary file left by a crash goes after the hour, like an unused image
+        let left = picked(&dir, ".tmp-0000", b"half");
+        age(&left, 2 * 3600);
+        age(&dir.join(&name), 2 * 3600);
+        assert_eq!(prune(&dir, [name.as_str()]).unwrap(), 1);
+        assert!(!left.exists() && dir.join(&name).exists());
     }
 
     #[test]
