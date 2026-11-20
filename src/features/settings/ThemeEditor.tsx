@@ -172,7 +172,7 @@ export function ThemeEditor({ start, onBack, onDirty, commit }: { start: string;
       const came = [t.images?.background && "background", t.images?.corner && "corner"].filter(Boolean);
       const with_ = came.length ? ` with its ${came.join(" and ")} image${came.length > 1 ? "s" : ""}` : "";
       const left = got.dropped.length ? `; left out: ${got.dropped.join("; ")}` : "";
-      setMsg({ tone: got.dropped.length ? "warn" : "ok", text: `Imported "${t.name}" (based on ${BUILT_IN.find((b) => b.id === t.base)?.name})${with_}${left}. Check it, then Save as new theme` });
+      setMsg({ tone: got.dropped.length ? "warn" : "ok", text: `Imported "${t.name}" (based on ${BUILT_IN.find((b) => b.id === t.base)?.name})${with_}${left}. Check it: Save as new theme or OK keeps it` });
     } catch (e) {
       setMsg({ tone: "danger", text: `Not imported: ${e}` });
     }
