@@ -25,6 +25,12 @@ export type Corner = (typeof CORNERS)[number];
 export const SIZE_MIN = 10;
 export const SIZE_MAX = 40;
 
+/** When a slot's animated image plays: "focused" (the default) stops it on its first frame while Qurry isn't the active window */
+export type Play = "focused" | "always";
+export const PLAYS: { id: Play; label: string }[] = [
+  { id: "focused", label: "While focused" },
+  { id: "always", label: "Always" },
+];
 /** "area": one picture behind the whole editor area (all splits together); "pane": one in each console or table pane */
 export type Span = "area" | "pane";
 export const SPANS: { id: Span; label: string }[] = [
@@ -38,27 +44,22 @@ export interface BackgroundSlot {
   fill: Fill;
   anchor: Anchor;
   span: Span;
+  play?: Play;
 }
 export interface CornerSlot {
   file: string;
   corner: Corner;
   size: number;
   opacity: number;
+  play?: Play;
 }
-/** When animated images play: "focused" (the default) stops them on their first frame while Qurry isn't the active window */
-export type Play = "focused" | "always";
-export const PLAYS: { id: Play; label: string }[] = [
-  { id: "focused", label: "While focused" },
-  { id: "always", label: "Always" },
-];
-/** A theme's images: either slot, both or none, and when animated ones play (one setting for both) */
+/** A theme's images: either slot, both or none */
 export interface ThemeImages {
   background?: BackgroundSlot;
   corner?: CornerSlot;
-  play?: Play;
 }
 /** An animated image stops on its first frame: always with the system's Reduce motion (an accessibility setting), and while the window
- *  isn't focused unless the theme plays them always */
+ *  isn't focused unless its slot plays it always */
 export const motionPaused = (reduceMotion: boolean, focused: boolean, play?: Play) => reduceMotion || (!focused && play !== "always");
 /** Two themes' images are the same, whatever order their fields come in (settings.json writes them in its own) */
 export function sameImages(a: ThemeImages | undefined, b: ThemeImages | undefined): boolean {
@@ -66,8 +67,8 @@ export function sameImages(a: ThemeImages | undefined, b: ThemeImages | undefine
   return key(a) === key(b);
 }
 /** A new image's settings: DataGrip's 15% in the background; a corner sticker bottom right, fully opaque */
-export const newBackgroundSlot = (file: string): BackgroundSlot => ({ file, opacity: 15, fill: "cover", anchor: "center", span: "area" });
-export const newCornerSlot = (file: string): CornerSlot => ({ file, corner: "right bottom", size: 20, opacity: 100 });
+export const newBackgroundSlot = (file: string): BackgroundSlot => ({ file, opacity: 15, fill: "cover", anchor: "center", span: "area", play: "focused" });
+export const newCornerSlot = (file: string): CornerSlot => ({ file, corner: "right bottom", size: 20, opacity: 100, play: "focused" });
 
 /** The grid's colors drawn as tints over the image (App.css, :is(.theme-backdrop-host, .theme-preview).has-image): how much of each
  *  color is laid over it. Background itself is the image's backdrop */

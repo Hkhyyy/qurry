@@ -51,8 +51,8 @@ test("an image in each slot is drawn live in the window and the preview, saved w
   await dialog(page).getByRole("textbox", { name: "Theme name" }).fill("Pictures");
   await dialog(page).getByRole("button", { name: "Save as new theme" }).click();
   await expect.poll(async () => (await saved(page))?.custom?.[0]?.images).toEqual({
-    background: { file: RIDGES, opacity: 15, fill: "cover", anchor: "center", span: "area" },
-    corner: { file: BEACON, corner: "right bottom", size: 20, opacity: 100 },
+    background: { file: RIDGES, opacity: 15, fill: "cover", anchor: "center", span: "area", play: "focused" },
+    corner: { file: BEACON, corner: "right bottom", size: 20, opacity: 100, play: "focused" },
   });
   // Removed: gone from the window and the preview
   await slot(page, "Background").getByRole("button", { name: "Remove Background image" }).click();
@@ -239,7 +239,7 @@ test("Export… carries the images (version 2) and Import… on another computer
   const text: string = await page.evaluate(() => (window as any).__mockThemeExported);
   const file = JSON.parse(text);
   expect(file.qurryTheme).toBe(2);
-  expect(Object.keys(file.images).sort()).toEqual(["background", "corner", "play"]);
+  expect(Object.keys(file.images).sort()).toEqual(["background", "corner"]);
   expect(file.images.background).toMatchObject({ type: "png", opacity: 25, fill: "contain", anchor: "right bottom", span: "pane" });
   // Never the local file names
   expect(text).not.toContain(RIDGES);
@@ -359,46 +359,53 @@ test("Span switches live in the editor and OK keeps it", async ({ page }) => {
   await expect(slot(page, "Background").getByRole("combobox", { name: "Span" })).toHaveValue("pane");
 });
 
-// When animated images play (one setting per theme): while focused (the default) or always; Reduce motion stops them either way
+// When each slot's animated image plays: while focused (the default) or always; Reduce motion stops both either way
 const blobType = (page: Page, src: string) => page.evaluate(async (u) => (await (await fetch(u)).blob()).type, src);
 const blur = (page: Page) =>
   page.evaluate(() => {
     Object.defineProperty(document, "hasFocus", { value: () => false, configurable: true });
     window.dispatchEvent(new Event("blur"));
   });
-for (const play of ["focused", "always"] as const) {
-  test(`play ${play}: with the window not focused the animated image ${play === "always" ? "keeps playing" : "stops on its first frame"}`, async ({ page }) => {
-    await openInTheme(page, "custom-1", pictures({ corner: CORNER, play }));
+/** The Background layer's image type and the Corner sticker's, as drawn now */
+const drawnTypes = async (page: Page) => {
+  const bg = await windowLayer(page).evaluate((e) => getComputedStyle(e).backgroundImage.slice(5, -2));
+  const corner = (await windowSticker(page).getAttribute("src"))!;
+  return [await blobType(page, bg), await blobType(page, corner)];
+};
+const BEACON_BG = { file: BEACON, opacity: 40, fill: "tile", anchor: "center", span: "area" };
+for (const [bgPlay, cornerPlay] of [["always", "focused"], ["focused", "always"]] as const) {
+  test(`background plays ${bgPlay}, corner ${cornerPlay}: with the window not focused each follows its own setting`, async ({ page }) => {
+    await openInTheme(page, "custom-1", pictures({ background: { ...BEACON_BG, play: bgPlay }, corner: { ...CORNER, play: cornerPlay } }));
+    await treeItem(page, "users").first().dblclick();
+    await expect(windowLayer(page)).toHaveCount(1);
     await expect(windowSticker(page)).toBeVisible();
-    const before = (await windowSticker(page).getAttribute("src"))!;
-    expect(await blobType(page, before)).toBe("image/gif");
+    await expect.poll(() => drawnTypes(page)).toEqual(["image/gif", "image/gif"]);
     await blur(page);
-    if (play === "always") {
-      await page.waitForTimeout(500);
-      expect(await windowSticker(page).getAttribute("src")).toBe(before);
-    } else {
-      await expect.poll(async () => blobType(page, (await windowSticker(page).getAttribute("src"))!)).toBe("image/png");
-    }
+    const want = (p: string) => (p === "always" ? "image/gif" : "image/png");
+    await expect.poll(() => drawnTypes(page)).toEqual([want(bgPlay), want(cornerPlay)]);
   });
 }
 
-test.describe("Reduce motion with play always", () => {
+test.describe("Reduce motion with both slots playing always", () => {
   test.use({ reducedMotion: "reduce" });
-  test("the animated image shows its first frame anyway", async ({ page }) => {
-    await openInTheme(page, "custom-1", pictures({ corner: CORNER, play: "always" }));
+  test("both animated images show their first frame anyway", async ({ page }) => {
+    await openInTheme(page, "custom-1", pictures({ background: { ...BEACON_BG, play: "always" }, corner: { ...CORNER, play: "always" } }));
+    await treeItem(page, "users").first().dblclick();
     await expect(windowSticker(page)).toBeVisible();
-    expect(await blobType(page, (await windowSticker(page).getAttribute("src"))!)).toBe("image/png");
+    await expect.poll(() => drawnTypes(page)).toEqual(["image/png", "image/png"]);
   });
 });
 
-test("Play shows with an animated image only, applies live, and OK keeps it", async ({ page }) => {
+test("each slot's Play shows with an animated image only, applies live, and OK keeps it", async ({ page }) => {
   await openInTheme(page, "custom-1", pictures({ background: { file: RIDGES, opacity: 15, fill: "cover", anchor: "center", span: "area" } }));
   await openEditor(page);
-  await expect(dialog(page).getByRole("combobox", { name: "Play" })).toHaveCount(0);
+  // A PNG background: no Play
+  await expect(dialog(page).getByRole("combobox", { name: "Background play" })).toHaveCount(0);
   await pickNext(page, "beacon.gif");
   await slot(page, "Corner").getByRole("button", { name: "Choose Corner image" }).click();
-  const play = dialog(page).getByRole("combobox", { name: "Play" });
+  const play = slot(page, "Corner").getByRole("combobox", { name: "Corner play" });
   await expect(play).toHaveValue("focused");
+  await expect(dialog(page).getByRole("combobox", { name: "Background play" })).toHaveCount(0);
   await play.selectOption("always");
   // Live: the window behind Settings keeps the GIF playing when the window isn't focused
   await blur(page);
@@ -406,5 +413,6 @@ test("Play shows with an animated image only, applies live, and OK keeps it", as
   expect(await blobType(page, (await windowSticker(page).getAttribute("src"))!)).toBe("image/gif");
   await dialog(page).getByRole("button", { name: "OK" }).click();
   await expect(dialog(page)).toHaveCount(0);
-  await expect.poll(async () => (await saved(page)).custom[0].images.play).toBe("always");
+  await expect.poll(async () => (await saved(page)).custom[0].images.corner.play).toBe("always");
+  expect((await saved(page)).custom[0].images.play).toBeUndefined();
 });

@@ -14,11 +14,10 @@ import { Button, cx, Named, Select } from "../../ui";
 const LABEL = Object.fromEntries(TOKENS.map((t) => [t.key, t.label.split(",")[0]]));
 const POS_LABEL = (a: string) => (a === "center" ? "Center" : a.replace(/^(\w+) (\w+)$/, "$2 $1").replace("center", "middle").replace(/^\w/, (c) => c.toUpperCase()));
 
-/** Motion is paused while the system's Reduce motion is on, or the window isn't the active one and the theme in use (the editor's draft
- *  while it is open) plays animated images only while focused */
-function useMotionPaused(): boolean {
+/** Motion is paused while the system's Reduce motion is on, or the window isn't the active one and the slot (`play`) plays its animated
+ *  image only while focused */
+function useMotionPaused(play?: Play): boolean {
   const media = useMemo(() => window.matchMedia("(prefers-reduced-motion: reduce)"), []);
-  const play = useThemeState().current.images?.play;
   const [state, setState] = useState(() => ({ reduce: media.matches, focused: document.hasFocus() }));
   useEffect(() => {
     const update = () => setState({ reduce: media.matches, focused: document.hasFocus() });
@@ -37,8 +36,8 @@ function useMotionPaused(): boolean {
 /** A theme image's URL to draw ("" until it is ready): the file's blob URL, or, for a GIF or WebP while motion is paused (or still is
  *  set: a story's Reduce motion), its first frame as a still. Nothing is drawn until the still is ready, so an animation never plays
  *  for a moment; a PNG or JPEG is never re-encoded. The file is used while this is mounted (freed after) */
-function useThemeImage(file: string | undefined, still?: boolean): { url: string; error?: string } {
-  const paused = (useMotionPaused() || !!still) && !!file && mayMove(file);
+function useThemeImage(file: string | undefined, still?: boolean, play?: Play): { url: string; error?: string } {
+  const paused = (useMotionPaused(play) || !!still) && !!file && mayMove(file);
   const [src, setSrc] = useState<{ file: string; url: string; error?: string } | null>(null);
   const [frame, setFrame] = useState<{ file: string; url: string } | null>(null);
   useEffect(() => {
@@ -70,7 +69,7 @@ type Shown = { still?: boolean };
 
 /** Background: a surface the image is drawn behind: Background, the image layer, then the children (with clear surfaces) over it */
 export function ThemeBackdrop({ slot, still, seeThrough, className, style, children }: Shown & { slot?: BackgroundSlot; /** No layer here: a host around it draws the picture, this one's surfaces let it through */ seeThrough?: boolean; className?: string; style?: CSSProperties; children?: ReactNode }) {
-  const { url } = useThemeImage(slot?.file, still);
+  const { url } = useThemeImage(slot?.file, still, slot?.play);
   return (
     <div className={cx("theme-backdrop-host", (slot || seeThrough) && "has-image", seeThrough && "see-through", className)} style={style}>
       {slot && url && <div className="theme-backdrop" aria-hidden style={backdropStyle(slot, url)} />}
@@ -109,7 +108,7 @@ export const ThemeCorner = () => <ThemeSticker slot={useThemeState().current.ima
 /** Corner: the image scaled down in a corner, in front of the window and under menus, dialogs, toasts and popups; clicks pass through.
  *  inPreview: in the editor's preview (or a thumbnail), sized by it */
 export function ThemeSticker({ slot, still, inPreview }: Shown & { slot?: CornerSlot; inPreview?: boolean }) {
-  const { url } = useThemeImage(slot?.file, still);
+  const { url } = useThemeImage(slot?.file, still, slot?.play);
   if (!slot || !url) return null;
   return <img className={cx("theme-sticker", inPreview && "in-preview")} src={url} alt="" aria-hidden draggable={false} style={inPreview ? stickerStyle(slot, 4, "%") : stickerStyle(slot)} />;
 }
@@ -219,6 +218,27 @@ function Slot({ name, info, file, error, onPick, onRemove, thumb, children }: { 
 }
 
 const NEW_THEME = "Images belong to a custom theme: OK saves these edits as a new custom theme and picks it.";
+
+const PLAY_INFO = ["While focused: the animated image stops on its first frame while Qurry isn't the active window, which saves battery.", "Always: it keeps playing.", "With the system's Reduce motion on it shows its first frame either way."];
+/** A slot's Play row, only while its image is animated (the value is kept otherwise) */
+function PlayRow({ file, play, label, onChange }: { file: string; play?: Play; label: string; onChange: (p: Play) => void }) {
+  if (!mayMove(file)) return null;
+  return (
+    <div className="theme-bg-row">
+      <Named about={`${label} play`} info={PLAY_INFO}>
+        Play
+      </Named>
+      <Select aria-label={`${label} play`} value={play ?? "focused"} onChange={(e) => onChange(e.target.value as Play)}>
+        {PLAYS.map((x) => (
+          <option key={x.id} value={x.id}>
+            {x.label}
+          </option>
+        ))}
+      </Select>
+    </div>
+  );
+}
+
 const ABOUT = [
   "PNG, JPEG, WebP or GIF, each copied into the config folder and kept with the theme: up to 4 MB, 8 MB when animated. GIF and animated WebP play, and stop on their first frame while Reduce motion is on or Qurry isn't the active window.",
   "Hold Peek (or Space on it) to see the window behind Settings.",
@@ -265,21 +285,6 @@ export function ThemeImagesSection({ images, p, onChange, newTheme }: { images: 
         )}
         <PeekButton />
       </div>
-      {/* Only with an animated image; the value is kept when there is none */}
-      {[bg?.file, cn?.file].some((f) => f && mayMove(f)) && (
-        <div className="theme-bg-row">
-          <Named about="Play" info={["While focused: animated images stop on their first frame while Qurry isn't the active window, which saves battery.", "Always: they keep playing.", "With the system's Reduce motion on they show their first frame either way."]}>
-            Play
-          </Named>
-          <Select aria-label="Play" value={images.play ?? "focused"} onChange={(e) => onChange({ ...images, play: e.target.value as Play })}>
-            {PLAYS.map((x) => (
-              <option key={x.id} value={x.id}>
-                {x.label}
-              </option>
-            ))}
-          </Select>
-        </div>
-      )}
       <Slot
         name="Background"
         info={["Faint behind the SQL editor and the result grid."]}
@@ -291,6 +296,7 @@ export function ThemeImagesSection({ images, p, onChange, newTheme }: { images: 
       >
         {bg && (
           <>
+            <PlayRow file={bg.file} play={bg.play} label="Background" onChange={(play) => setBg({ play })} />
             <div className="theme-bg-row">
               <Named about="Opacity" info={[`Up to ${cap}% in this theme, every color keeps its contrast minimum over the image's lightest and darkest pixels (the mark). Above it, the colors that fall below are warned about, never changed.`, ...names]}>
                 Opacity
@@ -348,6 +354,7 @@ export function ThemeImagesSection({ images, p, onChange, newTheme }: { images: 
       >
         {cn && (
           <>
+            <PlayRow file={cn.file} play={cn.play} label="Corner" onChange={(play) => setCn({ play })} />
             <div className="theme-bg-row">
               <span className="theme-bg-label">Position</span>
               <PositionPicker label="Position" options={CORNERS} cols={2} value={cn.corner} onChange={(corner) => setCn({ corner })} />

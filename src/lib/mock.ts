@@ -949,7 +949,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     if (text == null) return null;
     const { theme, images } = shared().parseThemeFile(text);
     const dropped: string[] = [];
-    const slots: Record<string, unknown> = { play: (images as { play?: string }).play ?? "focused" };
+    const slots: Record<string, unknown> = {};
     for (const k of ["background", "corner"] as const) {
       const slot = images[k];
       if (!slot) continue;
@@ -976,14 +976,13 @@ const handlers: Record<string, (a: any) => unknown> = {
     checkTheme(a.theme);
     let images: Record<string, unknown> | undefined;
     for (const [k, slot] of Object.entries<any>(a.theme.images ?? {})) {
-      if (!slot || k === "play") continue;
+      if (!slot) continue;
       const { file, ...settings } = slot;
       const bytes = new Uint8Array(await (await fetch(themeImages[file])).arrayBuffer());
       let bin = "";
       bytes.forEach((b) => (bin += String.fromCharCode(b)));
       (images ??= {})[k] = { type: file.split(".").pop(), data: btoa(bin), ...settings };
     }
-    if (images) images.play = a.theme.images?.play ?? "focused";
     (window as any).__mockThemeExported = shared().themeFileText(a.theme, images);
     return `/Users/me/Downloads/${a.theme.name}.qurry-theme.json`;
   },

@@ -241,12 +241,13 @@ export const ThemeImagesEditorFromBuiltIn: S = {
     await userEvent.click(await body.findByRole("button", { name: "Choose Background image" }));
   },
 };
-/** Play (when animated images play: While focused, the default, or Always), shown under Images while a slot has an animated image
- *  (here the Corner's GIF); its ⓘ: battery, and Reduce motion shows the first frame either way */
+/** Play, per slot (when its animated image plays: While focused, the default, or Always), shown in a slot while its image is animated:
+ *  here the Corner's GIF plays always and the Background's PNG has none; its ⓘ: battery, and Reduce motion shows the first frame either
+ *  way */
 export const ThemeImagesEditorPlay: S = {
-  ...bgEditor({ background: SAMPLE_BACKGROUND, corner: SAMPLE_CORNER, play: "always" }),
+  ...bgEditor({ background: SAMPLE_BACKGROUND, corner: { ...SAMPLE_CORNER, play: "always" } }),
   play: async ({ canvasElement }) => {
-    await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Play" });
+    await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Corner play" });
   },
 };
 export const ThemeEditorSavedSmallWindow: S = { ...bgEditor({}), ...inSmallWindow };

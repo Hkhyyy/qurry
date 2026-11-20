@@ -1113,11 +1113,6 @@ impl Store {
         let (mut theme, images) = theme::parse_file(&fs::read_to_string(path)?).map_err(AppError::Msg)?;
         let mut dropped = Vec::new();
         const SETTINGS: &str = "settings aren't ones Qurry knows";
-        if theme::PLAYS.contains(&images.play.as_str()) {
-            theme.images.play = images.play.clone();
-        } else {
-            dropped.push("When animated images play isn't a setting Qurry knows: while focused".to_string());
-        }
         if let Some(b) = images.background {
             match self.file_image(&b.kind, &b.data, "The background image") {
                 Ok(file) => match b.slot(file) {
@@ -1166,10 +1161,10 @@ impl Store {
             let ext = file.rsplit_once('.').map(|(_, e)| e.to_string()).unwrap_or_default();
             Ok((ext, base64::engine::general_purpose::STANDARD.encode(self.theme_image(file)?)))
         };
-        let images = if t.images.background.is_none() && t.images.corner.is_none() {
+        let images = if t.images.is_empty() {
             None
         } else {
-            let mut i = theme::FileImages { play: t.images.play.clone(), ..Default::default() };
+            let mut i = theme::FileImages::default();
             if let Some(b) = &t.images.background {
                 let (ext, d) = data(&b.file)?;
                 i.background = Some(b.to_file(&ext, d));
@@ -1264,9 +1259,8 @@ mod tests {
         let corner = pick("small.gif", b"GIF89a\x01\x00\x01\x00\x00\x00\x00\x3b");
         assert!(store.import_theme_image(&dir.path().join("nothing.png")).is_err());
         let images = ThemeImages {
-            background: Some(BackgroundImage { file: bg.clone(), opacity: 15, fill: "contain".into(), anchor: "right bottom".into(), span: "pane".into() }),
-            corner: Some(CornerImage { file: corner.clone(), corner: "right bottom".into(), size: 20, opacity: 100 }),
-            ..Default::default()
+            background: Some(BackgroundImage { file: bg.clone(), opacity: 15, fill: "contain".into(), anchor: "right bottom".into(), span: "pane".into(), play: "focused".into() }),
+            corner: Some(CornerImage { file: corner.clone(), corner: "right bottom".into(), size: 20, opacity: 100, play: "focused".into() }),
         };
         let pics = store.save_custom_theme(&CustomTheme { name: "Pics".into(), base: "dark".into(), images: images.clone(), ..Default::default() }).unwrap();
         let plain = store.save_custom_theme(&CustomTheme { name: "Plain".into(), base: "light".into(), ..Default::default() }).unwrap();
@@ -1315,7 +1309,9 @@ mod tests {
         assert_eq!(file[0], later[0]);
         assert_eq!((file[1]["name"].as_str(), &file[1]["glow"]), (Some("Renamed"), &serde_json::json!(true)));
         assert_eq!(file[1]["images"]["background"], later[1]["images"]["background"]);
-        assert_eq!(file[1]["images"]["corner"], later[1]["images"]["corner"]);
+        let mut corner = later[1]["images"]["corner"].clone();
+        corner["play"] = "focused".into();
+        assert_eq!(file[1]["images"]["corner"], corner, "written as read, with its play");
         // Deleting another theme leaves them too
         store.delete_custom_theme(&added.id).unwrap();
         assert_eq!(store.custom_entries()[..2], file[..2]);
@@ -1338,11 +1334,9 @@ mod tests {
             a.import_theme_image(&p).unwrap()
         };
         let images = ThemeImages {
-            background: Some(BackgroundImage { file: pick("big.png", &png), opacity: 20, fill: "contain".into(), anchor: "right bottom".into(), span: "pane".into() }),
-            corner: Some(CornerImage { file: pick("small.gif", &gif), corner: "left top".into(), size: 30, opacity: 90 }),
-            ..Default::default()
+            background: Some(BackgroundImage { file: pick("big.png", &png), opacity: 20, fill: "contain".into(), anchor: "right bottom".into(), span: "pane".into(), play: "always".into() }),
+            corner: Some(CornerImage { file: pick("small.gif", &gif), corner: "left top".into(), size: 30, opacity: 90, play: "focused".into() }),
         };
-        let images = ThemeImages { play: "always".into(), ..images };
         let t = CustomTheme { name: "Pics".into(), base: "dark".into(), colors: [("bg".into(), "#101010".into())].into(), images: images.clone(), ..Default::default() };
         let file = from.path().join("pics.json");
         a.write_theme_file(&file, &t).unwrap();

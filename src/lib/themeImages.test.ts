@@ -56,12 +56,12 @@ describe("theme background image", () => {
     expect(s).not.toHaveProperty("right");
   });
   it("starts a new background image at 15%, a new corner image bottom right at 20% and fully opaque", () => {
-    expect(newBackgroundSlot("a.png")).toEqual({ file: "a.png", opacity: 15, fill: "cover", anchor: "center", span: "area" });
-    expect(newCornerSlot("a.gif")).toEqual({ file: "a.gif", corner: "right bottom", size: 20, opacity: 100 });
+    expect(newBackgroundSlot("a.png")).toEqual({ file: "a.png", opacity: 15, fill: "cover", anchor: "center", span: "area", play: "focused" });
+    expect(newCornerSlot("a.gif")).toEqual({ file: "a.gif", corner: "right bottom", size: 20, opacity: 100, play: "focused" });
   });
   it("compares two themes' images whatever order their fields come in", () => {
     const bg = newBackgroundSlot("0123456789abcdef.png");
-    expect(sameImages({ background: bg }, { background: { span: bg.span, anchor: bg.anchor, fill: bg.fill, opacity: bg.opacity, file: bg.file } })).toBe(true);
+    expect(sameImages({ background: bg }, { background: { play: bg.play, span: bg.span, anchor: bg.anchor, fill: bg.fill, opacity: bg.opacity, file: bg.file } })).toBe(true);
     expect(sameImages(undefined, {})).toBe(true);
     expect(sameImages({}, { background: undefined })).toBe(true);
     expect(sameImages({ background: bg }, { background: { ...bg, opacity: 16 } })).toBe(false);
