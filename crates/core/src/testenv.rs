@@ -1,5 +1,5 @@
 //! Real servers for the ignored tests, read one way by every core test module:
-//! QURRY_TEST_PG=host:port:user:db[:password] · QURRY_TEST_MY=host:port:user:password:db.
+//! QURRY_TEST_PG=host:port:user:db[:password] · QURRY_TEST_MY=host:port:user:password:db · QURRY_TEST_MARIADB (as QURRY_TEST_MY).
 //! Unset: None and one `skipped: <VAR> is unset (<format>)` line on stderr, and the test returns without running.
 //! Core's own tests and, through the `testenv` feature (a dev-dependency only), the TUI and MCP tests read it.
 
@@ -28,6 +28,11 @@ pub fn pg() -> Option<Server> {
 /// QURRY_TEST_MY=host:port:user:password:db
 pub fn my() -> Option<Server> {
     my_from("QURRY_TEST_MY")
+}
+
+/// QURRY_TEST_MARIADB=host:port:user:password:db: a MariaDB, for what differs there from MySQL
+pub fn mariadb() -> Option<Server> {
+    my_from("QURRY_TEST_MARIADB")
 }
 
 /// Another MySQL in the QURRY_TEST_MY format (e.g. QURRY_TEST_MY_NOTLS)

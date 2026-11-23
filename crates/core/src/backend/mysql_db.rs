@@ -298,7 +298,8 @@ pub struct MySession {
     cut_list: String,
     /// db::row_bound of the pages of `more`: their columns described and each of a bounded size (db::PageBudget)
     row_bound: Option<usize>,
-    /// The server is MariaDB, which drops an ORDER BY in a derived table: a first page isn't wrapped there (first_page)
+    /// The server is MariaDB, which drops an ORDER BY in a derived table: a first page isn't wrapped there (first_page), and the
+    /// next ones are read as maria_page says
     mariadb: bool,
 }
 
@@ -706,7 +707,7 @@ impl MySession {
     }
 
     /// Up to `limit` rows of `sql` after `offset`, in chunks of `SELECT <cut_list> FROM (<sql>) … LIMIT n OFFSET o` until `limit`
-    /// rows are in or their values reach db::PAGE_BYTES (db::PageBudget): one chunk, so one run of the statement, when the
+    /// rows are in or their values reach db::PAGE_BYTES (db::PageBudget), on MariaDB as maria_page says: one chunk, so one run of the statement, when the
     /// described columns bound the row size and the whole page fits at that size. Several chunks get no transaction of their own:
     /// in Auto mode START TRANSACTION would release the user's LOCK TABLES, so another session's change between chunks can lose
     /// or repeat a row, as it can between pages. truncated: the last chunk was full
@@ -714,8 +715,17 @@ impl MySession {
         let start = Instant::now();
         let mut budget = crate::db::PageBudget::new(self.row_bound);
         let (mut columns, mut rows, mut done) = (Vec::new(), Vec::new(), false);
+        let maria = self.mariadb.then(|| maria_page(sql));
+        if let Some(MariaPage::Refuse(why)) = maria {
+            return Err(AppError::Msg(format!("MariaDB can't load more rows of this statement: {why}. Add LIMIT … OFFSET … to it to read further")));
+        }
         while let Some(n) = budget.next(limit - rows.len()) {
-            let chunk = run_on(&mut self.conn, &page_sql(sql, &self.cut_list, n, offset + rows.len()), n).await?;
+            let o = offset + rows.len();
+            let q = match maria {
+                Some(MariaPage::Append(body)) => format!("{body}\nLIMIT {n} OFFSET {o}"),
+                _ => page_sql(sql, &self.cut_list, n, o),
+            };
+            let chunk = run_on(&mut self.conn, &q, n).await?;
             if columns.is_empty() {
                 columns = chunk.columns;
             }
@@ -779,6 +789,55 @@ fn page_query(sql: &str) -> &str {
 /// One chunk of a page of `sql` (page_query), the statement on lines of its own: a `--` comment at its end ends there
 fn page_sql(sql: &str, list: &str, n: usize, offset: usize) -> String {
     format!("SELECT {list} FROM (\n{sql}\n) AS dbtool_page LIMIT {n} OFFSET {offset}")
+}
+
+/// How a MariaDB page of a statement (page_query) is read (#200). MariaDB drops an ORDER BY in a derived table without a LIMIT,
+/// so page_sql's wrap would read the rows in another order: a statement with no LIMIT of its own gets `LIMIT n OFFSET o` after
+/// its last token (a trailing `;` and comments left out); one with its own top-level LIMIT (or OFFSET … FETCH) is wrapped, since
+/// MariaDB keeps the order of a derived table that has a LIMIT. Pages there never cut long values (MySession::wraps is false on
+/// MariaDB, so they read `*`). A locking read, INTO, PROCEDURE, an executable comment or several statements can't take an
+/// appended LIMIT: Load more is refused with why
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum MariaPage<'a> {
+    Append(&'a str),
+    Wrap,
+    Refuse(&'static str),
+}
+
+fn maria_page(sql: &str) -> MariaPage<'_> {
+    use qurry_shared::scope::K;
+    if sql.contains("/*!") || sql.contains("/*M!") {
+        return MariaPage::Refuse("it holds an executable comment (/*! … */)");
+    }
+    let mut toks = qurry_shared::scope::lex(sql, true);
+    if toks.last().is_some_and(|t| &sql[t.s..t.e] == ";") {
+        toks.pop();
+    }
+    let Some(last) = toks.last() else { return MariaPage::Refuse("it is empty") };
+    let (mut depth, mut top) = (0i32, Vec::new());
+    for t in &toks {
+        match (t.k, &sql[t.s..t.e]) {
+            (K::Punct, "(") => depth += 1,
+            (K::Punct, ")") => depth -= 1,
+            (K::Punct, ";") if depth == 0 => return MariaPage::Refuse("it holds several statements"),
+            (K::Word, w) if depth == 0 => top.push(w.to_ascii_lowercase()),
+            _ => {}
+        }
+    }
+    let has = |pair: &[&str]| top.windows(pair.len()).any(|w| w.iter().zip(pair).all(|(a, b)| a == b));
+    if has(&["for", "update"]) || has(&["for", "share"]) || has(&["lock", "in"]) {
+        return MariaPage::Refuse("it locks rows (FOR UPDATE, LOCK IN SHARE MODE)");
+    }
+    if has(&["into"]) {
+        return MariaPage::Refuse("it reads INTO");
+    }
+    if has(&["procedure"]) {
+        return MariaPage::Refuse("it ends with PROCEDURE");
+    }
+    if has(&["limit"]) || has(&["fetch", "first"]) || has(&["fetch", "next"]) {
+        return MariaPage::Wrap;
+    }
+    MariaPage::Append(&sql[..last.e])
 }
 
 /// The statement's columns as the server describes it (a prepare, closed right after)
@@ -1295,6 +1354,35 @@ mod tests {
         }
     }
 
+    /// A MariaDB page (#200): LIMIT appended after the last token when the statement has none of its own, wrapped when it has,
+    /// refused where an appended LIMIT can't go
+    #[test]
+    fn maria_page_reads() {
+        use MariaPage::*;
+        for (q, body) in [
+            ("select id from t order by id desc", "select id from t order by id desc"),
+            ("select id from t order by id desc;", "select id from t order by id desc"),
+            ("select id from t order by id desc ; -- last", "select id from t order by id desc"),
+            ("select id from t order by id desc -- last", "select id from t order by id desc"),
+            ("select id from t order by id desc /* end */", "select id from t order by id desc"),
+            ("select id from t order by id desc # x", "select id from t order by id desc"),
+            ("with c as (select id from t limit 5) select id from c order by id", "with c as (select id from t limit 5) select id from c order by id"),
+            ("select * from (select a from t limit 3) x", "select * from (select a from t limit 3) x"),
+            ("select `limit` from t where a = 'for update'", "select `limit` from t where a = 'for update'"),
+            ("select a from t union select a from u order by a", "select a from t union select a from u order by a"),
+            ("select * from t for system_time all order by id", "select * from t for system_time all order by id"),
+            ("select a, row_number() over (order by a) from t", "select a, row_number() over (order by a) from t"),
+        ] {
+            assert_eq!(maria_page(q), Append(body), "{q}");
+        }
+        for q in ["select id from t order by id desc limit 220", "select a from t union select a from u limit 5", "select * from t order by id offset 5 rows fetch first 10 rows only"] {
+            assert_eq!(maria_page(q), Wrap, "{q}");
+        }
+        for q in ["select * from t for update", "select * from t order by id lock in share mode", "select 1 into @a", "select 1; select 2", "select /*!50000 1 */", "select /*M!100000 1 */", "select a from t procedure analyse()"] {
+            assert!(matches!(maria_page(q), Refuse(_)), "{q}");
+        }
+    }
+
     /// A page assembled from chunks: its cut cells are numbered by their row in the page, not in their chunk
     #[test]
     fn cut_cells_across_chunks() {
@@ -1312,6 +1400,126 @@ mod tests {
         let crate::testenv::Server { mut cfg, password } = crate::testenv::my()?;
         (cfg.id, cfg.name) = ("my".into(), "my".into());
         Some((cfg, password.unwrap_or_default()))
+    }
+
+    /// QURRY_TEST_MARIADB=host:port:user:password:db (crate::testenv): a MariaDB data source and its password
+    fn mariadb() -> Option<(ConnectionConfig, String)> {
+        let crate::testenv::Server { mut cfg, password } = crate::testenv::mariadb()?;
+        (cfg.id, cfg.name) = ("maria".into(), "maria".into());
+        Some((cfg, password.unwrap_or_default()))
+    }
+
+    /// A session on the server with `table` holding ids 1 … 250
+    async fn ordered_table(server: Option<(ConnectionConfig, String)>, table: &str) -> Option<(MySqlPool, MySession)> {
+        let (cfg, pw) = server?;
+        let Pool::My(p) = crate::db::connect(&cfg, Some(pw.as_str())).await.expect("connect") else { unreachable!() };
+        let mut s = MySession::open(&p).await.unwrap();
+        for q in [
+            format!("drop table if exists {table}"),
+            format!("create table {table} (id int primary key)"),
+            format!("insert into {table} with recursive x(i) as (select 1 union all select i + 1 from x where i < 250) select i from x"),
+        ] {
+            s.run(&q, 10).await.unwrap();
+        }
+        Some((p, s))
+    }
+
+    fn ids(r: &QueryResult) -> Vec<i64> {
+        r.rows.iter().map(|row| row[0].as_i64().unwrap()).collect()
+    }
+
+    /// The pages of `sql`, 100 rows each, as Load more reads them
+    async fn pages(s: &mut MySession, sql: &str) -> Vec<Vec<i64>> {
+        let mut r = s.run(sql, 100).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let mut out = vec![ids(&r)];
+        while r.truncated {
+            r = s.fetch(100).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+            out.push(ids(&r));
+        }
+        out
+    }
+
+    fn desc(from: i64, to: i64) -> Vec<i64> {
+        (to..=from).rev().collect()
+    }
+
+    /// `order by id desc` paged across 3 pages, in that order (#200: MariaDB dropped the ORDER BY of the wrapped next pages)
+    async fn ordered_desc_pages(server: Option<(ConnectionConfig, String)>, table: &str) {
+        let Some((_p, mut s)) = ordered_table(server, table).await else { return };
+        let sql = format!("select id from {table} order by id desc");
+        assert_eq!(pages(&mut s, &sql).await, [desc(250, 151), desc(150, 51), desc(50, 1)]);
+        s.run(&format!("drop table {table}"), 10).await.unwrap();
+    }
+
+    /// MariaDB: QURRY_TEST_MARIADB=… cargo test -p qurry-core mariadb_ -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn mariadb_load_more_keeps_the_order() {
+        ordered_desc_pages(mariadb(), "qurry_order_desc").await;
+    }
+
+    /// The same pages on MySQL, read wrapped as before
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_load_more_keeps_the_order() {
+        ordered_desc_pages(server(), "qurry_order_desc").await;
+    }
+
+    /// Reopened on a new session (a reconnect), after the rows read, in the same order
+    async fn reopened_in_order(server: Option<(ConnectionConfig, String)>, table: &str) {
+        let Some((p, mut s)) = ordered_table(server, table).await else { return };
+        let r = s.run(&format!("select id from {table} order by id desc"), 100).await.unwrap();
+        assert_eq!(ids(&r), desc(250, 151));
+        let m = crate::session::More { schema: s.database().await, ..s.more().unwrap() };
+        let mut again = MySession::open(&p).await.unwrap();
+        assert_eq!(ids(&again.reopen(&m, 100).await.unwrap()), desc(150, 51));
+        assert_eq!(ids(&again.fetch(100).await.unwrap()), desc(50, 1));
+        s.run(&format!("drop table {table}"), 10).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn mariadb_reopen_keeps_the_order() {
+        reopened_in_order(mariadb(), "qurry_order_reopen").await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_reopen_keeps_the_order() {
+        reopened_in_order(server(), "qurry_order_reopen").await;
+    }
+
+    /// A statement with its own LIMIT is read wrapped (MariaDB keeps the order of a derived table with a LIMIT); a locking read
+    /// is refused, with why
+    #[tokio::test]
+    #[ignore]
+    async fn mariadb_own_limit_and_locking_read() {
+        let t = "qurry_order_limit";
+        let Some((_p, mut s)) = ordered_table(mariadb(), t).await else { return };
+        assert_eq!(pages(&mut s, &format!("select id from {t} order by id desc limit 220")).await, [desc(250, 151), desc(150, 51), desc(50, 31)]);
+        assert!(s.run(&format!("select id from {t} order by id desc for update"), 100).await.unwrap().truncated);
+        let e = s.fetch(100).await.unwrap_err().to_string();
+        assert!(e.contains("MariaDB can't load more rows") && e.contains("FOR UPDATE"), "{e}");
+        s.run(&format!("drop table {t}"), 10).await.unwrap();
+    }
+
+    /// A trailing `;` and trailing comments are left out of the appended LIMIT; a CTE with ORDER BY pages in order
+    #[tokio::test]
+    #[ignore]
+    async fn mariadb_trailing_semicolon_comment_and_cte() {
+        let t = "qurry_order_tail";
+        let Some((_p, mut s)) = ordered_table(mariadb(), t).await else { return };
+        for q in [
+            format!("select id from {t} order by id desc;"),
+            format!("select id from {t} order by id desc; -- last"),
+            format!("select id from {t} order by id desc -- last"),
+            format!("select id from {t} order by id desc /* end */"),
+            format!("select id from {t} order by id desc # end"),
+            format!("with c as (select id from {t}) select id from c order by id desc"),
+        ] {
+            assert_eq!(pages(&mut s, &q).await, [desc(250, 151), desc(150, 51), desc(50, 1)], "{q}");
+        }
+        s.run(&format!("drop table {t}"), 10).await.unwrap();
     }
 
     /// Notify when a source without SSL set connected in plaintext (silent when connected over TLS)
