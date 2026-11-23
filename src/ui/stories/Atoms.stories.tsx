@@ -233,3 +233,25 @@ export const Inputs: S = {
     );
   },
 };
+
+/** Keyboard focus on a checkbox or radio (and Theme › Background's slider): the shared 2px accent ring, on :focus-visible only (a mouse click shows none).
+ *  The story focuses Read-only; Tab moves the ring on */
+export const CheckFocus: S = {
+  name: "Checkbox · Radio — keyboard focus",
+  render: () => (
+    <Row gap={4}>
+      <Checkbox checked onChange={() => {}}>
+        Read-only
+      </Checkbox>
+      <Radio checked onChange={() => {}}>
+        A
+      </Radio>
+      <Radio checked={false} onChange={() => {}}>
+        B
+      </Radio>
+    </Row>
+  ),
+  play: async ({ canvasElement }) => {
+    canvasElement.querySelector<HTMLInputElement>('input[type="checkbox"]')?.focus();
+  },
+};

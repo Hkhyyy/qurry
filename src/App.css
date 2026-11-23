@@ -121,6 +121,8 @@ button.icon { background: none; border: none; padding: 0 6px; font-size: 14px; c
 button.icon:hover { color: var(--text); background: var(--c-3a3c40); }
 input, select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--c-4e5157); border-radius: 4px; padding: 4px 8px; outline: none; }
 input:focus, select:focus { border-color: var(--accent); }
+/* A checkbox, radio or slider has no border to color: reached with the keyboard it shows the shared accent ring (#203) */
+input:is([type="checkbox"], [type="radio"], [type="range"]):focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
 a { color: var(--c-548af7); cursor: pointer; }
 .grow { flex: 1; }
 .muted { color: var(--muted); }
@@ -565,7 +567,6 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-bg-opacity { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--ui-sp-3); }
 .theme-bg-range { position: relative; flex: 1; min-width: 60px; display: flex; }
 .theme-bg-range input { width: 100%; margin: 0; accent-color: var(--ui-accent); }
-.theme-bg-range input:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; border-radius: 2px; }
 .theme-bg-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--ui-warn); pointer-events: none; }
 .theme-bg-pct { flex: none; width: 34px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ui-text-muted); }
 .theme-bg-pos { display: grid; grid-auto-rows: 12px; gap: 2px; padding: 3px; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-sm); }
