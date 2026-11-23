@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import TABLE from "../../crates/shared/src/themes.json";
 import { shared } from "./shared";
-import { backdropStyle, holdImage, motionPaused, TINTS, mayMove, mixHex, releaseImage, newBackgroundSlot, newCornerSlot, opacityCap, sameImages, stickerStyle, warningsOver } from "./themeImages";
+import { backdropStyle, holdImage, IDLE_KEEP, IDLE_MS, motionPaused, TINTS, mayMove, mixHex, releaseImage, newBackgroundSlot, newCornerSlot, opacityCap, sameImages, stickerStyle, warningsOver } from "./themeImages";
 
 const api = vi.hoisted(() => ({ themeImage: vi.fn() }));
 vi.mock("./api", () => ({ api }));
@@ -67,7 +67,8 @@ describe("theme background image", () => {
     expect(sameImages({ background: bg }, { background: { ...bg, opacity: 16 } })).toBe(false);
     expect(sameImages({ background: bg }, { corner: newCornerSlot(bg.file) })).toBe(false);
   });
-  it("reads an image once while it is used, frees its blob URL when the last use ends, and reads it again after a failure", async () => {
+  it("reads an image once while it is used, keeps its blob URL a while after the last use ends, and reads it again after a failure", async () => {
+    vi.useFakeTimers();
     const made: Blob[] = [];
     const revoked: string[] = [];
     vi.stubGlobal("URL", { createObjectURL: (b: Blob) => (made.push(b), `blob:${made.length}`), revokeObjectURL: (u: string) => revoked.push(u) });
@@ -78,15 +79,21 @@ describe("theme background image", () => {
     expect(api.themeImage).toHaveBeenCalledTimes(1);
     expect(made[0].type).toBe("image/gif");
     releaseImage(gif);
-    await Promise.resolve();
-    expect(revoked).toEqual([]);
     releaseImage(gif);
-    await new Promise((r) => setTimeout(r));
+    await vi.advanceTimersByTimeAsync(IDLE_MS - 1);
+    expect(revoked).toEqual([]);
+    // Used again within IDLE_MS: the same URL, not read again (the engine decodes it once)
+    expect(await holdImage(gif)).toBe("blob:1");
+    expect(api.themeImage).toHaveBeenCalledTimes(1);
+    // A use ending and another starting in one React commit (cleanup, then effect) keeps it too
+    releaseImage(gif);
+    expect(await holdImage(gif)).toBe("blob:1");
+    // Unused for IDLE_MS: freed, read again by the next use
+    releaseImage(gif);
+    await vi.advanceTimersByTimeAsync(IDLE_MS);
     expect(revoked).toEqual(["blob:1"]);
-    // Used again: read again
     expect(await holdImage(gif)).toBe("blob:2");
     expect(api.themeImage).toHaveBeenCalledTimes(2);
-    releaseImage(gif);
     releaseImage(gif);
     const png = "1111111111111111.png";
     api.themeImage.mockRejectedValueOnce(`The theme image ${png} is missing: choose it again`);
@@ -96,6 +103,37 @@ describe("theme background image", () => {
     releaseImage(png);
     expect(await holdImage("2222222222222222.apng")).toBe("blob:4");
     expect(made[3].type).toBe("image/apng");
+    releaseImage("2222222222222222.apng");
+    await vi.advanceTimersByTimeAsync(IDLE_MS);
+    expect(revoked.sort()).toEqual(["blob:1", "blob:2", "blob:3", "blob:4"]);
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+  it("keeps at most IDLE_KEEP unused files: the one let go longest ago is freed first; a file in use never is", async () => {
+    const made: string[] = [];
+    const revoked: string[] = [];
+    vi.stubGlobal("URL", { createObjectURL: () => (made.push(`blob:k${made.length + 1}`), made[made.length - 1]), revokeObjectURL: (u: string) => revoked.push(u) });
+    api.themeImage.mockReset().mockResolvedValue(new ArrayBuffer(4));
+    const [a, b, c, d] = ["a000000000000000.gif", "b000000000000000.gif", "c000000000000000.gif", "d000000000000000.png"];
+    const inUse = await holdImage(d);
+    // Switching a slot a → b → c → a: a is still kept when it comes back after b
+    expect(await holdImage(a)).toBe("blob:k2");
+    releaseImage(a);
+    expect(await holdImage(b)).toBe("blob:k3");
+    releaseImage(b);
+    expect(await holdImage(a)).toBe("blob:k2");
+    releaseImage(a);
+    expect(await holdImage(c)).toBe("blob:k4");
+    releaseImage(c);
+    // Idle now: b (let go first), a, c; IDLE_KEEP of them stay
+    await Promise.resolve();
+    expect(IDLE_KEEP).toBe(2);
+    expect(revoked).toEqual(["blob:k3"]);
+    expect(await holdImage(a)).toBe("blob:k2");
+    expect(await holdImage(c)).toBe("blob:k4");
+    expect(await holdImage(d)).toBe(inUse);
+    expect(api.themeImage).toHaveBeenCalledTimes(4);
+    for (const f of [a, c, d, d]) releaseImage(f);
     vi.unstubAllGlobals();
   });
   it("stops animated images with Reduce motion whatever the theme says, and while unfocused unless the theme plays them always", () => {
