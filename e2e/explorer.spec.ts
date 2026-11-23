@@ -49,7 +49,31 @@ test("data source context menu", async ({ page }) => {
       - menuitem "Remove Data Source ⌦"
       - separator
       - text: Color
+      - radiogroup "Color":
+        - radio "No color"
+        - radio "Red"
+        - radio "Orange"
+        - radio "Yellow" [checked]
+        - radio "Green"
+        - radio "Teal"
+        - radio "Blue"
+        - radio "Violet"
+        - radio "Gray"
   `);
+});
+
+test("the menu's colors: the arrow keys move without picking (nor closing it), Space picks and closes (#213)", async ({ page }) => {
+  await treeItem(page, "[DEV] shop_app 3").click({ button: "right" });
+  const colors = page.getByRole("menu").getByRole("radiogroup", { name: "Color" });
+  await colors.getByRole("radio", { checked: true }).focus();
+  await expect(colors.getByRole("radio", { name: "Yellow" })).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(colors.getByRole("radio", { name: "Green" })).toBeFocused();
+  await expect(colors.getByRole("radio", { name: "Yellow" })).toBeChecked();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await treeItem(page, "[DEV] shop_app 3").click({ button: "right" });
+  await expect(page.getByRole("menu").getByRole("radio", { name: "Green" })).toBeChecked();
 });
 
 test("Navigation → Jump to Query Console… offers New Query Console, then the open consoles", async ({ page }) => {
@@ -239,11 +263,11 @@ test("toolbar ↻ with nothing selected reloads the data source list", async ({ 
   await expect(treeItem(page, "[QA] shop_app")).toBeVisible();
 });
 
-test("the explorer splitter shows the accent line when focused from the keyboard, and arrows move it", async ({ page }) => {
+test("the explorer splitter shows the focus line when focused from the keyboard, and arrows move it", async ({ page }) => {
   const sep = page.locator(".resize-h").first();
-  const accent = await page.evaluate(() => {
+  const focus = await page.evaluate(() => {
     const probe = document.body.appendChild(document.createElement("div"));
-    probe.style.background = "var(--accent)";
+    probe.style.background = "var(--ui-focus)";
     const c = getComputedStyle(probe).backgroundColor;
     probe.remove();
     return c;
@@ -252,7 +276,7 @@ test("the explorer splitter shows the accent line when focused from the keyboard
   await sep.focus();
   await expect(sep).toHaveAttribute("data-separator", "focus");
   await expect(sep).toHaveCSS("width", "2px");
-  await expect(sep).toHaveCSS("background-color", accent);
+  await expect(sep).toHaveCSS("background-color", focus);
   const x = (await sep.boundingBox())!.x;
   await page.keyboard.press("ArrowRight");
   await expect.poll(async () => (await sep.boundingBox())!.x).toBeGreaterThan(x);
