@@ -485,6 +485,17 @@ test.describe("fixed keys", () => {
     await expect(seTab(page)).toHaveText("All");
   });
 
+  test("two quick ⇧-clicks are not ⇧⇧: Search Everywhere stays closed (#217)", async ({ page }) => {
+    await users(page).click({ modifiers: ["Shift"] });
+    await users(page).click({ modifiers: ["Shift"] });
+    await page.waitForTimeout(300);
+    await expect(seTab(page)).toHaveCount(0);
+    // ⇧⇧ itself still opens it
+    await page.keyboard.press("Shift");
+    await page.keyboard.press("Shift");
+    await expect(seTab(page)).toHaveText("All");
+  });
+
   test("⇧⎋ hides the Find tool window, or the explorer, whichever has the focus", async ({ page }) => {
     await page.keyboard.press("Meta+Shift+KeyF");
     await page.locator("[data-toolwindow=find]").focus();

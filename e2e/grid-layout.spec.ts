@@ -203,9 +203,8 @@ test("the status bar's shown columns skip those under the pinned ones once the g
 
 // Several selected columns (#216, DataGrip): the header menu's Hide, Pin and Unpin act on all of them when the right-click lands on one
 const selHeads = (page: Page) => work(page).locator(".grid-head [role=columnheader].col-sel .col-name").allTextContents();
-/** A ⇧-click, after a pause: two ⇧ presses within 400 ms open Search Everywhere (⇧⇧) */
+/** A ⇧-click, with no pause: quick ⇧-clicks never count as ⇧⇧ (#217) */
 async function shiftClick(page: Page, target: ReturnType<Page["locator"]>) {
-  await page.waitForTimeout(450);
   await target.click({ modifiers: ["Shift"] });
 }
 async function selectHeads(page: Page, from: string, to: string) {
