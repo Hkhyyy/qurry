@@ -197,6 +197,23 @@ test("a confirm over Settings keeps the focus, then gives it back to the button 
   await expect(del).toBeFocused();
 });
 
+test("a dialog opened under a confirm (the Update dialog) leaves the focus in the confirm (#211)", async ({ page }) => {
+  await treeItem(page, "[DEV] shop_app 3").click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^Remove Data Source/ }).click();
+  const ask = page.locator(".ui-modal[aria-modal]", { hasText: "Delete data source" });
+  const focused = () => page.evaluate(() => document.activeElement?.closest(".ui-modal")?.textContent ?? "");
+  const before = await page.evaluate(() => document.activeElement?.outerHTML);
+  expect(await focused()).toContain("Delete data source");
+  // The offer arrives while the confirm is open (Qurry › Check for Updates…): its window mounts below, with an autoFocus inside
+  await page.evaluate(async () => (await import(/* @vite-ignore */ "/src/features/dialogs/store.ts")).setUpdateOpen(true));
+  await expect(page.getByText("Qurry 0.1.2 is available")).toBeVisible();
+  expect(await page.evaluate(() => document.activeElement?.outerHTML)).toBe(before);
+  // Closed, the confirm hands the focus to the window left on top
+  await page.keyboard.press("Escape");
+  await expect(ask).toHaveCount(0);
+  expect(await focused()).toContain("Qurry 0.1.2 is available");
+});
+
 test("a radio group is one Tab stop and the arrow keys pick in it (#212)", async ({ page, browserName }) => {
   await treeItem(page, "users").first().dblclick();
   await work(page).getByRole("button", { name: "Export Data…" }).click();

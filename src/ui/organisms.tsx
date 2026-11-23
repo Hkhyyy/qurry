@@ -94,17 +94,23 @@ export function Modal(p: {
   onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void;
   bodyClassName?: string;
 }) {
-  // Take focus when opened (unless an autoFocus inside got it first) — so Esc · Enter always go to this window. Closed, give it back to
-  // where it was (read while rendering, before an autoFocus inside moves it), unless something else has taken it since
+  // Take focus when opened (unless an autoFocus inside got it first) — so Esc · Enter always go to this window; opened under a window in
+  // a higher layer (the Update dialog under a confirm), leave the focus up there. Closed, give it back to where it was (read while
+  // rendering, before an autoFocus inside moves it) when that is in the window now on top, else to that window; unless something else
+  // has taken it since
   const box = useRef<HTMLDivElement>(null);
   const [opener] = useState(() => document.activeElement);
   useEffect(() => {
     const el = box.current;
-    if (el && !el.contains(document.activeElement)) el.focus();
+    const top = topModal();
+    const back = (to: HTMLElement | undefined) => (opener instanceof HTMLElement && opener.isConnected && (!to || to.contains(opener)) ? opener : to)?.focus();
+    if (el && top && layer(top) > layer(el)) {
+      if (el.contains(document.activeElement)) back(top);
+    } else if (el && !el.contains(document.activeElement)) el.focus();
     return () => {
       // Still in the document: StrictMode's trial unmount, not a close
-      if (el?.isConnected || !(opener instanceof HTMLElement) || !opener.isConnected) return;
-      if (!document.activeElement || document.activeElement === document.body) opener.focus();
+      if (el?.isConnected) return;
+      if (!document.activeElement || document.activeElement === document.body) back(topModal());
     };
   }, [opener]);
   // Tab · ⇧Tab stay inside: past the last control (or before the first) the focus lands on an edge stop and goes round to the other end.
@@ -120,8 +126,7 @@ export function Modal(p: {
   useEffect(() => {
     const key = (e: globalThis.KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || (document.activeElement && document.activeElement !== document.body)) return;
-      const open = [...document.querySelectorAll<HTMLElement>(".ui-modal[aria-modal='true']")];
-      if (topOf(open, (m) => Number(getComputedStyle(m.parentElement ?? m).zIndex) || 0) !== box.current) return;
+      if (topModal() !== box.current) return;
       e.preventDefault();
       close.current();
     };
@@ -161,6 +166,9 @@ export function Modal(p: {
     </div>
   );
 }
+/** The open dialog on top: the one in the highest layer (a confirm over a dialog), then the last opened */
+const layer = (m: HTMLElement) => Number(getComputedStyle(m.parentElement ?? m).zIndex) || 0;
+const topModal = () => topOf([...document.querySelectorAll<HTMLElement>(".ui-modal[aria-modal='true']")], layer);
 /** What Tab can reach inside a dialog (enabled, not taken out with tabindex=-1) */
 const TABBABLE = ["a[href]", "button", "input", "select", "textarea", "[tabindex]"].map((s) => `${s}:not([tabindex='-1']):not(:disabled)`).join(", ");
 
