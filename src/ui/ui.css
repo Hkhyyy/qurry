@@ -83,6 +83,8 @@
 .ui-backdrop.overlay-clear { background: transparent; }
 .ui-backdrop.overlay-light { background: rgba(0, 0, 0, 0.15); }
 .ui-backdrop.layer-dialog { z-index: var(--ui-z-dialog); }
+/* A dialog's Tab edge stops (they pass the focus round to the other end): out of the layout */
+.ui-focus-edge { position: absolute; width: 1px; height: 1px; overflow: hidden; }
 /* Dialogs are pinned to the top: title · tab positions don't move when content height changes. Sized against the backdrop (the
    window), never past it: the head and the foot stay in view and only the body scrolls */
 .ui-backdrop.for-modal { align-items: flex-start; padding: 8vh 0 24px; }

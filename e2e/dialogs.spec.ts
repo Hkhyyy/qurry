@@ -150,6 +150,53 @@ test("a checkbox and a radio reached with the keyboard show the accent focus rin
   expect((await ring(json)).outline).toMatch(/^none /);
 });
 
+/** The keys Tab and ⇧Tab press `n` times, the focus checked to be inside `inside` after each (⌥ in WebKit as well: plain Tab skips buttons there) */
+async function staysInside(page: Page, browserName: string, inside: Locator, n: number) {
+  const keys = browserName === "webkit" ? ["Tab", "Alt+Tab", "Shift+Tab", "Shift+Alt+Tab"] : ["Tab", "Shift+Tab"];
+  for (const key of keys)
+    for (let i = 0; i < n; i++) {
+      await page.keyboard.press(key);
+      expect(await inside.evaluate((el) => el.contains(document.activeElement) && document.activeElement !== el), `${key} ×${i + 1}`).toBe(true);
+    }
+}
+
+test("a dialog keeps Tab and ⇧Tab inside and, closed, gives the focus back to its opener (#211)", async ({ page, browserName }) => {
+  await treeItem(page, "users").first().dblclick();
+  const opener = work(page).getByRole("button", { name: "Export Data…" });
+  await opener.focus();
+  await page.keyboard.press("Enter");
+  const exp = page.locator(".ui-modal[aria-modal]");
+  await expect(exp.getByRole("button", { name: "Export", exact: true })).toBeFocused();
+  // Past the primary button (the last control) round to the first one, and back
+  await staysInside(page, browserName, exp, 12);
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+  await expect(opener).toBeFocused();
+
+  await page.keyboard.press("Meta+Comma");
+  const settings = page.locator(".ui-modal[aria-modal]");
+  await staysInside(page, browserName, settings, 30);
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+});
+
+test("a confirm over Settings keeps the focus, then gives it back to the button that opened it (#211)", async ({ page, browserName }) => {
+  await page.evaluate(() => localStorage.setItem("mock-themeSettings", JSON.stringify({ theme: "custom-1", sync: { dark: "dark", light: "light" }, custom: [{ id: "custom-1", name: "Night shift", base: "dracula", colors: { accent: "#9580ff" } }] })));
+  await openApp(page);
+  await page.keyboard.press("Meta+Comma");
+  await dialog(page).getByRole("button", { name: "Edit Colors…" }).click();
+  const del = dialog(page).getByRole("button", { name: "Delete", exact: true });
+  await del.focus();
+  await page.keyboard.press("Enter");
+  const ask = page.locator(".ui-modal[aria-modal]", { hasText: "Delete the custom theme" });
+  await expect(ask).toBeVisible();
+  await staysInside(page, browserName, ask, 5);
+  await page.keyboard.press("Escape");
+  await expect(ask).toHaveCount(0);
+  await expect(dialog(page)).toHaveCount(1);
+  await expect(del).toBeFocused();
+});
+
 test("Export Data… offers every format and destination", async ({ page }) => {
   await treeItem(page, "users").first().dblclick();
   await work(page).getByRole("button", { name: "Export Data…" }).click();
