@@ -234,7 +234,7 @@ export const Inputs: S = {
   },
 };
 
-/** Keyboard focus on a checkbox or radio (and Theme › Background's slider): the shared 2px accent ring, on :focus-visible only (a mouse click shows none).
+/** Keyboard focus on a checkbox or radio (and Theme › Background's slider): the shared 2px focus ring (--ui-focus), on :focus-visible only (a mouse click shows none).
  *  The story focuses Read-only; Tab moves the ring on */
 export const CheckFocus: S = {
   name: "Checkbox · Radio — keyboard focus",

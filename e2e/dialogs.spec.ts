@@ -109,15 +109,15 @@ test("Keymap Reference (⇧⌘/) lists every row with ⌘⌥⌃⇧ keys", async 
   expect(rows).not.toMatch(/Ctrl|Alt\+|Cmd|Shift\+/);
 });
 
-/** The element's outline next to the accent ring (2px solid --ui-accent, resolved to rgb) */
+/** The element's outline next to the focus ring (2px solid --ui-focus, resolved) */
 const ring = (l: Locator) =>
   l.evaluate((el) => {
     const probe = document.body.appendChild(document.createElement("i"));
-    probe.style.color = "var(--ui-accent)";
-    const accent = getComputedStyle(probe).color;
+    probe.style.color = "var(--ui-focus)";
+    const focus = getComputedStyle(probe).color;
     probe.remove();
     const cs = getComputedStyle(el);
-    return { outline: `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineColor}`, accent: `solid 2px ${accent}` };
+    return { outline: `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineColor}`, focus: `solid 2px ${focus}` };
   });
 /** Tab (⌥Tab in WebKit, which otherwise skips checkboxes and radios) until the control has the focus */
 async function tabTo(page: Page, browserName: string, target: Locator, back = false) {
@@ -131,7 +131,7 @@ test("a checkbox and a radio reached with the keyboard show the accent focus rin
   const check = dialog(page).getByRole("checkbox", { name: "Sum", exact: true });
   await tabTo(page, browserName, check);
   const r = await ring(check);
-  expect(r.outline).toBe(r.accent);
+  expect(r.outline).toBe(r.focus);
   // Another one clicked (the focused one keeps :focus-visible when clicked)
   const avg = dialog(page).getByRole("checkbox", { name: "Avg", exact: true });
   await avg.click();
@@ -144,7 +144,7 @@ test("a checkbox and a radio reached with the keyboard show the accent focus rin
   const file = dialog(page).getByRole("radio", { name: /^File…/ });
   await tabTo(page, browserName, file, true);
   const rr = await ring(file);
-  expect(rr.outline).toBe(rr.accent);
+  expect(rr.outline).toBe(rr.focus);
   const json = dialog(page).getByRole("radio", { name: /^JSON/ });
   await json.click();
   expect((await ring(json)).outline).toMatch(/^none /);

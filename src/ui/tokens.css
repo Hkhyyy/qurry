@@ -31,6 +31,9 @@
 
   /* The line after a result grid's pinned columns: muted text toward the background (at least 3:1 on the grid in the built-in themes) */
   --ui-grid-pin-edge: color-mix(in srgb, var(--ui-text-muted) 85%, var(--ui-bg));
+  /* Every keyboard focus ring and focused field's border: the accent toward the text (lighter in dark themes, darker in light ones), at
+     least 3:1 on every surface a ring sits on in the built-in themes (theme.test.ts); custom themes derive it the same way */
+  --ui-focus: color-mix(in srgb, var(--ui-accent) 55%, var(--ui-text));
 
   /* The theme's Corner image: over the window's content (its layers stay below), under every popup (in-window ones use popup-in-window) */
   --ui-z-sticker: 20;

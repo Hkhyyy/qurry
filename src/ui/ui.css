@@ -9,7 +9,7 @@
   cursor: pointer; -webkit-user-select: none; user-select: none;
 }
 .ui-btn:hover:not(:disabled) { background: var(--ui-hover); }
-.ui-btn:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
+.ui-btn:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 1px; }
 .ui-btn:disabled { opacity: 0.45; cursor: default; }
 .ui-btn-sm { height: var(--ui-h-sm); padding: 0 var(--ui-sp-3); font-size: var(--ui-fs-sm); }
 .ui-btn-primary { color: var(--ui-text-on-accent); background: var(--ui-accent); border-color: var(--ui-accent); }
@@ -29,7 +29,7 @@
 }
 .ui-icon-btn svg { display: block; }
 .ui-icon-btn:hover:not(:disabled) { color: var(--ui-text); background: var(--ui-hover); }
-.ui-icon-btn:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
+.ui-icon-btn:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
 .ui-icon-btn:disabled { opacity: 0.35; cursor: default; }
 .ui-icon-btn.active { color: var(--ui-text); background: var(--ui-selected); }
 .ui-icon-btn.tone-ok:not(:disabled) { color: var(--ui-ok); }
@@ -130,7 +130,7 @@
   font: inherit; font-size: var(--ui-fs-md); color: var(--ui-text);
   background: var(--ui-bg); border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-sm); outline: none;
 }
-.ui-input:focus, .ui-select:focus { border-color: var(--ui-accent); }
+.ui-input:focus, .ui-select:focus { border-color: var(--ui-focus); }
 .ui-input:disabled, .ui-select:disabled { opacity: 0.45; }
 .ui-input.full, .ui-select.full { width: 100%; }
 .ui-check { display: inline-flex; align-items: center; gap: var(--ui-sp-2); cursor: pointer; }
@@ -152,7 +152,7 @@
 .ui-select.w-auto { justify-self: start; }
 .ui-row > .grow, .ui-input.grow { flex: 1; min-width: 0; }
 .ui-textarea { min-height: 72px; padding: var(--ui-sp-2) var(--ui-sp-3); font-family: var(--ui-font-mono); font-size: var(--ui-fs-sm); color: var(--ui-text); background: var(--ui-bg); border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-sm); outline: none; resize: vertical; }
-.ui-textarea:focus { border-color: var(--ui-accent); }
+.ui-textarea:focus { border-color: var(--ui-focus); }
 .ui-notice + .ui-notice, .ui-hint + .ui-notice { margin-top: var(--ui-sp-3); }
 
 /* ── Tabs ── */
@@ -216,7 +216,7 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-swatch.none { background: linear-gradient(135deg, transparent 45%, var(--ui-text-muted) 45%, var(--ui-text-muted) 55%, transparent 55%); }
 .ui-swatch.on { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
 /* A swatch over a hidden input (a preset's radio, the custom color, the theme editor's colors) shows the input's keyboard focus (#203) */
-.ui-swatch:has(> input:focus-visible) { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
+.ui-swatch:has(> input:focus-visible) { outline: 2px solid var(--ui-focus); outline-offset: 1px; }
 .ui-swatch > input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; border: 0; padding: 0; margin: 0; }
 .ui-color-picker { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-sp-2); }
 .ui-swatch-custom { width: 18px; height: 18px; overflow: hidden; background: conic-gradient(#d9605a, #e5a540, #c9b458, #59b36b, #4fb6b0, #4e9af1, #a77fd8, #d47fb0, #d9605a); }
