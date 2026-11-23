@@ -49,6 +49,16 @@ test("data source context menu", async ({ page }) => {
       - menuitem "Remove Data Source ⌦"
       - separator
       - text: Color
+      - radiogroup "Color":
+        - radio "None"
+        - radio "Red"
+        - radio "Orange"
+        - radio "Yellow" [checked]
+        - radio "Green"
+        - radio "Teal"
+        - radio "Blue"
+        - radio "Violet"
+        - radio "Gray"
   `);
 });
 

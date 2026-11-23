@@ -398,3 +398,26 @@ test("General › Password command: turns Password off, is saved and shown again
   await expect(d.getByRole("textbox", { name: "Reuse for seconds" })).toHaveValue("600");
   await expect(d.getByLabel("Password", { exact: true })).toBeDisabled();
 });
+
+test("the color presets are one Tab stop: Space picks the focused one, the arrow keys pick the next (#213)", async ({ page, browserName }) => {
+  await treeNode(page, "[PROD] shop_app").click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^Properties/ }).click();
+  const colors = dialog(page).getByRole("radiogroup", { name: "Color" });
+  // A custom color: no preset is picked
+  const hex = dialog(page).getByPlaceholder("#hex");
+  await hex.fill("#123456");
+  await expect(colors.getByRole("radio", { checked: true })).toHaveCount(0);
+  // Back from the hex field past the custom color into the presets (⌥ in WebKit, whose plain Tab skips radios)
+  const gray = colors.getByRole("radio", { name: "Gray", exact: true });
+  for (let i = 0; i < 4 && !(await gray.evaluate((e) => e === document.activeElement)); i++) await page.keyboard.press(browserName === "webkit" ? "Shift+Alt+Tab" : "Shift+Tab");
+  await expect(gray).toBeFocused();
+  await expect(gray).not.toBeChecked();
+  // The shared focus ring on the swatch
+  const ring = await colors.locator(".ui-swatch:has(> input:focus-visible)").evaluate((e) => `${getComputedStyle(e).outlineStyle} ${getComputedStyle(e).outlineWidth}`);
+  expect(ring).toBe("solid 2px");
+  await page.keyboard.press("Space");
+  await expect(gray).toBeChecked();
+  await page.keyboard.press("ArrowLeft");
+  await expect(colors.getByRole("radio", { name: "Violet", exact: true })).toBeChecked();
+  await expect(colors.getByRole("radio", { name: "Violet", exact: true })).toBeFocused();
+});

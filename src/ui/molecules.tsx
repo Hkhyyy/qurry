@@ -155,10 +155,11 @@ export const Hint = ({ children, className }: { children: ReactNode; className?:
 /** Color picker (Data Source color). value = null means no color */
 export function ColorPicker({ value, options, onChange, custom }: { value: string | null; options: { name: string; value: string | null }[]; onChange: (v: string | null) => void; custom?: boolean }) {
   const isPreset = options.some((c) => c.value?.toLowerCase() === value?.toLowerCase());
+  const name = useId();
   return (
-    <div className="ui-color-picker">
+    <div className="ui-color-picker" role="radiogroup" aria-label="Color">
       {options.map((c) => (
-        <Swatch key={c.name} color={c.value} title={c.name} selected={c.value?.toLowerCase() === value?.toLowerCase()} onClick={() => onChange(c.value)} />
+        <Swatch key={c.name} name={name} color={c.value} title={c.name} selected={c.value?.toLowerCase() === value?.toLowerCase()} onClick={() => onChange(c.value)} />
       ))}
       {custom && <CustomColor value={value && !isPreset ? value : null} onChange={onChange} />}
     </div>
