@@ -10,6 +10,7 @@ import { EXTRACTORS, type Extractor, raw } from "../lib/extract";
 import { sharedOr } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { CELL_KIND } from "../lib/gridAlign";
+import { columnsLabel, headerColumns } from "../lib/columnLayout";
 import { type WidthsOf } from "../lib/columnWidths";
 import { jsonCell } from "../lib/jsonSpans";
 import { contains, extend, forEachCell, type Pos, remapCols, selCols, selRows as rowsOf, type Selection, single, toggle } from "../lib/gridSelection";
@@ -249,23 +250,35 @@ export function ResultGrid(p: Props) {
   // Pin, Unpin or Hide: the selection and the cursor follow their columns (as rows follow dataIndex), set before this render paints
   const [selView, setSelView] = useState(view);
   const sel = selView === view ? selState : remapCols(selState, selView, view);
+  // The selection made on the column headers (a click, ⇧- or ⌘-click there): only it makes Hide and Pin act on several columns
+  // (#216); a cell, range or row selection is another object, so its columns never count
+  const headerSel = useRef<Selection | null>(null);
   if (selView !== view) {
+    if (headerSel.current === selState) headerSel.current = sel;
     setSelView(view);
     setSel(sel);
   }
-  /** The column header's menu on display column c: hide or pin it, Columns…, widths of it or all of them */
-  const headerItems = (c: number, i = view[c]): MenuItem[] => [
-    { label: "Hide Column", ...cmd("grid.colHide"), action: () => layout.hide(i), disabled: view.length < 2 },
-    c < layout.pinned ? { label: "Unpin Column", ...cmd("grid.colPin"), action: () => layout.unpin(i) } : { label: "Pin Column", ...cmd("grid.colPin"), action: () => layout.pin(i) },
-    { label: "Columns…", ...cmd("grid.columns"), action: () => setColumnsOpen(true) },
-    { separator: true },
-    { label: "Fit Column", ...cmd("grid.colFit"), shortcut: cmd("grid.colFit").shortcut ?? "double-click the edge", action: () => fitColumn(i) },
-    { label: "Fit All Columns", ...cmd("grid.colFitAll"), action: fitAll },
-    { label: "Reset Widths", ...cmd("grid.colReset"), shortcut: cmd("grid.colReset").shortcut ?? "computed widths", action: resetWidths, disabled: !Object.keys(setW).length },
-    { separator: true },
-    { label: "Narrow Column", ...cmd("grid.colNarrow"), action: () => stepColumn(i, -1) },
-    { label: "Widen Column", ...cmd("grid.colWiden"), action: () => stepColumn(i, 1) },
-  ];
+  /** The column header's menu on display column c: hide or pin it (and the other selected columns when it is one of them; a mixed
+   *  selection gets both Pin and Unpin, Pin first so its key pins the rest), Columns…, widths of it or all of them */
+  const colSel = sel && headerSel.current === sel ? selCols(sel) : [];
+  const headerItems = (c: number, i = view[c]): MenuItem[] => {
+    const { cols, pin, unpin } = headerColumns(c, colSel, layout.pinned);
+    const res = (cs: number[]) => cs.map((x) => view[x]);
+    const all = cols.length >= view.length;
+    return [
+      { label: columnsLabel("Hide", cols.length), ...cmd("grid.colHide"), action: () => layout.hide(res(cols)), disabled: all, title: all ? "At least one column stays shown" : undefined },
+      ...(pin.length ? [{ label: columnsLabel("Pin", pin.length), ...cmd("grid.colPin"), action: () => layout.pin(res(pin)) }] : []),
+      ...(unpin.length ? [{ label: columnsLabel("Unpin", unpin.length), ...cmd("grid.colPin"), action: () => layout.unpin(res(unpin)) }] : []),
+      { label: "Columns…", ...cmd("grid.columns"), action: () => setColumnsOpen(true) },
+      { separator: true },
+      { label: "Fit Column", ...cmd("grid.colFit"), shortcut: cmd("grid.colFit").shortcut ?? "double-click the edge", action: () => fitColumn(i) },
+      { label: "Fit All Columns", ...cmd("grid.colFitAll"), action: fitAll },
+      { label: "Reset Widths", ...cmd("grid.colReset"), shortcut: cmd("grid.colReset").shortcut ?? "computed widths", action: resetWidths, disabled: !Object.keys(setW).length },
+      { separator: true },
+      { label: "Narrow Column", ...cmd("grid.colNarrow"), action: () => stepColumn(i, -1) },
+      { label: "Widen Column", ...cmd("grid.colWiden"), action: () => stepColumn(i, 1) },
+    ];
+  };
 
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => scrollRef.current, estimateSize: () => ROW_H, overscan: 20 });
   // Horizontally only the visible columns are drawn (useColumnLayout); blank cells fill the width between and after them
@@ -290,7 +303,16 @@ export function ResultGrid(p: Props) {
   const forSelected = (fn: (r: number, c: number) => void | false) => forEachCell(sel, (d, c) => fn(dataIndex(d), view[c]));
   const selectCell = (pos: Pos, ext: boolean) => setSel((s) => (ext ? extend(s, pos) : single(pos)));
   /** A mouse click: ⇧ extends the last range to b, ⌘ adds a..b (a cell, a row, a column) or takes it out, a plain click starts over (DataGrip) */
-  const clickSel = (e: React.MouseEvent, a: Pos, b: Pos = a) => setSel((s) => (e.shiftKey ? extend(s, b) : (isMac ? e.metaKey : e.ctrlKey) ? toggle(s, a, b) : single(a, b)));
+  const clicked = (s: Selection | null, e: React.MouseEvent, a: Pos, b: Pos) => (e.shiftKey ? extend(s, b) : (isMac ? e.metaKey : e.ctrlKey) ? toggle(s, a, b) : single(a, b));
+  const clickSel = (e: React.MouseEvent, a: Pos, b: Pos = a) => setSel((s) => clicked(s, e, a, b));
+  /** A click on display column c's header: selects the column (DataGrip), kept as the column selection; a right-click keeps the
+   *  column selection it lands in, else selects its column (⌃-click on a Mac is a right-click) */
+  const clickHeader = (e: React.MouseEvent, c: number) => {
+    if ((e.button === 2 || (isMac && e.ctrlKey)) && colSel.includes(c)) return;
+    const next = clicked(sel, e, { r: 0, c }, { r: rowCount - 1, c });
+    headerSel.current = next;
+    setSel(next);
+  };
 
   useGridStatus({
     colVirt, scrollRef, wrapRef, chart, transposed, pinned: layout.pinned, pinEdge: layout.pinEdge, hasSel, sel, cur, wasmReady, forSelected, valueAt,
@@ -621,8 +643,7 @@ export function ResultGrid(p: Props) {
                         before={pad}
                         colSelected={selColSet.has(c)}
                         sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}
-                        // Header click = select the whole column (DataGrip)
-                        onMouseDown={(e) => clickSel(e, { r: 0, c }, { r: rowCount - 1, c })}
+                        onMouseDown={(e) => clickHeader(e, c)}
                         onSortClick={(e) => clickSort(i, e.altKey)}
                         onContextMenu={(e) => {
                           e.preventDefault();
