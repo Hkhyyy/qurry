@@ -1430,6 +1430,16 @@ mod tests {
         big.resize(qurry_shared::theme::IMAGE_MAX + 1, 0);
         let got = v2(serde_json::json!({ "type": "png", "data": b64(&big), "opacity": 15, "fill": "cover", "anchor": "center" }), good_corner.clone()).unwrap();
         assert_eq!(got.dropped, ["The background image is 4.0 MB: a still image can be at most 4 MB"]);
+        // An animated image that decodes to more than 64 MB: Choose…'s cap too (#208)
+        let mut many = b"GIF89a\x00\x02\x00\x02\x00\x00\x00".to_vec();
+        for _ in 0..65 {
+            many.extend([0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x4c, 1, 0]);
+        }
+        many.push(0x3b);
+        let png_bg = serde_json::json!({ "type": "png", "data": b64(&png), "opacity": 15, "fill": "cover", "anchor": "center" });
+        let got = v2(png_bg, serde_json::json!({ "type": "gif", "data": b64(&many), "corner": "right bottom", "size": 20, "opacity": 100 })).unwrap();
+        assert_eq!(got.dropped, ["The corner image decodes to 65 MB (65 frames of 512×512): an animated image can take at most 64 MB; use fewer or smaller frames"]);
+        assert!(got.theme.images.corner.is_none() && got.theme.images.background.is_some());
         // Not base64, a type that isn't the content's, an unknown type, settings Qurry can't draw
         let bg = |kind: &str, data: String, fill: &str| serde_json::json!({ "type": kind, "data": data, "opacity": 15, "fill": fill, "anchor": "center" });
         assert_eq!(v2(bg("png", "%%%".into(), "cover"), good_corner.clone()).unwrap().dropped, ["The background image isn't base64 data"]);

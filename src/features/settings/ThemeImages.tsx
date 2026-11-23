@@ -240,7 +240,7 @@ function PlayRow({ file, play, label, onChange }: { file: string; play?: Play; l
 }
 
 const ABOUT = [
-  "PNG, JPEG, WebP or GIF, each copied into the config folder and kept with the theme: up to 4 MB, 8 MB when animated. GIF and animated WebP play, and stop on their first frame while Reduce motion is on or Qurry isn't the active window.",
+  "PNG, JPEG, WebP or GIF, each copied into the config folder and kept with the theme: up to 4 MB, 8 MB when animated (and 64 MB decoded: frames × width × height × 4 bytes). GIF and animated WebP play, and stop on their first frame while Reduce motion is on or Qurry isn't the active window.",
   "Hold Peek (or Space on it) to see the window behind Settings.",
   "The TUI ignores them: a terminal's own background image shows there.",
 ];
