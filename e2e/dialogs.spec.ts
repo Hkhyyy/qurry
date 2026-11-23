@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { Locator, Page } from "@playwright/test";
 import { dialog, expect, openApp, openSettings, settingsRow, settingsTree, test, treeItem, work } from "./app";
 
 test.beforeEach(async ({ page }) => openApp(page));
@@ -106,6 +107,47 @@ test("Keymap Reference (⇧⌘/) lists every row with ⌘⌥⌃⇧ keys", async 
   );
   expect(rows).toBe(readFileSync(new URL("fixtures/keymap-reference.txt", import.meta.url), "utf8"));
   expect(rows).not.toMatch(/Ctrl|Alt\+|Cmd|Shift\+/);
+});
+
+/** The element's outline next to the accent ring (2px solid --ui-accent, resolved to rgb) */
+const ring = (l: Locator) =>
+  l.evaluate((el) => {
+    const probe = document.body.appendChild(document.createElement("i"));
+    probe.style.color = "var(--ui-accent)";
+    const accent = getComputedStyle(probe).color;
+    probe.remove();
+    const cs = getComputedStyle(el);
+    return { outline: `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineColor}`, accent: `solid 2px ${accent}` };
+  });
+/** Tab (⌥Tab in WebKit, which otherwise skips checkboxes and radios) until the control has the focus */
+async function tabTo(page: Page, browserName: string, target: Locator, back = false) {
+  const key = `${back ? "Shift+" : ""}${browserName === "webkit" ? "Alt+" : ""}Tab`;
+  for (let i = 0; i < 20 && !(await target.evaluate((e) => e === document.activeElement)); i++) await page.keyboard.press(key);
+  await expect(target).toBeFocused();
+}
+
+test("a checkbox and a radio reached with the keyboard show the accent focus ring; clicked with the mouse, none (#203)", async ({ page, browserName }) => {
+  await openSettings(page, "Data grid");
+  const check = dialog(page).getByRole("checkbox", { name: "Sum", exact: true });
+  await tabTo(page, browserName, check);
+  const r = await ring(check);
+  expect(r.outline).toBe(r.accent);
+  // Another one clicked (the focused one keeps :focus-visible when clicked)
+  const avg = dialog(page).getByRole("checkbox", { name: "Avg", exact: true });
+  await avg.click();
+  expect((await ring(avg)).outline).toMatch(/^none /);
+  await page.keyboard.press("Escape");
+
+  await treeItem(page, "users").first().dblclick();
+  await work(page).getByRole("button", { name: "Export Data…" }).click();
+  // Back from the dialog's primary button to its last radio
+  const clipboard = dialog(page).getByRole("radio", { name: /^Clipboard/ });
+  await tabTo(page, browserName, clipboard, true);
+  const rr = await ring(clipboard);
+  expect(rr.outline).toBe(rr.accent);
+  const json = dialog(page).getByRole("radio", { name: /^JSON/ });
+  await json.click();
+  expect((await ring(json)).outline).toMatch(/^none /);
 });
 
 test("Export Data… offers every format and destination", async ({ page }) => {
