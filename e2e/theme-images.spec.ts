@@ -176,6 +176,27 @@ for (const where of ["table tab", "console result"] as const) {
   });
 }
 
+test("over a Background image, what cells scroll under stays opaque: the header, row numbers and a pinned column", async ({ page }) => {
+  await openInTheme(page, "custom-1", pictures({ background: { file: RIDGES, opacity: 60, fill: "cover", anchor: "center" } }));
+  await treeItem(page, "users").first().dblclick();
+  await expect(work(page).getByRole("gridcell", { name: "user_2", exact: true })).toBeVisible();
+  await work(page).locator(".grid-head [role=columnheader]", { hasText: "user_name" }).click({ button: "right" });
+  await menuItem(page, /^Pin Column/).click();
+  // Opaque backgrounds (no alpha below 1): cells passing beneath can't show through
+  const alpha = (sel: string) =>
+    work(page).locator(sel).first().evaluate((e) => {
+      // rgb(…) / rgba(…, a) / color(srgb r g b / a), whatever the engine writes
+      const c = getComputedStyle(e).backgroundColor;
+      if (c === "transparent") return 0;
+      const a = c.match(/\/\s*([\d.]+)\s*\)$/) ?? c.match(/^rgba\([^)]*,\s*([\d.]+)\)$/);
+      return a ? Number(a[1]) : 1;
+    });
+  for (const sel of [".grid-head .cell.head", ".cell.rownum", ".cell.pinned:not(.head)"]) expect(await alpha(sel), sel).toBe(1);
+  // A selected pinned cell too
+  await work(page).getByRole("gridcell", { name: "user_2", exact: true }).click();
+  expect(await alpha(".cell.pinned.sel"), "selected pinned cell").toBe(1);
+});
+
 test.describe("with Reduce motion on", () => {
   test.use({ reducedMotion: "reduce" });
   test("an animated image is drawn as its first frame, a still", async ({ page }) => {

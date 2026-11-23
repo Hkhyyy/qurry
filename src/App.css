@@ -525,18 +525,15 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-backdrop-host.has-image :is(.editor-area, .result-area, .results-panel) { background: transparent; }
 .theme-backdrop-host.has-image .result-tabs { background: var(--panel); }
 /* The grid over the image, in a console, a table tab and the editor's preview */
+/* What other cells scroll under (the header, row numbers, pinned columns) stays opaque, in every state, as without an image: a tint
+   there lets the cells passing beneath show through. The image shows through the rest */
 :is(.theme-backdrop-host, .theme-preview).has-image .grid-row.odd { background: color-mix(in srgb, var(--c-222326) 50%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .grid-header, :is(.theme-backdrop-host, .theme-preview).has-image .cell.head.pinned { background: color-mix(in srgb, var(--panel) 85%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.rownum { background: color-mix(in srgb, var(--panel-2) 85%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.pinned { background: color-mix(in srgb, var(--bg) 85%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .grid-row.odd .cell.pinned { background: color-mix(in srgb, var(--c-222326) 85%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.sel { background: color-mix(in srgb, var(--sel) 70%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.changed { background: color-mix(in srgb, var(--grid-changed) 70%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .grid-row.added .cell:not(.rownum) { background: color-mix(in srgb, var(--grid-added) 70%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .grid-row.deleted .cell:not(.rownum) { background: color-mix(in srgb, var(--grid-deleted) 70%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.match { background: color-mix(in srgb, var(--grid-match) 70%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.sel.match { background: color-mix(in srgb, var(--c-4a5a3a) 70%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.head.col-sel, :is(.theme-backdrop-host, .theme-preview).has-image .cell.rownum.row-sel { background: color-mix(in srgb, var(--c-33405a) 85%, transparent); }
+:is(.theme-backdrop-host, .theme-preview).has-image .cell.sel:not(.pinned, .rownum) { background: color-mix(in srgb, var(--sel) 70%, transparent); }
+:is(.theme-backdrop-host, .theme-preview).has-image .cell.changed:not(.pinned) { background: color-mix(in srgb, var(--grid-changed) 70%, transparent); }
+:is(.theme-backdrop-host, .theme-preview).has-image .grid-row.added .cell:not(.rownum, .pinned) { background: color-mix(in srgb, var(--grid-added) 70%, transparent); }
+:is(.theme-backdrop-host, .theme-preview).has-image .grid-row.deleted .cell:not(.rownum, .pinned) { background: color-mix(in srgb, var(--grid-deleted) 70%, transparent); }
+:is(.theme-backdrop-host, .theme-preview).has-image .cell.match:not(.pinned) { background: color-mix(in srgb, var(--grid-match) 70%, transparent); }
+:is(.theme-backdrop-host, .theme-preview).has-image .cell.sel.match:not(.pinned) { background: color-mix(in srgb, var(--c-4a5a3a) 70%, transparent); }
 /* The editor's preview: one picture behind its editor and grid (clipped to them), its parts over it */
 .theme-preview { position: relative; }
 .theme-preview-images { position: absolute; left: 0; right: 0; pointer-events: none; }
