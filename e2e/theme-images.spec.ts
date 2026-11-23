@@ -417,3 +417,25 @@ test("each slot's Play shows with an animated image only, applies live, and OK k
   await expect.poll(async () => (await saved(page)).custom[0].images.corner.play).toBe("always");
   expect((await saved(page)).custom[0].images.play).toBeUndefined();
 });
+
+/** A blob URL still loads: not revoked */
+const live = (page: Page, src: string) => page.evaluate(async (u) => (await fetch(u)).ok, src).catch(() => false);
+for (const corner of [BEACON, RIDGES]) {
+  test(`with every tab closed both images stay drawn with a live URL${corner === RIDGES ? ", also when both slots use one file" : ""} (#207)`, async ({ page }) => {
+    await openInTheme(page, "custom-1", pictures({ background: { file: RIDGES, opacity: 60, fill: "cover", anchor: "center", span: "area" }, corner: { ...CORNER, file: corner } }));
+    await treeItem(page, "users").first().dblclick();
+    await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+    await page.keyboard.press("Meta+W");
+    await expect(page.getByRole("tab")).toHaveCount(0);
+    await expect(windowLayer(page)).toHaveCount(1);
+    const bg = await windowLayer(page).evaluate((e) => getComputedStyle(e).backgroundImage.slice(5, -2));
+    expect(await live(page, bg)).toBe(true);
+    await expect(windowSticker(page)).toBeVisible();
+    expect(await live(page, (await windowSticker(page).getAttribute("src"))!)).toBe(true);
+    // Drawn: the empty editor area's middle differs from the same pixel without the image
+    const r = (await page.locator(".theme-editor-area").boundingBox())!;
+    const [x, y] = [r.x + r.width / 2, r.y + r.height / 3];
+    const shown = await pixel(page, x, y);
+    expect(far(shown, await withoutImage(page, () => pixel(page, x, y)))).toBe(true);
+  });
+}

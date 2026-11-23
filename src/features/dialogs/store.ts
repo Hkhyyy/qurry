@@ -1,15 +1,20 @@
 import { create } from "zustand";
 import type { ConnectionView, DbKind, UpdateInfo } from "../../lib/api";
 import type { NewKind } from "../../components/ObjectEditors";
+import type { SeTab } from "../../components/SearchEverywhere";
+import type { SwitchItem } from "../../components/Switcher";
 import type { SettingsPage } from "../settings/SettingsDialog";
 import { setter } from "../setter";
+
+/** The transient popups: Switcher (⌃⇥), Recent Files (⌘e), Quick Switch Theme (⌃`) and Search Everywhere with its Go to … and Find Action tabs */
+export type Popup = { kind: "switcher"; items: SwitchItem[]; start: number } | { kind: "recent" } | { kind: "theme" } | { kind: "search"; tab: SeTab };
 
 /** Which dialogs are open, and what each was opened for (null / false = closed) */
 interface DialogsState {
   /** true: the last page used */
   settingsOpen: boolean | SettingsPage | "theme";
-  /** Quick Switch Theme */
-  schemeOpen: boolean;
+  /** The one transient popup open (DataGrip: opening one closes the other) */
+  popup: Popup | null;
   /** Keymap Reference */
   keymapOpen: boolean;
   /** New version (checked at startup + every hour) and its window */
@@ -36,7 +41,7 @@ interface DialogsState {
 
 export const useDialogsStore = create<DialogsState>()(() => ({
   settingsOpen: false,
-  schemeOpen: false,
+  popup: null,
   keymapOpen: false,
   update: null,
   updateOpen: false,
@@ -53,7 +58,6 @@ export const useDialogsStore = create<DialogsState>()(() => ({
   quickDoc: null,
 }));
 export const setSettingsOpen = setter(useDialogsStore, "settingsOpen");
-export const setSchemeOpen = setter(useDialogsStore, "schemeOpen");
 export const setKeymapOpen = setter(useDialogsStore, "keymapOpen");
 export const setUpdate = setter(useDialogsStore, "update");
 export const setUpdateOpen = setter(useDialogsStore, "updateOpen");
@@ -68,3 +72,11 @@ export const setObjEdit = setter(useDialogsStore, "objEdit");
 export const setCopyReq = setter(useDialogsStore, "copyReq");
 export const setBackupReq = setter(useDialogsStore, "backupReq");
 export const setQuickDoc = setter(useDialogsStore, "quickDoc");
+
+/** Opens a transient popup in place of the one open (and Quick Documentation). Ignored while a modal dialog is up, as DataGrip's dialogs
+ *  block the main window's actions: the popups stack under the dialogs, so it would open hidden */
+export const openPopup = (popup: Popup) => {
+  if (!globalThis.document?.querySelector(".ui-modal[aria-modal='true']")) useDialogsStore.setState({ popup, quickDoc: null });
+};
+/** Closes the popup of this kind, if it is still the one open (an action picked in one may have opened another) */
+export const closePopup = (kind: Popup["kind"]) => useDialogsStore.setState((s) => (s.popup?.kind === kind ? { popup: null } : {}));

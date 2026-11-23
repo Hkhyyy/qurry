@@ -359,9 +359,9 @@ export default function App() {
       </PanelGroup>
       </div>
 
-      {search.switcherPopup}
+      {search.popup}
       <Dialogs conns={conns} setStatus={setStatus} openConsole={openConsole} startBackup={startBackup} startExport={startExport} startImport={startImport} readyToQuit={readyToQuit} />
-      {search.popups}
+      {search.ftsDialog}
       <ReconnectToasts
         extra={
           recovered.length > 0 &&

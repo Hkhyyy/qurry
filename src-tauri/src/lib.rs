@@ -2,6 +2,7 @@
 mod bundle;
 mod commands;
 mod fonts;
+mod window_frame;
 // The engine is qurry-core (shared with TUI and MCP)
 pub use qurry_core::{app, db, error, meta, redisdb, secrets, store};
 
@@ -18,7 +19,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Window frame (#206): saved on quit to .window-state.json in the config folder; restored below, fitted to the displays
+        .plugin(tauri_plugin_window_state::Builder::new().with_state_flags(window_frame::FLAGS).skip_initial_state("main").build())
         .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                window_frame::restore(&window);
+            }
             // SIGTERM / SIGINT / SIGHUP end the process without RunEvent::Exit: stop the AWS SSM tunnels' aws CLI then too
             tauri::async_runtime::spawn(qurry_core::ssm::kill_on_signals());
             // Build the menu manually so the default menu's "Close Window(⌘W)" does not steal the close-tab shortcut

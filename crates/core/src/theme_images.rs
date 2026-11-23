@@ -143,6 +143,14 @@ mod tests {
         assert_eq!(e, "huge.png is 20.0 MB: an animated image can be at most 8 MB, a still one 4 MB");
         let e = import(&dir, &picked(&src, "huge.svg", &vec![b'<'; 20 * 1024 * 1024])).unwrap_err().to_string();
         assert_eq!(e, "huge.svg isn't a PNG, JPEG, GIF or WebP image");
+        // Animated and small, but 65 frames of 512×512 decode to 65 MB: refused with how to fix it (#208)
+        let mut gif = b"GIF89a\x00\x02\x00\x02\x00\x00\x00".to_vec();
+        for _ in 0..65 {
+            gif.extend([0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x4c, 1, 0]);
+        }
+        gif.push(0x3b);
+        let e = import(&dir, &picked(&src, "many.gif", &gif)).unwrap_err().to_string();
+        assert_eq!(e, "many.gif decodes to 65 MB (65 frames of 512×512): an animated image can take at most 64 MB; use fewer or smaller frames");
         let e = import(&dir, &src.join("gone.png")).unwrap_err().to_string();
         assert!(e.starts_with("Couldn't read gone.png") && !e.contains(src.to_str().unwrap()), "{e}");
         assert_eq!(std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0), 0, "nothing copied");

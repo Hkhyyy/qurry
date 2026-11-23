@@ -82,7 +82,7 @@ An ignored test whose server variable is unset passes without running and prints
 MySQL takes about half a minute to accept connections after it starts. The Redis tests empty databases 0, 3–8, 11 and 12 (`FLUSHDB`), so don't point `QURRY_TEST_REDIS` at a Redis you care about. Remove the containers when you are done:
 
 ```bash
-docker rm -f qurry-demo-pg qurry-demo-mysql qurry-demo-redis
+docker rm -f -v qurry-demo-pg qurry-demo-mysql qurry-demo-redis
 ```
 
 Driver and vector database tests (`QURRY_TEST_CH`, `QURRY_TEST_MSSQL`, `QURRY_TEST_MONGO`, `QURRY_TEST_QDRANT`, …) and older server versions are described in [Development › Tests](docs/development.md#tests); `.github/workflows/ci.yml` has the exact images.

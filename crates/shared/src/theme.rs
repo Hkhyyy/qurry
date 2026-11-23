@@ -138,6 +138,9 @@ pub const SIZE_MAX: u8 = 40;
 /// The largest still image a theme takes, and the largest animated one (GIF, animated WebP)
 pub const IMAGE_MAX: usize = 4 * 1024 * 1024;
 pub const ANIMATED_MAX: usize = 8 * 1024 * 1024;
+/// The most an animated image may take decoded (every frame at the canvas size, 4 bytes a pixel): the engine keeps all its frames, so a
+/// small file of many large frames can cost hundreds of MB (#208)
+pub const DECODED_MAX: u64 = 64 * 1024 * 1024;
 /// The extensions a theme image is kept under
 pub const IMAGE_EXTS: [&str; 5] = ["png", "apng", "jpg", "gif", "webp"];
 
@@ -165,15 +168,59 @@ pub fn image_ext(bytes: &[u8]) -> Option<&'static str> {
 
 /// A PNG with an animation control chunk (acTL) before its first image data (IDAT): an APNG
 fn png_animated(b: &[u8]) -> bool {
+    apng_frames(b).is_some()
+}
+
+/// An APNG's frame count (its acTL's num_frames; 0 when cut short), None for a still PNG
+fn apng_frames(b: &[u8]) -> Option<u64> {
     let mut i = 8;
     while let (Some(len), Some(kind)) = (b.get(i..i + 4), b.get(i + 4..i + 8)) {
         match kind {
-            b"acTL" => return true,
-            b"IDAT" | b"IEND" => return false,
-            _ => i += 12 + u32::from_be_bytes([len[0], len[1], len[2], len[3]]) as usize,
+            b"acTL" => return Some(b.get(i + 8..i + 12).map_or(0, |n| be32(n) as u64)),
+            b"IDAT" | b"IEND" => return None,
+            _ => i += 12 + be32(len) as usize,
         }
     }
-    false
+    None
+}
+
+fn be32(b: &[u8]) -> u32 {
+    u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+}
+fn le16(b: &[u8]) -> u64 {
+    u16::from_le_bytes([b[0], b[1]]) as u64
+}
+fn le24(b: &[u8]) -> u64 {
+    u32::from_le_bytes([b[0], b[1], b[2], 0]) as u64
+}
+
+/// An animated WebP's frames (its ANMF chunks), counted by walking the RIFF chunks' headers
+fn webp_frames(b: &[u8]) -> u64 {
+    let mut i = 12;
+    let mut frames = 0;
+    while let (Some(kind), Some(len)) = (b.get(i..i + 4), b.get(i + 4..i + 8)) {
+        if kind == b"ANMF" {
+            frames += 1;
+        }
+        let len = u32::from_le_bytes([len[0], len[1], len[2], len[3]]) as usize;
+        i = i.saturating_add(8 + len + (len & 1));
+    }
+    frames
+}
+
+/// An animated image's frames and canvas (width, height), read from its headers without decoding it; None for a still one
+pub fn animation(bytes: &[u8]) -> Option<(u64, u64, u64)> {
+    if !is_animated(bytes) {
+        return None;
+    }
+    match image_ext(bytes)? {
+        // The logical screen: every frame is drawn onto it
+        "gif" => Some((gif_frames(bytes) as u64, le16(bytes.get(6..8)?), le16(bytes.get(8..10)?))),
+        "apng" => Some((apng_frames(bytes)?, be32(bytes.get(16..20)?) as u64, be32(bytes.get(20..24)?) as u64)),
+        // VP8X: the canvas's width and height, each less one
+        "webp" => Some((webp_frames(bytes), le24(bytes.get(24..27)?) + 1, le24(bytes.get(27..30)?) + 1)),
+        _ => None,
+    }
 }
 
 /// A GIF with more than one frame, an APNG, or a WebP with its animation flag (VP8X)
@@ -218,12 +265,20 @@ fn gif_frames(b: &[u8]) -> usize {
     frames
 }
 
-/// An image a theme can take: its extension, or why not (a still image up to 4 MB, an animated one up to 8 MB). `shown` names it
+/// An image a theme can take: its extension, or why not (a still image up to 4 MB, an animated one up to 8 MB and DECODED_MAX
+/// decoded). `shown` names it
 pub fn check_image(bytes: &[u8], shown: &str) -> Result<&'static str, String> {
     let ext = image_ext(bytes).ok_or_else(|| format!("{shown} isn't a PNG, JPEG, GIF or WebP image"))?;
     let (max, what) = if is_animated(bytes) { (ANIMATED_MAX, "an animated image") } else { (IMAGE_MAX, "a still image") };
     if bytes.len() > max {
         return Err(format!("{shown} is {:.1} MB: {what} can be at most {} MB", bytes.len() as f64 / (1024.0 * 1024.0), max / (1024 * 1024)));
+    }
+    if let Some((frames, w, h)) = animation(bytes) {
+        let decoded = frames.saturating_mul(w).saturating_mul(h).saturating_mul(4);
+        if decoded > DECODED_MAX {
+            let mb = decoded as f64 / (1024.0 * 1024.0);
+            return Err(format!("{shown} decodes to {mb:.0} MB ({frames} frames of {w}×{h}): an animated image can take at most {} MB; use fewer or smaller frames", DECODED_MAX / (1024 * 1024)));
+        }
     }
     Ok(ext)
 }
@@ -825,6 +880,72 @@ mod tests {
         assert!(check_image(&pad(gif(2, false), ANIMATED_MAX + 1), "a.gif").unwrap_err().ends_with("an animated image can be at most 8 MB"));
         assert!(check_image(&pad(gif(1, false), IMAGE_MAX + 1), "a.gif").unwrap_err().ends_with("a still image can be at most 4 MB"));
         assert_eq!(check_image(b"<svg/>", "logo.svg").unwrap_err(), "logo.svg isn't a PNG, JPEG, GIF or WebP image");
+    }
+
+    /// A GIF of `frames` frames on a `w`×`h` screen
+    fn gif_sized(frames: usize, w: u16, h: u16) -> Vec<u8> {
+        let mut b = gif(frames, false);
+        b[6..8].copy_from_slice(&w.to_le_bytes());
+        b[8..10].copy_from_slice(&h.to_le_bytes());
+        b
+    }
+    /// An animated WebP: a `w`×`h` canvas (VP8X) and `frames` ANMF chunks, the last one of odd length (padded)
+    fn webp_anim(frames: usize, w: u32, h: u32) -> Vec<u8> {
+        let mut b = webp(0x02);
+        b.extend(&(w - 1).to_le_bytes()[..3]);
+        b.extend(&(h - 1).to_le_bytes()[..3]);
+        b.extend(b"ANIM");
+        b.extend(6u32.to_le_bytes());
+        b.extend([0; 6]);
+        for k in 0..frames {
+            let len: u32 = if k + 1 == frames { 17 } else { 16 };
+            b.extend(b"ANMF");
+            b.extend(len.to_le_bytes());
+            b.extend(vec![0; len as usize + (len as usize & 1)]);
+        }
+        b
+    }
+    /// An APNG of `frames` frames, `w`×`h`
+    fn apng_sized(frames: u32, w: u32, h: u32) -> Vec<u8> {
+        let ihdr = [w.to_be_bytes(), h.to_be_bytes()].concat();
+        let actl = [frames.to_be_bytes(), [0; 4]].concat();
+        png(&[(b"IHDR", &[&ihdr[..], &[8, 6, 0, 0, 0]].concat()), (b"acTL", &actl), (b"IDAT", b"x"), (b"IEND", b"")])
+    }
+
+    #[test]
+    fn an_animated_image_is_read_for_its_frames_and_canvas_without_decoding() {
+        assert_eq!(animation(&gif_sized(48, 480, 480)), Some((48, 480, 480)));
+        assert_eq!(animation(&webp_anim(3, 640, 360)), Some((3, 640, 360)));
+        assert_eq!(animation(&apng_sized(12, 300, 200)), Some((12, 300, 200)));
+        // Still images have none
+        assert_eq!(animation(&gif_sized(1, 4000, 4000)), None);
+        assert_eq!(animation(&webp(0x10)), None);
+        assert_eq!(animation(&png(&[(b"IHDR", &[0; 13]), (b"IDAT", b"x")])), None);
+        // Cut short: no panic
+        let w = webp_anim(2, 10, 10);
+        for n in 0..w.len() {
+            let _ = animation(&w[..n]);
+        }
+        let a = apng_sized(2, 10, 10);
+        for n in 0..a.len() {
+            let _ = animation(&a[..n]);
+        }
+    }
+
+    #[test]
+    fn an_animated_image_over_64_mb_decoded_is_refused_with_how_to_fix_it() {
+        // 48 frames of 480×480: 42 MB decoded, taken
+        assert_eq!(check_image(&gif_sized(48, 480, 480), "cat.gif"), Ok("gif"));
+        // Exactly at the cap is taken; one frame more is not
+        assert_eq!(check_image(&gif_sized(64, 512, 512), "a.gif"), Ok("gif"));
+        assert_eq!(check_image(&gif_sized(65, 512, 512), "a.gif").unwrap_err(), "a.gif decodes to 65 MB (65 frames of 512×512): an animated image can take at most 64 MB; use fewer or smaller frames");
+        assert!(check_image(&webp_anim(20, 1920, 1080), "a.webp").unwrap_err().starts_with("a.webp decodes to 158 MB (20 frames of 1920×1080)"));
+        assert!(check_image(&apng_sized(100, 640, 480), "a.png").unwrap_err().starts_with("a.png decodes to 117 MB (100 frames of 640×480)"));
+        assert_eq!(check_image(&apng_sized(10, 640, 480), "a.png"), Ok("apng"));
+        // A still image of any size is decoded once: no such cap
+        assert_eq!(check_image(&gif_sized(1, 8000, 8000), "a.gif"), Ok("gif"));
+        // Absurd headers saturate instead of overflowing
+        assert!(check_image(&apng_sized(u32::MAX, u32::MAX, u32::MAX), "a.png").is_err());
     }
 
     #[test]

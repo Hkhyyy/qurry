@@ -10,7 +10,7 @@ import { RecentFiles, Switcher, SwitchItem } from "../../components/Switcher";
 import { TabIcon } from "../../ui/icons";
 import type { useConnActions } from "../conns/useConnActions";
 import type { useConsole } from "../console/useConsole";
-import { setDialog, setHistoryFor, setHistoryTab, setKeymapOpen, setProdLog, setSchemeOpen, setSettingsOpen } from "../dialogs/store";
+import { closePopup, openPopup, setDialog, setHistoryFor, setHistoryTab, setKeymapOpen, setProdLog, setSettingsOpen, useDialogsStore } from "../dialogs/store";
 import type { useEditorGroups } from "../editorGroups/useEditorGroups";
 import type { useExplorer } from "../explorer/useExplorer";
 import { cmd } from "../../lib/shortcuts";
@@ -56,8 +56,7 @@ export function useSearch({
   const split = useTabsStore((s) => s.panes.t === "split");
   const searchScope = useSearchScope();
   // ───────── Switcher / Recent Files / Maximize ─────────
-  const [switcher, setSwitcher] = useState<{ items: SwitchItem[]; start: number } | null>(null);
-  const [recentOpen, setRecentOpen] = useState(false);
+  const popup = useDialogsStore((s) => s.popup);
   const kindIcon = (t: { kind: string; objKind?: string }) => <TabIcon kind={t.kind} obj={t.objKind} />;
   const hintOf = (connId: string, db?: string) => {
     const c = conns.find((x) => x.id === connId);
@@ -68,7 +67,7 @@ export function useSearch({
     const ordered = [...useTabsStore.getState().mru.map((id) => ts.find((t) => t.id === id)).filter((t): t is Tab => !!t), ...ts.filter((t) => !useTabsStore.getState().mru.includes(t.id))];
     if (!ordered.length) return;
     const items = ordered.map((t) => ({ key: t.id, icon: kindIcon(t), title: labelOf(t), hint: hintOf(t.connId, t.database), color: conns.find((c) => c.id === t.connId)?.color }));
-    setSwitcher({ items, start: back ? items.length - 1 : 1 });
+    openPopup({ kind: "switcher", items, start: back ? items.length - 1 : 1 });
   };
   const recentItems = (): SwitchItem[] => {
     const openKeys = new Map(useTabsStore.getState().tabs.map((t) => [snapKey(t), t] as const));
@@ -78,7 +77,8 @@ export function useSearch({
   };
 
   // ───────── Search Everywhere (⇧⇧) / Go to Database Object (⌘o) / Find Action (⇧⌘A) ─────────
-  const [se, setSe] = useState<SeTab | null>(null);
+  const se = popup?.kind === "search" ? popup.tab : null;
+  const setSe = (tab: SeTab) => openPopup({ kind: "search", tab });
   // Find Action lists the Import Data Sources locations: look for them again when it opens
   useEffect(() => {
     if (se) loadImportLocs();
@@ -166,7 +166,7 @@ export function useSearch({
       ...allThemes(getThemeSettings()).map((th) => ({ name: `Theme: ${th.name}`, ...({ dark: cmd("theme.dark"), light: cmd("theme.light"), hc: cmd("theme.hc") } as Record<string, object>)[th.id], group: "Appearance", run: () => pickTheme(th.id) })),
       { name: "Theme: Sync with OS", ...cmd("theme.system"), group: "Appearance", run: () => pickTheme(SYSTEM) },
       { name: "Edit Theme Colors…", group: "Appearance", run: () => setSettingsOpen("theme") },
-      { name: "Quick Switch Theme…", ...cmd("theme"), group: "Appearance", run: () => setSchemeOpen(true) },
+      { name: "Quick Switch Theme…", ...cmd("theme"), group: "Appearance", run: () => openPopup({ kind: "theme" }) },
       { name: "Execute", ...cmd("editor.run"), group: "Run", run: () => t && editorApis.get(t.id)?.run(), disabled: t?.kind !== "console" },
       { name: "Explain Plan", ...cmd("editor.explain"), group: "Run", run: () => t && editorApis.get(t.id)?.run("plan"), disabled: t?.kind !== "console" },
       { name: "Explain Analyse", ...cmd("editor.explainAnalyze"), group: "Run", run: () => t && editorApis.get(t.id)?.run("analyze"), disabled: t?.kind !== "console" },
@@ -193,7 +193,7 @@ export function useSearch({
       { name: "Go to Symbol…", ...cmd("goto.symbol"), group: "Navigate", run: () => setTimeout(() => setSe("symbols")) },
       { name: "Go to File…", ...cmd("goto.file"), group: "Navigate", run: () => setTimeout(() => setSe("files")) },
       { name: "Full-text Search…", ...cmd("fts"), group: "Navigate", run: () => openFts() },
-      { name: "Recent Files", ...cmd("recent"), group: "Navigate", run: () => setRecentOpen(true) },
+      { name: "Recent Files", ...cmd("recent"), group: "Navigate", run: () => openPopup({ kind: "recent" }) },
       { name: "Switcher", shortcut: "⌃⇥", group: "Navigate", run: () => openSwitcher(false) },
       {
         name: "Select in Database Explorer",
@@ -229,28 +229,24 @@ export function useSearch({
   const seLists = useMemo(() => (se ? { files: seFiles(), actions: seActions() } : null), [se]);
 
   return {
-    openSwitcher, setRecentOpen, setSe, findOpen, setFindOpen, openFts,
+    openSwitcher, setSe, findOpen, setFindOpen, openFts,
     /** Find Action's list, built now: the global key handler runs a command's item by its id */
     paletteActions: seActions,
-    /** Mounted where App had it: before the dialogs (overlays stack in mount order) */
-    switcherPopup: (
+    /** The transient popup but Quick Switch Theme (in Dialogs): mounted before the dialogs (overlays stack in mount order) */
+    popup: (
       <>
-        {switcher && (
+        {popup?.kind === "switcher" && (
           <Switcher
-            items={switcher.items}
-            start={switcher.start}
-            onClose={() => setSwitcher(null)}
+            items={popup.items}
+            start={popup.start}
+            onClose={() => closePopup("switcher")}
             onPick={(id) => {
-              setSwitcher(null);
+              closePopup("switcher");
               const t = useTabsStore.getState().tabs.find((x) => x.id === id);
               if (t) activate(t);
             }}
           />
         )}
-      </>
-    ),
-    popups: (
-      <>
         {se && (
           <SearchEverywhere
             initialTab={se}
@@ -261,7 +257,7 @@ export function useSearch({
             onScopeChange={(s) => setSearchScope(s).catch((e) => setStatus(`Couldn't save the search scope: ${e}`))}
             files={seLists?.files ?? []}
             actions={seLists?.actions ?? []}
-            onClose={() => setSe(null)}
+            onClose={() => closePopup("search")}
             onSelectInTree={(o) => {
               setExplorerHidden(false);
               setMaximized(false);
@@ -287,13 +283,12 @@ export function useSearch({
             }}
           />
         )}
-        {ftsScope && <FullTextSearchDialog scope={ftsScope} onClose={() => setFtsScope(null)} onSearch={(req) => runFts(ftsScope, req)} />}
-        {recentOpen && (
+        {popup?.kind === "recent" && (
           <RecentFiles
             items={recentItems()}
-            onClose={() => setRecentOpen(false)}
+            onClose={() => closePopup("recent")}
             onPick={(key) => {
-              setRecentOpen(false);
+              closePopup("recent");
               const snap = useTabsStore.getState().recent.find((r) => r.key === key);
               if (snap) reopen(snap);
             }}
@@ -301,6 +296,7 @@ export function useSearch({
         )}
       </>
     ),
+    ftsDialog: ftsScope && <FullTextSearchDialog scope={ftsScope} onClose={() => setFtsScope(null)} onSearch={(req) => runFts(ftsScope, req)} />,
     findPanel: (
       <FindPanel
         runs={findRuns}

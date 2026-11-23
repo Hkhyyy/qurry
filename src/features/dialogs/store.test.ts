@@ -1,6 +1,6 @@
 import { beforeEach, expect, it } from "vitest";
 import type { ConnectionView } from "../../lib/api";
-import { setDialog, setExportReq, setHistoryFor, setHistoryTab, setSettingsOpen, setUpdateOpen, useDialogsStore } from "./store";
+import { closePopup, openPopup, setDialog, setExportReq, setHistoryFor, setHistoryTab, setQuickDoc, setSettingsOpen, setUpdateOpen, useDialogsStore } from "./store";
 
 const initial = useDialogsStore.getState();
 beforeEach(() => useDialogsStore.setState(initial, true));
@@ -30,4 +30,18 @@ it("setters take a value or a function of the current one, and apply right away"
   const req = { target: "dev", sql: "SELECT 1", name: "result", table: null };
   setExportReq(req);
   expect(useDialogsStore.getState().exportReq).toBe(req);
+});
+
+it("a transient popup replaces the one open, and closing one that was replaced leaves the new one", () => {
+  setQuickDoc({ title: "orders", text: "CREATE TABLE orders ()" });
+  openPopup({ kind: "theme" });
+  expect(useDialogsStore.getState()).toMatchObject({ popup: { kind: "theme" }, quickDoc: null });
+  openPopup({ kind: "search", tab: "all" });
+  expect(useDialogsStore.getState().popup).toEqual({ kind: "search", tab: "all" });
+  // Find Action closes itself after running its action, which may have opened another popup
+  openPopup({ kind: "recent" });
+  closePopup("search");
+  expect(useDialogsStore.getState().popup).toEqual({ kind: "recent" });
+  closePopup("recent");
+  expect(useDialogsStore.getState().popup).toBeNull();
 });

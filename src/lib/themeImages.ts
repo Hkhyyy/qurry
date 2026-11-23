@@ -1,7 +1,7 @@
 // A custom theme's images (#202, GUI only: a terminal draws characters, so the TUI keeps them in settings.json and never draws them),
 // two independent slots, each optional with its own image: Background, faint behind the SQL editor and the result grid; Corner, scaled
 // down in front of the window (below menus, dialogs and popups), a sticker. The files are copies in the config folder
-// (crates/core/src/theme_images.rs, which checks them); the GUI reads their bytes and draws them from blob URLs (holdImage), freed when nothing draws them.
+// (crates/core/src/theme_images.rs, which checks them); the GUI reads their bytes and draws them from blob URLs (holdImage), freed a while after nothing draws them.
 // The background costs contrast: drawn at opacity α, the image moves each pixel of Background (and the grid's odd rows) toward its own pixel
 // by α; the worst pixel is black or white, so the checks (qurry_shared::theme, through the WASM) are run with those surfaces mixed
 // that far toward black and white. GIF and animated WebP play, and stop on their first frame while motion is paused (stillFrame).
@@ -126,32 +126,52 @@ const MIME: Record<string, string> = { png: "image/png", apng: "image/apng", jpg
 /** A GIF, WebP or animated PNG (kept as .apng) may move (they are frozen while motion is paused); a PNG or JPEG is drawn as it is */
 export const mayMove = (file: string) => /\.(gif|webp|apng)$/.test(file);
 
-/** Each image in use: its blob URL, its still once made, and how many drawings use it. The last one to let go frees both */
-const images = new Map<string, { url: Promise<string>; still?: Promise<string>; users: number }>();
+/** Each image read: its blob URL, its still once made, and how many drawings use it. A file nothing uses keeps both for a while (idle),
+ *  so drawing it again (a switch back, a span or theme change, a pane unmounted before the next one mounts) reuses the URL: the engine
+ *  keeps an image's decoded frames per URL, and a new URL for the same file would be decoded again (#208) */
+const images = new Map<string, { url: Promise<string>; still?: Promise<string>; users: number; idle?: ReturnType<typeof setTimeout> }>();
 const revoke = (u?: Promise<string>) => u?.then((x) => URL.revokeObjectURL(x), () => {});
+/** Files nothing uses, kept at most this many (the last ones let go) and this long */
+export const IDLE_KEEP = 2;
+export const IDLE_MS = 30_000;
 
-/** A theme image's blob URL, read once while it is used (the bytes command: no asset protocol or CSP change needed); each call is
- *  one use, ended by releaseImage. A file that can't be read is read again by the next use */
+function free(file: string) {
+  const e = images.get(file);
+  if (!e) return;
+  clearTimeout(e.idle);
+  images.delete(file);
+  revoke(e.url);
+  revoke(e.still);
+}
+
+/** A theme image's blob URL, read once and kept while it is used and a while after (the bytes command: no asset protocol or CSP
+ *  change needed); each call is one use, ended by releaseImage. A file that can't be read is read again by the next use */
 export function holdImage(file: string): Promise<string> {
   let e = images.get(file);
   if (!e) {
     const url = api.themeImage(file).then((b) => URL.createObjectURL(new Blob([b], { type: MIME[file.split(".").pop() ?? ""] ?? "" })));
     e = { url, users: 0 };
     const entry = e;
-    url.catch(() => images.get(file) === entry && images.delete(file));
+    url.catch(() => images.get(file) === entry && free(file));
     images.set(file, e);
   }
+  clearTimeout(e.idle);
+  e.idle = undefined;
   e.users++;
   return e.url;
 }
 
-/** One use of a file ends; with none left its blob URL and still are freed */
+/** One use of a file ends; with none left it goes idle: freed after IDLE_MS, or at once when more than IDLE_KEEP files are idle */
 export function releaseImage(file: string) {
   const e = images.get(file);
   if (!e || --e.users > 0) return;
+  e.users = 0;
+  e.idle = setTimeout(() => free(file), IDLE_MS);
+  // Last let go last in the map's order: the oldest idle files come first
   images.delete(file);
-  revoke(e.url);
-  revoke(e.still);
+  images.set(file, e);
+  const idle = [...images].filter(([, x]) => x.users === 0);
+  for (const [f] of idle.slice(0, Math.max(0, idle.length - IDLE_KEEP))) free(f);
 }
 
 /** A GIF's or WebP's first frame as a still (a blob URL), made once while the file is used: drawn into a canvas from a fresh load,

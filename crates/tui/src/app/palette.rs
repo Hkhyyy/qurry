@@ -205,7 +205,7 @@ impl App {
     pub(crate) fn index_into_palette(&mut self, cfg: &ConnectionConfig, dbs: Vec<String>) {
         // Search Everywhere also finds columns (the GUI's All / Symbols)
         let columns = match self.popup_under() {
-            Some(Popup::Palette(p)) => {
+            Some(Popup::Palette(p)) if is_search(&p.title) => {
                 p.loading = (p.loading + dbs.len()).saturating_sub(1);
                 p.title == "Search Everywhere" && cfg.kind != DbKind::Redis
             }
@@ -226,7 +226,9 @@ impl App {
                 if let Err(e) = &r {
                     a.status = format!("{name}/{db}: {e}");
                 }
-                if let Some(Popup::Palette(p)) = a.popup_under() {
+                if let Some(Popup::Palette(p)) = a.popup_under()
+                    && is_search(&p.title)
+                {
                     p.loading = p.loading.saturating_sub(1);
                     if let Ok(es) = r {
                         p.items.extend(object_items(&conn, &name, &db, es, ""));
@@ -248,6 +250,9 @@ impl App {
                 return;
             }
             let (Some(Popup::Palette(p)), Ok(ts)) = (a.popup_under(), r) else { return };
+            if !is_search(&p.title) {
+                return;
+            }
             p.items.extend(column_items(&conn, &name, &db, ts, ""));
             sort_objects(&mut p.items);
         });

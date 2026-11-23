@@ -22,6 +22,7 @@ import { editorApis, useTabsStore } from "../tabs/store";
 import type { useTabs } from "../tabs/useTabs";
 import type { useWorkspaces } from "../workspaces/useWorkspaces";
 import {
+  closePopup,
   setBackupReq,
   setCopyReq,
   setDialog,
@@ -33,15 +34,14 @@ import {
   setObjEdit,
   setProdLog,
   setQuickDoc,
-  setSchemeOpen,
   setSettingsOpen,
   setUpdate,
   setUpdateOpen,
   useDialogsStore,
 } from "./store";
 
-// The dialogs, in two groups mounted where App had them: overlays of the same layer stack in mount order (the Switcher, Search Everywhere,
-// Full-text Search and Recent Files come between, then the status bar)
+// The dialogs, in two groups mounted where App had them: overlays of the same layer stack in mount order (the transient popups come
+// before, so a dialog is always above them; Full-text Search and the status bar come between)
 
 type Deps = {
   conns: ConnectionView[];
@@ -55,7 +55,7 @@ type Deps = {
 export function Dialogs({ conns, setStatus, openConsole, startBackup, startExport, startImport, readyToQuit }: Deps) {
   const { settings: themeSettings, current } = useThemeState();
   const settingsOpen = useDialogsStore((s) => s.settingsOpen);
-  const schemeOpen = useDialogsStore((s) => s.schemeOpen);
+  const schemeOpen = useDialogsStore((s) => s.popup?.kind === "theme");
   const keymapOpen = useDialogsStore((s) => s.keymapOpen);
   const update = useDialogsStore((s) => s.update);
   const updateOpen = useDialogsStore((s) => s.updateOpen);
@@ -82,9 +82,9 @@ export function Dialogs({ conns, setStatus, openConsole, startBackup, startExpor
               title="Theme"
               start={Math.max(0, items.findIndex((i) => i.key === pick))}
               items={items}
-              onClose={() => setSchemeOpen(false)}
+              onClose={() => closePopup("theme")}
               onPick={(k) => {
-                setSchemeOpen(false);
+                closePopup("theme");
                 if (k) setThemePick(k).catch((e) => setStatus(String(e)));
                 else setSettingsOpen("theme");
               }}
