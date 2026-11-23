@@ -1417,7 +1417,8 @@ mod tests {
         for q in [
             format!("drop table if exists {table}"),
             format!("create table {table} (id int primary key)"),
-            format!("insert into {table} with recursive x(i) as (select 1 union all select i + 1 from x where i < 250) select i from x"),
+            // A plain VALUES list: MySQL 5.7 (CI's compat job) has no WITH RECURSIVE
+            format!("insert into {table} values {}", (1..=250).map(|i| format!("({i})")).collect::<Vec<_>>().join(", ")),
         ] {
             s.run(&q, 10).await.unwrap();
         }
