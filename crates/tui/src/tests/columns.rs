@@ -321,6 +321,61 @@ async fn cursor_column_shows_when_pinned_ones_fill_the_grid() {
     assert!(header(&s).contains("memo") && header(&s).contains("║"), "pinned again on a pinned column:\n{s}");
 }
 
+/// P and H act on every selected column (#216, the GUI's header menu on a selection): P pins them in their order, again unpins them;
+/// a selection with some pinned pins the rest; H hides them, never every column; saved for the table
+#[tokio::test]
+async fn pin_and_hide_act_on_the_selected_columns() {
+    let mut h = Harness::new().await;
+    wide_orders(&mut h);
+    // order_no..note selected (Shift+arrows)
+    h.key("Right");
+    h.key("Shift+Right");
+    h.key("Shift+Right");
+    assert_eq!(grid(&h).selected_cols(), [1, 2, 3]);
+    h.key("Shift+P");
+    assert_eq!(grid(&h).view.view, [1, 2, 3, 0, 4, 5], "pinned in their order");
+    assert_eq!(h.app.status, "3 columns pinned at the left");
+    assert_eq!(Store::new(h.app.state.store.dir()).column_layout(&orders()).pinned, ["order_no", "memo", "note"]);
+    assert_eq!(grid(&h).selected_cols(), [1, 2, 3], "the selection stays on its columns");
+    h.key("Shift+P");
+    assert_eq!(grid(&h).view.view, [0, 1, 2, 3, 4, 5], "all pinned: unpinned");
+    assert_eq!(h.app.status, "3 columns unpinned");
+
+    // memo pinned alone, then memo..note selected (memo is first now): the rest is pinned after it
+    h.key("Esc");
+    h.key("Home");
+    h.key("Right");
+    h.key("Right");
+    h.key("Shift+P");
+    assert_eq!(grid(&h).view.view, [2, 0, 1, 3, 4, 5]);
+    h.key("Home");
+    for _ in 0..3 {
+        h.key("Shift+Right");
+    }
+    assert_eq!(grid(&h).selected_cols(), [2, 0, 1, 3]);
+    h.key("Shift+P");
+    assert_eq!(grid(&h).view.view, [2, 0, 1, 3, 4, 5]);
+    assert_eq!(grid(&h).view.pinned, 4);
+    assert_eq!(h.app.status, "3 columns pinned at the left");
+
+    // H on two selected columns; every column selected can't be hidden
+    h.key("Shift+P");
+    h.key("Esc");
+    h.key("End");
+    h.key("Shift+Left");
+    h.key("Shift+H");
+    assert_eq!(grid(&h).view.view, [0, 1, 2, 3]);
+    assert!(h.app.status.starts_with("2 columns hidden · Columns… (C) shows them again"), "{}", h.app.status);
+    assert_eq!(Store::new(h.app.state.store.dir()).column_layout(&orders()).hidden, ["status", "total"]);
+    h.key("Home");
+    for _ in 0..3 {
+        h.key("Shift+Right");
+    }
+    h.key("Shift+H");
+    assert_eq!(grid(&h).view.view, [0, 1, 2, 3], "nothing hidden");
+    assert_eq!(h.app.status, "At least one column stays shown");
+}
+
 /// A DBA report's auto-refresh keeps its hidden and pinned columns (it runs again on its own)
 #[tokio::test]
 async fn dba_refresh_keeps_the_column_layout() {

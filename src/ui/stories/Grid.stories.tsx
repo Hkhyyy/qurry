@@ -293,7 +293,8 @@ export const CutValues: StoryObj = {
 
 /** Hidden and pinned columns (the column header's menu, Columns…; settings.json "columnLayout" for a table tab). `id` and `user_name`
  *  are pinned: they stay at the left while the grid is scrolled right, and the line after `user_name` is where the others pass under.
- *  `email` is hidden: gone from the header and the rows, unchecked in Columns…, where Show All brings every column back */
+ *  `email` is hidden: gone from the header and the rows, unchecked in Columns…, where Show All brings every column back. Three
+ *  columns are selected and the menu is open on one of them: Hide and Pin act on all three (#216) */
 const LAYOUT_COLS = [
   ["id", "int8"], ["user_name", "varchar"], ["email", "varchar"], ["amount", "numeric"], ["status", "varchar"], ["paid_at", "timestamptz"],
   ["city", "varchar"], ["memo", "text"], ["coupon", "varchar"], ["refunded", "bool"],
@@ -310,7 +311,7 @@ function HiddenPinned() {
   const body = useRef<HTMLDivElement>(null);
   // Scrolled right, as after a look at the far columns: the pinned ones are still at the left
   useEffect(() => void body.current?.scrollTo({ left: 260 }), []);
-  const menuOn = "city";
+  const selected = ["city", "memo", "coupon"].filter((n) => view.includes(n) && !pinned.includes(n));
   return (
     <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
       {/* transform: the menu and the popover (position: fixed) are placed in their own box, not the window */}
@@ -320,7 +321,7 @@ function HiddenPinned() {
             <GridHead body={body} corner={<GridHeaderRow width={W[0]} height={26}><RowNumberCell width={W[0]} title="Select all" /></GridHeaderRow>}>
               <GridHeaderRow width={width - W[0]} height={26}>
                 {view.map((n, d) => (
-                  <GridHeaderCell key={n} name={n} type={typeOf(n)} pk={n === "id"} width={LW} pin={pin(d)} colSelected={n === menuOn} onSortClick={() => {}} />
+                  <GridHeaderCell key={n} name={n} type={typeOf(n)} pk={n === "id"} width={LW} pin={pin(d)} colSelected={selected.includes(n)} onSortClick={() => {}} />
                 ))}
               </GridHeaderRow>
             </GridHead>
@@ -332,7 +333,7 @@ function HiddenPinned() {
                     {view.map((n, d) => {
                       const num = n === "id" || n === "amount";
                       return (
-                        <GridCell key={n} width={LW} pin={pin(d)} kind={num ? "num" : undefined} align={num ? "right" : undefined} selected={n === menuOn} active={r === 2 && n === "user_name"}>
+                        <GridCell key={n} width={LW} pin={pin(d)} kind={num ? "num" : undefined} align={num ? "right" : undefined} selected={selected.includes(n)} active={r === 2 && n === "user_name"}>
                           {n === "id" ? r + 1 : n === "amount" ? `${(r + 1) * 1250}.00` : `${n}_${r + 1}`}
                         </GridCell>
                       );
@@ -347,8 +348,8 @@ function HiddenPinned() {
           at={{ x: 330, y: 40 }}
           onClose={() => {}}
           items={[
-            { label: "Hide Column", action: () => setHidden((h) => [...h, menuOn]) },
-            { label: "Pin Column", action: () => setPinned((p) => [...p, menuOn]) },
+            { label: selected.length > 1 ? `Hide ${selected.length} Columns` : "Hide Column", action: () => setHidden((h) => [...h, ...selected]) },
+            { label: selected.length > 1 ? `Pin ${selected.length} Columns` : "Pin Column", action: () => setPinned((p) => [...p, ...selected]) },
             { label: "Columns…", action: () => {} },
             { separator: true },
             { label: "Fit Column", shortcut: "double-click the edge", action: () => {} },

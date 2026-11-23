@@ -11,6 +11,23 @@ import { sharedOr, type ColumnView } from "./shared";
 export const columnView = (keys: string[], layout: ColumnLayout): ColumnView =>
   sharedOr({ view: keys.map((_, i) => i), pinned: 0, hidden: 0 }, (s) => s.columnView(keys, layout));
 
+/** The display columns the header menu's Hide, Pin and Unpin act on from display column `c` (#216, DataGrip): every selected one
+ *  (`selected`, in display order) when `c` is among them, else `c` alone; `pin` the ones not pinned yet, `unpin` the pinned ones */
+export function headerColumns(c: number, selected: number[], pinned: number) {
+  const cols = selected.includes(c) ? selected : [c];
+  return { cols, pin: cols.filter((x) => x >= pinned), unpin: cols.filter((x) => x < pinned) };
+}
+
+/** "Pin Column", or "Pin 3 Columns" for several */
+export const columnsLabel = (verb: string, n: number) => (n > 1 ? `${verb} ${n} Columns` : `${verb} Column`);
+
+/** `keys` pinned after the pinned ones, in the order given (their display order); ones pinned already stay where they are */
+export const pinKeys = (l: ColumnLayout, keys: string[]): ColumnLayout => ({ ...l, pinned: [...l.pinned, ...keys.filter((k) => !l.pinned.includes(k))] });
+/** `keys` unpinned: back to their place in the result */
+export const unpinKeys = (l: ColumnLayout, keys: string[]): ColumnLayout => ({ ...l, pinned: l.pinned.filter((k) => !keys.includes(k)) });
+/** `keys` hidden (the caller keeps one column shown) */
+export const hideKeys = (l: ColumnLayout, keys: string[]): ColumnLayout => ({ ...l, hidden: [...l.hidden.filter((k) => !keys.includes(k)), ...keys] });
+
 // The layout on screen per table or console result, as columnWidths.ts keeps widths: a table's is read again each time a grid for it
 // opens (the TUI may have changed it) and forgotten when the last one closes; a console result's lives in memory only
 const cache = new Map<string, ColumnLayout>();

@@ -107,7 +107,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | — | Fit Column to its content (the rows loaded so far; again: back to the width before) |
 | — | Fit All Columns |
 | — | Reset Column Widths (back to the computed widths) |
-| — | Hide Column (the current one) |
+| — | Hide Column (the selected ones) |
 | — | Pin Column at the left (again: unpin) |
 | — | Columns… (show, hide and pin each column) |
 | — | Explain Analyze (runs the statement: real times and row counts) |
@@ -196,7 +196,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `<` | Narrow Column (the current one) |
 | `>` | Widen Column (the current one) |
 | `=` | Fit Column to its content (the rows loaded so far; again: back to the width before) |
-| `H` | Hide Column (the current one) |
+| `H` | Hide Column (the selected ones) |
 | `P` | Pin Column at the left (again: unpin) |
 | `C` | Columns… (show, hide and pin each column) |
 | `⌃z` | Revert Changes |
