@@ -44,7 +44,8 @@ summary() {
 
 remove_ctrs() {
   [ ${#ctrs[@]} -gt 0 ] || return 0
-  docker rm -f "${ctrs[@]}" >/dev/null 2>&1 || true
+  # -v: the databases' anonymous data volumes go with them (without it every run left one per container behind)
+  docker rm -f -v "${ctrs[@]}" >/dev/null 2>&1 || true
   ctrs=()
 }
 
@@ -272,7 +273,7 @@ if [ -n "$(docker ps -aq --filter name=qurry-demo-ci- 2>/dev/null || true)" ]; t
   # Not ours to remove: they belong to another run (one at a time)
   trap - EXIT
   echo "ci-local: a qurry-demo-ci-* container already exists (another run, or one left over): wait for it, or remove it with" >&2
-  echo "  docker rm -f \$(docker ps -aq --filter name=qurry-demo-ci-)" >&2
+  echo "  docker rm -f -v \$(docker ps -aq --filter name=qurry-demo-ci-)" >&2
   exit 1
 fi
 
