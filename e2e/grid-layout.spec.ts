@@ -203,9 +203,14 @@ test("the status bar's shown columns skip those under the pinned ones once the g
 
 // Several selected columns (#216, DataGrip): the header menu's Hide, Pin and Unpin act on all of them when the right-click lands on one
 const selHeads = (page: Page) => work(page).locator(".grid-head [role=columnheader].col-sel .col-name").allTextContents();
+/** A ⇧-click, after a pause: two ⇧ presses within 400 ms open Search Everywhere (⇧⇧) */
+async function shiftClick(page: Page, target: ReturnType<Page["locator"]>) {
+  await page.waitForTimeout(450);
+  await target.click({ modifiers: ["Shift"] });
+}
 async function selectHeads(page: Page, from: string, to: string) {
   await header(page, from).locator(".col-name").click();
-  await header(page, to).locator(".col-name").click({ modifiers: ["Shift"] });
+  await shiftClick(page, header(page, to).locator(".col-name"));
 }
 const ALL = ["id", "user_name", "amount", "created_at", "memo"];
 
@@ -235,7 +240,7 @@ test("Pin 3 Columns pins the selected ones in their order and the table keeps th
   await menuItem(page, /^Unpin 3 Columns/).click();
   await expect.poll(() => heads(page)).toEqual(ALL);
 
-  // ⌘-click adds a column (two ⇧ presses in a row would open Search Everywhere)
+  // ⌘-click adds a column
   await header(page, "id").locator(".col-name").click();
   await header(page, "user_name").locator(".col-name").click({ modifiers: ["Meta"] });
   await header(page, "id").click({ button: "right" });
@@ -261,9 +266,8 @@ test("a mixed selection gets Pin for the rest and Unpin for the pinned ones; eve
   await menuItem(page, /^Unpin 3 Columns/).click();
   await expect.poll(() => heads(page)).toEqual(ALL);
 
-  // ⌘A selects every column: Hide is greyed out and says why
-  await cell(page, "user_1").click();
-  await page.keyboard.press("Meta+a");
+  // Every column selected on the headers: Hide is greyed out and says why
+  await selectHeads(page, "id", "memo");
   await header(page, "memo").click({ button: "right" });
   await expect(menuItem(page, /^Hide 5 Columns/)).toBeDisabled();
   await expect(menuItem(page, /^Hide 5 Columns/)).toHaveAttribute("title", "At least one column stays shown");
@@ -296,4 +300,43 @@ test("the Pin Column and Hide Column keys act on the selected columns", async ({
   await expect.poll(() => heads(page)).toEqual(ALL);
   await page.keyboard.press("Control+Alt+KeyH");
   await expect.poll(() => heads(page)).toEqual(["id", "user_name"]);
+});
+
+/** Row r's display column c (0-based) */
+const at = (page: Page, r: number, c: number) => work(page).locator(".grid-scroll [role=row]").nth(r).locator("[role=gridcell]").nth(c);
+
+test("a row, a cell range or ⌘A is no column selection: the header menu and the keys act on one column", async ({ page }) => {
+  await openApp(page);
+  await page.evaluate(() =>
+    import(/* @vite-ignore */ "/src/lib/shortcuts.ts").then((m) => {
+      m.bind("grid.colPin", "Ctrl+Alt+P", false);
+      m.bind("grid.colHide", "Ctrl+Alt+H", false);
+    }),
+  );
+  await openUsers(page);
+  // A whole row: Hide Column is there and hides the right-clicked column alone
+  await work(page).locator(".grid-scroll [role=row]").nth(1).locator(".rownum").click();
+  await header(page, "amount").click({ button: "right" });
+  await expect(menuItem(page, /^Hide Column/)).toBeEnabled();
+  await expect(menuItem(page, /^Hide \d/)).toHaveCount(0);
+  await menuItem(page, /^Hide Column/).click();
+  await expect.poll(() => heads(page)).toEqual(["id", "user_name", "created_at", "memo"]);
+
+  // A cell range over three columns: Pin Column pins the right-clicked one
+  await at(page, 0, 0).click();
+  await shiftClick(page, at(page, 1, 2));
+  await header(page, "user_name").click({ button: "right" });
+  await expect(menuItem(page, /^Pin \d/)).toHaveCount(0);
+  await menuItem(page, /^Pin Column/).click();
+  await expect.poll(() => heads(page)).toEqual(["user_name", "id", "created_at", "memo"]);
+
+  // The keys on a cell range act on the cursor's column (the last clicked cell's)
+  await at(page, 0, 1).click();
+  await shiftClick(page, at(page, 1, 0));
+  await page.keyboard.press("Control+Alt+KeyP");
+  await expect.poll(() => heads(page)).toEqual(["id", "user_name", "created_at", "memo"]);
+  // ⌘A (the cursor on the last cell): the key hides memo alone
+  await page.keyboard.press("Meta+a");
+  await page.keyboard.press("Control+Alt+KeyH");
+  await expect.poll(() => heads(page)).toEqual(["id", "user_name", "created_at"]);
 });

@@ -427,11 +427,6 @@ impl Grid {
         self.set_layout(l);
     }
 
-    /// The columns Hide Column and Pin Column act on (#216, the GUI's selected columns): the selection's, in grid order, else the cursor's
-    pub fn selected_cols(&self) -> Vec<usize> {
-        self.selection().map_or_else(|| vec![self.col], |(_, cols)| cols)
-    }
-
     /// Show All: every column on display again, the pinned ones still pinned
     pub fn show_all(&mut self) {
         let l = ColumnLayout { hidden: vec![], pinned: self.layout.pinned.clone() };

@@ -11,8 +11,8 @@ import { sharedOr, type ColumnView } from "./shared";
 export const columnView = (keys: string[], layout: ColumnLayout): ColumnView =>
   sharedOr({ view: keys.map((_, i) => i), pinned: 0, hidden: 0 }, (s) => s.columnView(keys, layout));
 
-/** The display columns the header menu's Hide, Pin and Unpin act on from display column `c` (#216, DataGrip): every selected one
- *  (`selected`, in display order) when `c` is among them, else `c` alone; `pin` the ones not pinned yet, `unpin` the pinned ones */
+/** The display columns the header menu's Hide, Pin and Unpin act on from display column `c` (#216, DataGrip): every column selected
+ *  on the headers (`selected`, in display order) when `c` is among them, else `c` alone; `pin` the ones not pinned yet, `unpin` the pinned ones */
 export function headerColumns(c: number, selected: number[], pinned: number) {
   const cols = selected.includes(c) ? selected : [c];
   return { cols, pin: cols.filter((x) => x >= pinned), unpin: cols.filter((x) => x < pinned) };

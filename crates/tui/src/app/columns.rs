@@ -16,47 +16,29 @@ impl App {
         self.grid_mut().filter(|g| g.cols() > 0).map(|g| (g, table))
     }
 
-    /// Hide Column: the selected columns (else the cursor's), never every column shown
+    /// Hide Column: the cursor's column, never the last one shown
     pub fn column_hide(&mut self) {
         let columns = match self.keys.slot_label(crate::keys::Slot { action: Action::Columns, pane: qurry_core::keymap::Scope::Grid }) {
             k if k == "—" => format!("{} › Columns…", self.keys.label(Action::Palette)),
             k => k,
         };
         let Some((g, table)) = self.layout_grid() else { return };
-        let cs = g.selected_cols();
         let name = g.result.columns[g.col].name.clone();
-        if cs.len() >= g.visible_cols() {
-            self.status = if cs.len() == 1 { format!("{name} is the only column shown") } else { "At least one column stays shown".into() };
+        if !g.set_hidden(g.col, true) {
+            self.status = format!("{name} is the only column shown");
             return;
         }
-        for &c in &cs {
-            g.set_hidden(c, true);
-        }
-        self.status = match cs.len() {
-            1 => format!("{name} hidden · Columns… ({columns}) shows it again"),
-            n => format!("{n} columns hidden · Columns… ({columns}) shows them again"),
-        };
+        self.status = format!("{name} hidden · Columns… ({columns}) shows it again");
         self.save_layout(table);
     }
 
-    /// Pin Column: the selected columns (else the cursor's) pinned at the left in their order; when they all are, unpinned (the
-    /// GUI's menu has Pin for the rest of a mixed selection first)
+    /// Pin Column: the cursor's column pinned at the left, or unpinned
     pub fn column_pin_toggle(&mut self) {
         let Some((g, table)) = self.layout_grid() else { return };
-        let cs = g.selected_cols();
-        let name = g.result.columns[g.col].name.clone();
-        let rest: Vec<usize> = cs.iter().copied().filter(|&c| !g.is_pinned(c)).collect();
-        let pin = !rest.is_empty();
-        let on = if pin { rest } else { cs };
-        for &c in &on {
-            g.set_pinned(c, pin);
-        }
-        self.status = match (on.len(), pin) {
-            (1, true) => format!("{name} pinned at the left"),
-            (1, false) => format!("{name} unpinned"),
-            (n, true) => format!("{n} columns pinned at the left"),
-            (n, false) => format!("{n} columns unpinned"),
-        };
+        let (c, name) = (g.col, g.result.columns[g.col].name.clone());
+        let pin = !g.is_pinned(c);
+        g.set_pinned(c, pin);
+        self.status = if pin { format!("{name} pinned at the left") } else { format!("{name} unpinned") };
         self.save_layout(table);
     }
 

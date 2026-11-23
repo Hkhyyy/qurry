@@ -250,14 +250,19 @@ export function ResultGrid(p: Props) {
   // Pin, Unpin or Hide: the selection and the cursor follow their columns (as rows follow dataIndex), set before this render paints
   const [selView, setSelView] = useState(view);
   const sel = selView === view ? selState : remapCols(selState, selView, view);
+  // The selection made on the column headers (a click, ⇧- or ⌘-click there): only it makes Hide and Pin act on several columns
+  // (#216); a cell, range or row selection is another object, so its columns never count
+  const headerSel = useRef<Selection | null>(null);
   if (selView !== view) {
+    if (headerSel.current === selState) headerSel.current = sel;
     setSelView(view);
     setSel(sel);
   }
   /** The column header's menu on display column c: hide or pin it (and the other selected columns when it is one of them; a mixed
    *  selection gets both Pin and Unpin, Pin first so its key pins the rest), Columns…, widths of it or all of them */
+  const colSel = sel && headerSel.current === sel ? selCols(sel) : [];
   const headerItems = (c: number, i = view[c]): MenuItem[] => {
-    const { cols, pin, unpin } = headerColumns(c, selCols(sel), layout.pinned);
+    const { cols, pin, unpin } = headerColumns(c, colSel, layout.pinned);
     const res = (cs: number[]) => cs.map((x) => view[x]);
     const all = cols.length >= view.length;
     return [
@@ -298,7 +303,16 @@ export function ResultGrid(p: Props) {
   const forSelected = (fn: (r: number, c: number) => void | false) => forEachCell(sel, (d, c) => fn(dataIndex(d), view[c]));
   const selectCell = (pos: Pos, ext: boolean) => setSel((s) => (ext ? extend(s, pos) : single(pos)));
   /** A mouse click: ⇧ extends the last range to b, ⌘ adds a..b (a cell, a row, a column) or takes it out, a plain click starts over (DataGrip) */
-  const clickSel = (e: React.MouseEvent, a: Pos, b: Pos = a) => setSel((s) => (e.shiftKey ? extend(s, b) : (isMac ? e.metaKey : e.ctrlKey) ? toggle(s, a, b) : single(a, b)));
+  const clicked = (s: Selection | null, e: React.MouseEvent, a: Pos, b: Pos) => (e.shiftKey ? extend(s, b) : (isMac ? e.metaKey : e.ctrlKey) ? toggle(s, a, b) : single(a, b));
+  const clickSel = (e: React.MouseEvent, a: Pos, b: Pos = a) => setSel((s) => clicked(s, e, a, b));
+  /** A click on display column c's header: selects the column (DataGrip), kept as the column selection; a right-click keeps the
+   *  column selection it lands in, else selects its column (⌃-click on a Mac is a right-click) */
+  const clickHeader = (e: React.MouseEvent, c: number) => {
+    if ((e.button === 2 || (isMac && e.ctrlKey)) && colSel.includes(c)) return;
+    const next = clicked(sel, e, { r: 0, c }, { r: rowCount - 1, c });
+    headerSel.current = next;
+    setSel(next);
+  };
 
   useGridStatus({
     colVirt, scrollRef, wrapRef, chart, transposed, pinned: layout.pinned, pinEdge: layout.pinEdge, hasSel, sel, cur, wasmReady, forSelected, valueAt,
@@ -629,9 +643,7 @@ export function ResultGrid(p: Props) {
                         before={pad}
                         colSelected={selColSet.has(c)}
                         sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}
-                        // Header click = select the whole column (DataGrip); a right-click keeps the selection it lands in, else
-                        // selects its column (⌃-click on a Mac is a right-click)
-                        onMouseDown={(e) => !((e.button === 2 || (isMac && e.ctrlKey)) && selColSet.has(c)) && clickSel(e, { r: 0, c }, { r: rowCount - 1, c })}
+                        onMouseDown={(e) => clickHeader(e, c)}
                         onSortClick={(e) => clickSort(i, e.altKey)}
                         onContextMenu={(e) => {
                           e.preventDefault();

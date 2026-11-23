@@ -154,7 +154,7 @@
   {"gui": "grid.colFit", "tui": "ColumnFit", "title": "Fit Column", "guiDesc": "Fit Column to its content (the rows loaded so far; also: double-click the header's right edge, again to put it back)", "tuiTitle": "Fit Column to its content (the rows loaded so far; again: back to the width before)", "scope": "grid", "tuiPane": "grid", "tuiPaneKeys": ["="]},
   {"gui": "grid.colFitAll", "tui": "ColumnFitAll", "title": "Fit All Columns", "scope": "grid"},
   {"gui": "grid.colReset", "tui": "ColumnReset", "title": "Reset Widths", "guiDesc": "Reset Widths (back to the computed widths)", "tuiTitle": "Reset Column Widths (back to the computed widths)", "scope": "grid"},
-  {"gui": "grid.colHide", "tui": "ColumnHide", "title": "Hide Column", "tuiTitle": "Hide Column (the selected ones)", "scope": "grid", "tuiPane": "grid", "tuiPaneKeys": ["Shift+H"]},
+  {"gui": "grid.colHide", "tui": "ColumnHide", "title": "Hide Column", "tuiTitle": "Hide Column (the current one)", "scope": "grid", "tuiPane": "grid", "tuiPaneKeys": ["Shift+H"]},
   {"gui": "grid.colPin", "tui": "ColumnPinToggle", "title": "Pin Column", "tuiTitle": "Pin Column at the left (again: unpin)", "scope": "grid", "tuiPane": "grid", "tuiPaneKeys": ["Shift+P"]},
   {"gui": "grid.columns", "tui": "Columns", "title": "Columns…", "tuiTitle": "Columns… (show, hide and pin each column)", "scope": "grid", "tuiPane": "grid", "tuiPaneKeys": ["Shift+C"]},
   {"tui": "TxToggle", "title": "Toggle Transaction Mode (Auto/Manual)", "tuiKeys": ["Alt+T"]},
