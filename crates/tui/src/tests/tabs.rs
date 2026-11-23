@@ -234,3 +234,31 @@ async fn r_on_a_ddl_without_its_object_says_to_reopen() {
     h.key("r");
     assert_eq!(h.app.status, "Reopen the DDL to reload");
 }
+
+/// The key of another popup in an open one (⌃p Search Everywhere, ⌃e Recent Tabs, ⌃k Actions, ⌃o Go to Database Object): it opens in
+/// place of the open one, as in the GUI (#209); the open popup's own key keeps its meaning there (⌃k, ⌃e edit the filter)
+#[tokio::test]
+async fn a_popup_key_replaces_the_open_popup() {
+    let mut h = Harness::new().await;
+    h.table_tab("orders", &["id"], &[], &[]);
+    let title = |h: &Harness| match &h.app.popup {
+        Some(Popup::Palette(p)) => p.title.clone(),
+        _ => String::new(),
+    };
+    h.key("Ctrl+p");
+    assert_eq!(title(&h), "Search Everywhere");
+    h.key("Ctrl+e");
+    assert_eq!(title(&h), "Recent Tabs");
+    h.key("Ctrl+e");
+    assert_eq!(title(&h), "Recent Tabs");
+    h.key("Ctrl+k");
+    assert_eq!(title(&h), "Actions");
+    h.key("o");
+    h.key("Ctrl+k");
+    let Some(Popup::Palette(p)) = &h.app.popup else { panic!() };
+    assert_eq!((p.title.as_str(), p.input.lines()[0].as_str()), ("Actions", "o"), "⌃k is the filter's own key here");
+    h.key("Ctrl+o");
+    assert_eq!(title(&h), "Go to Database Object");
+    let s = h.screen(120, 30);
+    assert!(s.contains("Go to Database Object") && !s.contains("Actions"), "{s}");
+}
