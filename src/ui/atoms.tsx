@@ -186,10 +186,10 @@ export function Checkbox({ checked, onChange, children, disabled, title, indeter
     </label>
   );
 }
-export function Radio({ checked, onChange, children, disabled }: { checked: boolean; onChange: () => void; children?: ReactNode; disabled?: boolean }) {
+export function Radio({ checked, onChange, children, disabled, name }: { checked: boolean; onChange: () => void; children?: ReactNode; disabled?: boolean; name?: string }) {
   return (
     <label className="ui-check">
-      <input type="radio" checked={checked} disabled={disabled} onChange={onChange} />
+      <input type="radio" name={name} checked={checked} disabled={disabled} onChange={onChange} />
       {children}
     </label>
   );

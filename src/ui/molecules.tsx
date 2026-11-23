@@ -134,12 +134,13 @@ export function Field({ label, hint, error, info, children, className, group }: 
     </Tag>
   );
 }
-/** One of several (radio). Short description (hint) per option */
+/** One of several (radio). Short description (hint) per option. One shared name: the group is one Tab stop and the arrow keys pick */
 export function RadioGroup<T extends string | number>({ value, onChange, options, row }: { value: T; onChange: (v: T) => void; options: { value: T; label: ReactNode; hint?: ReactNode; disabled?: boolean }[]; row?: boolean }) {
+  const name = useId();
   return (
     <div className={cx("ui-radio-group", row && "row")} role="radiogroup">
       {options.map((o) => (
-        <Radio key={String(o.value)} checked={value === o.value} disabled={o.disabled} onChange={() => onChange(o.value)}>
+        <Radio key={String(o.value)} name={name} checked={value === o.value} disabled={o.disabled} onChange={() => onChange(o.value)}>
           {o.label}
           {o.hint && <Text tone="muted"> {o.hint}</Text>}
         </Radio>

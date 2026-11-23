@@ -140,10 +140,10 @@ test("a checkbox and a radio reached with the keyboard show the accent focus rin
 
   await treeItem(page, "users").first().dblclick();
   await work(page).getByRole("button", { name: "Export Data…" }).click();
-  // Back from the dialog's primary button to its last radio
-  const clipboard = dialog(page).getByRole("radio", { name: /^Clipboard/ });
-  await tabTo(page, browserName, clipboard, true);
-  const rr = await ring(clipboard);
+  // Back from the dialog's primary button to the last group's picked radio
+  const file = dialog(page).getByRole("radio", { name: /^File…/ });
+  await tabTo(page, browserName, file, true);
+  const rr = await ring(file);
   expect(rr.outline).toBe(rr.accent);
   const json = dialog(page).getByRole("radio", { name: /^JSON/ });
   await json.click();
@@ -195,6 +195,28 @@ test("a confirm over Settings keeps the focus, then gives it back to the button 
   await expect(ask).toHaveCount(0);
   await expect(dialog(page)).toHaveCount(1);
   await expect(del).toBeFocused();
+});
+
+test("a radio group is one Tab stop and the arrow keys pick in it (#212)", async ({ page, browserName }) => {
+  await treeItem(page, "users").first().dblclick();
+  await work(page).getByRole("button", { name: "Export Data…" }).click();
+  const format = dialog(page).getByRole("radiogroup").nth(0);
+  const csv = format.getByRole("radio", { name: /^CSV/ });
+  // From the dialog's window, one stop lands on the picked format
+  await page.locator(".ui-modal[aria-modal]").focus();
+  await page.keyboard.press(browserName === "webkit" ? "Alt+Tab" : "Tab");
+  await expect(csv).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(format.getByRole("radio", { name: /^TSV/ })).toBeChecked();
+  await expect(format.getByRole("radio", { name: /^TSV/ })).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(format.getByRole("radio", { name: /^JSON/ })).toBeChecked();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowLeft");
+  await expect(csv).toBeChecked();
+  // The next stop is the other group's picked radio, not the next format
+  await page.keyboard.press(browserName === "webkit" ? "Alt+Tab" : "Tab");
+  await expect(dialog(page).getByRole("radio", { name: /^File…/ })).toBeFocused();
 });
 
 test("Export Data… offers every format and destination", async ({ page }) => {
