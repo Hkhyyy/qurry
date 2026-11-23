@@ -4,6 +4,17 @@ use crate::app::{PAction, COLUMNS};
 /// A yes pressed during a quiet confirm's pause (TLS_ASK_GRACE) doesn't count: say so instead of ignoring it
 const TOO_SOON: &str = "Wait a moment, then answer (n / Esc cancels)";
 
+/// ⌃k Actions, ⌃e Recent Tabs, ⌃p / ⌃o a search, pressed in another palette: as in the GUI (DataGrip), one popup at a time. A search's
+/// own keys were taken before (the next scope)
+fn opens_other_popup(a: Action, title: &str) -> bool {
+    match a {
+        Action::Palette => title != "Actions",
+        Action::RecentTabs => title != "Recent Tabs",
+        Action::SearchEverywhere | Action::GoToObject => true,
+        _ => false,
+    }
+}
+
 pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
     if matches!(app.popup, Some(Popup::Find(_))) {
         return crate::find::key(app, k);
@@ -254,6 +265,8 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                     app.popup = Some(Popup::Palette(p));
                     return app.next_search_scope();
                 }
+                // The key of another popup: it opens in place of this one
+                _ if let Some(a) = app.keys.lookup(&k).filter(|a| opens_other_popup(*a, &p.title)) => return app.run_action(a),
                 // The Go to DDL key (⌃b): DDL of the selected object
                 _ if app.keys.lookup(&k) == Some(Action::Ddl) => {
                     if let Some(it) = App::palette_matches(&p).get(p.sel).map(|x| (*x).clone()) {

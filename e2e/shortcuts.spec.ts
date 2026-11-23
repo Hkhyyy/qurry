@@ -553,3 +553,71 @@ test.describe("fixed keys", () => {
     await expect(selectedTab(page)).toContainText("payments");
   });
 });
+
+// One transient popup at a time, as DataGrip: the key of another popup closes the open one and opens its own, on top and with the keys.
+// Over a modal dialog the popup keys do nothing (popups stack under dialogs, so they would open hidden)
+test.describe("popups opened over each other", () => {
+  test.beforeEach(async ({ page }) => openApp(page));
+  /** The one popup shown, and that it is the one on top at its middle (not drawn under another overlay) */
+  async function onlyPopup(page: Page, title: string) {
+    await expect(popoverTitle(page)).toHaveText([title]);
+    const onTop = await page.locator(".ui-popover").evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+    });
+    expect(onTop).toBe(true);
+  }
+  const focusInPopup = (page: Page) => page.locator(".ui-popover").evaluate((el) => el.contains(document.activeElement));
+
+  test("⌃` then ⌃⇥: the Switcher replaces Quick Switch Theme and has the keys", async ({ page }) => {
+    await twoTabs(page);
+    await page.keyboard.press("Control+Backquote");
+    await onlyPopup(page, "Theme");
+    await page.keyboard.down("Control");
+    await page.keyboard.press("Tab");
+    await onlyPopup(page, "Switcher");
+    await expect(page.locator(".ui-popover [role=listbox] .selected")).toContainText("users");
+    await page.keyboard.up("Control");
+    await expect(popoverTitle(page)).toHaveCount(0);
+    await expect(selectedTab(page)).toContainText("users");
+  });
+
+  test("⌃⇥ then ⇧⇧: Search Everywhere replaces the Switcher, and releasing ⌃ then switches nothing", async ({ page }) => {
+    await twoTabs(page);
+    await page.keyboard.down("Control");
+    await page.keyboard.press("Tab");
+    await onlyPopup(page, "Switcher");
+    await page.keyboard.press("Shift");
+    await page.keyboard.press("Shift");
+    await page.keyboard.up("Control");
+    await expect(seTab(page)).toHaveText("All");
+    await expect(page.locator(".switcher")).toHaveCount(0);
+    expect(await focusInPopup(page)).toBe(true);
+    await expect(selectedTab(page)).toContainText("contracts");
+  });
+
+  test("⇧⇧ then ⌘E: Recent Files replaces Search Everywhere and has the focus", async ({ page }) => {
+    await page.keyboard.press("Shift");
+    await page.keyboard.press("Shift");
+    await expect(seTab(page)).toHaveText("All");
+    await page.keyboard.press("Meta+KeyE");
+    await onlyPopup(page, "Recent Files");
+    await expect(page.locator(".search-everywhere")).toHaveCount(0);
+    expect(await focusInPopup(page)).toBe(true);
+  });
+
+  test("Settings then ⌃⇥, ⌃` or ⇧⇧: nothing opens under the dialog, which keeps the focus", async ({ page }) => {
+    await twoTabs(page);
+    await page.keyboard.press("Meta+Comma");
+    await expect(dialog(page)).toBeVisible();
+    await page.keyboard.down("Control");
+    await page.keyboard.press("Tab");
+    await page.keyboard.up("Control");
+    await page.keyboard.press("Control+Backquote");
+    await page.keyboard.press("Shift");
+    await page.keyboard.press("Shift");
+    await expect(page.locator(".ui-popover")).toHaveCount(0);
+    expect(await dialog(page).evaluate((el) => el.contains(document.activeElement))).toBe(true);
+    await expect(selectedTab(page)).toContainText("contracts");
+  });
+});

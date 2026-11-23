@@ -6,7 +6,7 @@ import { commandsFor, eventSpec, hit, runKey } from "../../lib/shortcuts";
 import type { NodeInfo } from "../../components/SchemaTree";
 import type { useConnActions } from "../conns/useConnActions";
 import type { useConsole } from "../console/useConsole";
-import { setDialog, setHistoryFor, setHistoryTab, setKeymapOpen, setSchemeOpen, setSettingsOpen } from "../dialogs/store";
+import { openPopup, type Popup, setDialog, setHistoryFor, setHistoryTab, setKeymapOpen, setSettingsOpen, useDialogsStore } from "../dialogs/store";
 import type { useEditorGroups } from "../editorGroups/useEditorGroups";
 import type { useExplorer } from "../explorer/useExplorer";
 import { ONE_NODE } from "../explorer/selection";
@@ -48,10 +48,14 @@ const FIXED = new Map<string, (e: KeyboardEvent) => boolean>([
   ["switcher", (e) => e.ctrlKey && !e.metaKey && e.key === "Tab"],
 ]);
 
+/** The commands that open a transient popup, and which one. While a popup is open these are the only keys handled here, when they open
+ *  another one (it replaces the open one); the open popup has the rest, its own key again too (⌃⇥ moves in the Switcher) */
+const POPUP_OF: Record<string, Popup["kind"]> = { switcher: "switcher", recent: "recent", theme: "theme", "goto.object": "search", "goto.symbol": "search", "goto.file": "search", "find.action": "search" };
+
 /** The app-wide key handler: command shortcuts of the keymap (lib/shortcuts.ts) and the fixed keys (⇧⇧, ⇧⎋, ⌃⇥). Commands without a
  *  handler here run the entry with their id in Find Action's list or the active tab's menu (global), or in the selected node's menu (tree) */
 export function useGlobalShortcuts({
-  conns, keymapVer, treeSel, treeSelAll, setStatus, active, focused, tabs, split, toggleExplorer, bumpFont, setMaximized, openFts, setSe, setFindOpen, findOpen, openSwitcher, setRecentOpen, switchWs, activate, openConsole, jumpToConsole, activateNode, deactivate, sqlGenerator, ddlToClipboard, ddlToConsole, showQuickDoc, canDdl, modifyTable, renameNode, duplicateConn, removeConn, dangerous, openDdl, applyTableFilter, refreshAll, canCancel, cancelRun, renameConsole, reopenClosed, buildMenu, paletteActions, tabMenu, ddlCommands,
+  conns, keymapVer, treeSel, treeSelAll, setStatus, active, focused, tabs, split, toggleExplorer, bumpFont, setMaximized, openFts, setSe, setFindOpen, findOpen, openSwitcher, switchWs, activate, openConsole, jumpToConsole, activateNode, deactivate, sqlGenerator, ddlToClipboard, ddlToConsole, showQuickDoc, canDdl, modifyTable, renameNode, duplicateConn, removeConn, dangerous, openDdl, applyTableFilter, refreshAll, canCancel, cancelRun, renameConsole, reopenClosed, buildMenu, paletteActions, tabMenu, ddlCommands,
 }: Deps) {
   // The key handler is registered only once, so pass the latest functions via a ref
   const latest = useRef({ toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs, buildMenu, paletteActions, tabMenu, ddlCommands });
@@ -63,8 +67,9 @@ export function useGlobalShortcuts({
   keyState.current = { treeSel, treeSelAll, active, focused, tabs, split };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // If the Switcher / Recent Files popup is open, the popup handles keys
-      if (document.querySelector(".switcher, .search-everywhere, .modal.fts, .modal.keymap, .keymap-recording")) return;
+      // A key being recorded in the keymap has the keys
+      if (document.querySelector(".modal.fts, .modal.keymap, .keymap-recording")) return;
+      const popup = useDialogsStore.getState().popup?.kind;
       const { treeSel, treeSelAll, active, tabs } = keyState.current;
       const L = latest.current;
       // ⇧⇧: Search Everywhere
@@ -73,7 +78,7 @@ export function useGlobalShortcuts({
           const now = Date.now();
           if (now - lastShift.current < 400) {
             lastShift.current = 0;
-            L.setSe("all");
+            if (popup !== "search") L.setSe("all");
           } else lastShift.current = now;
         }
         return;
@@ -201,12 +206,12 @@ export function useGlobalShortcuts({
         },
         theme: () => {
           e.preventDefault();
-          setSchemeOpen(true);
+          openPopup({ kind: "theme" });
         },
         recent: () => {
           e.preventDefault();
           e.stopPropagation();
-          setRecentOpen(true);
+          openPopup({ kind: "recent" });
         },
         "tab.next": tabStep,
         "tab.prev": tabStep,
@@ -230,7 +235,8 @@ export function useGlobalShortcuts({
           if (t) activate(t);
         },
       };
-      for (const [id, run] of Object.entries(actions)) if ((FIXED.get(id)?.(e) ?? is(id)) && run() !== false) return;
+      for (const [id, run] of Object.entries(actions)) if ((!popup || (POPUP_OF[id] && POPUP_OF[id] !== popup)) && (FIXED.get(id)?.(e) ?? is(id)) && run() !== false) return;
+      if (popup) return;
       if (many && commandsFor(spec, "tree").length) {
         e.preventDefault();
         e.stopPropagation();
