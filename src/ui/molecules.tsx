@@ -152,12 +152,28 @@ export function RadioGroup<T extends string | number>({ value, onChange, options
 export const FormSection = ({ children }: { children: ReactNode }) => <div className="ui-form-section">{children}</div>;
 /** Small gray description below a field · window */
 export const Hint = ({ children, className }: { children: ReactNode; className?: string }) => <div className={cx("ui-hint", className)}>{children}</div>;
-/** Color picker (Data Source color). value = null means no color */
+/** Color picker (Data Source color). value = null means no color. The presets are one Tab stop; the arrow keys move between them
+ *  without picking (in the explorer's menu a pick also closes it), Space or Enter picks */
 export function ColorPicker({ value, options, onChange, custom }: { value: string | null; options: { name: string; value: string | null }[]; onChange: (v: string | null) => void; custom?: boolean }) {
   const isPreset = options.some((c) => c.value?.toLowerCase() === value?.toLowerCase());
   const name = useId();
+  const key = (e: KeyboardEvent<HTMLDivElement>) => {
+    const r = e.target as HTMLInputElement;
+    if (r.type !== "radio") return;
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (e.key === "Enter") {
+      // Not the dialog's Enter (OK)
+      e.preventDefault();
+      e.stopPropagation();
+      r.click();
+    } else if (step) {
+      e.preventDefault();
+      const all = [...e.currentTarget.querySelectorAll<HTMLInputElement>("input[type=radio]")];
+      all[(all.indexOf(r) + step + all.length) % all.length].focus();
+    }
+  };
   return (
-    <div className="ui-color-picker" role="radiogroup" aria-label="Color">
+    <div className="ui-color-picker" role="radiogroup" aria-label="Color" onKeyDown={key}>
       {options.map((c) => (
         <Swatch key={c.name} name={name} color={c.value} title={c.name} selected={c.value?.toLowerCase() === value?.toLowerCase()} onClick={() => onChange(c.value)} />
       ))}

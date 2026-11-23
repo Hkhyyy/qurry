@@ -50,7 +50,7 @@ test("data source context menu", async ({ page }) => {
       - separator
       - text: Color
       - radiogroup "Color":
-        - radio "None"
+        - radio "No color"
         - radio "Red"
         - radio "Orange"
         - radio "Yellow" [checked]
@@ -60,6 +60,20 @@ test("data source context menu", async ({ page }) => {
         - radio "Violet"
         - radio "Gray"
   `);
+});
+
+test("the menu's colors: the arrow keys move without picking (nor closing it), Space picks and closes (#213)", async ({ page }) => {
+  await treeItem(page, "[DEV] shop_app 3").click({ button: "right" });
+  const colors = page.getByRole("menu").getByRole("radiogroup", { name: "Color" });
+  await colors.getByRole("radio", { checked: true }).focus();
+  await expect(colors.getByRole("radio", { name: "Yellow" })).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(colors.getByRole("radio", { name: "Green" })).toBeFocused();
+  await expect(colors.getByRole("radio", { name: "Yellow" })).toBeChecked();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await treeItem(page, "[DEV] shop_app 3").click({ button: "right" });
+  await expect(page.getByRole("menu").getByRole("radio", { name: "Green" })).toBeChecked();
 });
 
 test("Navigation → Jump to Query Console… offers New Query Console, then the open consoles", async ({ page }) => {
