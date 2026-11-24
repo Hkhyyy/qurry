@@ -200,3 +200,142 @@ test("the status bar's shown columns skip those under the pinned ones once the g
   await work(page).locator(".grid-scroll").evaluate((el, x) => (el.scrollLeft = x), by);
   await expect(cols).toHaveText(/^cols 8–\d+ of 30$/);
 });
+
+// Several selected columns (#216, DataGrip): the header menu's Hide, Pin and Unpin act on all of them when the right-click lands on one
+const selHeads = (page: Page) => work(page).locator(".grid-head [role=columnheader].col-sel .col-name").allTextContents();
+/** A ⇧-click, with no pause: quick ⇧-clicks never count as ⇧⇧ (#217) */
+async function shiftClick(page: Page, target: ReturnType<Page["locator"]>) {
+  await target.click({ modifiers: ["Shift"] });
+}
+async function selectHeads(page: Page, from: string, to: string) {
+  await header(page, from).locator(".col-name").click();
+  await shiftClick(page, header(page, to).locator(".col-name"));
+}
+const ALL = ["id", "user_name", "amount", "created_at", "memo"];
+
+test("Pin 3 Columns pins the selected ones in their order and the table keeps them after a restart; Unpin 3 Columns; Hide 2 Columns", async ({ page }) => {
+  await openApp(page);
+  await openUsers(page);
+  await selectHeads(page, "user_name", "created_at");
+  await header(page, "amount").click({ button: "right" });
+  // The right-click keeps the selection it lands in
+  await expect.poll(() => selHeads(page)).toEqual(["user_name", "amount", "created_at"]);
+  await expect(menuItem(page, /^Hide 3 Columns/)).toBeEnabled();
+  await expect(menuItem(page, /^Unpin/)).toHaveCount(0);
+  await menuItem(page, /^Pin 3 Columns/).click();
+  const pinned = ["user_name", "amount", "created_at", "id", "memo"];
+  await expect.poll(() => heads(page)).toEqual(pinned);
+  await expect.poll(() => selHeads(page)).toEqual(["user_name", "amount", "created_at"]);
+  expect(await work(page).locator(".grid-head [role=columnheader].pin-edge .col-name").allTextContents()).toEqual(["created_at"]);
+
+  await page.reload();
+  await openApp(page);
+  await openUsers(page);
+  await expect.poll(() => heads(page)).toEqual(pinned);
+
+  await selectHeads(page, "user_name", "created_at");
+  await header(page, "user_name").click({ button: "right" });
+  await expect(menuItem(page, /^Pin/)).toHaveCount(0);
+  await menuItem(page, /^Unpin 3 Columns/).click();
+  await expect.poll(() => heads(page)).toEqual(ALL);
+
+  // ⌘-click adds a column
+  await header(page, "id").locator(".col-name").click();
+  await header(page, "user_name").locator(".col-name").click({ modifiers: ["Meta"] });
+  await header(page, "id").click({ button: "right" });
+  await menuItem(page, /^Hide 2 Columns/).click();
+  await expect.poll(() => heads(page)).toEqual(["amount", "created_at", "memo"]);
+  await expect.poll(() => segments(page)).toContain("2 hidden");
+});
+
+test("a mixed selection gets Pin for the rest and Unpin for the pinned ones; every column selected can't be hidden", async ({ page }) => {
+  await openApp(page);
+  await openUsers(page);
+  await headerMenu(page, "amount", /^Pin Column/);
+  await expect.poll(() => heads(page)).toEqual(["amount", "id", "user_name", "created_at", "memo"]);
+  await selectHeads(page, "amount", "user_name");
+  await header(page, "id").click({ button: "right" });
+  await expect(menuItem(page, /^Pin 2 Columns/)).toBeVisible();
+  await expect(menuItem(page, /^Unpin Column/)).toBeVisible();
+  await menuItem(page, /^Pin 2 Columns/).click();
+  // The pinned one stays first, the rest follow in their display order
+  await expect.poll(() => heads(page)).toEqual(["amount", "id", "user_name", "created_at", "memo"]);
+  await header(page, "id").click({ button: "right" });
+  await expect(menuItem(page, /^Pin/)).toHaveCount(0);
+  await menuItem(page, /^Unpin 3 Columns/).click();
+  await expect.poll(() => heads(page)).toEqual(ALL);
+
+  // Every column selected on the headers: Hide is greyed out and says why
+  await selectHeads(page, "id", "memo");
+  await header(page, "memo").click({ button: "right" });
+  await expect(menuItem(page, /^Hide 5 Columns/)).toBeDisabled();
+  await expect(menuItem(page, /^Hide 5 Columns/)).toHaveAttribute("title", "At least one column stays shown");
+});
+
+test("a right-click outside the selection acts on that column alone", async ({ page }) => {
+  await openApp(page);
+  await openUsers(page);
+  await selectHeads(page, "id", "user_name");
+  await header(page, "memo").click({ button: "right" });
+  await expect.poll(() => selHeads(page)).toEqual(["memo"]);
+  await menuItem(page, /^Pin Column/).click();
+  await expect.poll(() => heads(page)).toEqual(["memo", "id", "user_name", "amount", "created_at"]);
+});
+
+test("the Pin Column and Hide Column keys act on the selected columns", async ({ page }) => {
+  await openApp(page);
+  await page.evaluate(() =>
+    import(/* @vite-ignore */ "/src/lib/shortcuts.ts").then((m) => {
+      m.bind("grid.colPin", "Ctrl+Alt+P", false);
+      m.bind("grid.colHide", "Ctrl+Alt+H", false);
+    }),
+  );
+  await openUsers(page);
+  await selectHeads(page, "amount", "memo");
+  await page.keyboard.press("Control+Alt+KeyP");
+  await expect.poll(() => heads(page)).toEqual(["amount", "created_at", "memo", "id", "user_name"]);
+  // Again: all pinned now, so the key unpins them
+  await page.keyboard.press("Control+Alt+KeyP");
+  await expect.poll(() => heads(page)).toEqual(ALL);
+  await page.keyboard.press("Control+Alt+KeyH");
+  await expect.poll(() => heads(page)).toEqual(["id", "user_name"]);
+});
+
+/** Row r's display column c (0-based) */
+const at = (page: Page, r: number, c: number) => work(page).locator(".grid-scroll [role=row]").nth(r).locator("[role=gridcell]").nth(c);
+
+test("a row, a cell range or ⌘A is no column selection: the header menu and the keys act on one column", async ({ page }) => {
+  await openApp(page);
+  await page.evaluate(() =>
+    import(/* @vite-ignore */ "/src/lib/shortcuts.ts").then((m) => {
+      m.bind("grid.colPin", "Ctrl+Alt+P", false);
+      m.bind("grid.colHide", "Ctrl+Alt+H", false);
+    }),
+  );
+  await openUsers(page);
+  // A whole row: Hide Column is there and hides the right-clicked column alone
+  await work(page).locator(".grid-scroll [role=row]").nth(1).locator(".rownum").click();
+  await header(page, "amount").click({ button: "right" });
+  await expect(menuItem(page, /^Hide Column/)).toBeEnabled();
+  await expect(menuItem(page, /^Hide \d/)).toHaveCount(0);
+  await menuItem(page, /^Hide Column/).click();
+  await expect.poll(() => heads(page)).toEqual(["id", "user_name", "created_at", "memo"]);
+
+  // A cell range over three columns: Pin Column pins the right-clicked one
+  await at(page, 0, 0).click();
+  await shiftClick(page, at(page, 1, 2));
+  await header(page, "user_name").click({ button: "right" });
+  await expect(menuItem(page, /^Pin \d/)).toHaveCount(0);
+  await menuItem(page, /^Pin Column/).click();
+  await expect.poll(() => heads(page)).toEqual(["user_name", "id", "created_at", "memo"]);
+
+  // The keys on a cell range act on the cursor's column (the last clicked cell's)
+  await at(page, 0, 1).click();
+  await shiftClick(page, at(page, 1, 0));
+  await page.keyboard.press("Control+Alt+KeyP");
+  await expect.poll(() => heads(page)).toEqual(["id", "user_name", "created_at", "memo"]);
+  // ⌘A (the cursor on the last cell): the key hides memo alone
+  await page.keyboard.press("Meta+a");
+  await page.keyboard.press("Control+Alt+KeyH");
+  await expect.poll(() => heads(page)).toEqual(["id", "user_name", "created_at"]);
+});

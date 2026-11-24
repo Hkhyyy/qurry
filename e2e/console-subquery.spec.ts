@@ -98,8 +98,11 @@ test("a failed statement after the first: the error is marked at the server's po
   await expect(work(page).locator(".output-log")).toContainText('ERROR: relation "no_such_table" does not exist');
   // Its message on hover, with the way out (the decoration is drawn a frame after it is set: wait for it on a slow WebKit)
   await expect(editor(page).locator(".squiggly-error")).toBeVisible();
-  await editor(page).locator(".squiggly-error").hover({ force: true });
-  await expect(page.locator(".monaco-hover:visible")).toContainText('relation "no_such_table" does not exist');
+  // Monaco can redraw the decoration right after it shows (a new node, briefly without size): hover again until its message shows
+  await expect(async () => {
+    await editor(page).locator(".squiggly-error").hover({ force: true, timeout: 2000 });
+    await expect(page.locator(".monaco-hover:visible")).toContainText('relation "no_such_table" does not exist', { timeout: 2000 });
+  }).toPass({ timeout: 15000 });
   await expect(page.locator(".monaco-hover:visible")).toContainText("Fix the statement and run it again");
   // The mark is the spot: the hover leaves out the position Output has
   await expect(page.locator(".monaco-hover:visible")).not.toContainText("(position");

@@ -93,15 +93,14 @@ export const Divider = ({ vertical }: { vertical?: boolean }) => <span className
 /** Vertical line between toolbar groups */
 export const ToolbarSep = () => <Divider vertical />;
 
-/** Color swatch (Data Source color · tab stripe). none = no color (hatched) */
-export function Swatch({ color, selected, title, onClick, size = 18 }: { color: string | null; selected?: boolean; title?: string; onClick?: () => void; size?: number }) {
+/** Color swatch (Data Source color · tab stripe). none = no color (hatched). With onClick it is a radio named by its title: a picker's
+ *  swatches sharing a `name` are one Tab stop, and the arrow keys pick */
+export function Swatch({ color, selected, title, onClick, name, size = 18 }: { color: string | null; selected?: boolean; title?: string; onClick?: () => void; name?: string; size?: number }) {
+  const Tag = onClick ? "label" : "span";
   return (
-    <span
-      className={cx("ui-swatch", !color && "none", selected && "on", onClick && "clickable")}
-      title={title}
-      style={{ width: size, height: size, ...(color ? { background: color } : {}) }}
-      onClick={onClick}
-    />
+    <Tag className={cx("ui-swatch", !color && "none", selected && "on", onClick && "clickable")} title={title} style={{ width: size, height: size, ...(color ? { background: color } : {}) }}>
+      {onClick && <input type="radio" name={name} aria-label={title} checked={!!selected} onChange={onClick} />}
+    </Tag>
   );
 }
 
@@ -186,10 +185,10 @@ export function Checkbox({ checked, onChange, children, disabled, title, indeter
     </label>
   );
 }
-export function Radio({ checked, onChange, children, disabled }: { checked: boolean; onChange: () => void; children?: ReactNode; disabled?: boolean }) {
+export function Radio({ checked, onChange, children, disabled, name }: { checked: boolean; onChange: () => void; children?: ReactNode; disabled?: boolean; name?: string }) {
   return (
     <label className="ui-check">
-      <input type="radio" checked={checked} disabled={disabled} onChange={onChange} />
+      <input type="radio" name={name} checked={checked} disabled={disabled} onChange={onChange} />
       {children}
     </label>
   );

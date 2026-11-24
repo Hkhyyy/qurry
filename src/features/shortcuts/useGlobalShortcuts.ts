@@ -249,8 +249,14 @@ export function useGlobalShortcuts({
         e.stopPropagation();
       }
     };
+    // ⇧⇧ counts only two ⇧ presses with nothing between them: a click (a ⇧-click that extends a selection) starts over (#217)
+    const onPointer = () => (lastShift.current = 0);
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    window.addEventListener("pointerdown", onPointer, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("pointerdown", onPointer, true);
+    };
     // keymapVer: menus opened from keys (⇧⌘F10 …) show the current shortcut labels
   }, [conns, keymapVer]);
 }

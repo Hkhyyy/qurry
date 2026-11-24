@@ -72,7 +72,8 @@ export const newCornerSlot = (file: string): CornerSlot => ({ file, corner: "rig
 
 /** The grid's colors drawn as tints over the image (App.css, :is(.theme-backdrop-host, .theme-preview).has-image): how much of each
  *  color is laid over it. Background itself is the image's backdrop */
-export const TINTS: Record<string, number> = { odd: 0.5, panel: 0.85, panel2: 0.85, sel: 0.7, changed: 0.7, added: 0.7, deleted: 0.7, match: 0.7 };
+// The header (panel) and row numbers (panel2) stay opaque over the image: cells scroll under them (App.css)
+export const TINTS: Record<string, number> = { odd: 0.5, panel: 1, panel2: 1, sel: 0.7, changed: 0.7, added: 0.7, deleted: 0.7, match: 0.7 };
 
 const hex2 = (n: number) => Math.round(n).toString(16).padStart(2, "0");
 /** a mixed toward b by t (0–1), in sRGB as CSS opacity mixes */

@@ -33,15 +33,15 @@ export const Fields: S = {
         <Field label="Port" error="Must be a number">
           <TextInput className="w-port" defaultValue="54x2" />
         </Field>
-        <Field label="Snippet">
+        <Field label="Snippet" group>
           <RadioGroup value={scope} onChange={setScope} options={[{ value: "one", label: 'Only for "[PROD] kr"' }, { value: "all", label: "For all data sources", hint: "(everywhere)" }]} />
         </Field>
-        <Field label="Color">
+        <Field label="Color" group>
           <ColorPicker
             value={color}
             onChange={setColor}
             options={[
-              { name: "none", value: null },
+              { name: "No color", value: null },
               { name: "red", value: "#6e2a2a" },
               { name: "green", value: "#2f5634" },
               { name: "blue", value: "#28406e" },
@@ -52,6 +52,40 @@ export const Fields: S = {
         <Hint>Host keys are checked against ~/.ssh/known_hosts.</Hint>
       </div>
     );
+  },
+};
+
+/** Keyboard focus in a radio group and on a color preset: each group is one Tab stop with the 2px focus ring (--ui-focus). In a radio
+ *  group the arrow keys move and pick; among the colors they only move (the picked one keeps its check), Space or Enter picks. The
+ *  story focuses Blue next to the picked Green */
+export const GroupFocus: S = {
+  name: "RadioGroup · ColorPicker — keyboard focus",
+  render: function Render() {
+    const [format, setFormat] = useState("csv");
+    const [color, setColor] = useState<string | null>("#2f5634");
+    return (
+      <div style={{ width: 480 }}>
+        <Field label="Format" group>
+          <RadioGroup value={format} onChange={setFormat} options={[{ value: "csv", label: <b>CSV</b>, hint: "spreadsheets" }, { value: "json", label: <b>JSON</b>, hint: "array of objects" }, { value: "sql", label: <b>SQL INSERT</b> }]} />
+        </Field>
+        <Field label="Color" group>
+          <ColorPicker
+            custom
+            value={color}
+            onChange={setColor}
+            options={[
+              { name: "No color", value: null },
+              { name: "Red", value: "#6e2a2a" },
+              { name: "Green", value: "#2f5634" },
+              { name: "Blue", value: "#28406e" },
+            ]}
+          />
+        </Field>
+      </div>
+    );
+  },
+  play: async ({ canvasElement }) => {
+    canvasElement.querySelector<HTMLInputElement>('.ui-color-picker input[aria-label="Blue"]')?.focus();
   },
 };
 

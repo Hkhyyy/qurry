@@ -611,7 +611,7 @@ export const quoteIdent = (s: string) => (/^[a-z_][a-z0-9_]*$/.test(s) && !RESER
 
 /** Colors to tell connections apart, like DataGrip (for dark backgrounds) */
 export const COLOR_PRESETS: { name: string; value: string | null }[] = [
-  { name: "None", value: null },
+  { name: "No color", value: null },
   { name: "Red", value: "#6e2a2a" },
   { name: "Orange", value: "#6e4a22" },
   { name: "Yellow", value: "#5f5b24" },

@@ -398,3 +398,46 @@ test("General › Password command: turns Password off, is saved and shown again
   await expect(d.getByRole("textbox", { name: "Reuse for seconds" })).toHaveValue("600");
   await expect(d.getByLabel("Password", { exact: true })).toBeDisabled();
 });
+
+test("the color presets are one Tab stop: the arrow keys move without picking, Space or Enter picks; focus and pick look different (#213)", async ({ page, browserName }) => {
+  await treeNode(page, "[PROD] shop_app").click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^Properties/ }).click();
+  const colors = dialog(page).getByRole("radiogroup", { name: "Color" });
+  const preset = (name: string) => colors.getByRole("radio", { name, exact: true });
+  // A custom color: no preset is picked
+  const hex = dialog(page).getByPlaceholder("#hex");
+  await hex.fill("#123456");
+  await expect(colors.getByRole("radio", { checked: true })).toHaveCount(0);
+  // Back from the hex field past the custom color into the presets (⌥ in WebKit, whose plain Tab skips radios)
+  const gray = preset("Gray");
+  for (let i = 0; i < 4 && !(await gray.evaluate((e) => e === document.activeElement)); i++) await page.keyboard.press(browserName === "webkit" ? "Shift+Alt+Tab" : "Shift+Tab");
+  await expect(gray).toBeFocused();
+  await expect(gray).not.toBeChecked();
+  // The focus ring (2px --ui-focus); the pick is a check, not a ring
+  const look = (name: string) =>
+    colors.locator(".ui-swatch", { has: page.getByRole("radio", { name, exact: true }) }).evaluate((e) => {
+      const probe = document.body.appendChild(document.createElement("i"));
+      probe.style.color = "var(--ui-focus)";
+      const focus = getComputedStyle(probe).color;
+      probe.remove();
+      const cs = getComputedStyle(e);
+      return { ring: cs.outlineStyle === "solid" && cs.outlineWidth === "2px" && cs.outlineColor === focus, check: getComputedStyle(e, "::after").content.includes("✓") };
+    });
+  expect(await look("Gray")).toEqual({ ring: true, check: false });
+  await page.keyboard.press("Space");
+  await expect(gray).toBeChecked();
+  expect(await look("Gray")).toEqual({ ring: true, check: true });
+  // The arrows only move: Violet focused, Gray still picked
+  await page.keyboard.press("ArrowLeft");
+  await expect(preset("Violet")).toBeFocused();
+  await expect(gray).toBeChecked();
+  expect(await look("Violet")).toEqual({ ring: true, check: false });
+  expect(await look("Gray")).toEqual({ ring: false, check: true });
+  // Round from the first to the last; Enter picks without pressing OK
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await expect(preset("No color")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(preset("No color")).toBeChecked();
+  await expect(dialog(page)).toHaveCount(1);
+});

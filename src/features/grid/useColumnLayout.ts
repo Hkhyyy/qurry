@@ -1,7 +1,7 @@
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import { type RefObject, useEffect, useId, useMemo } from "react";
 import type { ColumnLayout, QueryResult } from "../../lib/api";
-import { columnView, NO_LAYOUT, useLayoutOf } from "../../lib/columnLayout";
+import { columnView, hideKeys, NO_LAYOUT, pinKeys, unpinKeys, useLayoutOf } from "../../lib/columnLayout";
 import { widthKeys, type WidthsOf } from "../../lib/columnWidths";
 import { setStatusNote } from "../../lib/statusbar";
 import type { CheckItem, Pin } from "../../ui";
@@ -52,20 +52,20 @@ export function useColumnLayout({ cols, widths, rownumW, scrollRef, wasmReady, l
   const scrollToCol = (c: number) => c >= pinned && colVirt.scrollToIndex(c);
 
   const change = (f: (l: ColumnLayout) => ColumnLayout) => set(f(layout));
-  const without = (list: string[], k: string) => list.filter((x) => x !== k);
-  /** Hide result column i; the last shown column stays */
-  const hide = (i: number) => view.length > 1 && change((l) => ({ ...l, hidden: [...without(l.hidden, keys[i]), keys[i]] }));
-  const show = (key: string) => change((l) => ({ ...l, hidden: without(l.hidden, key) }));
+  const keysOf = (is: number[]) => is.map((i) => keys[i]);
+  /** Hide shown result columns `is`; at least one column stays shown */
+  const hide = (is: number[]) => is.length < view.length && change((l) => hideKeys(l, keysOf(is)));
+  const show = (key: string) => change((l) => ({ ...l, hidden: l.hidden.filter((k) => k !== key) }));
   const showAll = () => change((l) => ({ ...l, hidden: [] }));
-  /** Pin result column i after the pinned ones / unpin it (back to its place in the result) */
-  const pin = (i: number) => change((l) => ({ ...l, pinned: [...without(l.pinned, keys[i]), keys[i]] }));
-  const unpin = (i: number) => change((l) => ({ ...l, pinned: without(l.pinned, keys[i]) }));
+  /** Pin result columns `is` (in display order) after the pinned ones / unpin them (back to their place in the result) */
+  const pin = (is: number[]) => change((l) => pinKeys(l, keysOf(is)));
+  const unpin = (is: number[]) => change((l) => unpinKeys(l, keysOf(is)));
   /** Every column shown, nothing pinned (Reset View) */
   const reset = () => (layout.hidden.length || layout.pinned.length) && set(NO_LAYOUT);
   /** Columns…: every result column in result order, checked when shown */
   const listItems = (): CheckItem[] =>
     cols.map((col, i) => ({ key: keys[i], label: col.name, hint: col.typeName.toLowerCase(), mark: layout.pinned.includes(keys[i]) ? "pinned" : undefined, checked: !layout.hidden.includes(keys[i]) }));
-  const setShown = (key: string, on: boolean) => (on ? show(key) : hide(keys.indexOf(key)));
+  const setShown = (key: string, on: boolean) => (on ? show(key) : hide([keys.indexOf(key)]));
 
   return { view, pinned, pinEdge: pinLeft[pinned], hidden, colVirt, shownCols, padR, total, pinOf, scrollToCol, hide, show, showAll, pin, unpin, reset, listItems, setShown };
 }

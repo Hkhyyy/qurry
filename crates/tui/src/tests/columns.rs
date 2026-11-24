@@ -321,6 +321,36 @@ async fn cursor_column_shows_when_pinned_ones_fill_the_grid() {
     assert!(header(&s).contains("memo") && header(&s).contains("║"), "pinned again on a pinned column:\n{s}");
 }
 
+/// A cell range or marked rows never make P and H act on several columns (#216): the TUI has no column selection (the GUI's
+/// header clicks), so they act on the cursor's column
+#[tokio::test]
+async fn pin_and_hide_act_on_the_cursor_column_with_a_range_or_rows_selected() {
+    let mut h = Harness::new().await;
+    wide_orders(&mut h);
+    // order_no..note selected (⇧ arrows), the cursor on note
+    h.key("Right");
+    h.key("Shift+Right");
+    h.key("Shift+Right");
+    h.key("Shift+P");
+    assert_eq!(grid(&h).view.view, [3, 0, 1, 2, 4, 5], "only note pinned");
+    assert_eq!(h.app.status, "note pinned at the left");
+    h.key("Shift+P");
+    assert_eq!(grid(&h).view.view, [0, 1, 2, 3, 4, 5]);
+    h.key("Shift+H");
+    assert_eq!(grid(&h).view.view, [0, 1, 2, 4, 5], "only note hidden");
+    assert_eq!(Store::new(h.app.state.store.dir()).column_layout(&orders()).hidden, ["note"]);
+
+    // Both rows marked (every column of them selected): H still hides the cursor's column alone
+    h.key("Esc");
+    h.key("m");
+    h.key("Down");
+    h.key("m");
+    let c = grid(&h).col;
+    h.key("Shift+H");
+    assert_eq!(grid(&h).view.view.len(), 4);
+    assert!(!grid(&h).view.view.contains(&c), "the cursor's column hidden");
+}
+
 /// A DBA report's auto-refresh keeps its hidden and pinned columns (it runs again on its own)
 #[tokio::test]
 async fn dba_refresh_keeps_the_column_layout() {

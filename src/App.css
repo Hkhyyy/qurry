@@ -120,7 +120,9 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.icon { background: none; border: none; padding: 0 6px; font-size: 14px; color: var(--muted); }
 button.icon:hover { color: var(--text); background: var(--c-3a3c40); }
 input, select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--c-4e5157); border-radius: 4px; padding: 4px 8px; outline: none; }
-input:focus, select:focus { border-color: var(--accent); }
+input:focus, select:focus { border-color: var(--ui-focus); }
+/* A checkbox, radio or slider has no border to color: reached with the keyboard it shows the shared accent ring (#203) */
+input:is([type="checkbox"], [type="radio"], [type="range"]):focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
 a { color: var(--c-548af7); cursor: pointer; }
 .grow { flex: 1; }
 .muted { color: var(--muted); }
@@ -136,6 +138,7 @@ a { color: var(--c-548af7); cursor: pointer; }
 .resize-v { height: 1px; background: var(--border); }
 .resize-h:hover, .resize-h[data-separator="active"], .resize-h[data-separator="focus"] { background: var(--accent); width: 2px; }
 .resize-v:hover, .resize-v[data-separator="active"], .resize-v[data-separator="focus"] { background: var(--accent); height: 2px; }
+.resize-h[data-separator="focus"], .resize-v[data-separator="focus"] { background: var(--ui-focus); }
 
 .panel { display: flex; flex-direction: column; height: 100%; background: var(--panel); min-width: 0; }
 .panel-header { height: 30px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 8px 0 12px; font-weight: 600; font-size: 12px; border-bottom: 1px solid var(--border); }
@@ -331,7 +334,7 @@ input:disabled, select:disabled { opacity: .45; }
 .dg-filter-field .ui-hl { flex: 1; }
 .dg-filter-field .ui-hl-layer { inset: 0; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; color: var(--text); }
 .dg-filter-field input:focus { outline: none; }
-.dg-filter-field:focus-within { box-shadow: inset 0 -2px 0 var(--accent); }
+.dg-filter-field:focus-within { box-shadow: inset 0 -2px 0 var(--ui-focus); }
 .dg-filter-field .clear { background: none; border: none; padding: 0 4px; color: var(--muted); }
 .grid-find { flex: none; height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 8px; background: var(--panel); border-bottom: 1px solid var(--border); color: var(--muted); }
 .grid-find .ui-search { width: 260px; } .grid-find .ui-input { height: var(--ui-h-sm); font-size: var(--ui-fs-sm); }
@@ -446,7 +449,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .settings-form .ui-field { grid-template-columns: 108px 1fr; }
 /* Settings' pages tree (DataGrip): one focusable tree, the rows are TreeRows */
 .settings-tree { display: flex; flex-direction: column; outline: none; }
-.settings-tree:focus-visible { box-shadow: 0 0 0 2px var(--ui-accent); border-radius: var(--ui-radius-sm); }
+.settings-tree:focus-visible { box-shadow: 0 0 0 2px var(--ui-focus); border-radius: var(--ui-radius-sm); }
 /* Settings › Updates › Open GitHub: a square icon button */
 .settings-github { display: inline-flex; align-items: center; justify-content: center; width: var(--ui-h-sm); padding: 0; }
 .settings-github svg { display: block; flex: none; }
@@ -522,18 +525,15 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-backdrop-host.has-image :is(.editor-area, .result-area, .results-panel) { background: transparent; }
 .theme-backdrop-host.has-image .result-tabs { background: var(--panel); }
 /* The grid over the image, in a console, a table tab and the editor's preview */
+/* What other cells scroll under (the header, row numbers, pinned columns) stays opaque, in every state, as without an image: a tint
+   there lets the cells passing beneath show through. The image shows through the rest */
 :is(.theme-backdrop-host, .theme-preview).has-image .grid-row.odd { background: color-mix(in srgb, var(--c-222326) 50%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .grid-header, :is(.theme-backdrop-host, .theme-preview).has-image .cell.head.pinned { background: color-mix(in srgb, var(--panel) 85%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.rownum { background: color-mix(in srgb, var(--panel-2) 85%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.pinned { background: color-mix(in srgb, var(--bg) 85%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .grid-row.odd .cell.pinned { background: color-mix(in srgb, var(--c-222326) 85%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.sel { background: color-mix(in srgb, var(--sel) 70%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.changed { background: color-mix(in srgb, var(--grid-changed) 70%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .grid-row.added .cell:not(.rownum) { background: color-mix(in srgb, var(--grid-added) 70%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .grid-row.deleted .cell:not(.rownum) { background: color-mix(in srgb, var(--grid-deleted) 70%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.match { background: color-mix(in srgb, var(--grid-match) 70%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.sel.match { background: color-mix(in srgb, var(--c-4a5a3a) 70%, transparent); }
-:is(.theme-backdrop-host, .theme-preview).has-image .cell.head.col-sel, :is(.theme-backdrop-host, .theme-preview).has-image .cell.rownum.row-sel { background: color-mix(in srgb, var(--c-33405a) 85%, transparent); }
+:is(.theme-backdrop-host, .theme-preview).has-image .cell.sel:not(.pinned, .rownum) { background: color-mix(in srgb, var(--sel) 70%, transparent); }
+:is(.theme-backdrop-host, .theme-preview).has-image .cell.changed:not(.pinned) { background: color-mix(in srgb, var(--grid-changed) 70%, transparent); }
+:is(.theme-backdrop-host, .theme-preview).has-image .grid-row.added .cell:not(.rownum, .pinned) { background: color-mix(in srgb, var(--grid-added) 70%, transparent); }
+:is(.theme-backdrop-host, .theme-preview).has-image .grid-row.deleted .cell:not(.rownum, .pinned) { background: color-mix(in srgb, var(--grid-deleted) 70%, transparent); }
+:is(.theme-backdrop-host, .theme-preview).has-image .cell.match:not(.pinned) { background: color-mix(in srgb, var(--grid-match) 70%, transparent); }
+:is(.theme-backdrop-host, .theme-preview).has-image .cell.sel.match:not(.pinned) { background: color-mix(in srgb, var(--c-4a5a3a) 70%, transparent); }
 /* The editor's preview: one picture behind its editor and grid (clipped to them), its parts over it */
 .theme-preview { position: relative; }
 .theme-preview-images { position: absolute; left: 0; right: 0; pointer-events: none; }
@@ -565,14 +565,13 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-bg-opacity { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--ui-sp-3); }
 .theme-bg-range { position: relative; flex: 1; min-width: 60px; display: flex; }
 .theme-bg-range input { width: 100%; margin: 0; accent-color: var(--ui-accent); }
-.theme-bg-range input:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; border-radius: 2px; }
 .theme-bg-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--ui-warn); pointer-events: none; }
 .theme-bg-pct { flex: none; width: 34px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ui-text-muted); }
 .theme-bg-pos { display: grid; grid-auto-rows: 12px; gap: 2px; padding: 3px; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-sm); }
 .theme-bg-pos button { width: 16px; height: 12px; min-width: 0; padding: 0; border: 1px solid var(--ui-border-strong); border-radius: 2px; background: transparent; }
 .theme-bg-pos button:hover:not(:disabled) { background: var(--ui-hover); }
 .theme-bg-pos button[aria-checked="true"] { background: var(--ui-accent); border-color: var(--ui-accent); }
-.theme-bg-pos button:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
+.theme-bg-pos button:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 1px; }
 .theme-bg-bar { display: flex; flex-direction: column; gap: var(--ui-sp-2); padding: var(--ui-sp-3); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); }
 .theme-bg-slot { border-top: 1px solid var(--ui-border); padding-top: var(--ui-sp-2); }
 .theme-bg-slot-head { display: flex; align-items: center; gap: var(--ui-sp-3); min-height: 28px; font-size: var(--ui-fs-sm); white-space: nowrap; }
