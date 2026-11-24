@@ -532,15 +532,20 @@ export function DetailRow({ children, value, tone, note, lead }: { children: Rea
 }
 
 // ───────── Menu item ─────────
-/** Menu row: name ……… shortcut (▸ for submenus) */
+/** Menu row: name ……… shortcut (▸ for submenus). Focusable for the menu's arrow keys; the pointer focuses it too, so the keys go on from there */
 export function MenuItem({ label, shortcut, danger, disabled, title, hasSubmenu, children, onClick, onMouseEnter }: { label: ReactNode; shortcut?: string; danger?: boolean; disabled?: boolean; title?: string; hasSubmenu?: boolean; children?: ReactNode; onClick?: () => void; onMouseEnter?: () => void }) {
   return (
     <div
       className={cx("ui-menu-item", danger && "danger", disabled && "disabled")}
       role="menuitem"
       title={title}
+      tabIndex={-1}
       aria-disabled={disabled}
-      onMouseEnter={onMouseEnter}
+      aria-haspopup={hasSubmenu ? "menu" : undefined}
+      onMouseEnter={(e) => {
+        if (!disabled) e.currentTarget.focus({ preventScroll: true });
+        onMouseEnter?.();
+      }}
       onClick={() => !disabled && onClick?.()}
     >
       <span className="ui-menu-label">{label}</span>

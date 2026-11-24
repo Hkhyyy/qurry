@@ -256,6 +256,11 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-menu-label { flex: 1; }
 .ui-menu-item:hover { color: var(--ui-text-on-accent); background: var(--ui-accent); }
 .ui-menu-item:hover .ui-menu-key, .ui-menu-item:hover .ui-menu-arrow { color: var(--ui-text-on-accent); }
+/* The keys' focus (#215): the shared ring (#203); the pointer's focus shows only as the hover */
+.ui-menu-item:focus { outline: none; }
+.ui-menu-item:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
+/* The item whose submenu is open stays marked while the focus is in the submenu */
+.ui-menu-item:where(:has(> .ui-menu.sub)) { background: var(--ui-hover); }
 .ui-menu-item.danger { color: var(--ui-danger); }
 .ui-menu-item.danger:hover { color: var(--ui-text-on-accent); background: var(--ui-danger); }
 .ui-menu-item.disabled { opacity: 0.4; }

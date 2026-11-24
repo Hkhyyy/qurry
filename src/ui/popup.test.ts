@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampDrag, listKey, matchOptions, placePopup, topOf } from "./popup";
+import { clampDrag, listKey, matchOptions, menuKey, placePopup, topOf } from "./popup";
 
 const TYPES = ["integer", "bigint", "smallint", "numeric(10,2)", "text", "timestamp", "timestamptz", "time", "interval", "text[]"];
 
@@ -65,4 +65,36 @@ describe("topOf: the window Esc closes", () => {
     expect(topOf([{ id: "confirm", z: 400 }, { id: "update", z: 100 }], (w) => w.z)?.id).toBe("confirm"));
   it("among equals, the last opened", () => expect(topOf([{ id: "a", z: 100 }, { id: "b", z: 100 }], (w) => w.z)?.id).toBe("b"));
   it("none open: none", () => expect(topOf([], () => 0)).toBeUndefined());
+});
+
+describe("menuKey: the keyboard of a menu (#215)", () => {
+  // The color swatch row is a stop without a name
+  const STOPS = ["New Query Console", "Refresh", "　Show System Schemas", "✓ Read-only", "Rename…", null];
+  it("↓ and ↑ go round", () => {
+    expect(menuKey("ArrowDown", 0, STOPS)).toBe(1);
+    expect(menuKey("ArrowDown", 5, STOPS)).toBe(0);
+    expect(menuKey("ArrowUp", 0, STOPS)).toBe(5);
+  });
+  it("opened by the pointer (nothing focused): ↓ the first, ↑ the last", () => {
+    expect(menuKey("ArrowDown", -1, STOPS)).toBe(0);
+    expect(menuKey("ArrowUp", -1, STOPS)).toBe(5);
+  });
+  it("Home and End", () => {
+    expect(menuKey("Home", 3, STOPS)).toBe(0);
+    expect(menuKey("End", 1, STOPS)).toBe(5);
+  });
+  it("a letter jumps to the next item starting with it, round, ignoring case", () => {
+    expect(menuKey("r", 0, STOPS)).toBe(1);
+    expect(menuKey("R", 1, STOPS)).toBe(3);
+    expect(menuKey("r", 4, STOPS)).toBe(1);
+    expect(menuKey("n", -1, STOPS)).toBe(0);
+  });
+  it("a ✓ or blank before the name doesn't count", () => expect(menuKey("s", 0, STOPS)).toBe(2));
+  it("no match, other keys, no stops: no move", () => {
+    expect(menuKey("z", 0, STOPS)).toBeNull();
+    expect(menuKey(" ", 0, STOPS)).toBeNull();
+    expect(menuKey("Enter", 0, STOPS)).toBeNull();
+    expect(menuKey("ArrowRight", 0, STOPS)).toBeNull();
+    expect(menuKey("ArrowDown", -1, [])).toBeNull();
+  });
 });

@@ -5,6 +5,7 @@ import {
   Badge,
   Button,
   Checkbox,
+  ColorPicker,
   ComboBox,
   ConfirmHost,
   confirm,
@@ -150,6 +151,50 @@ export const MenuStory: S = {
       />
     </div>
   ),
+};
+
+/** A menu on the keys (#215): opened from the keyboard its first item has the focus; ↑↓ go round past separators and disabled items,
+ *  Home End, a letter jumps, ↩ or Space runs, → opens a submenu and ← closes it, ⎋ closes and gives the focus back. The swatch row
+ *  is one stop (its ←→ move between colors). The story opens it with ↩ on the button and goes ↓ → into Diagrams */
+export const MenuKeys: S = {
+  name: "Menu — keyboard focus",
+  render: function Render() {
+    const [open, setOpen] = useState(false);
+    const [color, setColor] = useState<string | null>("#28406e");
+    return (
+      <div style={{ height: 320 }}>
+        <Button onClick={() => setOpen(true)}>Open menu</Button>
+        {open && (
+          <Menu
+            at={{ x: 24, y: 56 }}
+            onClose={() => setOpen(false)}
+            items={[
+              { label: "New Query Console", shortcut: "⇧⌘L", action: () => {} },
+              { label: "Diagrams", submenu: [{ label: "Show Diagram (ERD)", action: () => {} }, { label: "Show Visualization", action: () => {} }] },
+              { separator: true },
+              { label: "Disconnect", disabled: true, title: "Not connected", action: () => {} },
+              { label: "Remove Data Source", danger: true, action: () => {} },
+            ]}
+            footer={
+              <>
+                <Text tone="muted" size="sm">
+                  Color
+                </Text>
+                <ColorPicker value={color} onChange={setColor} options={[{ name: "No color", value: null }, { name: "Red", value: "#6e2a2a" }, { name: "Green", value: "#2f5634" }, { name: "Blue", value: "#28406e" }]} />
+              </>
+            }
+          />
+        )}
+      </div>
+    );
+  },
+  play: async ({ canvasElement }) => {
+    within(canvasElement).getByRole("button", { name: "Open menu" }).focus();
+    await userEvent.keyboard("{Enter}");
+    // The menu takes its keys on the next tick
+    await new Promise((r) => setTimeout(r, 50));
+    await userEvent.keyboard("{ArrowDown}{ArrowRight}");
+  },
 };
 
 /** Like Search Everywhere: header (tabs · search field) + list + key hints below. Drag the title or header (not its controls) to move it */
