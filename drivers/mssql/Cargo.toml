@@ -9,6 +9,7 @@ qurry-driver = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["compat"] }
-tiberius = { version = "0.13", default-features = false, features = ["tds73", "rustls", "chrono"] }
-chrono = "0.4"
+tiberius = { version = "0.13", default-features = false, features = ["tds73", "rustls", "time"] }
+# large-dates: a datetimeoffset at +14:00 on 9999-12-31 is past 9999 at its own offset
+time = { version = "0.3", features = ["large-dates"] }
 futures-util = "0.3"

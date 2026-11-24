@@ -348,6 +348,34 @@ mod tests {
         ], "q_parent", "q_child", true).await;
     }
 
+    /// Dates and times as they have always been shown (#199): fractions per type and scale, datetime's 1/300 s ticks,
+    /// datetimeoffset at its own offset
+    #[tokio::test]
+    #[ignore]
+    async fn mssql_driver_dates() {
+        let Some((cfg, pw)) = server_cfg("mssql", "QURRY_TEST_MSSQL") else { return };
+        if driver_path("mssql").is_none() {
+            return;
+        }
+        let c = connect(&cfg, Some(&pw), None).await.unwrap();
+        let r = c
+            .query(
+                "SELECT CAST('2024-01-02' AS date), CAST('0001-01-01' AS date), CAST('13:14:15.5' AS time(3)), CAST('13:14:15.1234567' AS time), \
+                 CAST('2024-01-02 03:04:05.1234567' AS datetime2), CAST('2024-01-02 03:04:05' AS datetime2(0)), CAST('2024-01-02 23:59:59.997' AS datetime), \
+                 CAST('2024-01-02 12:34' AS smalldatetime), CAST('2024-01-02 12:04:05.5 +09:00' AS datetimeoffset(1)), \
+                 CAST('2024-01-01 21:34:05 -05:30' AS datetimeoffset(0)), CAST('9999-12-31 23:59:59.9999999 +00:00' AS datetimeoffset)",
+                10,
+            )
+            .await
+            .unwrap();
+        let want = [
+            "2024-01-02", "0001-01-01", "13:14:15.500", "13:14:15.123456700", "2024-01-02 03:04:05.123456700", "2024-01-02 03:04:05",
+            "2024-01-02 23:59:59.996666666", "2024-01-02 12:34:00", "2024-01-02 12:04:05.500 +09:00", "2024-01-01 21:34:05 -05:30",
+            "9999-12-31 23:59:59.999999900 +00:00",
+        ];
+        assert_eq!(r.rows[0], want.map(|v| json!(v)));
+    }
+
     /// A statement longer than tiberius 0.13's 30 s default command timeout still returns, and the connection stays usable
     #[tokio::test]
     #[ignore]

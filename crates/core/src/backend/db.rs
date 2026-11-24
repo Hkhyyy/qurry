@@ -467,7 +467,6 @@ pub(crate) async fn pg_values(conn: &mut sqlx::PgConnection, columns: &[ColumnIn
 }
 
 pub(crate) fn pg_value(row: &PgRow, i: usize, zone: &Zone) -> Value {
-    use chrono::NaiveTime;
     let raw = match row.try_get_raw(i) {
         Ok(r) => r,
         Err(_) => return Value::Null,
@@ -504,7 +503,7 @@ pub(crate) fn pg_value(row: &PgRow, i: usize, zone: &Zone) -> Value {
             let elem = ty.trim_end_matches("[]");
             raw.as_bytes().ok().and_then(|b| pg_array(b, &|e| pg_datetime(elem, e, zone))).map(Value::from)
         }
-        "TIME" => get!(NaiveTime).map(|t| Value::from(t.to_string())),
+        "TIME" => get!(sqlx::types::time::Time).map(|t| Value::from(crate::timefmt::time(t))),
         "BYTEA" => get!(Vec<u8>).map(|b| {
             let hex: String = b.iter().take(64).map(|x| format!("{x:02X}")).collect();
             Value::from(format!("0x{hex}{}", if b.len() > 64 { "…" } else { "" }))
@@ -520,20 +519,20 @@ pub(crate) fn pg_value(row: &PgRow, i: usize, zone: &Zone) -> Value {
     })
 }
 
-/// PostgreSQL timestamp / timestamptz / date (binary) → text. Decoded here, not with sqlx's chrono types, which panic on
-/// infinity (i64::MAX / i64::MIN microseconds, i32::MAX / i32::MIN days) and past chrono's range. Shows infinity / -infinity
-/// as psql does; None for anything chrono can't hold. timestamptz shows in the session's time zone (`zone`) with its offset, as psql
+/// PostgreSQL timestamp / timestamptz / date (binary) → text. Decoded here, not with sqlx's date types, which panicked on
+/// infinity (i64::MAX / i64::MIN microseconds, i32::MAX / i32::MIN days) and past their range. Shows infinity / -infinity
+/// as psql does; None outside the years shown (crate::timefmt). timestamptz shows in the session's time zone (`zone`) with its offset, as psql
 fn pg_datetime(ty: &str, b: &[u8], zone: &Zone) -> Option<String> {
-    use chrono::{NaiveDate, NaiveTime, TimeDelta};
-    let epoch = NaiveDate::from_ymd_opt(2000, 1, 1)?;
+    use time::{Date, Duration, Month, Time};
+    let epoch = Date::from_calendar_date(2000, Month::January, 1).ok()?;
     match ty {
         "TIMESTAMP" | "TIMESTAMPTZ" => match i64::from_be_bytes(b.try_into().ok()?) {
             i64::MAX => Some("infinity".into()),
             i64::MIN => Some("-infinity".into()),
             us => {
-                let t = epoch.and_time(NaiveTime::MIN).checked_add_signed(TimeDelta::microseconds(us))?;
+                let t = epoch.with_time(Time::MIDNIGHT).checked_add(Duration::microseconds(us)).filter(|t| crate::timefmt::in_range(t.date()))?;
                 match ty {
-                    "TIMESTAMP" => Some(t.format("%Y-%m-%d %H:%M:%S%.f").to_string()),
+                    "TIMESTAMP" => Some(crate::timefmt::datetime(t)),
                     _ => zone.format(t),
                 }
             }
@@ -541,7 +540,7 @@ fn pg_datetime(ty: &str, b: &[u8], zone: &Zone) -> Option<String> {
         "DATE" => match i32::from_be_bytes(b.try_into().ok()?) {
             i32::MAX => Some("infinity".into()),
             i32::MIN => Some("-infinity".into()),
-            days => Some(epoch.checked_add_signed(TimeDelta::try_days(days.into())?)?.to_string()),
+            days => epoch.checked_add(Duration::days(days.into())).filter(|d| crate::timefmt::in_range(*d)).map(crate::timefmt::date),
         },
         _ => None,
     }
@@ -865,7 +864,7 @@ mod tests {
         assert!(format!("{}", err.unwrap_err()).contains("read-only"));
     }
 
-    /// infinity sentinels show as text; values past chrono's range give None (shown as <TYPE>), never a panic (#84)
+    /// infinity sentinels show as text; values past the years shown give None (shown as <TYPE>), never a panic (#84)
     #[test]
     fn pg_datetime_infinity_and_range() {
         let ts = |v: i64| v.to_be_bytes().to_vec();
@@ -902,18 +901,90 @@ mod tests {
     #[test]
     fn pg_timestamptz_in_the_session_zone() {
         // 2026-11-09 04:00:00.25 UTC, in microseconds from 2000-01-01
-        let us = (chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap().and_hms_opt(4, 0, 0).unwrap() - chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap())
-            .num_microseconds()
-            .unwrap()
-            + 250_000;
+        let at = |y, m: u8, d, h, mi, s, us| time::Date::from_calendar_date(y, m.try_into().unwrap(), d).unwrap().with_hms_micro(h, mi, s, us).unwrap();
+        let since = |t: time::PrimitiveDateTime| (t - at(2000, 1, 1, 0, 0, 0, 0)).whole_microseconds() as i64;
+        let us = since(at(2026, 11, 9, 4, 0, 0, 0)) + 250_000;
         let b = us.to_be_bytes();
         assert_eq!(pg_datetime("TIMESTAMPTZ", &b, &Zone::UTC).as_deref(), Some("2026-11-09 04:00:00.250 +00:00"));
         assert_eq!(pg_datetime("TIMESTAMPTZ", &b, &Zone::Fixed(9 * 3600)).as_deref(), Some("2026-11-09 13:00:00.250 +09:00"));
         assert_eq!(pg_datetime("TIMESTAMP", &b, &Zone::Fixed(9 * 3600)).as_deref(), Some("2026-11-09 04:00:00.250"), "timestamp has no zone");
-        // Past chrono's range only once the offset is added: None (shown as <TIMESTAMPTZ>), never a panic
-        let last = (chrono::NaiveDateTime::MAX - chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap()).num_microseconds().unwrap();
+        // Past the years shown only once the offset is added: None (shown as <TIMESTAMPTZ>), never a panic
+        let last = since(at(262_142, 12, 31, 23, 59, 59, 999_999));
         assert_eq!(pg_datetime("TIMESTAMPTZ", &last.to_be_bytes(), &Zone::Fixed(3600)), None);
         assert!(pg_datetime("TIMESTAMPTZ", &last.to_be_bytes(), &Zone::Fixed(-3600)).is_some());
+    }
+
+    /// The text of timestamp, timestamptz and date as it has always been shown (#199): fractions to the last 3, 6 or 9 digits,
+    /// years before 1 AD as astronomical years with a sign (1 BC is 0000), years past 9999 with a +, None outside -262143-01-01 ..= +262142-12-31
+    #[test]
+    fn pg_datetime_text_pinned() {
+        // Days from 2000-01-01 to y-m-d (proleptic Gregorian, astronomical years)
+        let days = |y: i64, m: i64, d: i64| {
+            let y = if m <= 2 { y - 1 } else { y };
+            let era = y.div_euclid(400);
+            let yoe = y - era * 400;
+            let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+            era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468 - 10_957
+        };
+        let us = |y, m, d, h: i64, mi: i64, s: i64, f: i64| ((days(y, m, d) * 24 + h) * 60 + mi) * 60_000_000 + s * 1_000_000 + f;
+        let ts = |ty: &str, v: i64, z: &Zone| pg_datetime(ty, &v.to_be_bytes(), z);
+        let date = |v: i64| pg_datetime("DATE", &(v as i32).to_be_bytes(), &Zone::UTC);
+        let utc = Zone::UTC;
+        for (v, want) in [
+            (us(2026, 11, 9, 4, 0, 0, 0), Some("2026-11-09 04:00:00")),
+            (us(2026, 11, 9, 4, 0, 0, 1), Some("2026-11-09 04:00:00.000001")),
+            (us(2026, 11, 9, 4, 0, 0, 10), Some("2026-11-09 04:00:00.000010")),
+            (us(2026, 11, 9, 4, 0, 0, 1000), Some("2026-11-09 04:00:00.001")),
+            (us(2026, 11, 9, 4, 0, 0, 120_000), Some("2026-11-09 04:00:00.120")),
+            (us(2026, 11, 9, 4, 0, 0, 123_456), Some("2026-11-09 04:00:00.123456")),
+            (-1, Some("1999-12-31 23:59:59.999999")),
+            (us(1900, 2, 28, 23, 59, 59, 0), Some("1900-02-28 23:59:59")),
+            (us(1, 1, 1, 0, 0, 0, 0), Some("0001-01-01 00:00:00")),
+            (us(0, 1, 1, 0, 0, 0, 0), Some("0000-01-01 00:00:00")),
+            (us(-43, 3, 15, 12, 0, 0, 1), Some("-0043-03-15 12:00:00.000001")),
+            (us(-4712, 11, 24, 0, 0, 0, 0), Some("-4712-11-24 00:00:00")),
+            (us(9999, 12, 31, 23, 59, 59, 999_999), Some("9999-12-31 23:59:59.999999")),
+            (us(10000, 1, 1, 0, 0, 0, 0), Some("+10000-01-01 00:00:00")),
+            (us(262_142, 12, 31, 23, 59, 59, 999_999), Some("+262142-12-31 23:59:59.999999")),
+            (us(262_143, 1, 1, 0, 0, 0, 0), None),
+            (us(294_276, 12, 31, 23, 59, 59, 999_999), None),
+            (us(-262_143, 1, 1, 0, 0, 0, 0), Some("-262143-01-01 00:00:00")),
+            (us(-262_143, 1, 1, 0, 0, 0, 0) - 1, None),
+        ] {
+            assert_eq!(ts("TIMESTAMP", v, &utc).as_deref(), want, "{v}");
+        }
+        for (v, want) in [
+            (0, Some("2000-01-01")),
+            (days(2024, 2, 29), Some("2024-02-29")),
+            (days(1, 1, 1), Some("0001-01-01")),
+            (days(0, 1, 1), Some("0000-01-01")),
+            (days(-43, 3, 15), Some("-0043-03-15")),
+            (days(-4712, 11, 24), Some("-4712-11-24")),
+            (days(10000, 1, 1), Some("+10000-01-01")),
+            (days(262_142, 12, 31), Some("+262142-12-31")),
+            (days(262_143, 1, 1), None),
+            (days(5_874_897, 12, 31), None),
+            (days(-262_143, 1, 1), Some("-262143-01-01")),
+            (days(-262_143, 1, 1) - 1, None),
+        ] {
+            assert_eq!(date(v).as_deref(), want, "{v}");
+        }
+        let at = us(2026, 11, 9, 4, 0, 0, 0);
+        for (v, z, want) in [
+            (at + 1500, Zone::UTC, Some("2026-11-09 04:00:00.001500 +00:00")),
+            (at, Zone::Fixed(9 * 3600), Some("2026-11-09 13:00:00 +09:00")),
+            (at + 123_456, Zone::Fixed(9 * 3600), Some("2026-11-09 13:00:00.123456 +09:00")),
+            (at, Zone::Fixed(-(3 * 3600 + 30 * 60)), Some("2026-11-09 00:30:00 -03:30")),
+            (at, Zone::Fixed(9 * 3600 + 30), Some("2026-11-09 13:00:30 +09:00:30")),
+            (at, Zone::Fixed(-(8 * 3600 + 27 * 60 + 52)), Some("2026-11-08 19:32:08 -08:27:52")),
+            (us(-43, 3, 15, 12, 0, 0, 0), Zone::Fixed(9 * 3600), Some("-0043-03-15 21:00:00 +09:00")),
+            (us(0, 12, 31, 20, 0, 0, 0), Zone::Fixed(9 * 3600), Some("0001-01-01 05:00:00 +09:00")),
+            (us(9999, 12, 31, 20, 0, 0, 0), Zone::Fixed(9 * 3600), Some("+10000-01-01 05:00:00 +09:00")),
+            (us(-262_143, 1, 1, 0, 30, 0, 0), Zone::Fixed(3600), Some("-262143-01-01 01:30:00 +01:00")),
+            (us(-262_143, 1, 1, 0, 30, 0, 0), Zone::Fixed(-3600), None),
+        ] {
+            assert_eq!(ts("TIMESTAMPTZ", v, &z).as_deref(), want, "{v} {z:?}");
+        }
     }
 
     /// The session's zone on each path: a data source without the Time zone option (sqlx starts every session in UTC), Asia/Seoul
@@ -951,6 +1022,54 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert_eq!(csv.lines().nth(1), Some(format!("{summer},{winter},\"{{\"\"{summer}\"\",NULL,\"\"{winter}\"\",infinity,-infinity}}\",infinity").as_str()), "{csv}");
     }
+
+    /// Dates and times as they have always been shown (#199), the same in the grid, MCP's read-only path and CSV export: fractions,
+    /// BC years, years past 9999, the session's zone (Seoul's local mean time before 1908), values past what can be shown, time
+    #[tokio::test]
+    #[ignore]
+    async fn pg_date_time_text_pinned() {
+        let Some(s) = crate::testenv::pg() else { return };
+        let mut cfg = s.cfg.clone();
+        cfg.options.time_zone = Some("Asia/Seoul".into());
+        let pool = connect(&cfg, s.password.as_deref()).await.expect("connect");
+        let q = "select '2026-11-09 04:00:00.123456'::timestamp a, '2026-11-09 04:00:00.5+00'::timestamptz b, \
+                 '0044-03-15 12:00:00.000001 BC'::timestamp c, '0044-03-15 BC'::date d, '10000-01-01 00:00:00'::timestamp e, \
+                 '1900-01-01 00:00:00+00'::timestamptz f, '4713-11-24 BC'::date g, '0044-03-15 12:00:00+00 BC'::timestamptz h, \
+                 '294276-12-31 23:59:59.999999'::timestamp i, '5874897-12-31'::date j, '13:14:15'::time k, '13:14:15.5'::time l, \
+                 '00:00:00.000001'::time m, '23:59:59.999999'::time n, '24:00:00'::time o, \
+                 array['2026-11-09 04:00:00.25', '0044-03-15 BC']::timestamp[] p, '2026-11-09 04:00:00+00'::timestamptz - interval '1 microsecond' r";
+        let want: Vec<Value> = PG_PINNED.iter().map(|v| Value::from(*v)).collect();
+        assert_eq!(pool.run_query(q, 10).await.unwrap().rows[0], want);
+        let Pool::Pg(p) = &pool else { unreachable!() };
+        assert_eq!(crate::backend::Backend::run_read_only(p, q, 10).await.unwrap().rows[0], want, "MCP's read-only path");
+        let path = std::env::temp_dir().join(format!("qurry_dt_{}.csv", std::process::id()));
+        pool.export_csv(q, &path).await.unwrap();
+        let csv = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let quoted = |v: &str| if v.contains([',', '"']) { format!("\"{}\"", v.replace('"', "\"\"")) } else { v.to_string() };
+        assert_eq!(csv.lines().nth(1), Some(PG_PINNED.map(quoted).join(",").as_str()), "{csv}");
+    }
+
+    /// Before chrono was replaced (#199). '24:00:00'::time shows as 00:00:00 (the time of day wraps), as it always has
+    const PG_PINNED: [&str; 17] = [
+        "2026-11-09 04:00:00.123456",
+        "2026-11-09 13:00:00.500 +09:00",
+        "-0043-03-15 12:00:00.000001",
+        "-0043-03-15",
+        "+10000-01-01 00:00:00",
+        "1900-01-01 08:27:52 +08:27:52",
+        "-4712-11-24",
+        "-0043-03-15 20:27:52 +08:27:52",
+        "<TIMESTAMP>",
+        "<DATE>",
+        "13:14:15",
+        "13:14:15.500",
+        "00:00:00.000001",
+        "23:59:59.999999",
+        "00:00:00",
+        "{\"2026-11-09 04:00:00.250\",\"-0043-03-15 00:00:00\"}",
+        "2026-11-09 12:59:59.999999 +09:00",
+    ];
 
     /// `SET TIME ZONE` in a console applies to that console's later results; SET LOCAL ends with its transaction, and a value read
     /// in the statement that changes the zone already shows in the new one (#133)

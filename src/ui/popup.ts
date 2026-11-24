@@ -24,6 +24,28 @@ export function listKey(key: string, active: number, count: number): number | "p
   return null;
 }
 
+/**
+ * A key in a menu (DataGrip, macOS): the stop to focus next, or null when the key doesn't move. `stops` are the labels of the
+ * items the keys reach (disabled ones and separators left out; null for a stop without a name, the color swatch row);
+ * `cur` is the focused one, -1 for none (a menu opened by the pointer). ↑↓ go round, Home End, a letter jumps to the next
+ * item whose name starts with it (a ✓ or blank before the name doesn't count)
+ */
+export function menuKey(key: string, cur: number, stops: (string | null)[]): number | null {
+  const n = stops.length;
+  if (!n) return null;
+  if (key === "ArrowDown") return cur < 0 ? 0 : (cur + 1) % n;
+  if (key === "ArrowUp") return cur < 0 ? n - 1 : (cur - 1 + n) % n;
+  if (key === "Home") return 0;
+  if (key === "End") return n - 1;
+  if (key.length !== 1 || !/\S/.test(key)) return null;
+  const k = key.toLowerCase();
+  for (let i = 1; i <= n; i++) {
+    const j = (cur + i + n) % n;
+    if (stops[j]?.replace(/^[^\p{L}\p{N}]+/u, "").toLowerCase().startsWith(k)) return j;
+  }
+  return null;
+}
+
 const GAP = 2;
 const MARGIN = 8;
 

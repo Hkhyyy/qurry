@@ -843,7 +843,6 @@ checksum = "f431b67cba6122a1f7d26b7adafc71bbdf07026095fe811f5efc025d8748e1d8"
 dependencies = [
  "atoi_simd",
  "byteorder",
- "chrono",
  "codepage",
  "encoding_rs",
  "fast-float2",
@@ -1155,9 +1154,9 @@ dependencies = [
 
 [[package]]
 name = "cookie"
-version = "0.18.2"
+version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a373e3602691c3cdea496d2f0ee5935151e6168fe87739483c463db1b2f2f87"
+checksum = "d55f2d6c30eeec7d5c6f98bd4395d4abb1895629eab97ee6522d340623615f8a"
 dependencies = [
  "percent-encoding",
  "time",
@@ -4994,7 +4993,6 @@ dependencies = [
  "aes-gcm",
  "base64 0.23.1",
  "calamine",
- "chrono",
  "csv",
  "dirs",
  "futures",
@@ -5018,6 +5016,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tracing",
  "tz-rs",
@@ -5086,11 +5085,11 @@ dependencies = [
 name = "qurry-driver-mssql"
 version = "0.3.1"
 dependencies = [
- "chrono",
  "futures-util",
  "qurry-driver",
  "serde_json",
  "tiberius",
+ "time",
  "tokio",
  "tokio-util",
 ]
@@ -6462,7 +6461,6 @@ checksum = "ee6798b1838b6a0f69c007c133b8df5866302197e404e8b6ee8ed3e3a5e68dc6"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "chrono",
  "crc",
  "crossbeam-queue",
  "either",
@@ -6484,6 +6482,7 @@ dependencies = [
  "sha2 0.10.9",
  "smallvec",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -6541,7 +6540,6 @@ dependencies = [
  "bitflags 2.13.2",
  "byteorder",
  "bytes",
- "chrono",
  "crc",
  "digest 0.10.7",
  "dotenvy",
@@ -6569,6 +6567,7 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.21",
+ "time",
  "tracing",
  "uuid",
  "whoami",
@@ -6584,7 +6583,6 @@ dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.2",
  "byteorder",
- "chrono",
  "crc",
  "dotenvy",
  "etcetera",
@@ -6608,6 +6606,7 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.21",
+ "time",
  "tracing",
  "uuid",
  "whoami",
@@ -6620,7 +6619,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2d12fe70b2c1b4401038055f90f151b78208de1f9f89a7dbfd41587a10c3eea"
 dependencies = [
  "atoi 2.0.0",
- "chrono",
  "flume",
  "futures-channel",
  "futures-core",
@@ -6634,6 +6632,7 @@ dependencies = [
  "serde_urlencoded",
  "sqlx-core",
  "thiserror 2.0.21",
+ "time",
  "tracing",
  "url",
  "uuid",
@@ -7405,7 +7404,6 @@ dependencies = [
  "asynchronous-codec",
  "byteorder",
  "bytes",
- "chrono",
  "connection-string",
  "encoding_rs",
  "enumflags2",
@@ -7422,6 +7420,7 @@ dependencies = [
  "secrecy",
  "thiserror 2.0.21",
  "tiberius-macros",
+ "time",
  "tokio-rustls",
  "tokio-util",
  "tracing",

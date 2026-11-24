@@ -33,6 +33,19 @@ PostgreSQL, MySQL / MariaDB and Redis (Standalone, Sentinel, Cluster) are built 
 
 All three share the same data sources and passwords, so a connection created in one shows up in the others.
 
+## Benchmarks
+
+Headless, on an M4 Pro against PostgreSQL 16 in Docker, median of 5 runs ([method, all numbers and how to repeat them](BENCHMARKS.md)):
+
+| | qurry-tui | qurry-mcp |
+|---|---|---|
+| Launch | 15 ms to the first frame | 5 ms to the `initialize` reply |
+| Idle memory, one PostgreSQL source | 4.6 MB | 3.0 MB |
+| 1,000-row query | 48 ms end to end, on screen | 10 ms per `query` call |
+| 1,000,000-row table | first 500 rows in 35 ms; 100,000 rows in the grid in 1.6 s, 71 MB at peak | — |
+
+The GUI and the comparison with DataGrip and DBeaver are still to be measured (`scripts/bench.sh --gui`, `--compare`).
+
 ## Trust
 
 - **Passwords** are kept in `secrets.json` in the config folder, encrypted with AES-256-GCM. The key is in `secret.key` in the same folder, or in the OS keychain if you move it there in **Settings › Passwords** (TUI: `⌃k` › Password Key…).

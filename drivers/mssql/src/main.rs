@@ -20,8 +20,41 @@ fn q(s: &str) -> String {
     format!("[{}]", s.replace(']', "]]"))
 }
 
+/// Dates and times as text, the same as before chrono was replaced with time (#199): years outside 0..=9999 with a sign, a
+/// fraction to its last 3, 6 or 9 digits, the offset as +09:00
+fn date(d: time::Date) -> String {
+    let y = d.year();
+    let year = if (0..=9999).contains(&y) { format!("{y:04}") } else { format!("{y:+05}") };
+    format!("{year}-{:02}-{:02}", u8::from(d.month()), d.day())
+}
+
+fn time_of_day(t: time::Time) -> String {
+    let n = t.nanosecond();
+    let frac = if n == 0 {
+        String::new()
+    } else if n.is_multiple_of(1_000_000) {
+        format!(".{:03}", n / 1_000_000)
+    } else if n.is_multiple_of(1_000) {
+        format!(".{:06}", n / 1_000)
+    } else {
+        format!(".{n:09}")
+    };
+    format!("{:02}:{:02}:{:02}{frac}", t.hour(), t.minute(), t.second())
+}
+
+fn datetime(t: time::PrimitiveDateTime) -> String {
+    format!("{} {}", date(t.date()), time_of_day(t.time()))
+}
+
+/// At its own offset; SQL Server's offsets are whole minutes
+fn offset_datetime(t: time::OffsetDateTime) -> String {
+    let m = t.offset().whole_minutes();
+    let sign = if m < 0 { '-' } else { '+' };
+    format!("{} {sign}{:02}:{:02}", datetime(time::PrimitiveDateTime::new(t.date(), t.time())), m.abs() / 60, m.abs() % 60)
+}
+
 fn value(d: &ColumnData<'static>) -> Value {
-    use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+    use time::{Date, OffsetDateTime, PrimitiveDateTime, Time};
     match d {
         ColumnData::U8(v) => v.map(|x| json!(x)).unwrap_or(Value::Null),
         ColumnData::I16(v) => v.map(|x| json!(x)).unwrap_or(Value::Null),
@@ -35,10 +68,10 @@ fn value(d: &ColumnData<'static>) -> Value {
         ColumnData::Numeric(v) => v.map(|n| Value::String(n.to_string())).unwrap_or(Value::Null),
         ColumnData::Binary(v) => v.as_ref().map(|b| Value::String(format!("0x{}", b.iter().map(|x| format!("{x:02X}")).collect::<String>()))).unwrap_or(Value::Null),
         ColumnData::Xml(v) => v.as_ref().map(|x| Value::String(x.to_string())).unwrap_or(Value::Null),
-        ColumnData::DateTime(_) | ColumnData::SmallDateTime(_) | ColumnData::DateTime2(_) => NaiveDateTime::from_sql(d).ok().flatten().map(|t| Value::String(t.to_string())).unwrap_or(Value::Null),
-        ColumnData::Date(_) => NaiveDate::from_sql(d).ok().flatten().map(|t| Value::String(t.to_string())).unwrap_or(Value::Null),
-        ColumnData::Time(_) => NaiveTime::from_sql(d).ok().flatten().map(|t| Value::String(t.to_string())).unwrap_or(Value::Null),
-        ColumnData::DateTimeOffset(_) => chrono::DateTime::<chrono::FixedOffset>::from_sql(d).ok().flatten().map(|t| Value::String(t.to_string())).unwrap_or(Value::Null),
+        ColumnData::DateTime(_) | ColumnData::SmallDateTime(_) | ColumnData::DateTime2(_) => PrimitiveDateTime::from_sql(d).ok().flatten().map(|t| Value::String(datetime(t))).unwrap_or(Value::Null),
+        ColumnData::Date(_) => Date::from_sql(d).ok().flatten().map(|t| Value::String(date(t))).unwrap_or(Value::Null),
+        ColumnData::Time(_) => Time::from_sql(d).ok().flatten().map(|t| Value::String(time_of_day(t))).unwrap_or(Value::Null),
+        ColumnData::DateTimeOffset(_) => OffsetDateTime::from_sql(d).ok().flatten().map(|t| Value::String(offset_datetime(t))).unwrap_or(Value::Null),
     }
 }
 
@@ -226,4 +259,71 @@ impl Driver for Ms {
 fn main() {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio");
     serve(Ms { rt, client: None, read_only: false });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tiberius::time::{Date, DateTime, DateTime2, DateTimeOffset, SmallDateTime, Time};
+
+    /// Days from 1970-01-01 to y-m-d (proleptic Gregorian)
+    fn days(y: i64, m: i64, d: i64) -> i64 {
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+        era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468
+    }
+
+    /// date, datetime2 and datetimeoffset count days from 0001-01-01
+    fn date(y: i64, m: i64, d: i64) -> Date {
+        Date::new((days(y, m, d) - days(1, 1, 1)) as u32)
+    }
+
+    /// Time of day in 10^-scale second increments
+    fn time(h: u64, mi: u64, s: u64, frac: u64, scale: u8) -> Time {
+        Time::new((h * 3600 + mi * 60 + s) * 10u64.pow(scale.into()) + frac, scale)
+    }
+
+    /// Dates and times as they have always been shown (#199): fractions to the last 3, 6 or 9 digits (datetime's 1/300 s ticks as
+    /// nanoseconds), datetimeoffset at its own offset, a year past 9999 with a +
+    #[test]
+    fn dates_and_times_pinned() {
+        let shown = |d: ColumnData<'static>| value(&d);
+        let s = |v: &str| Value::String(v.into());
+        let dt2 = |y, m, d, t| DateTime2::new(date(y, m, d), t);
+        let since_1900 = |y, m, d| (days(y, m, d) - days(1900, 1, 1)) as i32;
+        for (d, want) in [
+            (ColumnData::Date(Some(date(2024, 1, 2))), s("2024-01-02")),
+            (ColumnData::Date(Some(date(1, 1, 1))), s("0001-01-01")),
+            (ColumnData::Date(Some(date(9999, 12, 31))), s("9999-12-31")),
+            (ColumnData::Date(None), Value::Null),
+            (ColumnData::Time(Some(time(13, 14, 15, 0, 0))), s("13:14:15")),
+            (ColumnData::Time(Some(time(13, 14, 15, 500, 3))), s("13:14:15.500")),
+            (ColumnData::Time(Some(time(13, 14, 15, 1, 6))), s("13:14:15.000001")),
+            (ColumnData::Time(Some(time(13, 14, 15, 1_234_567, 7))), s("13:14:15.123456700")),
+            (ColumnData::Time(Some(time(23, 59, 59, 9_999_999, 7))), s("23:59:59.999999900")),
+            (ColumnData::Time(Some(time(0, 0, 0, 0, 7))), s("00:00:00")),
+            (ColumnData::DateTime2(Some(dt2(2024, 1, 2, time(3, 4, 5, 0, 7)))), s("2024-01-02 03:04:05")),
+            (ColumnData::DateTime2(Some(dt2(2024, 1, 2, time(3, 4, 5, 123, 3)))), s("2024-01-02 03:04:05.123")),
+            (ColumnData::DateTime2(Some(dt2(2024, 1, 2, time(3, 4, 5, 1_234_567, 7)))), s("2024-01-02 03:04:05.123456700")),
+            (ColumnData::DateTime2(Some(dt2(1, 1, 1, time(0, 0, 0, 0, 7)))), s("0001-01-01 00:00:00")),
+            (ColumnData::DateTime2(Some(dt2(9999, 12, 31, time(23, 59, 59, 9_999_999, 7)))), s("9999-12-31 23:59:59.999999900")),
+            (ColumnData::DateTime2(None), Value::Null),
+            (ColumnData::DateTime(Some(DateTime::new(since_1900(2024, 1, 2), 0))), s("2024-01-02 00:00:00")),
+            (ColumnData::DateTime(Some(DateTime::new(since_1900(2024, 1, 2), 1))), s("2024-01-02 00:00:00.003333333")),
+            (ColumnData::DateTime(Some(DateTime::new(since_1900(2024, 1, 2), 150))), s("2024-01-02 00:00:00.500")),
+            (ColumnData::DateTime(Some(DateTime::new(since_1900(2024, 1, 2), 86_399 * 300 + 299))), s("2024-01-02 23:59:59.996666666")),
+            (ColumnData::DateTime(Some(DateTime::new(since_1900(1753, 1, 1), 0))), s("1753-01-01 00:00:00")),
+            (ColumnData::SmallDateTime(Some(SmallDateTime::new(since_1900(2024, 1, 2) as u16, 12 * 60 + 34))), s("2024-01-02 12:34:00")),
+            (ColumnData::DateTimeOffset(Some(DateTimeOffset::new(dt2(2024, 1, 2, time(3, 4, 5, 0, 7)), 540))), s("2024-01-02 12:04:05 +09:00")),
+            (ColumnData::DateTimeOffset(Some(DateTimeOffset::new(dt2(2024, 1, 2, time(3, 4, 5, 1_234_567, 7)), 0))), s("2024-01-02 03:04:05.123456700 +00:00")),
+            (ColumnData::DateTimeOffset(Some(DateTimeOffset::new(dt2(2024, 1, 2, time(3, 4, 5, 5, 1)), -330))), s("2024-01-01 21:34:05.500 -05:30")),
+            (ColumnData::DateTimeOffset(Some(DateTimeOffset::new(dt2(9999, 12, 31, time(10, 0, 0, 0, 7)), 840))), s("+10000-01-01 00:00:00 +14:00")),
+            (ColumnData::DateTimeOffset(Some(DateTimeOffset::new(dt2(1, 1, 1, time(5, 0, 0, 0, 7)), -840))), s("0000-12-31 15:00:00 -14:00")),
+            (ColumnData::DateTimeOffset(None), Value::Null),
+        ] {
+            assert_eq!(shown(d.clone()), want, "{d:?}");
+        }
+    }
 }

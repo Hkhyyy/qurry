@@ -28,7 +28,7 @@ pub fn text(app: &str, app_version: &str, sources: &[ConnectionConfig], log: &Pa
         // Only the path is redacted: a data source named duckdb would turn the plugin's name into <name>
         out.push(match crate::plugin::driver_path(name) {
             Some(p) => {
-                let date = std::fs::metadata(&p).and_then(|m| m.modified()).map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d").to_string());
+                let date = std::fs::metadata(&p).and_then(|m| m.modified()).map(|t| crate::timefmt::date(crate::timefmt::local(t).date()));
                 format!("  {name}: installed, modified {} ({})", date.unwrap_or_else(|_| "?".into()), clean(p.display().to_string()))
             }
             None => format!("  {name}: not installed"),
