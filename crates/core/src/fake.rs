@@ -547,6 +547,12 @@ mod tests {
         status.choices = vec!["paid".into(), "refunded".into()];
         assert!(["paid", "refunded"].contains(&text(&status, &mut r).as_str()));
         assert!(text(&col("created_at", "timestamptz"), &mut r).len() == 19);
+        // YYYY-MM-DD and YYYY-MM-DD HH:MM:SS, local time within the last year (#199)
+        let shape = |s: &str, f: &str| s.len() == f.len() && s.chars().zip(f.chars()).all(|(c, f)| if f == '9' { c.is_ascii_digit() } else { c == f });
+        for _ in 0..50 {
+            let (d, t) = (text(&col("born", "date"), &mut r), text(&col("created_at", "timestamp"), &mut r));
+            assert!(shape(&d, "9999-99-99") && shape(&t, "9999-99-99 99:99:99"), "{d} {t}");
+        }
         assert!(uuid::Uuid::parse_str(&text(&col("ext_id", "uuid"), &mut r)).is_ok());
         // Numbers: precision · scale
         let mut price = col("price", "numeric");

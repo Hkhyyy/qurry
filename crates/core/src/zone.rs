@@ -96,6 +96,22 @@ mod tests {
         assert!(matches!(Zone::new("localtime", 3600), Zone::Fixed(3600)));
     }
 
+    /// This computer's offset at each moment, as chrono's Local has it (log lines, the diagnostics' dates, a RAG index's build time,
+    /// fake data): TZ when set, otherwise /etc/localtime (#199)
+    #[test]
+    fn local_offset_pinned() {
+        use chrono::{Offset, TimeZone};
+        let tz = match std::env::var("TZ") {
+            Ok(v) => tz::TimeZone::from_posix_tz(&v),
+            Err(_) => tz::TimeZone::local(),
+        };
+        let Ok(tz) = tz else { return };
+        for secs in [0, 1_700_000_000, 1_711_846_800, 1_729_990_800, 583_718_400, -2_208_988_800, 4_102_444_800] {
+            let chrono = chrono::Local.timestamp_opt(secs, 0).unwrap().offset().fix().local_minus_utc();
+            assert_eq!(chrono, tz.find_local_time_type(secs).unwrap().ut_offset(), "{secs}");
+        }
+    }
+
     /// The zone's own offset at each moment, across a DST change (needs /usr/share/zoneinfo, as on macOS and Linux)
     #[test]
     fn named_zones_follow_their_rules() {

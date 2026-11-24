@@ -635,6 +635,36 @@ mod tests {
         s + &e.footer()
     }
 
+    /// Excel date cells as they have always been read (#199): a date, a date and time (milliseconds dropped, rounded to the
+    /// millisecond first), a time or duration as the time of day, both epochs, Excel's 1900 leap day, years past 9999
+    #[test]
+    fn excel_dates_pinned() {
+        use calamine::{Data, ExcelDateTime, ExcelDateTimeType::*};
+        let cell = |v: f64, t, is_1904| excel_cell(&Data::DateTime(ExcelDateTime::new(v, t, is_1904)));
+        for (v, t, is_1904, want) in [
+            (45943.0, DateTime, false, Some("2025-10-13")),
+            (45943.541, DateTime, false, Some("2025-10-13 12:59:02")),
+            (45_943.999_999_99, DateTime, false, Some("2025-10-13 23:59:59")),
+            (45_943.999_999_999_9, DateTime, false, Some("2025-10-14")),
+            (0.5, DateTime, false, Some("12:00:00")),
+            (0.0, DateTime, false, Some("00:00:00")),
+            (-1.0, DateTime, false, Some("00:00:00")),
+            (1.75, TimeDelta, false, Some("18:00:00")),
+            (30.25, TimeDelta, false, Some("06:00:00")),
+            (1.0, DateTime, false, Some("1900-01-01")),
+            (59.0, DateTime, false, Some("1900-02-28")),
+            (60.0, DateTime, false, Some("1900-02-28")),
+            (61.0, DateTime, false, Some("1900-03-01")),
+            (1.0, DateTime, true, Some("1904-01-02")),
+            (45943.5, DateTime, true, Some("2029-10-14 12:00:00")),
+            (2_958_465.0, DateTime, false, Some("9999-12-31")),
+            (1e7, DateTime, false, Some("+29279-01-24")),
+            (1e8, DateTime, false, None),
+        ] {
+            assert_eq!(cell(v, t, is_1904).as_deref(), want, "{v} {t:?} {is_1904}");
+        }
+    }
+
     fn rows() -> Vec<Vec<Value>> {
         vec![vec![json!(1), json!("a, \"b\""), Value::Null], vec![json!(2), json!("it's\tx|y\nz"), json!(true)]]
     }
