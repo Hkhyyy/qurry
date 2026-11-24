@@ -12,6 +12,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 - `⇧⇧` (Search Everywhere) is a double tap, and the Switcher (`⌃⇥`) opens on release of `⌃`: neither is a key combination.
 - `Esc` always closes (a popup, a dialog, the find bar), so `⇧⎋` (hide the tool window) stays with it. A dialog moves by dragging its title bar, and a floating popup (Search Everywhere, the Switcher, Recent Files, Quick Switch Theme) by its title or header, inside the window; each opens in its place again next time.
 - Moving and opening: arrows, Home / End, Page Up / Down, Tab and `↩` in the tree, the grid, lists and popups. As in DataGrip, they are not commands.
+- In a context menu or a ▾ menu, as in DataGrip and macOS: `↑` / `↓` go round past separators and greyed-out items, Home / End, `↩` or Space runs, `→` opens a submenu and `←` closes it, a letter jumps to the next item starting with it, `Esc` closes a submenu back to its item, then the menu, giving the focus back. Opened from a key its first item has the focus; opened by a click none until `↑` / `↓`. A data source's color row is one stop, `←` / `→` move between its colors.
 - Typing: letters start speed search in the tree and edit the cell in the grid (`↩` / `F2` too), so a letter can't be a key there.
 - The editor's and the system's own keys: `⌘c` / `⌘v` / `⌘a` in the grid, `⌘/`, `⌘f` (and the find bar's toggles) and `⌃Space` in the editor.
 - Keys inside a dialog act on that dialog: query history, the Redis browser and terminal, the data source form. Mouse gestures (`⌥` click, drag) stay too.

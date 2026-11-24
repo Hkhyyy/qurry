@@ -3,10 +3,11 @@
  * Spec in README.md
  */
 import { Children, CSSProperties, FocusEvent, HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent, ReactNode, Ref, RefObject, TdHTMLAttributes, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Button, Checkbox, IconButton, Spacer, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { DetailRow, EmptyState, ListItem, MenuItem, MenuLabel, MenuSeparator, SearchField, SectionTitle } from "./molecules";
-import { clampDrag, listKey, matchOptions, placePopup, topOf } from "./popup";
+import { clampDrag, listKey, matchOptions, menuKey, placePopup, topOf } from "./popup";
 
 // ───────── Toolbar ─────────
 export function Toolbar({ children, className, ...rest }: HTMLAttributes<HTMLDivElement>) {
@@ -446,8 +447,25 @@ export type MenuEntry =
   | { heading: string }
   | { label: string; submenu: MenuEntry[] };
 
+/** Whether the last input was a key: a menu opened from the keyboard focuses its first item, one opened by the pointer none */
+let lastInputKey = false;
+if (typeof window !== "undefined") {
+  window.addEventListener("keydown", () => (lastInputKey = true), true);
+  window.addEventListener("pointerdown", () => (lastInputKey = false), true);
+}
+
+/** The stops the keys reach in one menu (or submenu): its enabled items, and the footer when it has something to focus */
+const menuStops = (menu: Element) =>
+  [...menu.children].filter((el): el is HTMLElement => el.matches('[role="menuitem"]:not([aria-disabled="true"])') || (el.matches(".ui-menu-footer") && !!stopTarget(el as HTMLElement)));
+/** What gets the focus at a stop: the item, or in the footer its picked swatch (else its first control) */
+const stopTarget = (stop: HTMLElement) => (stop.matches('[role="menuitem"]') ? stop : stop.querySelector<HTMLElement>("input:checked") ?? stop.querySelector<HTMLElement>("input, button, [tabindex]"));
+
 /**
- * Menu (right-click · ▾ dropdown). Closes on outside click · ⎋ · window blur. Submenus open on hover.
+ * Menu (right-click · ▾ dropdown). Closes on outside click · ⎋ · window blur. Submenus open on hover, → or ↩.
+ * Keys (DataGrip, macOS): ↑↓ round the items past separators and disabled ones, Home End, ↩ or Space runs, → opens a submenu and
+ * ← closes it, a letter jumps to the next item starting with it; ⎋ closes an open submenu (back to its item), else the menu and
+ * gives the focus back. The footer is one stop whose own
+ * keys (the swatches' ←→, Space, ↩) are left to it.
  * at = screen coordinates (right-click) — otherwise a dropdown relative to the parent. footer = appended at the bottom (color picker etc.)
  */
 export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClose: () => void; at?: { x: number; y: number }; footer?: ReactNode }) {
@@ -455,22 +473,70 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  // Where the focus was, to give it back (read on the first render: StrictMode runs the effects twice, the second time from the menu)
+  const [back] = useState(() => document.activeElement as HTMLElement | null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    // Closed with the focus in it (⎋, an item or swatch picked, a click outside): the focus goes back, not to the page
+    return () => {
+      if (el?.contains(document.activeElement)) back?.focus();
+    };
+  }, []);
   useEffect(() => {
+    const first = ref.current && menuStops(ref.current)[0];
+    if (lastInputKey && first) stopTarget(first)?.focus();
     const onDown = (e: globalThis.MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) closeRef.current();
     };
     const onKey = (e: globalThis.KeyboardEvent) => {
+      const root = ref.current;
+      if (!root) return;
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        closeRef.current();
+        // DataGrip: an open submenu closes first, the focus back on its item; then the menu
+        const open = root.querySelector(".ui-menu.sub");
+        if (open) {
+          setSub(null);
+          (open.parentElement as HTMLElement | null)?.focus();
+        } else closeRef.current();
+        return;
       }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const a = document.activeElement as HTMLElement | null;
+      // The menu (or open submenu) the focus is in; the root while the pointer opened it and nothing has the focus yet
+      const level = (a && root.contains(a) && a.closest(".ui-menu")) || root;
+      const stops = menuStops(level);
+      const cur = stops.findIndex((s) => s.contains(a));
+      const item = stops[cur]?.matches('[role="menuitem"]') ? stops[cur] : null;
+      // The footer keeps its own keys but ↑↓ Home End
+      if (cur >= 0 && !item && !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+      const next = menuKey(e.key, cur, stops.map((s) => (s.matches('[role="menuitem"]') ? s.querySelector(".ui-menu-label")?.textContent ?? "" : null)));
+      if (next !== null) {
+        // Moving off an item in the root closes its submenu
+        if (level === root) setSub(null);
+        stopTarget(stops[next])?.focus();
+      } else if (item && (e.key === "Enter" || e.key === " " || (e.key === "ArrowRight" && item.hasAttribute("aria-haspopup")))) {
+        // An item with a submenu opens it (its click) and its first item takes the focus; any other item runs
+        flushSync(() => item.click());
+        const subMenu = item.querySelector(":scope > .ui-menu");
+        const firstStop = subMenu && menuStops(subMenu)[0];
+        if (firstStop) stopTarget(firstStop)?.focus();
+      } else if (e.key === "ArrowLeft" && level !== root) {
+        // Back to the submenu's item
+        setSub(null);
+        level.parentElement?.focus();
+      } else if (!["Enter", " ", "ArrowRight", "ArrowLeft"].includes(e.key) && e.key.length !== 1) return;
+      // Handled, or a key that mustn't reach what is behind the menu (a letter would start the tree's speed search)
+      e.preventDefault();
+      e.stopPropagation();
     };
     const onBlur = () => closeRef.current();
-    // Register on the next tick so the click that opened the menu isn't treated as an "outside click" right away
+    // The keys at once (the key that opened the menu has passed the window already); the pointer on the next tick, so the click that
+    // opened the menu isn't treated as an "outside click" right away
+    window.addEventListener("keydown", onKey, true);
     const t = setTimeout(() => {
       window.addEventListener("mousedown", onDown, true);
-      window.addEventListener("keydown", onKey, true);
       window.addEventListener("blur", onBlur);
     });
     return () => {
@@ -482,7 +548,9 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
   }, []);
   // Keep it on screen
   const style = at ? { left: Math.min(at.x, window.innerWidth - 260), top: Math.max(4, Math.min(at.y, window.innerHeight - 24 * items.length - 40)) } : undefined;
+  // The focus goes back first, so what the item opens can take it
   const run = (fn: () => void) => {
+    if (ref.current?.contains(document.activeElement)) back?.focus();
     fn();
     onClose();
   };
@@ -494,7 +562,7 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
         ) : "heading" in it ? (
           <MenuLabel key={i}>{it.heading}</MenuLabel>
         ) : "submenu" in it ? (
-          <MenuItem key={i} label={it.label} hasSubmenu onMouseEnter={() => setSub(i)}>
+          <MenuItem key={i} label={it.label} hasSubmenu onMouseEnter={() => setSub(i)} onClick={() => setSub(i)}>
             {sub === i && (
               <SubMenu>
                 {it.submenu.map((s, j) => ("separator" in s ? <MenuSeparator key={j} /> : "heading" in s ? <MenuLabel key={j}>{s.heading}</MenuLabel> : "action" in s ? <MenuItem key={j} label={s.label} shortcut={s.shortcut} danger={s.danger} disabled={s.disabled} title={s.title} onClick={() => run(s.action)} /> : null))}
