@@ -11,7 +11,7 @@ const menu = (page: Page) => page.getByRole("menu").first();
 const tree = (page: Page) => page.locator(".ws-explorer.on .tree");
 const focusedItem = (page: Page) => page.evaluate(() => (document.activeElement?.getAttribute("role") === "menuitem" ? document.activeElement.querySelector(".ui-menu-label")?.textContent : null));
 
-test("⋮ opened with ↩: the first item has the focus; ↑↓ go round past the separator, Home End; → and ← through the submenu; ⎋ gives the focus back", async ({ page }) => {
+test("⋮ opened with ↩: the first item has the focus; ↑↓ go round past the separator, Home End; → and ← through the submenu; ⎋ closes the submenu, then the menu, the focus back", async ({ page }) => {
   const more = page.locator(".ws-explorer.on").getByTitle("More", { exact: true });
   await more.focus();
   await page.keyboard.press("Enter");
@@ -38,6 +38,13 @@ test("⋮ opened with ↩: the first item has the focus; ↑↓ go round past th
   await expect(menuItem(page, /^Import Data Sources/)).toBeFocused();
   // The keyboard focus shows the shared ring
   await expect(menuItem(page, /^Import Data Sources/)).toHaveCSS("outline-style", "solid");
+  // ⎋ in the submenu (DataGrip): only the submenu closes, the focus back on its item; ⎋ again closes the menu
+  await page.keyboard.press("ArrowRight");
+  await expect(sub.getByRole("menuitem").first()).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(sub).toHaveCount(0);
+  await expect(menu(page)).toBeVisible();
+  await expect(menuItem(page, /^Import Data Sources/)).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
   await expect(more).toBeFocused();

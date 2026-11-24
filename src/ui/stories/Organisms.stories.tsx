@@ -154,7 +154,7 @@ export const MenuStory: S = {
 };
 
 /** A menu on the keys (#215): opened from the keyboard its first item has the focus; ↑↓ go round past separators and disabled items,
- *  Home End, a letter jumps, ↩ or Space runs, → opens a submenu and ← closes it, ⎋ closes and gives the focus back. The swatch row
+ *  Home End, a letter jumps, ↩ or Space runs, → opens a submenu and ← or ⎋ closes it, ⎋ again closes the menu and gives the focus back. The swatch row
  *  is one stop (its ←→ move between colors). The story opens it with ↩ on the button and goes ↓ → into Diagrams */
 export const MenuKeys: S = {
   name: "Menu — keyboard focus",

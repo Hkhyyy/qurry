@@ -463,7 +463,8 @@ const stopTarget = (stop: HTMLElement) => (stop.matches('[role="menuitem"]') ? s
 /**
  * Menu (right-click · ▾ dropdown). Closes on outside click · ⎋ · window blur. Submenus open on hover, → or ↩.
  * Keys (DataGrip, macOS): ↑↓ round the items past separators and disabled ones, Home End, ↩ or Space runs, → opens a submenu and
- * ← closes it, a letter jumps to the next item starting with it; ⎋ closes and gives the focus back. The footer is one stop whose own
+ * ← closes it, a letter jumps to the next item starting with it; ⎋ closes an open submenu (back to its item), else the menu and
+ * gives the focus back. The footer is one stop whose own
  * keys (the swatches' ←→, Space, ↩) are left to it.
  * at = screen coordinates (right-click) — otherwise a dropdown relative to the parent. footer = appended at the bottom (color picker etc.)
  */
@@ -493,7 +494,12 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        closeRef.current();
+        // DataGrip: an open submenu closes first, the focus back on its item; then the menu
+        const open = root.querySelector(".ui-menu.sub");
+        if (open) {
+          setSub(null);
+          (open.parentElement as HTMLElement | null)?.focus();
+        } else closeRef.current();
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
