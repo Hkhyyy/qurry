@@ -342,7 +342,8 @@ impl AppState {
             if let Some(x) = list.iter_mut().find(|x| x.id == idx.id) {
                 x.dim = dim.or(x.dim);
                 x.rows = done;
-                x.built_at = Some(chrono::Local::now().format("%Y-%m-%d %H:%M").to_string());
+                let now = crate::timefmt::local(std::time::SystemTime::now());
+                x.built_at = Some(format!("{} {:02}:{:02}", crate::timefmt::date(now.date()), now.hour(), now.minute()));
             }
             self.rag_write(&list)?;
             Ok(done)

@@ -394,16 +394,29 @@ fn excel_cell(c: &calamine::Data) -> Option<String> {
         Data::Bool(b) => Some(b.to_string()),
         Data::DateTimeIso(s) | Data::DurationIso(s) => Some(s.clone()),
         Data::DateTime(d) => {
-            let t = d.as_datetime()?;
+            let t = excel_datetime(d)?;
             Some(if d.is_duration() || d.as_f64() < 1.0 {
-                t.format("%H:%M:%S").to_string()
-            } else if t.time() == chrono::NaiveTime::MIN {
-                t.format("%Y-%m-%d").to_string()
+                crate::timefmt::hms(t.time())
+            } else if t.time() == time::Time::MIDNIGHT {
+                crate::timefmt::date(t.date())
             } else {
-                t.format("%Y-%m-%d %H:%M:%S").to_string()
+                format!("{} {}", crate::timefmt::date(t.date()), crate::timefmt::hms(t.time()))
             })
         }
     }
+}
+
+/// calamine's ExcelDateTime::as_datetime (behind its chrono feature), with time: days from 1899-12-30 (1904-01-01 in the 1904
+/// date system), Excel's 1900-02-29 skipped, to the millisecond. None outside the years shown (crate::timefmt)
+fn excel_datetime(d: &calamine::ExcelDateTime) -> Option<time::PrimitiveDateTime> {
+    use calamine::{ExcelDateTime, ExcelDateTimeType};
+    // The date system isn't readable on its own: the same value in the 1904 system compares equal only if this is one
+    let kind = if d.is_duration() { ExcelDateTimeType::TimeDelta } else { ExcelDateTimeType::DateTime };
+    let is_1904 = *d == ExcelDateTime::new(d.as_f64(), kind, true);
+    let f = if is_1904 { d.as_f64() + 1462.0 } else { d.as_f64() };
+    let f = if f >= 60.0 { f } else { f + 1.0 };
+    let epoch = time::Date::from_calendar_date(1899, time::Month::December, 30).ok()?.with_time(time::Time::MIDNIGHT);
+    epoch.checked_add(time::Duration::milliseconds((f * 86_400_000.0).round() as i64)).filter(|t| crate::timefmt::in_range(t.date()))
 }
 
 fn csv_err(e: csv::Error) -> AppError {

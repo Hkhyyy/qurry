@@ -20,8 +20,41 @@ fn q(s: &str) -> String {
     format!("[{}]", s.replace(']', "]]"))
 }
 
+/// Dates and times as text, the same as before chrono was replaced with time (#199): years outside 0..=9999 with a sign, a
+/// fraction to its last 3, 6 or 9 digits, the offset as +09:00
+fn date(d: time::Date) -> String {
+    let y = d.year();
+    let year = if (0..=9999).contains(&y) { format!("{y:04}") } else { format!("{y:+05}") };
+    format!("{year}-{:02}-{:02}", u8::from(d.month()), d.day())
+}
+
+fn time_of_day(t: time::Time) -> String {
+    let n = t.nanosecond();
+    let frac = if n == 0 {
+        String::new()
+    } else if n.is_multiple_of(1_000_000) {
+        format!(".{:03}", n / 1_000_000)
+    } else if n.is_multiple_of(1_000) {
+        format!(".{:06}", n / 1_000)
+    } else {
+        format!(".{n:09}")
+    };
+    format!("{:02}:{:02}:{:02}{frac}", t.hour(), t.minute(), t.second())
+}
+
+fn datetime(t: time::PrimitiveDateTime) -> String {
+    format!("{} {}", date(t.date()), time_of_day(t.time()))
+}
+
+/// At its own offset; SQL Server's offsets are whole minutes
+fn offset_datetime(t: time::OffsetDateTime) -> String {
+    let m = t.offset().whole_minutes();
+    let sign = if m < 0 { '-' } else { '+' };
+    format!("{} {sign}{:02}:{:02}", datetime(time::PrimitiveDateTime::new(t.date(), t.time())), m.abs() / 60, m.abs() % 60)
+}
+
 fn value(d: &ColumnData<'static>) -> Value {
-    use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+    use time::{Date, OffsetDateTime, PrimitiveDateTime, Time};
     match d {
         ColumnData::U8(v) => v.map(|x| json!(x)).unwrap_or(Value::Null),
         ColumnData::I16(v) => v.map(|x| json!(x)).unwrap_or(Value::Null),
@@ -35,10 +68,10 @@ fn value(d: &ColumnData<'static>) -> Value {
         ColumnData::Numeric(v) => v.map(|n| Value::String(n.to_string())).unwrap_or(Value::Null),
         ColumnData::Binary(v) => v.as_ref().map(|b| Value::String(format!("0x{}", b.iter().map(|x| format!("{x:02X}")).collect::<String>()))).unwrap_or(Value::Null),
         ColumnData::Xml(v) => v.as_ref().map(|x| Value::String(x.to_string())).unwrap_or(Value::Null),
-        ColumnData::DateTime(_) | ColumnData::SmallDateTime(_) | ColumnData::DateTime2(_) => NaiveDateTime::from_sql(d).ok().flatten().map(|t| Value::String(t.to_string())).unwrap_or(Value::Null),
-        ColumnData::Date(_) => NaiveDate::from_sql(d).ok().flatten().map(|t| Value::String(t.to_string())).unwrap_or(Value::Null),
-        ColumnData::Time(_) => NaiveTime::from_sql(d).ok().flatten().map(|t| Value::String(t.to_string())).unwrap_or(Value::Null),
-        ColumnData::DateTimeOffset(_) => chrono::DateTime::<chrono::FixedOffset>::from_sql(d).ok().flatten().map(|t| Value::String(t.to_string())).unwrap_or(Value::Null),
+        ColumnData::DateTime(_) | ColumnData::SmallDateTime(_) | ColumnData::DateTime2(_) => PrimitiveDateTime::from_sql(d).ok().flatten().map(|t| Value::String(datetime(t))).unwrap_or(Value::Null),
+        ColumnData::Date(_) => Date::from_sql(d).ok().flatten().map(|t| Value::String(date(t))).unwrap_or(Value::Null),
+        ColumnData::Time(_) => Time::from_sql(d).ok().flatten().map(|t| Value::String(time_of_day(t))).unwrap_or(Value::Null),
+        ColumnData::DateTimeOffset(_) => OffsetDateTime::from_sql(d).ok().flatten().map(|t| Value::String(offset_datetime(t))).unwrap_or(Value::Null),
     }
 }
 

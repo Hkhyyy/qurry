@@ -195,9 +195,9 @@ fn int_range(c: &Col, n: &str) -> (i64, i64) {
 }
 
 /// Dates·times: within the last year
-fn when<R: Rng>(r: &mut R) -> chrono::NaiveDateTime {
-    let now = chrono::Local::now().naive_local();
-    now - chrono::Duration::seconds(r.random_range(0..365 * 86_400))
+fn when<R: Rng>(r: &mut R) -> time::PrimitiveDateTime {
+    let now = crate::timefmt::local(std::time::SystemTime::now());
+    time::PrimitiveDateTime::new(now.date(), now.time()) - time::Duration::seconds(r.random_range(0..365 * 86_400))
 }
 
 /// unique: include this number so values don't collide (n = row index + start number)
@@ -228,8 +228,11 @@ fn value<R: Rng>(r: &mut R, c: &Col, n: u64, kind: DbKind) -> Cell {
     }
     match b {
         "uuid" => return Cell::Text(uuid::Uuid::new_v4().to_string()),
-        "date" => return Cell::Text(when(r).date().to_string()),
-        "timestamp" | "timestamptz" | "datetime" => return Cell::Text(when(r).format("%Y-%m-%d %H:%M:%S").to_string()),
+        "date" => return Cell::Text(crate::timefmt::date(when(r).date())),
+        "timestamp" | "timestamptz" | "datetime" => {
+            let t = when(r);
+            return Cell::Text(format!("{} {}", crate::timefmt::date(t.date()), crate::timefmt::hms(t.time())));
+        }
         "time" | "timetz" => return Cell::Text(format!("{:02}:{:02}:{:02}", r.random_range(0..24), r.random_range(0..60), r.random_range(0..60))),
         "interval" => return Cell::Text(format!("{} minutes", r.random_range(1..600))),
         "json" | "jsonb" => return Cell::Text(format!(r#"{{"key": "{}", "n": {}}}"#, pick(r, WORDS), r.random_range(0..1000))),

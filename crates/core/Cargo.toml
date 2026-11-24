@@ -10,9 +10,10 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 # Not 0.9.0 yet: a non-persistent query (how Qurry runs SQL) uses the unnamed statement, and looking up an unknown column type
 # (enum, domain, extension type such as vector) with a simple query destroys it before Bind ("unnamed prepared statement does not exist")
-sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "mysql", "chrono", "uuid", "json"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "mysql", "time", "uuid", "json"] }
 uuid = { version = "1.28.0", features = ["v4", "v5", "serde"] }
-chrono = "0.4.45"
+# Dates and times (crate::timefmt). large-dates: the years past 9999 PostgreSQL holds
+time = { version = "0.3.55", features = ["large-dates"] }
 # timestamptz in the session's time zone: reads a zone's rules from the system tz database (/usr/share/zoneinfo) instead of building one in (crate::zone)
 tz-rs = { version = "0.7", default-features = false, features = ["std"] }
 thiserror = "2.0.21"
@@ -26,7 +27,7 @@ rand = "0.10"
 redis = { version = "1.7.1", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp", "tls-rustls", "tls-rustls-insecure", "cluster-async"] }
 dirs = "7"
 csv = "1"
-calamine = { version = "=0.38.0", features = ["dates"] }
+calamine = "=0.38.0"
 regex = "1"
 minisign-verify = "0.3"
 # Order of releases and betas (0.3.1-beta.2 < 0.3.1), the same rules as the GUI updater

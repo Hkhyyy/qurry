@@ -467,7 +467,6 @@ pub(crate) async fn pg_values(conn: &mut sqlx::PgConnection, columns: &[ColumnIn
 }
 
 pub(crate) fn pg_value(row: &PgRow, i: usize, zone: &Zone) -> Value {
-    use chrono::NaiveTime;
     let raw = match row.try_get_raw(i) {
         Ok(r) => r,
         Err(_) => return Value::Null,
@@ -504,7 +503,7 @@ pub(crate) fn pg_value(row: &PgRow, i: usize, zone: &Zone) -> Value {
             let elem = ty.trim_end_matches("[]");
             raw.as_bytes().ok().and_then(|b| pg_array(b, &|e| pg_datetime(elem, e, zone))).map(Value::from)
         }
-        "TIME" => get!(NaiveTime).map(|t| Value::from(t.to_string())),
+        "TIME" => get!(sqlx::types::time::Time).map(|t| Value::from(crate::timefmt::time(t))),
         "BYTEA" => get!(Vec<u8>).map(|b| {
             let hex: String = b.iter().take(64).map(|x| format!("{x:02X}")).collect();
             Value::from(format!("0x{hex}{}", if b.len() > 64 { "…" } else { "" }))
@@ -520,20 +519,20 @@ pub(crate) fn pg_value(row: &PgRow, i: usize, zone: &Zone) -> Value {
     })
 }
 
-/// PostgreSQL timestamp / timestamptz / date (binary) → text. Decoded here, not with sqlx's chrono types, which panic on
-/// infinity (i64::MAX / i64::MIN microseconds, i32::MAX / i32::MIN days) and past chrono's range. Shows infinity / -infinity
-/// as psql does; None for anything chrono can't hold. timestamptz shows in the session's time zone (`zone`) with its offset, as psql
+/// PostgreSQL timestamp / timestamptz / date (binary) → text. Decoded here, not with sqlx's date types, which panicked on
+/// infinity (i64::MAX / i64::MIN microseconds, i32::MAX / i32::MIN days) and past their range. Shows infinity / -infinity
+/// as psql does; None outside the years shown (crate::timefmt). timestamptz shows in the session's time zone (`zone`) with its offset, as psql
 fn pg_datetime(ty: &str, b: &[u8], zone: &Zone) -> Option<String> {
-    use chrono::{NaiveDate, NaiveTime, TimeDelta};
-    let epoch = NaiveDate::from_ymd_opt(2000, 1, 1)?;
+    use time::{Date, Duration, Month, Time};
+    let epoch = Date::from_calendar_date(2000, Month::January, 1).ok()?;
     match ty {
         "TIMESTAMP" | "TIMESTAMPTZ" => match i64::from_be_bytes(b.try_into().ok()?) {
             i64::MAX => Some("infinity".into()),
             i64::MIN => Some("-infinity".into()),
             us => {
-                let t = epoch.and_time(NaiveTime::MIN).checked_add_signed(TimeDelta::microseconds(us))?;
+                let t = epoch.with_time(Time::MIDNIGHT).checked_add(Duration::microseconds(us)).filter(|t| crate::timefmt::in_range(t.date()))?;
                 match ty {
-                    "TIMESTAMP" => Some(t.format("%Y-%m-%d %H:%M:%S%.f").to_string()),
+                    "TIMESTAMP" => Some(crate::timefmt::datetime(t)),
                     _ => zone.format(t),
                 }
             }
@@ -541,7 +540,7 @@ fn pg_datetime(ty: &str, b: &[u8], zone: &Zone) -> Option<String> {
         "DATE" => match i32::from_be_bytes(b.try_into().ok()?) {
             i32::MAX => Some("infinity".into()),
             i32::MIN => Some("-infinity".into()),
-            days => Some(epoch.checked_add_signed(TimeDelta::try_days(days.into())?)?.to_string()),
+            days => epoch.checked_add(Duration::days(days.into())).filter(|d| crate::timefmt::in_range(*d)).map(crate::timefmt::date),
         },
         _ => None,
     }
@@ -865,7 +864,7 @@ mod tests {
         assert!(format!("{}", err.unwrap_err()).contains("read-only"));
     }
 
-    /// infinity sentinels show as text; values past chrono's range give None (shown as <TYPE>), never a panic (#84)
+    /// infinity sentinels show as text; values past the years shown give None (shown as <TYPE>), never a panic (#84)
     #[test]
     fn pg_datetime_infinity_and_range() {
         let ts = |v: i64| v.to_be_bytes().to_vec();
@@ -902,16 +901,15 @@ mod tests {
     #[test]
     fn pg_timestamptz_in_the_session_zone() {
         // 2026-11-09 04:00:00.25 UTC, in microseconds from 2000-01-01
-        let us = (chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap().and_hms_opt(4, 0, 0).unwrap() - chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap())
-            .num_microseconds()
-            .unwrap()
-            + 250_000;
+        let at = |y, m: u8, d, h, mi, s, us| time::Date::from_calendar_date(y, m.try_into().unwrap(), d).unwrap().with_hms_micro(h, mi, s, us).unwrap();
+        let since = |t: time::PrimitiveDateTime| (t - at(2000, 1, 1, 0, 0, 0, 0)).whole_microseconds() as i64;
+        let us = since(at(2026, 11, 9, 4, 0, 0, 0)) + 250_000;
         let b = us.to_be_bytes();
         assert_eq!(pg_datetime("TIMESTAMPTZ", &b, &Zone::UTC).as_deref(), Some("2026-11-09 04:00:00.250 +00:00"));
         assert_eq!(pg_datetime("TIMESTAMPTZ", &b, &Zone::Fixed(9 * 3600)).as_deref(), Some("2026-11-09 13:00:00.250 +09:00"));
         assert_eq!(pg_datetime("TIMESTAMP", &b, &Zone::Fixed(9 * 3600)).as_deref(), Some("2026-11-09 04:00:00.250"), "timestamp has no zone");
-        // Past chrono's range only once the offset is added: None (shown as <TIMESTAMPTZ>), never a panic
-        let last = (chrono::NaiveDateTime::MAX - chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap()).num_microseconds().unwrap();
+        // Past the years shown only once the offset is added: None (shown as <TIMESTAMPTZ>), never a panic
+        let last = since(at(262_142, 12, 31, 23, 59, 59, 999_999));
         assert_eq!(pg_datetime("TIMESTAMPTZ", &last.to_be_bytes(), &Zone::Fixed(3600)), None);
         assert!(pg_datetime("TIMESTAMPTZ", &last.to_be_bytes(), &Zone::Fixed(-3600)).is_some());
     }
