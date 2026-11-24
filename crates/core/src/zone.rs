@@ -2,7 +2,7 @@
 //! that moment's offset. A zone name's rules (DST, past offsets) come from this computer's tz database (/usr/share/zoneinfo, on
 //! macOS and Linux), so no tz data is built in. A setting it lacks (`+09:00`, `<+09>-09`, or a computer without the database)
 //! takes the offset the server says the session has now, so the text is still the right moment
-use chrono::{DateTime, FixedOffset, NaiveDateTime};
+use time::{PrimitiveDateTime, UtcOffset};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -31,12 +31,14 @@ impl Zone {
     }
 
     /// A UTC time as `2026-11-09 13:00:00 +09:00` (fractions as stored; an offset with seconds, as before 1900, as `+08:27:52`)
-    pub fn format(&self, utc: NaiveDateTime) -> Option<String> {
-        let off = self.offset_at(utc.and_utc().timestamp());
-        // None out of chrono's range once the offset is added (the first or last hours it can hold)
-        utc.checked_add_signed(chrono::TimeDelta::seconds(off.into()))?;
-        let t = DateTime::<FixedOffset>::from_naive_utc_and_offset(utc, FixedOffset::east_opt(off)?);
-        Some(t.format(if off % 60 == 0 { "%Y-%m-%d %H:%M:%S%.f %:z" } else { "%Y-%m-%d %H:%M:%S%.f %::z" }).to_string())
+    pub fn format(&self, utc: PrimitiveDateTime) -> Option<String> {
+        let off = self.offset_at(utc.assume_utc().unix_timestamp());
+        // None out of the years shown once the offset is added (the first or last hours they hold), or for an offset of a day or more
+        let local = utc.checked_add(time::Duration::seconds(off.into())).filter(|t| crate::timefmt::in_range(t.date()))?;
+        if off.unsigned_abs() >= 86_400 {
+            return None;
+        }
+        Some(format!("{} {}", crate::timefmt::datetime(local), crate::timefmt::offset(UtcOffset::from_whole_seconds(off).ok()?)))
     }
 }
 
@@ -66,10 +68,9 @@ fn rules(name: &str) -> Option<Arc<tz::TimeZone>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
 
-    fn utc(y: i32, m: u32, d: u32, h: u32, mi: u32) -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(y, m, d).unwrap().and_hms_opt(h, mi, 0).unwrap()
+    fn utc(y: i32, m: u8, d: u8, h: u8, mi: u8) -> PrimitiveDateTime {
+        time::Date::from_calendar_date(y, m.try_into().unwrap(), d).unwrap().with_hms(h, mi, 0).unwrap()
     }
 
     #[test]
@@ -81,7 +82,7 @@ mod tests {
         // A setting the tz database doesn't name takes the server's offset: PostgreSQL reads '+09:00' as POSIX (9 hours west)
         assert_eq!(Zone::new("+09:00", -9 * 3600).format(t).as_deref(), Some("2026-11-08 19:00:00 -09:00"));
         assert_eq!(Zone::new("<+09>-09", 9 * 3600).format(t).as_deref(), Some("2026-11-09 13:00:00 +09:00"));
-        let frac = t + chrono::TimeDelta::microseconds(1500);
+        let frac = t + time::Duration::microseconds(1500);
         assert_eq!(Zone::UTC.format(frac).as_deref(), Some("2026-11-09 04:00:00.001500 +00:00"));
     }
 
@@ -94,6 +95,22 @@ mod tests {
         // The server's `localtime` is the server's zone, not this computer's: the server's offset
         assert!(rules("localtime").is_none() && rules("LocalTime").is_none());
         assert!(matches!(Zone::new("localtime", 3600), Zone::Fixed(3600)));
+    }
+
+    /// This computer's offset at each moment, as chrono's Local had it (log lines, the diagnostics' dates, a RAG index's build time,
+    /// fake data): TZ when set, otherwise /etc/localtime (#199)
+    #[test]
+    fn local_offset_pinned() {
+        let tz = match std::env::var("TZ") {
+            Ok(v) => tz::TimeZone::from_posix_tz(&v),
+            Err(_) => tz::TimeZone::local(),
+        };
+        let Ok(tz) = tz else { return };
+        for secs in [0, 1_700_000_000, 1_711_846_800, 1_729_990_800, 583_718_400, -2_208_988_800, 4_102_444_800] {
+            let t = std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(secs.max(0) as u64)).unwrap();
+            let at = crate::timefmt::local(t.checked_sub(std::time::Duration::from_secs((-secs).max(0) as u64)).unwrap());
+            assert_eq!(at.offset().whole_seconds(), tz.find_local_time_type(secs).unwrap().ut_offset(), "{secs}");
+        }
     }
 
     /// The zone's own offset at each moment, across a DST change (needs /usr/share/zoneinfo, as on macOS and Linux)

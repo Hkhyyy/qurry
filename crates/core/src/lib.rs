@@ -54,6 +54,7 @@ pub mod testenv;
 pub mod store;
 pub mod subset;
 pub mod theme_images;
+mod timefmt;
 pub mod transfer;
 pub mod tunnel;
 pub mod update;

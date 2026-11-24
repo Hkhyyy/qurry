@@ -82,6 +82,81 @@ async fn mysql_submit_edits() {
     check(DbKind::Mysql, cfg("mysql", p[0], p[1], p[2], p[4]), Some(p[3].into()), p[4], &create).await;
 }
 
+/// Rows keyed by date and time columns, shown in the session's time zone (`zone`) and edited (#199): the text shown is pinned, and
+/// each UPDATE … WHERE built from it finds its row. `create` makes `schema.grid_dates` (four date/time key columns and note) with
+/// two rows, note 'a' and 'b'
+async fn check_date_keys(kind: DbKind, mut c: ConnectionConfig, password: Option<String>, schema: &str, zone: &str, fixture: &[String], shown: [[&str; 4]; 2]) {
+    c.options.time_zone = Some(zone.into());
+    let dir = tempfile::Builder::new().prefix("qurry-grid-dates-").tempdir().unwrap();
+    let st = qurry_core::open_state(Some(dir.path().to_path_buf())).unwrap();
+    st.save_connection(c, password, None).await.unwrap();
+    q(&st, &format!("DROP TABLE IF EXISTS {schema}.grid_dates")).await;
+    for sql in fixture {
+        q(&st, sql).await;
+    }
+    let select = format!("SELECT k1, k2, k3, k4, note FROM {schema}.grid_dates ORDER BY note");
+    let rows = q(&st, &select).await;
+    let s = |v: &str| Some(v.to_string());
+    let want = |notes: [&str; 2]| (0..2).map(|i| shown[i].iter().map(|v| s(v)).chain([s(notes[i])]).collect::<Vec<_>>()).collect::<Vec<_>>();
+    assert_eq!(raw(&rows), want(["a", "b"]));
+    let keys = ["k1", "k2", "k3", "k4"].map(String::from);
+    let to = EditTarget { schema: schema.into(), table: "grid_dates".into(), pk: keys.to_vec(), columns: keys.into_iter().chain(["note".into()]).collect() };
+    let edits = BTreeMap::from([((0, 4), s("c")), ((1, 4), s("d"))]);
+    let stmts = edit_statements(kind, &to, &raw(&rows), &edits, &BTreeSet::new(), &[]).unwrap();
+    let r = st.submit_edits(ID.into(), None, stmts.clone()).await.unwrap_or_else(|e| panic!("{stmts:?}: {e}"));
+    assert_eq!(r.rows, 2, "{stmts:?}");
+    assert_eq!(raw(&q(&st, &select).await), want(["c", "d"]), "{stmts:?}");
+    q(&st, &format!("DROP TABLE {schema}.grid_dates")).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn postgres_date_keys() {
+    let Some(e) = qurry_core::testenv::var("QURRY_TEST_PG") else { return };
+    let p: Vec<&str> = e.split(':').collect();
+    let fixture = [
+        "CREATE TABLE public.grid_dates (k1 timestamp, k2 timestamptz, k3 date, k4 time, note text, PRIMARY KEY (k1, k2, k3, k4))".to_string(),
+        "INSERT INTO public.grid_dates VALUES ('2026-11-09 04:00:00.123456', '2026-11-09 04:00:00.5+00', '2026-11-09', '13:14:15.5', 'a'), \
+         ('2000-01-01 00:00:00', '1999-12-31 23:59:59.999999+00', '0001-01-01', '00:00:00.000001', 'b')".into(),
+    ];
+    let shown = [
+        ["2026-11-09 04:00:00.123456", "2026-11-09 13:00:00.500 +09:00", "2026-11-09", "13:14:15.500"],
+        ["2000-01-01 00:00:00", "2000-01-01 08:59:59.999999 +09:00", "0001-01-01", "00:00:00.000001"],
+    ];
+    check_date_keys(DbKind::Postgres, cfg("postgres", p[0], p[1], p[2], p[3]), None, "public", "Asia/Seoul", &fixture, shown).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_date_keys() {
+    let Some(e) = qurry_core::testenv::var("QURRY_TEST_MY") else { return };
+    my_date_keys(&e).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn mariadb_date_keys() {
+    let Some(e) = qurry_core::testenv::var("QURRY_TEST_MARIADB") else { return };
+    my_date_keys(&e).await;
+}
+
+/// The TIMESTAMP column is read and written in the session's time zone (+09:00), so it shows as inserted
+async fn my_date_keys(e: &str) {
+    let p: Vec<&str> = e.split(':').collect();
+    let db = p[4];
+    // An explicit default: on 5.7 the first TIMESTAMP NOT NULL column would otherwise change on every UPDATE
+    let fixture = [
+        format!("CREATE TABLE {db}.grid_dates (k1 DATETIME(6), k2 TIMESTAMP(3) NOT NULL DEFAULT '2000-01-01 00:00:00', k3 DATE, k4 TIME(6), note varchar(10), PRIMARY KEY (k1, k2, k3, k4))"),
+        format!("INSERT INTO {db}.grid_dates VALUES ('2026-11-09 04:00:00.123456', '2026-11-09 04:00:00.5', '2026-11-09', '13:14:15.5', 'a'), \
+                 ('1000-01-01 00:00:00', '1999-12-31 23:59:59.999', '9999-12-31', '-838:59:59', 'b')"),
+    ];
+    let shown = [
+        ["2026-11-09 04:00:00.123456", "2026-11-09 04:00:00.500", "2026-11-09", "13:14:15.500000"],
+        ["1000-01-01 00:00:00.000000", "1999-12-31 23:59:59.999", "9999-12-31", "-838:59:59.000000"],
+    ];
+    check_date_keys(DbKind::Mysql, cfg("mysql", p[0], p[1], p[2], db), Some(p[3].into()), db, "+09:00", &fixture, shown).await;
+}
+
 /// Rows copied as CSV and as TSV (with the TUI's and the GUI's extract options) and pasted as new rows (#160) insert the same
 /// values: NULL stays NULL (in the integer and the JSON column too), '' stays '', JSON text and a text with quotes, a comma, a tab
 /// and a line break arrive unescaped. `fixture` creates `schema.grid_paste` (id key, n int, j JSON, s text) with 3 rows

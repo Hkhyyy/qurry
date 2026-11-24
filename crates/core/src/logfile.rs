@@ -110,7 +110,8 @@ impl Sink {
             private_dir(&self.dir)?;
             self.lock = open_private(&lock)?;
         }
-        let ts = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false);
+        let now = crate::timefmt::local(std::time::SystemTime::now());
+        let ts = format!("{}T{}.{:03}{}", crate::timefmt::date(now.date()), crate::timefmt::hms(now.time()), now.millisecond(), crate::timefmt::offset(now.offset()));
         let msg = msg.strip_prefix("[qurry] ").unwrap_or(msg).replace('\r', "\\r").replace('\n', "\\n");
         let line = format!("{ts} [{} {}] {msg}\n", self.app, std::process::id());
         // A lock that fails (a file system without locks) still writes: a rare duplicate rotation, never a lost line
@@ -752,7 +753,7 @@ mod tests {
         let l = lines(&dir, "qurry.log");
         assert_eq!(l.len(), 1);
         let (ts, rest) = l[0].split_once(' ').unwrap();
-        assert!(chrono::DateTime::parse_from_rfc3339(ts).is_ok(), "{ts}");
+        assert!(time::OffsetDateTime::parse(ts, &time::format_description::well_known::Rfc3339).is_ok(), "{ts}");
         assert!(ts.contains('.'), "milliseconds: {ts}");
         assert_eq!(rest, format!("[tui {}] two\\nlines", std::process::id()));
         #[cfg(unix)]
