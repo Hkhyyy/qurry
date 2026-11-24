@@ -32,7 +32,9 @@ runs:
     - name: Install wasm-bindgen-cli
       if: steps.wb-cache.outputs.cache-hit != 'true'
       shell: bash
-      run: cargo install wasm-bindgen-cli --version "${{ steps.wb.outputs.version }}" --locked
+      # --force: a wasm-bindgen already in ~/.cargo/bin (restored with the Rust cache, or on the runner image) is replaced by the
+      # pinned version, instead of failing with "binary `wasm-bindgen` already exists"
+      run: cargo install wasm-bindgen-cli --version "${{ steps.wb.outputs.version }}" --locked --force
 
     # wasm-opt -Oz for the shipped module (scripts/wasm.sh runs it when it is on PATH). Needs Node (actions/setup-node first)
     - name: Install wasm-opt (binaryen)
