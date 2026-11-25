@@ -1628,26 +1628,33 @@ mod tests {
         let fields: Vec<String> = (0..5000).flat_map(|i| [format!("f{i}"), "v".into()]).collect();
         let _: () = redis::cmd("HSET").arg(h).arg(&fields).query_async(&mut c).await.unwrap();
         let _: () = redis::cmd("SET").arg("qurry:str:s").arg("hi").query_async(&mut c).await.unwrap();
-        async fn memory_calls(c: &mut RedisConn) -> i64 {
-            let info: String = redis::cmd("INFO").arg("commandstats").query_async(c).await.unwrap();
-            info.lines().find_map(|l| l.strip_prefix("cmdstat_memory|usage:calls=")).and_then(|r| r.split(',').next()).map_or(0, |n| n.parse().unwrap())
-        }
-        // The counter is the server's: another test running at the same time (as in CI) can add to it, so a round counts only
-        // when no call came in during it. A check that runs MEMORY USAGE adds to every round
-        let mut added = vec![];
-        for _ in 0..5 {
-            let before = memory_calls(&mut c).await;
-            let e = st.run_read_only("rd::db8".into(), format!("GET {h}"), 10).await.unwrap_err().to_string();
-            assert!(e.contains("WRONGTYPE"), "{e}");
-            assert!(st.run_read_only("rd::db8".into(), format!("MGET qurry:str:s {h}"), 10).await.is_ok());
-            assert!(st.run_read_only("rd::db8".into(), format!("GETRANGE {h} 0 -1"), 10).await.is_err());
-            assert!(st.run_read_only("rd::db8".into(), "GET qurry:str:s".into(), 10).await.is_ok());
-            added.push(memory_calls(&mut c).await - before);
-            if added.last() == Some(&0) {
+        // MONITOR on a connection of the test's own sees every command; only MEMORY USAGE of this test's key counts, so the other
+        // tests running at the same time (MEMORY USAGE of their own keys) don't
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let addr = std::env::var("QURRY_TEST_REDIS").unwrap();
+        let mut mon = tokio::io::BufReader::new(tokio::net::TcpStream::connect(&addr).await.unwrap());
+        mon.get_mut().write_all(b"MONITOR\r\n").await.unwrap();
+        let mut ok = String::new();
+        mon.read_line(&mut ok).await.unwrap();
+        assert_eq!(ok.trim(), "+OK");
+        let e = st.run_read_only("rd::db8".into(), format!("GET {h}"), 10).await.unwrap_err().to_string();
+        assert!(e.contains("WRONGTYPE"), "{e}");
+        assert!(st.run_read_only("rd::db8".into(), format!("MGET qurry:str:s {h}"), 10).await.is_ok());
+        assert!(st.run_read_only("rd::db8".into(), format!("GETRANGE {h} 0 -1"), 10).await.is_err());
+        assert!(st.run_read_only("rd::db8".into(), "GET qurry:str:s".into(), 10).await.is_ok());
+        // The last command, seen by MONITOR after everything before it
+        let _: () = redis::cmd("ECHO").arg("qurry:str:done").query_async(&mut c).await.unwrap();
+        let mut seen = vec![];
+        loop {
+            let mut line = String::new();
+            mon.read_line(&mut line).await.unwrap();
+            if line.contains("\"qurry:str:done\"") {
                 break;
             }
+            seen.push(line);
         }
-        assert_eq!(added.last(), Some(&0), "string size checks ran MEMORY USAGE: {added:?} calls per round");
+        let walks: Vec<&String> = seen.iter().filter(|l| l.to_uppercase().contains("\"MEMORY\" \"USAGE\"") && l.contains(h)).collect();
+        assert!(walks.is_empty(), "string size checks ran MEMORY USAGE: {walks:?}");
         let _: () = redis::cmd("DEL").arg(h).arg("qurry:str:s").query_async(&mut c).await.unwrap();
     }
 
