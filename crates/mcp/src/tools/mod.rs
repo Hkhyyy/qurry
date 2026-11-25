@@ -55,7 +55,7 @@ impl Server {
             ),
             tool(
                 "describe_table",
-                "Columns (type, nullability, default, comment, primary key), indexes and constraints of a table.",
+                "Columns (type, nullability, default, comment, primary key), indexes and constraints of a table (not for Redis: use redis_get).",
                 ds_props(json!({ "schema": { "type": "string" }, "table": { "type": "string" } })),
                 &["data_source", "table"],
                 true,
@@ -126,16 +126,25 @@ impl Server {
             ),
             tool(
                 "redis_scan",
-                "Scan Redis keys with a pattern and get their type and TTL (ms, -1 = no expiry).",
-                ds_props(json!({ "pattern": { "type": "string", "description": "default *" }, "type": { "type": "string", "enum": ["string", "hash", "list", "set", "zset", "stream"] }, "count": { "type": "integer", "description": "default 200" }, "cursor": { "type": "string" } })),
+                "Scan Redis keys with a pattern and get their type and TTL (ms, -1 = no expiry). A key name that isn't UTF-8 comes as key_base64 instead of key; pass it to redis_get as is. Continue with next_cursor until it is \"0\".",
+                ds_props(json!({
+                    "pattern": { "type": "string", "description": "default *" },
+                    "type": { "type": "string", "description": "Only keys of this type: string, hash, list, set, zset, stream, or a module type such as ReJSON-RL" },
+                    "count": { "type": "integer", "description": "default 200" },
+                    "cursor": { "type": "string", "description": "next_cursor of the previous call; default 0 (the start)" }
+                })),
                 &["data_source"],
                 true,
             ),
             tool(
                 "redis_get",
-                &format!("Get a Redis key's type, TTL (ms, -1 = no expiry), size and value (hash fields, list items, set/zset members, stream entries). A string shows its first {} KB; a collection its first `limit` elements, fewer when they would read more than {} MB (truncated: true). A value over {} KB comes as {{\"text\": its beginning, \"size\": bytes}}.", VALUE_MAX >> 10, READ_MAX_BYTES >> 20, VALUE_MAX >> 10),
-                ds_props(json!({ "key": { "type": "string" }, "limit": { "type": "integer", "description": "max elements, default 200" } })),
-                &["data_source", "key"],
+                &format!("Get a Redis key's type, TTL (ms, -1 = no expiry), size and value (hash fields, list items, set/zset members, stream entries). A string shows its first {} KB; a collection its first `limit` elements, fewer when they would read more than {} MB (truncated: true). A value over {} KB comes as {{\"text\": its beginning, \"size\": bytes}}; a value that isn't UTF-8 as {{\"base64\": …}} (with size when cut).", VALUE_MAX >> 10, READ_MAX_BYTES >> 20, VALUE_MAX >> 10),
+                ds_props(json!({
+                    "key": { "type": "string" },
+                    "key_base64": { "type": "string", "description": "Instead of key: a name that isn't UTF-8, as redis_scan gave it" },
+                    "limit": { "type": "integer", "description": "max elements, default 200" }
+                })),
+                &["data_source"],
                 true,
             ),
             tool(
@@ -193,10 +202,23 @@ impl Server {
     async fn target(&self, a: &Value) -> Result<(String, DbKind, String, McpAccess), String> {
         let (id, kind, def, ro) = self.resolve(a).await?;
         let db = a.get("database").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(String::from).unwrap_or(def);
+        // Redis would read any other name as db0
+        if kind == DbKind::Redis && qurry_core::redisdb::db_number(&db).is_none() {
+            return Err(format!("Unknown Redis database \"{db}\": use db0, db1, … (list_databases)"));
+        }
         Ok((sql::target_id(&id, Some(&db)), kind, db, ro))
     }
 
+    /// A read whose Redis connection dropped (the server restarted) runs once more on the new connection; execute and export_csv
+    /// (it writes a file) never do
     pub(crate) async fn call(&self, name: &str, a: &Value) -> Result<Value, String> {
+        match self.call_once(name, a).await {
+            Err(e) if !matches!(name, "execute" | "export_csv") && qurry_core::redisdb::dropped(&e) => self.call_once(name, a).await,
+            r => r,
+        }
+    }
+
+    async fn call_once(&self, name: &str, a: &Value) -> Result<Value, String> {
         let st = &self.state;
         let e = |e: qurry_core::error::AppError| e.to_string();
         match name {

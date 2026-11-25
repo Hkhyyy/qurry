@@ -137,9 +137,23 @@ pub fn redis_db_index(name: &str) -> i64 {
     name.trim().trim_start_matches("db").parse().unwrap_or(0)
 }
 
+/// A Redis database name that names one: "db3" or "3" → 3; anything else (redis_db_index reads it as 0) → None
+pub fn redis_db_number(name: &str) -> Option<i64> {
+    let n = name.trim();
+    let d = n.strip_prefix("db").unwrap_or(n);
+    (!d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())).then(|| d.parse().ok()).flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redis_database_names() {
+        for (name, n) in [("db0", Some(0)), ("db12", Some(12)), (" 3 ", Some(3)), ("dbfoo", None), ("", None), ("db", None), ("db-1", None), ("db1x", None), ("12345678901234567890", None)] {
+            assert_eq!(redis_db_number(name), n, "{name:?}");
+        }
+    }
 
     /// (blank Database, Database " app ") → default db; a match, so a new kind doesn't compile without its row
     fn expected(k: DbKind) -> (&'static str, &'static str) {

@@ -1,8 +1,9 @@
 //! Redis through the real stdio server (qurry-mcp --allow-write): redis_scan, redis_get, query refusing writes, and execute refusing
 //! writes that empty a key while partial ones run (#223); a hidden source's exact name is refused (#228); reads within the byte
 //! budget (#224); list_objects says when it stopped at 5,000 keys and search_objects finds keys past them (#225); SLOWLOG and CLIENT LIST
-//! on Production only with the admin-reports consent, SLOWLOG's values masked (#227).
-//! QURRY_TEST_REDIS=host:port cargo test -p qurry-mcp --test redis -- --ignored. Own keys (qurry:mcp:*) in db10, db11 and db13
+//! on Production only with the admin-reports consent, SLOWLOG's values masked (#227); binary keys and values,
+//! unknown databases, bad cursors, describe_table and a read after the connection dropped (#229).
+//! QURRY_TEST_REDIS=host:port cargo test -p qurry-mcp --test redis -- --ignored. Own keys (qurry:mcp:*) in db1, db10, db11 and db13
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -199,7 +200,10 @@ async fn redis_tools_over_stdio() {
 
 /// A config folder with the sources, and a state to write test keys with
 async fn setup(sources: &[qurry_core::store::ConnectionConfig]) -> (std::path::PathBuf, std::path::PathBuf, qurry_core::app::AppState) {
-    let dir = std::env::temp_dir().join(format!("qurry-mcp-redis-{}-{}", std::process::id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()));
+    // Tests run at once: the clock alone can give two of them the same folder
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("qurry-mcp-redis-{}-{n}-{}", std::process::id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()));
     let config = dir.join("config");
     let st = qurry_core::open_state(Some(config.clone())).unwrap();
     for c in sources {
@@ -220,11 +224,11 @@ async fn redis_reads_are_bounded_over_stdio() {
     let run = |s: String| st.run_query("b::db11".into(), s, None, None);
     let (l, h, big, s2) = ("qurry:mcp:bigl", "qurry:mcp:bigh", "qurry:mcp:big", "qurry:mcp:s2");
     run(format!("DEL {l} {h} {big} {s2}")).await.unwrap();
-    let two = "x".repeat(2 << 20);
-    run(format!("RPUSH {l} {two} {two} {two}")).await.unwrap();
-    run(format!("HSET {h} f1 {two} f2 {two} f3 {two}")).await.unwrap();
-    run(format!("SET {big} {}", "y".repeat(5 << 20))).await.unwrap();
-    run(format!("SET {s2} {two}")).await.unwrap();
+    // Made on the server (string.rep): sending megabytes could pass the response timeout while other tests run
+    let fill = "local two = string.rep('x', 2097152) \
+        redis.call('RPUSH', KEYS[1], two, two, two) redis.call('HSET', KEYS[2], 'f1', two, 'f2', two, 'f3', two) \
+        redis.call('SET', KEYS[3], string.rep('y', 5242880)) redis.call('SET', KEYS[4], two) return 1";
+    run(format!("EVAL \"{fill}\" 4 {l} {h} {big} {s2}")).await.unwrap();
 
     let mut m = Mcp::start(&dir, &config);
     let mut call = |name: &str, args: Value| {
@@ -328,5 +332,50 @@ async fn redis_admin_reports_need_consent_over_stdio() {
 
     m.stop();
     run("DEL qurry:mcp:card").await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #229: a key name that isn't UTF-8 goes from redis_scan to redis_get as key_base64, binary values come as base64; an unknown
+/// database and a bad cursor are refused; describe_table points to redis_get; a read whose connection dropped runs again
+#[tokio::test]
+#[ignore]
+async fn redis_binary_keys_and_dropped_connections_over_stdio() {
+    let Some(addr) = qurry_core::testenv::var("QURRY_TEST_REDIS") else { return };
+    let (host, port) = addr.rsplit_once(':').expect("QURRY_TEST_REDIS=host:port");
+    let mut c = source("one", "One", host, port, Some("read"), false);
+    c.database = "db1".into();
+    let (dir, config, st) = setup(&[c]).await;
+    let run = |s: &str| st.run_query("one::db1".into(), s.to_string(), None, None);
+    run(r#"SET "qurry:mcp:bin:\xff\xfe\x00k" "\x89PNG\xff""#).await.unwrap();
+
+    let mut m = Mcp::start(&dir, &config);
+    let (err, t) = m.call("redis_scan", json!({ "data_source": "One", "pattern": "qurry:mcp:bin:*" }));
+    let v: Value = serde_json::from_str(&t).unwrap();
+    let k = &v["keys"][0];
+    assert!(!err && k.get("key").is_none() && k["key_base64"] == json!("cXVycnk6bWNwOmJpbjr//gBr"), "{t}");
+    let (err, t) = m.call("redis_get", json!({ "data_source": "One", "key_base64": k["key_base64"] }));
+    let v: Value = serde_json::from_str(&t).unwrap();
+    assert!(!err && v["value"] == json!({ "base64": "iVBOR/8=" }), "{t}");
+
+    let (err, t) = m.call("query", json!({ "data_source": "One", "database": "dbfoo", "sql": "DBSIZE" }));
+    assert!(err && t.contains("Unknown Redis database"), "{t}");
+    let (err, t) = m.call("redis_scan", json!({ "data_source": "One", "cursor": "abc" }));
+    assert!(err && t.contains("Bad cursor"), "{t}");
+    let (err, t) = m.call("describe_table", json!({ "data_source": "One", "table": "qurry:mcp:x" }));
+    assert!(err && t.contains("redis_get"), "{t}");
+
+    // Another client closes MCP's connections (as a server restart does): the next read answers
+    let own = run("CLIENT ID").await.unwrap().rows[0][0].to_string();
+    let list = run("CLIENT LIST").await.unwrap().rows[0][0].as_str().unwrap().to_string();
+    let ids: Vec<&str> = list.lines().filter(|l| l.contains(" db=1 ")).filter_map(|l| l.strip_prefix("id=")?.split(' ').next()).filter(|id| *id != own).collect();
+    assert!(!ids.is_empty(), "MCP's connection: {list}");
+    for id in ids {
+        run(&format!("CLIENT KILL ID {id}")).await.unwrap();
+    }
+    let (err, t) = m.call("query", json!({ "data_source": "One", "sql": "PING" }));
+    assert!(!err && t.contains("PONG"), "{t}");
+
+    m.stop();
+    run(r#"DEL "qurry:mcp:bin:\xff\xfe\x00k""#).await.unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }

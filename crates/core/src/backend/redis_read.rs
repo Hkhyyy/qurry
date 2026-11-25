@@ -213,6 +213,26 @@ pub fn value_json(b: &[u8], size: usize) -> Value {
     }
 }
 
+/// A key name in an MCP answer: {"key": text}, or {"key_base64": …} when it isn't UTF-8 — redis_get takes either back as is
+pub fn key_json(k: &[u8]) -> serde_json::Map<String, Value> {
+    let mut m = serde_json::Map::new();
+    match std::str::from_utf8(k) {
+        Ok(s) => m.insert("key".into(), Value::from(s)),
+        Err(_) => m.insert("key_base64".into(), Value::from(base64::engine::general_purpose::STANDARD.encode(k))),
+    };
+    m
+}
+
+/// The key redis_get was given: `key` as text, or `key_base64` (from redis_scan, for a name that isn't UTF-8)
+pub fn key_arg(key: Option<&str>, key_base64: Option<&str>) -> AppResult<Vec<u8>> {
+    match (key, key_base64) {
+        (Some(k), None) => Ok(k.as_bytes().to_vec()),
+        (None, Some(b)) => base64::engine::general_purpose::STANDARD.decode(b.trim()).map_err(|e| AppError::Msg(format!("key_base64 isn't base64: {e}"))),
+        (Some(_), Some(_)) => Err(AppError::Msg("Give key or key_base64, not both".into())),
+        (None, None) => Err(AppError::Msg("key is required (or key_base64)".into())),
+    }
+}
+
 /// A Redis reply in an MCP answer: bulk strings by value_json, the rest as the app shows them
 pub(crate) fn reply_json(v: &RV) -> Value {
     match v {
@@ -299,6 +319,18 @@ mod tests {
         assert!(value_json(&[b'a', 0xc3], 2).get("base64").is_some());
     }
 
+    /// #229: a key name that isn't UTF-8 goes out as base64 and comes back to the same bytes
+    #[test]
+    fn binary_key_names_round_trip() {
+        let k = b"bin:\xff\xfe\x00k";
+        let j = key_json(k);
+        assert_eq!((j.get("key"), j.len()), (None, 1));
+        assert_eq!(key_arg(None, j["key_base64"].as_str()).unwrap(), k);
+        assert_eq!(key_json(b"user:1")["key"], json!("user:1"));
+        assert_eq!(key_arg(Some("user:1"), None).unwrap(), b"user:1");
+        assert!(key_arg(None, Some("not base64!")).is_err() && key_arg(Some("a"), Some("YQ==")).is_err() && key_arg(None, None).is_err());
+    }
+
     #[test]
     fn long_cells_are_cut_and_listed() {
         let mut r = crate::db::query_result(vec![], vec![vec![json!(1), json!("x".repeat(VALUE_MAX + 1))], vec![json!("ok"), json!("€".repeat(VALUE_MAX))]], 0, false, std::time::Instant::now(), true);
@@ -326,16 +358,13 @@ mod tests {
     async fn mcp_reads_stay_within_the_byte_budget() {
         let Some((st, m)) = state("db9").await else { return };
         let mut c = m.clone();
-        let two = "x".repeat(2 << 20);
         let keys = ["qurry:budget:l", "qurry:budget:h", "qurry:budget:big", "qurry:budget:s1", "qurry:budget:s2", "qurry:budget:s3", "qurry:budget:small"];
         let _: () = redis::cmd("DEL").arg(&keys[..]).query_async(&mut c).await.unwrap();
-        let _: () = redis::cmd("RPUSH").arg(keys[0]).arg(&two).arg(&two).arg(&two).query_async(&mut c).await.unwrap();
-        let _: () = redis::cmd("HSET").arg(keys[1]).arg("f1").arg(&two).arg("f2").arg(&two).arg("f3").arg(&two).query_async(&mut c).await.unwrap();
-        let _: () = redis::cmd("SET").arg(keys[2]).arg("y".repeat(5 << 20)).query_async(&mut c).await.unwrap();
-        for k in &keys[3..6] {
-            let _: () = redis::cmd("SET").arg(*k).arg(&two).query_async(&mut c).await.unwrap();
-        }
-        let _: () = redis::cmd("HSET").arg(keys[6]).arg("a").arg("1").arg("b").arg("2").query_async(&mut c).await.unwrap();
+        // Made on the server (string.rep): sending megabytes could pass the response timeout while other tests run
+        let fill = "local two = string.rep('x', 2097152) redis.call('RPUSH', KEYS[1], two, two, two) \
+            redis.call('HSET', KEYS[2], 'f1', two, 'f2', two, 'f3', two) redis.call('SET', KEYS[3], string.rep('y', 5242880)) \
+            for i = 4, 6 do redis.call('SET', KEYS[i], two) end redis.call('HSET', KEYS[7], 'a', '1', 'b', '2') return 1";
+        let _: () = redis::cmd("EVAL").arg(fill).arg(keys.len()).arg(&keys[..]).query_async(&mut c).await.unwrap();
         let read = |s: &str| st.run_read_only("rd::db9".into(), s.to_string(), 100);
         for over in ["LRANGE qurry:budget:l 0 2", "LRANGE qurry:budget:l 0 -1", "HMGET qurry:budget:h f1 f2 f3", "HRANDFIELD qurry:budget:h 3 WITHVALUES",
             "HSCAN qurry:budget:h 0 COUNT 1000", "HGETALL qurry:budget:h", "MGET qurry:budget:s1 qurry:budget:s2 qurry:budget:s3", "GET qurry:budget:big"] {

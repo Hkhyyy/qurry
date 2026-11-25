@@ -22,4 +22,9 @@ impl AppState {
     pub async fn redis_search_keys(&self, id: String, query: String, max: usize) -> AppResult<(Vec<Vec<u8>>, bool)> {
         crate::redis_read::search_keys(&redis_pool(self, &id).await?, &query, max).await
     }
+
+    /// redis_scan: about `count` keys with their type and TTL, the keys as bytes (redis_read::key_json shows them)
+    pub async fn redis_scan_read_only(&self, id: String, cursor: String, pattern: String, count: usize, type_filter: Option<String>) -> AppResult<(String, Vec<(Vec<u8>, String, i64)>)> {
+        redisdb::scan_keys_page(&redis_pool(self, &id).await?, &cursor, &pattern, count, type_filter.as_deref()).await
+    }
 }

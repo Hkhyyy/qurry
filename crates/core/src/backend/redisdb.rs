@@ -25,6 +25,7 @@ fn pct(s: &str) -> String {
 
 /// "db3" / "3" / "" → 3 / 0
 pub use qurry_shared::kind::redis_db_index as db_index;
+pub use qurry_shared::kind::redis_db_number as db_number;
 
 /// A connection, and whether the server answered CONFIG when it connected (managed services like ElastiCache, Azure Cache,
 /// Memorystore or Upstash rename or refuse it; the browser's Config tab is then greyed out)
@@ -274,6 +275,14 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
 
 pub(crate) fn err(e: redis::RedisError) -> AppError {
     AppError::Msg(format!("Redis: {e}"))
+}
+
+/// A Redis error whose connection dropped (the server restarted, a proxy or `CLIENT KILL` closed it): the connection manager opens
+/// a new one, so a read can run again once (MCP does). By the words redis-rs gives the I/O error, as app::is_conn_lost reads them;
+/// not a timeout, which would only wait twice
+pub fn dropped(e: &str) -> bool {
+    let e = e.to_lowercase();
+    e.starts_with("redis") && ["broken pipe", "connection reset", "connection aborted", "connection closed", "unexpected end of file", "not connected"].iter().any(|k| e.contains(k))
 }
 
 pub async fn server_version(m: &RedisConn) -> AppResult<String> {
@@ -749,12 +758,29 @@ pub struct ScanPage {
 
 /// One SCAN (+ a few more if needed) to get about `count` keys with type·TTL
 pub async fn scan_page(m: &RedisConn, cursor: &str, pattern: &str, count: usize, type_filter: Option<&str>) -> AppResult<ScanPage> {
-    let nodes = m.scan_nodes();
-    // Cursor: single node "123", cluster "node index:cursor"
-    let (mut node, mut cur): (usize, u64) = match cursor.split_once(':') {
-        Some((n, c)) => (n.parse().unwrap_or(0), c.parse().unwrap_or(0)),
-        None => (0, cursor.parse().unwrap_or(0)),
+    let (cursor, keys) = scan_keys_page(m, cursor, pattern, count, type_filter).await?;
+    let keys = keys.into_iter().map(|(k, ty, ttl)| KeyRow { key: String::from_utf8_lossy(&k).into_owned(), ty, ttl }).collect();
+    Ok(ScanPage { cursor, keys })
+}
+
+/// A cursor scan_page gave: single node "123", cluster "node index:cursor". Anything else is refused rather than read as 0, which
+/// would start the scan over
+fn parse_cursor(cursor: &str, nodes: usize) -> AppResult<(usize, u64)> {
+    let bad = || AppError::Msg(format!("Bad cursor \"{cursor}\": pass the next cursor the previous scan returned, or 0 to start"));
+    let (node, cur) = match cursor.trim().split_once(':') {
+        Some((n, c)) => (n.parse().map_err(|_| bad())?, c.parse().map_err(|_| bad())?),
+        None => (0, cursor.trim().parse().map_err(|_| bad())?),
     };
+    if node >= nodes.max(1) {
+        return Err(bad());
+    }
+    Ok((node, cur))
+}
+
+/// scan_page with the keys as bytes (they may not be UTF-8): (next cursor, [(key, type, TTL ms)])
+pub(crate) async fn scan_keys_page(m: &RedisConn, cursor: &str, pattern: &str, count: usize, type_filter: Option<&str>) -> AppResult<(String, Vec<(Vec<u8>, String, i64)>)> {
+    let nodes = m.scan_nodes();
+    let (mut node, mut cur) = parse_cursor(cursor, nodes.len())?;
     let mut keys: Vec<Vec<u8>> = Vec::new();
     let pattern = if pattern.trim().is_empty() { "*".to_string() } else { pattern.trim().to_string() };
     // If the pattern matches only rare keys a single SCAN can come back empty, so repeat a few times
@@ -778,19 +804,18 @@ pub async fn scan_page(m: &RedisConn, cursor: &str, pattern: &str, count: usize,
     }
     let meta = per_key(m, &keys, &["TYPE", "PTTL"]).await?;
     let rows = keys
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(i, k)| KeyRow {
-            key: String::from_utf8_lossy(k).into_owned(),
-            ty: meta.get(i * 2).map(text_of).unwrap_or_default(),
-            ttl: match meta.get(i * 2 + 1) {
+        .map(|(i, k)| {
+            let ttl = match meta.get(i * 2 + 1) {
                 Some(RV::Int(t)) => *t,
                 _ => -1,
-            },
+            };
+            (k, meta.get(i * 2).map(text_of).unwrap_or_default(), ttl)
         })
         .collect();
     let cursor = if node >= nodes.len() { "0".to_string() } else if nodes.len() > 1 { format!("{node}:{cur}") } else { cur.to_string() };
-    Ok(ScanPage { cursor, keys: rows })
+    Ok((cursor, rows))
 }
 
 #[derive(serde::Serialize)]
@@ -1079,7 +1104,7 @@ mod tests {
     use crate::store::DbKind;
 
     /// docker run -d --name dbtool-redis-test -p 16379:6379 redis:7-alpine, QURRY_TEST_REDIS=127.0.0.1:16379 (the tests on it skip
-    /// when it is unset; the TLS, Sentinel and Cluster tests use 127.0.0.1 and their own ports)
+    /// when it is unset; the TLS, Sentinel and Cluster tests have their own variables: crate::testenv)
     fn cfg(db: &str) -> ConnectionConfig {
         let addr = std::env::var("QURRY_TEST_REDIS").unwrap_or_else(|_| "127.0.0.1:16379".into());
         let (host, port) = addr.rsplit_once(':').expect("QURRY_TEST_REDIS=host:port");
@@ -1116,6 +1141,29 @@ mod tests {
         assert!(matches!(parse_command("GET \"x"), Err(AppError::Msg(m)) if m == "Unbalanced quotes"));
         assert_eq!(quote_arg("a b"), "\"a b\"");
         assert_eq!(quote_arg("user:1"), "user:1");
+    }
+
+    /// #229: what MCP runs again once
+    #[test]
+    fn dropped_connections_are_told_from_timeouts() {
+        for e in ["Redis: broken pipe", "Redis: Connection reset by peer (os error 54)", "Redis: unexpected end of file", "Redis: Connection closed - IoError"] {
+            assert!(dropped(e), "{e}");
+        }
+        for e in ["Redis: timed out", "Redis 127.0.0.1:6379: Connection refused (os error 61)", "WRONGTYPE", "server: broken pipe"] {
+            assert!(!dropped(e), "{e}");
+        }
+    }
+
+    /// #229: a cursor that isn't one scan_page gave is refused, not read as 0 (which starts the scan over)
+    #[test]
+    fn bad_scan_cursors_are_refused() {
+        assert_eq!(parse_cursor("0", 1).unwrap(), (0, 0));
+        assert_eq!(parse_cursor(" 1234 ", 1).unwrap(), (0, 1234));
+        assert_eq!(parse_cursor("2:99", 3).unwrap(), (2, 99));
+        for bad in ["abc", "", "-1", "1:x", "3:0", "1:5"] {
+            let e = parse_cursor(bad, if bad == "3:0" { 3 } else { 1 }).unwrap_err().to_string();
+            assert!(e.contains("Bad cursor"), "{bad}: {e}");
+        }
     }
 
     #[test]
@@ -1549,39 +1597,46 @@ mod tests {
         std::env::var("QURRY_TEST_TLS_DIR").unwrap_or_else(|_| "/tmp/dbtool-tls".into())
     }
 
-    /// docker: dbtool-redis-tls (16391, requirepass tlspass, tls-auth-clients optional)
+    /// QURRY_TEST_REDIS_TLS=host:port:password: a Redis with TLS only (tls-auth-clients optional), its certificates in
+    /// QURRY_TEST_TLS_DIR (ca.pem, client.pem, client-key.pem)
     #[tokio::test]
     #[ignore]
     async fn redis_tls() {
+        let Some(v) = crate::testenv::var("QURRY_TEST_REDIS_TLS") else { return };
+        let mut p = v.splitn(3, ':');
+        let (host, port, password) = (p.next().unwrap(), p.next().expect("port").parse().expect("port"), p.next().unwrap_or(""));
         let d = tls_dir();
         let mut c = cfg("0");
-        c.port = 16391;
+        (c.host, c.port) = (host.into(), port);
         // 1) require: encryption only, no certificate check
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "require".into(), ..Default::default() });
-        let p = crate::db::connect(&c, Some("tlspass")).await.expect("tls require");
+        let p = crate::db::connect(&c, Some(password)).await.expect("tls require");
         assert!(p.server_version().await.unwrap().starts_with("Redis"));
         // 2) verify-full + CA + client certificate (mTLS)
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "verify-full".into(), ca_file: format!("{d}/ca.pem"), cert_file: format!("{d}/client.pem"), key_file: format!("{d}/client-key.pem") });
-        let p = crate::db::connect(&c, Some("tlspass")).await.expect("tls verify-full + mtls");
+        let p = crate::db::connect(&c, Some(password)).await.expect("tls verify-full + mtls");
         let Pool::Redis(m, _) = &p else { panic!() };
         crate::redisdb::run(m, "SET tls:k ok", 1).await.unwrap();
         assert_eq!(crate::redisdb::run(m, "GET tls:k", 1).await.unwrap().rows[0][0], "ok");
         // 3) verify-full without the CA (self-signed) must be rejected
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "verify-full".into(), ..Default::default() });
-        assert!(crate::db::connect(&c, Some("tlspass")).await.is_err(), "self-signed must fail without CA");
+        assert!(crate::db::connect(&c, Some(password)).await.is_err(), "self-signed must fail without CA");
         // 4) Plain text connection must fail
         c.ssl = None;
-        assert!(crate::db::connect(&c, Some("tlspass")).await.is_err());
+        assert!(crate::db::connect(&c, Some(password)).await.is_err());
     }
 
-    /// docker: dbtool-redis-sentinel (master 16392 requirepass spass, sentinel 26392 master mymaster)
+    /// QURRY_TEST_REDIS_SENTINEL=sentinel-host:port:master-name:password: a Sentinel, and the master it names (with that password)
     #[tokio::test]
     #[ignore]
     async fn redis_sentinel() {
+        let Some(v) = crate::testenv::var("QURRY_TEST_REDIS_SENTINEL") else { return };
+        let p: Vec<&str> = v.splitn(4, ':').collect();
+        let [host, port, master, password] = p[..] else { panic!("QURRY_TEST_REDIS_SENTINEL=sentinel-host:port:master-name:password") };
         let mut c = cfg("2");
-        c.port = 1; // unused: the sentinel node list is used
-        c.redis = Some(crate::store::RedisMode { mode: "sentinel".into(), sentinel_master: "mymaster".into(), nodes: "127.0.0.1:1, 127.0.0.1:26392".into() });
-        let p = crate::db::connect(&c, Some("spass")).await.expect("sentinel");
+        c.port = 1; // unused: the sentinel node list is used, a node that doesn't answer first
+        c.redis = Some(crate::store::RedisMode { mode: "sentinel".into(), sentinel_master: master.into(), nodes: format!("127.0.0.1:1, {host}:{port}") });
+        let p = crate::db::connect(&c, Some(password)).await.expect("sentinel");
         let Pool::Redis(m, 2) = &p else { panic!() };
         crate::redisdb::run(m, "SET s:k viaSentinel", 1).await.unwrap();
         let info = crate::redisdb::run(m, "INFO replication", 50).await.unwrap();
@@ -1589,17 +1644,21 @@ mod tests {
         let page = scan_page(m, "0", "s:*", 50, None).await.unwrap();
         assert_eq!(page.keys.len(), 1);
         c.redis.as_mut().unwrap().sentinel_master = "nope".into();
-        let e = crate::db::connect(&c, Some("spass")).await.err().expect("unknown master").to_string();
+        let e = crate::db::connect(&c, Some(password)).await.err().expect("unknown master").to_string();
         assert!(e.contains("does not know master"), "{e}");
     }
 
-    /// docker: dbtool-redis-cluster (127.0.0.1:17001..17003, 3 masters)
+    /// QURRY_TEST_REDIS_CLUSTER=host:port,host:port: two masters of a Redis Cluster (the first is the data source's address, the
+    /// second its node list)
     #[tokio::test]
     #[ignore]
     async fn redis_cluster() {
+        let Some(v) = crate::testenv::var("QURRY_TEST_REDIS_CLUSTER") else { return };
+        let (seed, other) = v.split_once(',').expect("QURRY_TEST_REDIS_CLUSTER=host:port,host:port");
+        let (host, port) = seed.rsplit_once(':').expect("host:port");
         let mut c = cfg("0");
-        c.port = 17001;
-        c.redis = Some(crate::store::RedisMode { mode: "cluster".into(), nodes: "127.0.0.1:17002".into(), ..Default::default() });
+        (c.host, c.port) = (host.into(), port.parse().expect("port"));
+        c.redis = Some(crate::store::RedisMode { mode: "cluster".into(), nodes: other.trim().into(), ..Default::default() });
         let p = crate::db::connect(&c, None).await.expect("cluster");
         let Pool::Redis(m, _) = &p else { panic!() };
         assert!(m.is_cluster());

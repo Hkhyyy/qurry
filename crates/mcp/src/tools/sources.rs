@@ -73,6 +73,9 @@ impl Server {
         let e = |e: qurry_core::error::AppError| e.to_string();
         let schema_or = |kind: DbKind, db: &str| s("schema").unwrap_or_else(|| if kind == DbKind::Postgres { "public".into() } else { db.to_string() });
         let (t, kind, db, _) = self.target(a).await?;
+        if kind == DbKind::Redis {
+            return Err("Redis keys have no columns: use redis_get for a key's type, TTL, size and value".into());
+        }
         let d = st.table_detail(t, schema_or(kind, &db), s("table").ok_or("table is required")?).await.map_err(e)?;
         Ok(json!(d))
     }
@@ -99,7 +102,8 @@ impl Server {
         let q = s("query").ok_or("query is required")?;
         let limit = n("limit", 30);
         let list = self.sources().await?;
-        let only = if a.get("data_source").is_some() { Some(self.resolve(a).await?.0) } else { None };
+        let only = if a.get("data_source").is_some() { Some(self.target(a).await?.0) } else { None };
+        let only = only.map(|t| qurry_core::app::split_target(&t).0.to_string());
         let mut hits: Vec<(i64, Value)> = vec![];
         let mut errors = vec![];
         let mut notes: Vec<String> = vec![];
@@ -129,7 +133,12 @@ impl Server {
                         for k in keys {
                             let name = String::from_utf8_lossy(&k).into_owned();
                             let sc = fuzzy(&q, &name).unwrap_or(0);
-                            hits.push((sc, json!({ "data_source": c.config.name, "database": db, "schema": db, "name": name, "kind": "key" })));
+                            let mut hit = json!({ "data_source": c.config.name, "database": db, "schema": db, "name": name, "kind": "key" });
+                            // A name that isn't UTF-8: also as redis_get takes it
+                            if let Some(b) = qurry_core::redis_read::key_json(&k).remove("key_base64") {
+                                hit["key_base64"] = b;
+                            }
+                            hits.push((sc, hit));
                         }
                         if !complete {
                             notes.push(format!("{}/{db}: searched part of the keys only; use redis_scan with a pattern for the rest", c.config.name));

@@ -1,5 +1,6 @@
 //! Redis keys: redis_scan, redis_get
 use crate::Server;
+use qurry_core::redis_read::{key_arg, key_json};
 use qurry_core::store::DbKind;
 use serde_json::{json, Value};
 
@@ -13,11 +14,20 @@ impl Server {
         if kind != DbKind::Redis {
             return Err("Not a Redis data source".into());
         }
-        let p = st
-            .redis_scan(t, s("cursor").unwrap_or_else(|| "0".into()), s("pattern").unwrap_or_else(|| "*".into()), n("count", 200).clamp(1, 5000), s("type"))
+        let (cursor, keys) = st
+            .redis_scan_read_only(t, s("cursor").unwrap_or_else(|| "0".into()), s("pattern").unwrap_or_else(|| "*".into()), n("count", 200).clamp(1, 5000), s("type"))
             .await
             .map_err(e)?;
-        Ok(json!({ "next_cursor": p.cursor, "keys": p.keys }))
+        let keys: Vec<Value> = keys
+            .iter()
+            .map(|(k, ty, ttl)| {
+                let mut row = key_json(k);
+                row.insert("type".into(), json!(ty));
+                row.insert("ttl".into(), json!(ttl));
+                Value::Object(row)
+            })
+            .collect();
+        Ok(json!({ "next_cursor": cursor, "keys": keys }))
     }
 
     pub(super) async fn redis_get(&self, a: &Value) -> Result<Value, String> {
@@ -29,7 +39,7 @@ impl Server {
         if kind != DbKind::Redis {
             return Err("Not a Redis data source".into());
         }
-        let key = s("key").ok_or("key is required")?.into_bytes();
+        let key = key_arg(s("key").as_deref(), s("key_base64").as_deref()).map_err(e)?;
         Ok(json!(st.redis_key_read_only(t, key, n("limit", 200).clamp(1, 10000)).await.map_err(e)?))
     }
 }
