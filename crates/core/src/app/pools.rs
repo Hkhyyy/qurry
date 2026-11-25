@@ -140,6 +140,9 @@ pub(super) struct Connecting {
     /// The generation the last close not for a dead tunnel counted up to (Disconnect, the idle drop, saved settings): a read
     /// through a pool from before it isn't run again on a new one (with_pool), which would connect the source again
     pub(super) disconnected: std::sync::atomic::AtomicU64,
+    /// Held while a Redis source connects: its databases share the one connection (redis_db). Then the time and message of
+    /// its failure, for the callers that waited meanwhile (redis_turn)
+    redis_connect: tokio::sync::Mutex<Option<(std::time::Instant, String)>>,
 }
 
 impl Connecting {
@@ -387,6 +390,7 @@ async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppRes
         settle(state, base).await;
     }
     let pool = state.pools.read().await.get(id).cloned();
+    let none_open = pool.is_none();
     // Not the pool that just timed out (it is closed when its tunnel is opened again)
     let timed_out_here = stale.is_some() && state.connecting.lock().unwrap().get(base).map(|c| c.generation.load(SeqCst)) == stale;
     if let Some(p) = pool
@@ -395,11 +399,22 @@ async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppRes
     {
         return Ok(p);
     }
+    let redis = state.source(id)?.kind == store::DbKind::Redis;
+    if redis && split_target(id).1.is_some() {
+        return redis_db(state, id, stale).await;
+    }
+    let c = state.connecting(base);
+    let mut one = match redis {
+        true => match redis_turn(state, &c, id, none_open).await? {
+            Ok(turn) => Some(turn),
+            Err(pool) => return Ok(pool),
+        },
+        false => None,
+    };
     let cfg = target(state, id)?;
     let asked = std::time::SystemTime::now();
     let mut password = state.login_password(&cfg).await?;
     let ssh_secret = if cfg.active_ssh().is_some() { state.saved_secret(&store::ssh_secret_key(base), cfg.ssh_secret_saved)? } else { None };
-    let c = state.connecting(base);
     loop {
         let (port, g) = if cfg.tunneled() {
             let (port, g) = shared_tunnel(state, &c, base, &cfg, ssh_secret.as_deref(), stale).await?;
@@ -423,9 +438,55 @@ async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppRes
             // A password command's output kept from an earlier login (Password reuse) that the server no longer takes: the token
             // expired while no pool was open (Disconnect, Auto-disconnect, a wake). It runs again and this connects once more
             Err(e) if login_refused(&e) && state.command_password_older(&cfg, asked) => password = Some(state.command_password(&cfg, true).await?),
-            Err(e) => return Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, timeout_error(&cfg, e, stale.is_some())).await),
+            Err(e) => {
+                let e = crate::ssm::connect_error(mark, &cfg.host, cfg.port, timeout_error(&cfg, e, stale.is_some())).await;
+                if let Some(failed) = one.as_deref_mut() {
+                    *failed = Some((std::time::Instant::now(), e.to_string()));
+                }
+                return Err(e);
+            }
         }
     }
+}
+
+/// The turn of a Redis source's connect, held until it ends; then the time and message of its failure (Connecting::redis_connect)
+type RedisTurn<'a> = tokio::sync::MutexGuard<'a, Option<(std::time::Instant, String)>>;
+
+/// Redis: callers that come together (the browser, the terminal, MCP, each on a database of the source) share one connect. →
+/// the turn to connect, or the pool another caller opened while this one waited (none_open: there was none before). One that
+/// waited while the connect failed gets its error, instead of trying again after it
+async fn redis_turn<'a>(state: &AppState, c: &'a Connecting, id: &str, none_open: bool) -> AppResult<Result<RedisTurn<'a>, Pool>> {
+    let waited = std::time::Instant::now();
+    let turn = c.redis_connect.lock().await;
+    if let Some((at, e)) = turn.as_ref()
+        && *at >= waited
+    {
+        return Err(AppError::Msg(e.clone()));
+    }
+    match state.pools.read().await.get(id).cloned().filter(|_| none_open) {
+        Some(p) => Ok(Err(p)),
+        None => Ok(Ok(turn)),
+    }
+}
+
+/// A database of a Redis source: the source's one connection (open_pool), pinned to the database (RedisConn::on_db). SSH / SSM
+/// tunnels carry badly many connections opened at once (#221), and a connection per database made the browser, the terminal
+/// and MCP open one each
+async fn redis_db(state: &AppState, id: &str, stale: Option<u64>) -> AppResult<Pool> {
+    let (base, db) = split_target(id);
+    let Pool::Redis(m, _) = Box::pin(open_pool(state, base, stale)).await? else {
+        return Err(AppError::Msg("Not a Redis data source".into()));
+    };
+    // As for a connect: a disconnect from here on keeps no pool (keep_pool)
+    let c = state.connecting(base);
+    let g = c.generation.load(SeqCst);
+    let port = tunnel_port(state, base).await;
+    if !state.pools.read().await.contains_key(base) {
+        return Err(AppError::Msg(DISCONNECTED_WHILE_CONNECTING.into()));
+    }
+    let n = crate::redisdb::db_index(db.unwrap_or_default());
+    let pool = Pool::Redis(m.on_db(n).await?, n);
+    keep_pool(state, &c, g, id, port, pool).await
 }
 
 /// The settings a connect to `id` (a source, or one of its databases) uses
