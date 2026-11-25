@@ -624,10 +624,65 @@ pub fn redis_size_check(cmd: &str, args: &[String]) -> Option<RedisSizeCheck> {
     }
 }
 
+/// A read of part of a collection key: `elements` of the key at `key` (counted with `count`), so MCP can estimate its bytes from the
+/// key's memory before it runs (qurry_core's byte budget). Whole-key reads are redis_size_check's
+#[derive(Debug, PartialEq)]
+pub struct RedisPartRead {
+    pub count: &'static str,
+    pub key: usize,
+    pub elements: i64,
+}
+
+/// The part of a collection a Redis read returns, from its arguments: a bounded range, a LIMIT, COUNT (SCAN-like commands return
+/// about COUNT, 10 by default) or a random count. None for reads of whole keys (redis_size_check), of strings and of numbers.
+/// args as in redis_strict_violation
+pub fn redis_part_read(cmd: &str, args: &[String]) -> Option<RedisPartRead> {
+    if args.is_empty() || redis_size_check(cmd, args).is_some() {
+        return None;
+    }
+    let num = |i: usize| args.get(i).and_then(|a| a.parse::<i64>().ok());
+    let opt = |name: &str| redis_opt(cmd, args, name);
+    let range = || match (num(1), num(2)) {
+        (Some(a), Some(b)) => redis_range_len(a, b),
+        _ => None,
+    };
+    let limit = || opt("LIMIT").and_then(|i| num(i + 2));
+    let count = |default: i64| opt("COUNT").map_or(Some(default), |i| num(i + 1));
+    let random = || if args.len() > 1 { num(1).map(i64::abs) } else { Some(1) };
+    let (len, elements) = match cmd {
+        "LRANGE" => ("LLEN", range()),
+        "LINDEX" => ("LLEN", Some(1)),
+        "ZRANGE" if opt("BYSCORE").or(opt("BYLEX")).is_some() => ("ZCARD", limit()),
+        "ZRANGE" | "ZREVRANGE" => ("ZCARD", range()),
+        "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZREVRANGEBYSCORE" | "ZREVRANGEBYLEX" => ("ZCARD", limit()),
+        "ZRANDMEMBER" => ("ZCARD", random()),
+        "SRANDMEMBER" => ("SCARD", random()),
+        "HRANDFIELD" => ("HLEN", random()),
+        "HSCAN" => ("HLEN", count(10)),
+        "SSCAN" => ("SCARD", count(10)),
+        "ZSCAN" => ("ZCARD", count(10)),
+        "XRANGE" | "XREVRANGE" => ("XLEN", count(10)),
+        "GEOSEARCH" => ("ZCARD", count(10)),
+        // XINFO STREAM key: its first and last entries; FULL: COUNT entries (10 by default)
+        "XINFO" if args.len() > 1 && args[0].eq_ignore_ascii_case("STREAM") => {
+            return Some(RedisPartRead { count: "XLEN", key: 1, elements: if opt("FULL").is_some() { count(10)? } else { 2 } });
+        }
+        _ => return None,
+    };
+    Some(RedisPartRead { count: len, key: 0, elements: elements?.max(0) })
+}
+
 /// Read commands additionally blocked in Redis read-only (MCP): ones that expose config · passwords (CONFIG GET) or can stall the server (KEYS),
-/// and reads of more than REDIS_STRICT_MAX elements (with millions of elements the server stalls and MCP runs out of memory).
+/// reads of more than REDIS_STRICT_MAX elements (with millions of elements the server stalls and MCP runs out of memory), commands
+/// with more than REDIS_STRICT_MAX arguments (MGET, EXISTS, HMGET of thousands of keys or fields) and Qurry's own DBTOOL.VIEW.
 /// Whole-key reads (HGETALL, LRANGE 0 -1, XRANGE without COUNT …) pass here: they also need redis_size_check at run time. args = arguments after the command (not uppercased)
 pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
+    if cmd == "DBTOOL.VIEW" {
+        return Some("DBTOOL.VIEW is the Qurry app's value viewer, not a Redis command — use redis_get".into());
+    }
+    if args.len() as i64 > REDIS_STRICT_MAX {
+        return Some(format!("{cmd} takes at most {REDIS_STRICT_MAX} arguments (keys or fields) in read-only mode"));
+    }
     let num = |i: usize| args.get(i).and_then(|a| a.parse::<i64>().ok());
     let opt = |name: &str| redis_opt(cmd, args, name);
     // LIMIT · COUNT must be 1 or more (some commands treat 0 · negative as "all")
@@ -1529,6 +1584,42 @@ mod tests {
             "XRANGE s - + COUNT 10", "SRANDMEMBER s 5", "SRANDMEMBER s", "SCAN 0 MATCH a:* COUNT 100", "HLEN h"] {
             assert!(v(ok).is_none(), "{ok}");
         }
+    }
+
+    /// MCP's byte budget (#224): the part of a key each read takes, DBTOOL.VIEW refused, and at most REDIS_STRICT_MAX arguments
+    #[test]
+    fn redis_part_reads_and_argument_limit() {
+        let split = |line: &str| {
+            let mut w = line.split_whitespace();
+            (w.next().unwrap().to_uppercase(), w.map(String::from).collect::<Vec<_>>())
+        };
+        let part = |line: &str| {
+            let (cmd, a) = split(line);
+            redis_part_read(&cmd, &a).map(|p| (p.count, p.key, p.elements))
+        };
+        for (line, want) in [
+            ("LRANGE l 0 7", ("LLEN", 0, 8)), ("LRANGE l -10 -1", ("LLEN", 0, 10)), ("LINDEX l 3", ("LLEN", 0, 1)), ("ZRANGE z 0 3", ("ZCARD", 0, 4)),
+            ("ZRANGE z 0 +inf BYSCORE LIMIT 0 5", ("ZCARD", 0, 5)), ("ZREVRANGEBYSCORE z +inf 0 LIMIT 2 3", ("ZCARD", 0, 3)), ("HRANDFIELD h 3 WITHVALUES", ("HLEN", 0, 3)),
+            ("HRANDFIELD h", ("HLEN", 0, 1)), ("SRANDMEMBER s -4", ("SCARD", 0, 4)), ("HSCAN h 0 COUNT 1000", ("HLEN", 0, 1000)), ("SSCAN s 0", ("SCARD", 0, 10)),
+            ("XRANGE x - + COUNT 4", ("XLEN", 0, 4)), ("GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 9 km COUNT 7", ("ZCARD", 0, 7)), ("XINFO STREAM x", ("XLEN", 1, 2)),
+            ("XINFO STREAM x FULL COUNT 3", ("XLEN", 1, 3)), ("LRANGE l 5 2", ("LLEN", 0, 0)),
+        ] {
+            assert_eq!(part(line), Some(want), "{line}");
+        }
+        // Whole keys are redis_size_check's; strings and numbers aren't parts
+        for line in ["LRANGE l 0 -1", "HGETALL h", "XRANGE x - +", "GET a", "HGET h f", "ZSCORE z m", "LLEN l", "XINFO GROUPS x"] {
+            assert_eq!(part(line), None, "{line}");
+        }
+        let v = |line: &str| {
+            let (cmd, a) = split(line);
+            redis_strict_violation(&cmd, &a)
+        };
+        assert!(v("DBTOOL.VIEW shop:big").is_some_and(|e| e.contains("redis_get")));
+        let many = |cmd: &str, n: usize| format!("{cmd} {}", (0..n).map(|i| format!("k{i}")).collect::<Vec<_>>().join(" "));
+        for cmd in ["MGET", "EXISTS", "HMGET h", "SMISMEMBER s"] {
+            assert!(v(&many(cmd, 1001)).is_some_and(|e| e.contains("at most 1000 arguments")), "{cmd}");
+        }
+        assert!(v(&many("MGET", 1000)).is_none());
     }
 
     /// Redis takes the last of a repeated option (LIMIT 0 1 LIMIT 0 -1 reads everything), so a repeat is refused,

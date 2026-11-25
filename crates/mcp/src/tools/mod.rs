@@ -2,6 +2,7 @@
 //! (execute, only with --allow-write, is still answered here).
 use crate::Server;
 use qurry_core::app::ConnectionView;
+use qurry_core::redis_read::{READ_MAX_BYTES, VALUE_MAX};
 use qurry_core::sql;
 use qurry_core::store::{DbKind, McpAccess};
 use serde_json::{json, Value};
@@ -47,28 +48,28 @@ impl Server {
             tool("list_schemas", "List schemas in a database (MySQL/Redis: the database itself).", ds_props(json!({})), &["data_source"], true),
             tool(
                 "list_objects",
-                "List tables, views, materialized views, sequences and routines in a schema (Redis: keys with their types).",
+                &format!("List tables, views, materialized views, sequences and routines in a schema (Redis: keys with their types, at most {}; over that truncated: true, total_keys and a hint).", qurry_core::redisdb::MAX_KEYS),
                 ds_props(json!({ "schema": { "type": "string", "description": "Schema name (PostgreSQL default: public)" } })),
                 &["data_source"],
                 true,
             ),
             tool(
                 "describe_table",
-                "Columns (type, nullability, default, comment, primary key), indexes and constraints of a table.",
+                "Columns (type, nullability, default, comment, primary key), indexes and constraints of a table (not for Redis: use redis_get).",
                 ds_props(json!({ "schema": { "type": "string" }, "table": { "type": "string" } })),
                 &["data_source", "table"],
                 true,
             ),
             tool(
                 "get_ddl",
-                "DDL of a table, view, materialized view, sequence or routine (Redis: commands that recreate the key).",
+                "DDL of a table, view, materialized view, sequence or routine (Redis: commands that recreate the key; only for a key small enough to read whole, as query would).",
                 ds_props(json!({ "schema": { "type": "string" }, "name": { "type": "string" }, "kind": { "type": "string", "enum": ["table", "view", "matview", "sequence", "routine", "key"], "description": "default: table" } })),
                 &["data_source", "name"],
                 true,
             ),
             tool(
                 "search_objects",
-                "Fuzzy search database objects by name (Go to Database Object). Searches the default database of each data source, or the given one.",
+                "Fuzzy search database objects by name (Go to Database Object). Searches the default database of each data source, or the given one. Redis: keys whose name contains the query in any case (SCAN MATCH over up to 100,000 keys per database; notes says when it stopped before the end).",
                 json!({
                     "query": { "type": "string", "description": "Name or fragment, e.g. 'usr_pay' or 'public.orders'" },
                     "data_source": { "type": "string", "description": "Limit to one data source (default: all)" },
@@ -80,7 +81,7 @@ impl Server {
             ),
             tool(
                 "query",
-                "Run a read-only query and return rows. PostgreSQL/MySQL: a single SELECT/WITH/SHOW/EXPLAIN statement executed in a READ ONLY transaction. Redis: a read command line (e.g. 'HGETALL user:1', 'SCAN 0 MATCH user:* COUNT 100').",
+                &format!("Run a read-only query and return rows. PostgreSQL/MySQL: a single SELECT/WITH/SHOW/EXPLAIN statement executed in a READ ONLY transaction. Redis: a read command line (e.g. 'HGETALL user:1', 'SCAN 0 MATCH user:* COUNT 100'); one command reads at most {} MB (measured on the server before it runs; read big strings in parts with GETRANGE) and {} elements, and values over {} KB come back cut, listed in cut as [row, column]; SLOWLOG GET shows each command with its key only, and on a Production data source it and CLIENT LIST answer only if a person allowed admin reports there.", READ_MAX_BYTES >> 20, qurry_core::guard::REDIS_STRICT_MAX, VALUE_MAX >> 10),
                 ds_props(json!({ "sql": { "type": "string" }, "limit": { "type": "integer", "description": "max rows, default 100, max 1000" } })),
                 &["data_source", "sql"],
                 true,
@@ -125,16 +126,25 @@ impl Server {
             ),
             tool(
                 "redis_scan",
-                "Scan Redis keys with a pattern and get their type and TTL (ms, -1 = no expiry).",
-                ds_props(json!({ "pattern": { "type": "string", "description": "default *" }, "type": { "type": "string", "enum": ["string", "hash", "list", "set", "zset", "stream"] }, "count": { "type": "integer", "description": "default 200" }, "cursor": { "type": "string" } })),
+                "Scan Redis keys with a pattern and get their type and TTL (ms, -1 = no expiry). A key name that isn't UTF-8 comes as key_base64 instead of key; pass it to redis_get as is. Continue with next_cursor until it is \"0\".",
+                ds_props(json!({
+                    "pattern": { "type": "string", "description": "default *" },
+                    "type": { "type": "string", "description": "Only keys of this type: string, hash, list, set, zset, stream, or a module type such as ReJSON-RL" },
+                    "count": { "type": "integer", "description": "default 200" },
+                    "cursor": { "type": "string", "description": "next_cursor of the previous call; default 0 (the start)" }
+                })),
                 &["data_source"],
                 true,
             ),
             tool(
                 "redis_get",
-                "Get a Redis key's type, TTL, size and value (hash fields, list items, set/zset members, stream entries).",
-                ds_props(json!({ "key": { "type": "string" }, "limit": { "type": "integer", "description": "max elements, default 200" } })),
-                &["data_source", "key"],
+                &format!("Get a Redis key's type, TTL (ms, -1 = no expiry), size and value (hash fields, list items, set/zset members, stream entries). A string shows its first {} KB; a collection its first `limit` elements, fewer when they would read more than {} MB (truncated: true). A value over {} KB comes as {{\"text\": its beginning, \"size\": bytes}}; a value that isn't UTF-8 as {{\"base64\": …}} (with size when cut).", VALUE_MAX >> 10, READ_MAX_BYTES >> 20, VALUE_MAX >> 10),
+                ds_props(json!({
+                    "key": { "type": "string" },
+                    "key_base64": { "type": "string", "description": "Instead of key: a name that isn't UTF-8, as redis_scan gave it" },
+                    "limit": { "type": "integer", "description": "max elements, default 200" }
+                })),
+                &["data_source"],
                 true,
             ),
             tool(
@@ -192,10 +202,23 @@ impl Server {
     async fn target(&self, a: &Value) -> Result<(String, DbKind, String, McpAccess), String> {
         let (id, kind, def, ro) = self.resolve(a).await?;
         let db = a.get("database").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(String::from).unwrap_or(def);
+        // Redis would read any other name as db0
+        if kind == DbKind::Redis && qurry_core::redisdb::db_number(&db).is_none() {
+            return Err(format!("Unknown Redis database \"{db}\": use db0, db1, … (list_databases)"));
+        }
         Ok((sql::target_id(&id, Some(&db)), kind, db, ro))
     }
 
+    /// A read whose Redis connection dropped (the server restarted) runs once more on the new connection; execute and export_csv
+    /// (it writes a file) never do
     pub(crate) async fn call(&self, name: &str, a: &Value) -> Result<Value, String> {
+        match self.call_once(name, a).await {
+            Err(e) if !matches!(name, "execute" | "export_csv") && qurry_core::redisdb::dropped(&e) => self.call_once(name, a).await,
+            r => r,
+        }
+    }
+
+    async fn call_once(&self, name: &str, a: &Value) -> Result<Value, String> {
         let st = &self.state;
         let e = |e: qurry_core::error::AppError| e.to_string();
         match name {

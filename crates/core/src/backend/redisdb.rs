@@ -12,7 +12,7 @@ use std::time::Instant;
 /// Fake command the frontend sends when opening a single key
 pub const VIEW_CMD: &str = "DBTOOL.VIEW";
 /// Max number of keys fetched at once for the tree·search
-const MAX_KEYS: usize = 5000;
+pub const MAX_KEYS: usize = 5000;
 
 fn pct(s: &str) -> String {
     s.bytes()
@@ -25,6 +25,7 @@ fn pct(s: &str) -> String {
 
 /// "db3" / "3" / "" → 3 / 0
 pub use qurry_shared::kind::redis_db_index as db_index;
+pub use qurry_shared::kind::redis_db_number as db_number;
 
 /// A connection, and whether the server answered CONFIG when it connected (managed services like ElastiCache, Azure Cache,
 /// Memorystore or Upstash rename or refuse it; the browser's Config tab is then greyed out). One per data source: its
@@ -139,7 +140,7 @@ impl RedisConn {
     }
     /// Nodes to run SCAN on (all masters for a cluster). A single node is this connection, pinned to its database like every
     /// command on it
-    fn scan_nodes(&self) -> Vec<RedisConn> {
+    pub(crate) fn scan_nodes(&self) -> Vec<RedisConn> {
         match &self.link {
             Link::Single(_) => vec![self.clone()],
             Link::Cluster { masters, .. } => masters.iter().map(|m| RedisConn { link: Link::Single(m.clone()), config: self.config, db: 0, select: false }).collect(),
@@ -349,11 +350,19 @@ impl Link {
     }
 }
 
-fn err(e: redis::RedisError) -> AppError {
+pub(crate) fn err(e: redis::RedisError) -> AppError {
     if e.is_timeout() {
         return AppError::Msg(format!("Redis: timed out — the server or tunnel didn't answer within {}s. Check that it's up and reachable, then run it again.", RESPONSE_TIMEOUT.as_secs()));
     }
     AppError::Msg(format!("Redis: {e}"))
+}
+
+/// A Redis error whose connection dropped (the server restarted, a proxy or `CLIENT KILL` closed it): the connection manager opens
+/// a new one, so a read can run again once (MCP does). By the words redis-rs gives the I/O error, as app::is_conn_lost reads them;
+/// not a timeout, which would only wait twice
+pub fn dropped(e: &str) -> bool {
+    let e = e.to_lowercase();
+    e.starts_with("redis") && ["broken pipe", "connection reset", "connection aborted", "connection closed", "unexpected end of file", "not connected"].iter().any(|k| e.contains(k))
 }
 
 pub async fn server_version(m: &RedisConn) -> AppResult<String> {
@@ -376,7 +385,7 @@ pub async fn check(m: &RedisConn) -> AppResult<()> {
 }
 
 /// Whether the command doesn't change values (MCP read-only mode). Shared with the guard
-pub use qurry_shared::redis_cmd::is_read_command;
+pub use qurry_shared::redis_cmd::{is_admin_report, is_read_command};
 
 /// redis-cli style argument splitting (qurry_shared::redis_cmd::parse_command, the same rules the guard reads a line with)
 pub fn parse_command(line: &str) -> AppResult<Vec<Vec<u8>>> {
@@ -397,7 +406,7 @@ fn bytes_text(b: &[u8]) -> Value {
 }
 
 /// Redis value → cell
-fn cell(v: &RV) -> Value {
+pub(crate) fn cell(v: &RV) -> Value {
     match v {
         RV::Nil => Value::Null,
         RV::Int(i) => int_value(*i),
@@ -414,7 +423,7 @@ fn cell(v: &RV) -> Value {
         other => Value::from(format!("{other:?}")),
     }
 }
-fn text_of(v: &RV) -> String {
+pub(crate) fn text_of(v: &RV) -> String {
     match cell(v) {
         Value::String(s) => s,
         Value::Null => String::new(),
@@ -426,7 +435,7 @@ fn cols(names: &[&str]) -> Vec<ColumnInfo> {
     names.iter().map(|n| ColumnInfo { name: n.to_string(), type_name: "TEXT".into() }).collect()
 }
 
-fn table(names: &[&str], mut rows: Vec<Vec<Value>>, limit: usize, start: Instant) -> QueryResult {
+pub(crate) fn table(names: &[&str], mut rows: Vec<Vec<Value>>, limit: usize, start: Instant) -> QueryResult {
     let truncated = rows.len() > limit;
     rows.truncate(limit);
     query_result(cols(names), rows, 0, truncated, start, true)
@@ -528,7 +537,7 @@ pub async fn run(m: &RedisConn, line: &str, limit: usize) -> AppResult<QueryResu
     Ok(shape(&cmd, &args[1..], v, limit, start))
 }
 
-async fn key_type(m: &mut RedisConn, key: &[u8]) -> AppResult<String> {
+pub(crate) async fn key_type(m: &mut RedisConn, key: &[u8]) -> AppResult<String> {
     redis::cmd("TYPE").arg(key).query_async(m).await.map_err(err)
 }
 
@@ -704,14 +713,15 @@ async fn scan_keys(m: &RedisConn, pattern: &str, max: usize) -> AppResult<Vec<Ve
             break;
         }
     }
-    out.truncate(max);
+    // SCAN can return a key twice: drop repeats first, so a full list is exactly `max` long
     out.sort();
     out.dedup();
+    out.truncate(max);
     Ok(out)
 }
 
 /// Same command per key (cluster: slots differ, so run them one by one concurrently instead of a pipeline)
-async fn per_key(m: &RedisConn, keys: &[Vec<u8>], cmds: &[&str]) -> AppResult<Vec<RV>> {
+pub(crate) async fn per_key(m: &RedisConn, keys: &[Vec<u8>], cmds: &[&str]) -> AppResult<Vec<RV>> {
     if keys.is_empty() {
         return Ok(vec![]);
     }
@@ -828,12 +838,29 @@ pub struct ScanPage {
 
 /// One SCAN (+ a few more if needed) to get about `count` keys with type·TTL
 pub async fn scan_page(m: &RedisConn, cursor: &str, pattern: &str, count: usize, type_filter: Option<&str>) -> AppResult<ScanPage> {
-    let nodes = m.scan_nodes();
-    // Cursor: single node "123", cluster "node index:cursor"
-    let (mut node, mut cur): (usize, u64) = match cursor.split_once(':') {
-        Some((n, c)) => (n.parse().unwrap_or(0), c.parse().unwrap_or(0)),
-        None => (0, cursor.parse().unwrap_or(0)),
+    let (cursor, keys) = scan_keys_page(m, cursor, pattern, count, type_filter).await?;
+    let keys = keys.into_iter().map(|(k, ty, ttl)| KeyRow { key: String::from_utf8_lossy(&k).into_owned(), ty, ttl }).collect();
+    Ok(ScanPage { cursor, keys })
+}
+
+/// A cursor scan_page gave: single node "123", cluster "node index:cursor". Anything else is refused rather than read as 0, which
+/// would start the scan over
+fn parse_cursor(cursor: &str, nodes: usize) -> AppResult<(usize, u64)> {
+    let bad = || AppError::Msg(format!("Bad cursor \"{cursor}\": pass the next cursor the previous scan returned, or 0 to start"));
+    let (node, cur) = match cursor.trim().split_once(':') {
+        Some((n, c)) => (n.parse().map_err(|_| bad())?, c.parse().map_err(|_| bad())?),
+        None => (0, cursor.trim().parse().map_err(|_| bad())?),
     };
+    if node >= nodes.max(1) {
+        return Err(bad());
+    }
+    Ok((node, cur))
+}
+
+/// scan_page with the keys as bytes (they may not be UTF-8): (next cursor, [(key, type, TTL ms)])
+pub(crate) async fn scan_keys_page(m: &RedisConn, cursor: &str, pattern: &str, count: usize, type_filter: Option<&str>) -> AppResult<(String, Vec<(Vec<u8>, String, i64)>)> {
+    let nodes = m.scan_nodes();
+    let (mut node, mut cur) = parse_cursor(cursor, nodes.len())?;
     let mut keys: Vec<Vec<u8>> = Vec::new();
     let pattern = if pattern.trim().is_empty() { "*".to_string() } else { pattern.trim().to_string() };
     // If the pattern matches only rare keys a single SCAN can come back empty, so repeat a few times
@@ -857,19 +884,18 @@ pub async fn scan_page(m: &RedisConn, cursor: &str, pattern: &str, count: usize,
     }
     let meta = per_key(m, &keys, &["TYPE", "PTTL"]).await?;
     let rows = keys
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(i, k)| KeyRow {
-            key: String::from_utf8_lossy(k).into_owned(),
-            ty: meta.get(i * 2).map(text_of).unwrap_or_default(),
-            ttl: match meta.get(i * 2 + 1) {
+        .map(|(i, k)| {
+            let ttl = match meta.get(i * 2 + 1) {
                 Some(RV::Int(t)) => *t,
                 _ => -1,
-            },
+            };
+            (k, meta.get(i * 2).map(text_of).unwrap_or_default(), ttl)
         })
         .collect();
     let cursor = if node >= nodes.len() { "0".to_string() } else if nodes.len() > 1 { format!("{node}:{cur}") } else { cur.to_string() };
-    Ok(ScanPage { cursor, keys: rows })
+    Ok((cursor, rows))
 }
 
 #[derive(serde::Serialize)]
@@ -934,71 +960,25 @@ pub async fn field_len(m: &RedisConn, key: &[u8], field: &[u8]) -> AppResult<i64
     redis::cmd("HSTRLEN").arg(key).arg(field).query_async(&mut mgr).await.map_err(err)
 }
 
-/// Max size of a single Redis value readable from MCP
-const REDIS_READ_MAX_BYTES: i64 = 16 << 20;
-
-/// MCP Redis reads (query, and reads sent to execute): the guard's limits, then what only the server knows — whole-key reads
-/// (HGETALL, LRANGE 0 -1, XRANGE without COUNT …) up to REDIS_STRICT_MAX elements, and values up to REDIS_READ_MAX_BYTES.
-/// Commands that aren't reads are left to the caller
+/// MCP Redis reads (query, and reads sent to execute): the guard's limits, then the byte budget that only the server can tell
+/// (redis_read::check_budget). Commands that aren't reads are left to the caller
 pub(crate) async fn check_read(m: &RedisConn, line: &str) -> AppResult<()> {
-    use crate::guard::REDIS_STRICT_MAX;
-    let args = parse_command(line.trim().trim_end_matches(';').trim())?;
+    check_read_args(m, &parse_command(line.trim().trim_end_matches(';').trim())?).await
+}
+
+/// check_read of a command already split into its arguments (bytes as they will be sent)
+pub(crate) async fn check_read_args(m: &RedisConn, args: &[Vec<u8>]) -> AppResult<()> {
     let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
     let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
     if !is_read_command(&cmd, &sub) {
         return Ok(());
     }
     let rest: Vec<String> = args.iter().skip(1).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
-    // Keys and fields go to the server as the bytes that will run: lossy text would name another key when one isn't UTF-8
-    let raw = &args[1..];
     if let Some(why) = crate::guard::redis_strict_violation(&cmd, &rest) {
         return Err(AppError::Msg(why));
     }
-    // Whole keys: count the elements (and then the bytes) before reading
-    if let Some(c) = crate::guard::redis_size_check(&cmd, &rest) {
-        let keys: Vec<&[u8]> = c.keys.iter().map(|&i| raw[i].as_slice()).collect();
-        let mut n = 0i64;
-        for k in &keys {
-            n = n.saturating_add(element_count(m, c.count, k).await?);
-        }
-        if n > REDIS_STRICT_MAX {
-            return Err(AppError::Msg(format!("{cmd} would read {n} elements — at most {REDIS_STRICT_MAX} in read-only mode; use {} (or redis_get for a preview)", c.instead)));
-        }
-        let mut bytes = 0i64;
-        for k in &keys {
-            bytes = bytes.saturating_add(memory_usage(m, k, 0).await?);
-        }
-        if bytes > REDIS_READ_MAX_BYTES {
-            return Err(AppError::Msg(format!("{cmd} would read {} MB — too big to read here; use {}", bytes >> 20, c.instead)));
-        }
-    }
-    // Commands that return a whole value: check the size before reading
-    // GETRANGE with a bounded range reads at most that much
-    let range_small = cmd == "GETRANGE" && matches!((rest.get(1).and_then(|a| a.parse::<i64>().ok()), rest.get(2).and_then(|a| a.parse::<i64>().ok())), (Some(a), Some(b)) if a >= 0 && b >= a && b - a < REDIS_READ_MAX_BYTES);
-    let keys: &[Vec<u8>] = match cmd.as_str() {
-        "GET" | "JSON.GET" => raw.get(..1).unwrap_or(&[]),
-        "GETRANGE" if !range_small => raw.get(..1).unwrap_or(&[]),
-        "MGET" => raw,
-        "JSON.MGET" => raw.split_last().map(|(_, k)| k).unwrap_or(&[]),
-        _ => &[],
-    };
-    let json = cmd.starts_with("JSON.");
-    for k in keys {
-        let n = value_size(m, k, json).await?;
-        if n > REDIS_READ_MAX_BYTES {
-            return Err(AppError::Msg(format!("{} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", String::from_utf8_lossy(k), n >> 20)));
-        }
-    }
-    // HGET / HMGET: one hash field can be big too
-    if matches!(cmd.as_str(), "HGET" | "HMGET") && raw.len() > 1 {
-        for f in &raw[1..] {
-            let n = field_len(m, &raw[0], f).await?;
-            if n > REDIS_READ_MAX_BYTES {
-                return Err(AppError::Msg(format!("{}.{} is {} MB — too big to read here", rest[0], String::from_utf8_lossy(f), n >> 20)));
-            }
-        }
-    }
-    Ok(())
+    // Keys and fields go to the server as the bytes that will run: lossy text would name another key when one isn't UTF-8
+    crate::redis_read::check_budget(m, &cmd, &args[1..], &rest).await
 }
 
 /// MCP Redis writes (execute), what only the server knows: refuse removals (HDEL, SREM, ZREM, XDEL, SMOVE, LPOP, RPOP, LREM) that
@@ -1036,9 +1016,36 @@ pub(crate) async fn check_mcp_write(m: &RedisConn, lines: &[String]) -> AppResul
     Ok(())
 }
 
+/// Who reads a key's details: the app (whole elements, a string's first STRING_PREVIEW_MAX bytes, text read lossily) or MCP
+/// (redis_read: elements within its byte budget, each cut to VALUE_MAX, bytes that aren't UTF-8 as base64)
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Reader {
+    App,
+    Mcp,
+}
+
+impl Reader {
+    fn preview(self) -> i64 {
+        match self {
+            Reader::App => STRING_PREVIEW_MAX,
+            Reader::Mcp => crate::redis_read::VALUE_MAX as i64,
+        }
+    }
+    fn value(self, v: &RV) -> Value {
+        match self {
+            Reader::App => raw_text(v),
+            Reader::Mcp => crate::redis_read::reply_json(v),
+        }
+    }
+}
+
 pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<KeyDetail> {
+    key_detail_with(m, key.as_bytes(), limit, Reader::App).await
+}
+
+pub(crate) async fn key_detail_with(m: &RedisConn, k: &[u8], limit: usize, reader: Reader) -> AppResult<KeyDetail> {
     let mut mgr = m.clone();
-    let k = key.as_bytes();
+    let key = String::from_utf8_lossy(k);
     let ty = key_type(&mut mgr, k).await?;
     if ty == "none" {
         return Err(AppError::Msg(format!("Key not found: {key}")));
@@ -1056,12 +1063,21 @@ pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<Key
         _ => "",
     };
     let length: i64 = if len_cmd.is_empty() { 0 } else { redis::cmd(len_cmd).arg(k).query_async(&mut mgr).await.map_err(err)? };
+    let limit = match reader {
+        Reader::Mcp if !matches!(len_cmd, "" | "STRLEN") => crate::redis_read::elements_within_budget(m, k, &ty, length, limit).await?,
+        _ => limit,
+    };
     let lim = limit as i64;
+    let raw_text = |v: &RV| reader.value(v);
+    let preview = reader.preview();
     let value = match ty.as_str() {
         // Only the beginning of large strings (reading it whole would use up MCP · app memory)
-        "string" if length > STRING_PREVIEW_MAX => {
-            let v: RV = redis::cmd("GETRANGE").arg(k).arg(0).arg(STRING_PREVIEW_MAX - 1).query_async(&mut mgr).await.map_err(err)?;
-            raw_text(&v)
+        "string" if length > preview => {
+            let v: RV = redis::cmd("GETRANGE").arg(k).arg(0).arg(preview - 1).query_async(&mut mgr).await.map_err(err)?;
+            match (reader, &v) {
+                (Reader::Mcp, RV::BulkString(b)) => crate::redis_read::value_json(b, length as usize),
+                _ => raw_text(&v),
+            }
         }
         "string" => {
             let v: RV = redis::cmd("GET").arg(k).query_async(&mut mgr).await.map_err(err)?;
@@ -1071,7 +1087,7 @@ pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<Key
             let mut rows = Vec::new();
             let mut cur = 0u64;
             loop {
-                let (next, items): (u64, Vec<RV>) = redis::cmd("HSCAN").arg(k).arg(cur).arg("COUNT").arg(500).query_async(&mut mgr).await.map_err(err)?;
+                let (next, items): (u64, Vec<RV>) = redis::cmd("HSCAN").arg(k).arg(cur).arg("COUNT").arg(limit.min(500)).query_async(&mut mgr).await.map_err(err)?;
                 rows.extend(items.chunks(2).map(|c| Value::Array(vec![raw_text(&c[0]), c.get(1).map(raw_text).unwrap_or(Value::Null)])));
                 cur = next;
                 if cur == 0 || rows.len() >= limit {
@@ -1090,7 +1106,7 @@ pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<Key
             let mut rows = Vec::new();
             let mut cur = 0u64;
             loop {
-                let (next, items): (u64, Vec<RV>) = redis::cmd("SSCAN").arg(k).arg(cur).arg("COUNT").arg(500).query_async(&mut mgr).await.map_err(err)?;
+                let (next, items): (u64, Vec<RV>) = redis::cmd("SSCAN").arg(k).arg(cur).arg("COUNT").arg(limit.min(500)).query_async(&mut mgr).await.map_err(err)?;
                 rows.extend(items.iter().map(raw_text));
                 cur = next;
                 if cur == 0 || rows.len() >= limit {
@@ -1128,7 +1144,7 @@ pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<Key
         Value::Array(a) => a.len() as i64,
         _ => length,
     };
-    let truncated = (ty_is_collection(&value) && shown < length) || (ty == "string" && length > STRING_PREVIEW_MAX);
+    let truncated = (ty_is_collection(&value) && shown < length) || (ty == "string" && length > preview);
     Ok(KeyDetail { ty, ttl, length, memory, encoding, value, truncated })
 }
 fn ty_is_collection(v: &Value) -> bool {
@@ -1168,7 +1184,7 @@ mod tests {
     use crate::store::DbKind;
 
     /// docker run -d --name dbtool-redis-test -p 16379:6379 redis:7-alpine, QURRY_TEST_REDIS=127.0.0.1:16379 (the tests on it skip
-    /// when it is unset; the TLS, Sentinel and Cluster tests use 127.0.0.1 and their own ports)
+    /// when it is unset; the TLS, Sentinel and Cluster tests have their own variables: crate::testenv)
     fn cfg(db: &str) -> ConnectionConfig {
         let addr = std::env::var("QURRY_TEST_REDIS").unwrap_or_else(|_| "127.0.0.1:16379".into());
         let (host, port) = addr.rsplit_once(':').expect("QURRY_TEST_REDIS=host:port");
@@ -1214,6 +1230,29 @@ mod tests {
         assert!(e.to_string().contains("the server or tunnel didn't answer within 30s"), "{e}");
         assert!(crate::app::is_conn_lost(&e));
         assert!(!err(redis::RedisError::from((redis::ErrorKind::Client, "x"))).to_string().contains("didn't answer"));
+    }
+
+    /// #229: what MCP runs again once
+    #[test]
+    fn dropped_connections_are_told_from_timeouts() {
+        for e in ["Redis: broken pipe", "Redis: Connection reset by peer (os error 54)", "Redis: unexpected end of file", "Redis: Connection closed - IoError"] {
+            assert!(dropped(e), "{e}");
+        }
+        for e in ["Redis: timed out", "Redis 127.0.0.1:6379: Connection refused (os error 61)", "WRONGTYPE", "server: broken pipe"] {
+            assert!(!dropped(e), "{e}");
+        }
+    }
+
+    /// #229: a cursor that isn't one scan_page gave is refused, not read as 0 (which starts the scan over)
+    #[test]
+    fn bad_scan_cursors_are_refused() {
+        assert_eq!(parse_cursor("0", 1).unwrap(), (0, 0));
+        assert_eq!(parse_cursor(" 1234 ", 1).unwrap(), (0, 1234));
+        assert_eq!(parse_cursor("2:99", 3).unwrap(), (2, 99));
+        for bad in ["abc", "", "-1", "1:x", "3:0", "1:5"] {
+            let e = parse_cursor(bad, if bad == "3:0" { 3 } else { 1 }).unwrap_err().to_string();
+            assert!(e.contains("Bad cursor"), "{bad}: {e}");
+        }
     }
 
     #[test]
@@ -1286,12 +1325,12 @@ mod tests {
         let _: () = redis::cmd("SET").arg("qurry:big").arg(&big).query_async(&mut c).await.unwrap();
         let _: () = redis::cmd("SET").arg("qurry:small").arg("hi").query_async(&mut c).await.unwrap();
         let e = st.run_read_only("rd::db4".into(), "GET qurry:big".into(), 10).await.unwrap_err().to_string();
-        assert!(e.contains("too big"), "{e}");
+        assert!(e.contains("per MCP read"), "{e}");
         assert!(st.run_read_only("rd::db4".into(), "MGET qurry:small qurry:big".into(), 10).await.is_err());
         assert!(st.run_read_only("rd::db4".into(), "GET qurry:small".into(), 10).await.is_ok());
         // Reads sent to MCP execute get the same checks
         let e = st.execute_batch_prepared("rd::db4".into(), vec!["GET qurry:big".into()]).await.unwrap_err().to_string();
-        assert!(e.contains("too big"), "{e}");
+        assert!(e.contains("per MCP read"), "{e}");
         assert!(st.execute_batch_prepared("rd::db4".into(), vec!["GET qurry:small".into()]).await.is_ok());
         assert!(st.run_read_only("rd::db4".into(), "GETRANGE qurry:big 0 -1".into(), 10).await.is_err());
         assert!(st.run_read_only("rd::db4".into(), "GETRANGE qurry:big 0 99".into(), 10).await.is_ok());
@@ -1495,7 +1534,7 @@ mod tests {
         let _: () = redis::cmd("DEL").arg(z).arg(s).arg(l).query_async(&mut c).await.unwrap();
     }
 
-    /// The 16 MB check counts every element: MEMORY USAGE's default sampling (the first 5 list nodes) reads a list whose first elements are small as ~10 MB
+    /// The byte budget counts every element of a whole-key read: MEMORY USAGE's default sampling (the first 5 list nodes) reads a list whose first elements are small as ~10 MB
     #[tokio::test]
     #[ignore]
     async fn redis_size_check_counts_every_element() {
@@ -1520,7 +1559,7 @@ mod tests {
         assert!(sampled < 16 << 20, "default sampling under-counts: {sampled}");
         assert!(memory_usage(m, k.as_bytes(), 0).await.unwrap() > 50 << 20);
         let e = st.run_read_only("rd::db7".into(), format!("LRANGE {k} 0 -1"), 1000).await.unwrap_err().to_string();
-        assert!(e.contains("too big"), "{e}");
+        assert!(e.contains("per MCP read"), "{e}");
         let _: () = redis::cmd("DEL").arg(k).query_async(&mut c).await.unwrap();
     }
 
@@ -1647,39 +1686,46 @@ mod tests {
         std::env::var("QURRY_TEST_TLS_DIR").unwrap_or_else(|_| "/tmp/dbtool-tls".into())
     }
 
-    /// docker: dbtool-redis-tls (16391, requirepass tlspass, tls-auth-clients optional)
+    /// QURRY_TEST_REDIS_TLS=host:port:password: a Redis with TLS only (tls-auth-clients optional), its certificates in
+    /// QURRY_TEST_TLS_DIR (ca.pem, client.pem, client-key.pem)
     #[tokio::test]
     #[ignore]
     async fn redis_tls() {
+        let Some(v) = crate::testenv::var("QURRY_TEST_REDIS_TLS") else { return };
+        let mut p = v.splitn(3, ':');
+        let (host, port, password) = (p.next().unwrap(), p.next().expect("port").parse().expect("port"), p.next().unwrap_or(""));
         let d = tls_dir();
         let mut c = cfg("0");
-        c.port = 16391;
+        (c.host, c.port) = (host.into(), port);
         // 1) require: encryption only, no certificate check
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "require".into(), ..Default::default() });
-        let p = crate::db::connect(&c, Some("tlspass")).await.expect("tls require");
+        let p = crate::db::connect(&c, Some(password)).await.expect("tls require");
         assert!(p.server_version().await.unwrap().starts_with("Redis"));
         // 2) verify-full + CA + client certificate (mTLS)
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "verify-full".into(), ca_file: format!("{d}/ca.pem"), cert_file: format!("{d}/client.pem"), key_file: format!("{d}/client-key.pem") });
-        let p = crate::db::connect(&c, Some("tlspass")).await.expect("tls verify-full + mtls");
+        let p = crate::db::connect(&c, Some(password)).await.expect("tls verify-full + mtls");
         let Pool::Redis(m, _) = &p else { panic!() };
         crate::redisdb::run(m, "SET tls:k ok", 1).await.unwrap();
         assert_eq!(crate::redisdb::run(m, "GET tls:k", 1).await.unwrap().rows[0][0], "ok");
         // 3) verify-full without the CA (self-signed) must be rejected
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "verify-full".into(), ..Default::default() });
-        assert!(crate::db::connect(&c, Some("tlspass")).await.is_err(), "self-signed must fail without CA");
+        assert!(crate::db::connect(&c, Some(password)).await.is_err(), "self-signed must fail without CA");
         // 4) Plain text connection must fail
         c.ssl = None;
-        assert!(crate::db::connect(&c, Some("tlspass")).await.is_err());
+        assert!(crate::db::connect(&c, Some(password)).await.is_err());
     }
 
-    /// docker: dbtool-redis-sentinel (master 16392 requirepass spass, sentinel 26392 master mymaster)
+    /// QURRY_TEST_REDIS_SENTINEL=sentinel-host:port:master-name:password: a Sentinel, and the master it names (with that password)
     #[tokio::test]
     #[ignore]
     async fn redis_sentinel() {
+        let Some(v) = crate::testenv::var("QURRY_TEST_REDIS_SENTINEL") else { return };
+        let p: Vec<&str> = v.splitn(4, ':').collect();
+        let [host, port, master, password] = p[..] else { panic!("QURRY_TEST_REDIS_SENTINEL=sentinel-host:port:master-name:password") };
         let mut c = cfg("2");
-        c.port = 1; // unused: the sentinel node list is used
-        c.redis = Some(crate::store::RedisMode { mode: "sentinel".into(), sentinel_master: "mymaster".into(), nodes: "127.0.0.1:1, 127.0.0.1:26392".into() });
-        let p = crate::db::connect(&c, Some("spass")).await.expect("sentinel");
+        c.port = 1; // unused: the sentinel node list is used, a node that doesn't answer first
+        c.redis = Some(crate::store::RedisMode { mode: "sentinel".into(), sentinel_master: master.into(), nodes: format!("127.0.0.1:1, {host}:{port}") });
+        let p = crate::db::connect(&c, Some(password)).await.expect("sentinel");
         let Pool::Redis(m, 2) = &p else { panic!() };
         crate::redisdb::run(m, "SET s:k viaSentinel", 1).await.unwrap();
         let info = crate::redisdb::run(m, "INFO replication", 50).await.unwrap();
@@ -1687,17 +1733,21 @@ mod tests {
         let page = scan_page(m, "0", "s:*", 50, None).await.unwrap();
         assert_eq!(page.keys.len(), 1);
         c.redis.as_mut().unwrap().sentinel_master = "nope".into();
-        let e = crate::db::connect(&c, Some("spass")).await.err().expect("unknown master").to_string();
+        let e = crate::db::connect(&c, Some(password)).await.err().expect("unknown master").to_string();
         assert!(e.contains("does not know master"), "{e}");
     }
 
-    /// docker: dbtool-redis-cluster (127.0.0.1:17001..17003, 3 masters)
+    /// QURRY_TEST_REDIS_CLUSTER=host:port,host:port: two masters of a Redis Cluster (the first is the data source's address, the
+    /// second its node list)
     #[tokio::test]
     #[ignore]
     async fn redis_cluster() {
+        let Some(v) = crate::testenv::var("QURRY_TEST_REDIS_CLUSTER") else { return };
+        let (seed, other) = v.split_once(',').expect("QURRY_TEST_REDIS_CLUSTER=host:port,host:port");
+        let (host, port) = seed.rsplit_once(':').expect("host:port");
         let mut c = cfg("0");
-        c.port = 17001;
-        c.redis = Some(crate::store::RedisMode { mode: "cluster".into(), nodes: "127.0.0.1:17002".into(), ..Default::default() });
+        (c.host, c.port) = (host.into(), port.parse().expect("port"));
+        c.redis = Some(crate::store::RedisMode { mode: "cluster".into(), nodes: other.trim().into(), ..Default::default() });
         let p = crate::db::connect(&c, None).await.expect("cluster");
         let Pool::Redis(m, _) = &p else { panic!() };
         assert!(m.is_cluster());

@@ -17,7 +17,7 @@ pub mod app;
 pub mod audit;
 pub mod backup;
 mod backend;
-pub use backend::{db, redisdb};
+pub use backend::{db, redis_read, redisdb};
 pub mod dba;
 pub mod diagnostics;
 pub mod dsn;

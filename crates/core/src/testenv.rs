@@ -47,6 +47,9 @@ pub fn var(name: &str) -> Option<String> {
         let format = match name {
             "QURRY_TEST_PG" => "host:port:user:db[:password]",
             "QURRY_TEST_REDIS" => "host:port",
+            "QURRY_TEST_REDIS_TLS" => "host:port:password (certificates in QURRY_TEST_TLS_DIR)",
+            "QURRY_TEST_REDIS_SENTINEL" => "sentinel-host:port:master-name:password",
+            "QURRY_TEST_REDIS_CLUSTER" => "host:port,host:port (two of its masters)",
             _ => "host:port:user:password:db",
         };
         eprintln!("skipped: {name} is unset ({format})");
