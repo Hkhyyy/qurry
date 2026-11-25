@@ -150,7 +150,7 @@ pub(super) fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
         }
         KeyCode::Char('d') => app.redis_pick_db(id),
         KeyCode::Char('m') => app.redis_scan(id, false),
-        KeyCode::Char('r') => app.redis_scan(id, true),
+        KeyCode::Char('r') => app.redis_reload(id),
         KeyCode::Char('D') | KeyCode::Delete => {
             if let Some(key) = cur_key {
                 app.popup = Some(Popup::Confirm { opened: None, sql: None, text: format!("Delete key \"{key}\"?"), on_yes: Box::new(move |a| {

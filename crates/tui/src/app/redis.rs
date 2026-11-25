@@ -101,24 +101,32 @@ impl App {
         self.open_after_notices(Popup::Palette(Palette { title: "Show which database?".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
+    /// The keys (from the top when `reset`, with the key counts), Loading… in the list meanwhile. Each load here waits on a source
+    /// that reconnects as a table tab's does (#220): the status line says so, the Cancel key stops it, a failure says why with r
     pub fn redis_scan(&mut self, id: u64, reset: bool) {
         let Some(t) = self.tab_mut(id) else { return };
         let target = t.target.clone();
         let TabKind::Redis(r) = &mut t.kind else { return };
-        r.scanning = true;
+        (r.scanning, r.scan_error) = (true, None);
         let (cursor, pattern) = (if reset { "0".to_string() } else { r.cursor.clone() }, r.pattern.clone());
         let st = self.state.clone();
         if reset {
             // The title's key count and d's list
             let (st, target) = (st.clone(), target.clone());
-            self.spawn(async move { st.redis_overview(target).await.map_err(err) }, move |a, r| {
-                if let (Ok(o), Some(TabKind::Redis(t))) = (r, a.tab_mut(id).map(|t| &mut t.kind)) {
-                    t.dbs = o.databases;
+            self.spawn_wait(&target.clone(), WaitFor::Redis(id), async move { st.redis_overview(target).await.map_err(err) }, move |a, r, seen| {
+                let Some(TabKind::Redis(t)) = a.tab_mut(id).map(|t| &mut t.kind) else { return };
+                match r {
+                    Ok(o) => (t.dbs, t.counts_error) = (o.databases, None),
+                    Err(e) => {
+                        t.counts_error = Some(e.clone());
+                        a.status = format!("Couldn't read the key counts: {e}");
+                        a.redis_reconnect_failed(seen, &e);
+                    }
                 }
             });
         }
         let asked = target.clone();
-        self.spawn(async move { st.redis_scan(target, cursor, pattern, 500, None).await.map_err(err) }, move |a, res| {
+        self.spawn_wait(&target.clone(), WaitFor::Redis(id), async move { st.redis_scan(target, cursor, pattern, 500, None).await.map_err(err) }, move |a, res, seen| {
             // The tab switched databases meanwhile: these keys are the old one's
             let Some(t) = a.tab_mut(id).filter(|t| t.target == asked) else { return };
             let TabKind::Redis(r) = &mut t.kind else { return };
@@ -155,20 +163,73 @@ impl App {
                         a.redis_load_key(id, k);
                     }
                 }
-                Err(e) => a.status = e,
+                Err(e) => {
+                    r.scan_error = Some(e.clone());
+                    a.status = e.clone();
+                    a.redis_reconnect_failed(seen, &e);
+                }
             }
         });
     }
 
+    /// r: the keys again from the top, and the value whose load failed
+    pub fn redis_reload(&mut self, id: u64) {
+        let failed = match self.tab_mut(id).map(|t| &mut t.kind) {
+            Some(TabKind::Redis(r)) => r.key_error.take().map(|(k, _)| k),
+            _ => return,
+        };
+        self.redis_scan(id, true);
+        if let Some(k) = failed {
+            self.redis_load_key(id, k);
+        }
+    }
+
+    /// The Cancel key on a Redis tab that scans or loads a value, with no reconnect shown: those loads stop (what it sends goes on)
+    pub(crate) fn redis_cancel(&mut self, id: u64) {
+        let ids: Vec<u64> = self.waits.iter().filter(|(_, w)| matches!(w.into, WaitFor::Redis(t) if t == id)).map(|(k, _)| *k).collect();
+        for w in ids.into_iter().filter_map(|k| self.waits.remove(&k)) {
+            w.abort.abort();
+        }
+        self.redis_stopped(id, "Cancelled");
+        self.status = "Cancelled · r retry".into();
+        self.retry_status = self.status.clone();
+    }
+
+    /// Its loads were stopped (the Cancel key, or a reconnect's Cancel): the list and the value say so where they were loading
+    pub(crate) fn redis_stopped(&mut self, id: u64, why: &str) {
+        let Some(TabKind::Redis(r)) = self.tab_mut(id).map(|t| &mut t.kind) else { return };
+        if std::mem::take(&mut r.scanning) {
+            r.scan_error = Some(why.into());
+        }
+        if let Some(k) = r.loading.take() {
+            r.key_error = Some((k, why.into()));
+        }
+    }
+
+    /// A load or a send that waited on a reconnect (`seen`) failed with `e`: when the reconnect failed, the Message popup says why
+    fn redis_reconnect_failed(&mut self, seen: Option<Reconnecting>, e: &str) {
+        if let Some(rc) = seen {
+            self.reconnect_failed(&rc, e, Some("Redis"));
+        }
+    }
+
+    /// A key's value, Loading… in the value panel meanwhile (a newer pick's answer wins)
     pub fn redis_load_key(&mut self, id: u64, key: String) {
         let Some(t) = self.tab_mut(id) else { return };
         let target = t.target.clone();
+        if let TabKind::Redis(r) = &mut t.kind {
+            (r.loading, r.key_error) = (Some(key.clone()), None);
+        }
         let st = self.state.clone();
         let (k2, asked) = (key.clone(), target.clone());
-        self.spawn(async move { st.redis_key(target, k2, Some(1000)).await.map_err(err) }, move |a, res| {
+        self.spawn_wait(&target.clone(), WaitFor::Redis(id), async move { st.redis_key(target, k2, Some(1000)).await.map_err(err) }, move |a, res, seen| {
             // A key of the database the tab showed before: its edits would go to the new one
             let Some(t) = a.tab_mut(id).filter(|t| t.target == asked) else { return };
             let TabKind::Redis(r) = &mut t.kind else { return };
+            if r.loading.as_ref() != Some(&key) {
+                return;
+            }
+            r.loading = None;
             match res {
                 Ok(d) => {
                     r.value = redis_grid(&d);
@@ -181,7 +242,9 @@ impl App {
                 Err(e) => {
                     r.detail = None;
                     r.value = None;
-                    a.status = e;
+                    r.key_error = Some((key, e.clone()));
+                    a.status = e.clone();
+                    a.redis_reconnect_failed(seen, &e);
                 }
             }
         });
@@ -283,10 +346,13 @@ impl App {
         let Some(target) = self.tab_mut(id).map(|t| t.target.clone()) else { return };
         let st = self.state.clone();
         let l2 = line.clone();
-        self.spawn(async move { st.redis_exec_line(target, l2).await.map_err(|e| e.to_string()) }, move |a, r| {
+        self.spawn_wait(&target.clone(), WaitFor::RedisRun(id), async move { st.redis_exec_line(target, l2).await.map_err(|e| e.to_string()) }, move |a, r, seen| {
             match r {
                 Ok(v) => a.notice(line.clone(), crate::ui::format_typed(&line, &v)),
-                Err(e) => a.notice(line, format!("(error) {}", e.trim_start_matches("Redis: "))),
+                Err(e) => {
+                    a.notice(line, format!("(error) {}", e.trim_start_matches("Redis: ")));
+                    a.redis_reconnect_failed(seen, &e);
+                }
             }
             if write {
                 a.redis_scan(id, true);
@@ -311,7 +377,7 @@ impl App {
         };
         let st = self.state.clone();
         let shown = args.join(" ");
-        self.spawn(async move { st.redis_exec(target, args).await.map_err(err) }, move |a, res| match res {
+        self.spawn_wait(&target.clone(), WaitFor::RedisRun(id), async move { st.redis_exec(target, args).await.map_err(err) }, move |a, res, seen| match res {
             Ok(v) => {
                 a.status = format!("{shown} → {}", crate::ui::format_reply(&v).lines().next().unwrap_or(""));
                 if rescan {
@@ -321,7 +387,10 @@ impl App {
                     a.redis_load_key(id, k);
                 }
             }
-            Err(e) => a.status = e,
+            Err(e) => {
+                a.status = e.clone();
+                a.redis_reconnect_failed(seen, &e);
+            }
         });
     }
 }

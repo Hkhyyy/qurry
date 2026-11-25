@@ -633,6 +633,11 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 /* Redis browser (Medis style) */
 .redis-browser { height: 100%; display: flex; flex-direction: column; background: var(--bg); }
 .redis-browser > [data-group] { flex: 1; min-height: 0; }
+/* A load's place while its result isn't there (#220): Loading… with ■, or the failure with Retry (the grid's) */
+.rd-load { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 16px; }
+.rd-term-out .rd-load { justify-content: flex-start; padding: 0 0 2px; }
+.rd-load-error { flex: none; display: flex; align-items: center; gap: 8px; margin: 4px; }
+.rd-load-why { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: text; }
 .rd-pattern { flex: 1; min-width: 120px; font-family: 'JetBrains Mono', Menlo, monospace; }
 /* The filter and its ⓘ take the toolbar's spare width together */
 .ui-named:has(> .rd-pattern) { flex: 1; }

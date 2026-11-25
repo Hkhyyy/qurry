@@ -290,7 +290,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `d` | Show another database (with key counts; one Redis tab per data source) |
 | `/` | Filter keys (SCAN MATCH pattern, e.g. prod:user:*) |
 | `m` | Scan more |
-| `r` | Rescan |
+| `r` | Rescan (and load again a value that failed) |
 | `a` | Add key (SET / HSET / RPUSH / SADD / ZADD …) |
 | `D / Delete` | Delete key |
 | `R` | Rename key |

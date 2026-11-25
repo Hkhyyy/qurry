@@ -13,6 +13,23 @@ pub fn type_color(t: &str) -> Color {
     }
 }
 
+/// A load of the Redis tab that failed (#220), as the table tab's: its first line (the status line has it all), then that r retries
+pub fn failed_lines(e: &str, color: Color) -> Vec<Line<'static>> {
+    vec![
+        Line::styled(format!(" ✗ {}", e.lines().next().unwrap_or_default()), Style::default().fg(color)),
+        Line::from(vec![Span::styled(" r ", Style::default().fg(ACCENT)), Span::raw("retry")]),
+    ]
+}
+
+/// What the key list says above its keys: why the scan failed, else why the key counts didn't come (the keys did)
+pub fn list_note(r: &crate::app::RedisTab) -> Option<Vec<Line<'static>>> {
+    match (&r.scan_error, &r.counts_error) {
+        (Some(e), _) => Some(failed_lines(e, DANGER)),
+        (None, Some(e)) => Some(failed_lines(&format!("Couldn't read the key counts: {e}"), WARN)),
+        _ => None,
+    }
+}
+
 /// Output in the same form as redis-cli
 pub fn format_reply(v: &Value) -> String {
     fn go(v: &Value, indent: usize) -> String {

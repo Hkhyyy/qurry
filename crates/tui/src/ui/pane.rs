@@ -237,8 +237,16 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, fo
             let filter = if r.pattern.is_empty() { String::new() } else { format!(" · {}", r.pattern) };
             let title = format!(" {db}{filter} — {}{} {}", r.keys.len(), if r.cursor != "0" { "+" } else { "" }, if r.scanning { "scanning… " } else { "" });
             let b = panel(title, kf);
-            let inner = b.inner(left);
+            let mut inner = b.inner(left);
             f.render_widget(b, left);
+            // A failed scan or key counts above the keys (#220), Loading… where they go while none came yet
+            if let Some(note) = super::redis::list_note(r) {
+                let [msg, rest] = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(inner);
+                f.render_widget(Paragraph::new(note), msg);
+                inner = rest;
+            } else if r.keys.is_empty() && r.scanning {
+                f.render_widget(Paragraph::new(" Loading…").style(Style::default().fg(DIM)), inner);
+            }
             let h = inner.height as usize;
             if r.sel < r.off {
                 r.off = r.sel;
@@ -275,7 +283,16 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, fo
             }
             let vf = focus == Focus::Grid && r.focus_value;
             match &mut r.detail {
-                None => f.render_widget(Paragraph::new("Select a key").block(panel(" Value ", vf)), right),
+                // Its load: Loading…, or why it failed and that r retries (#220)
+                None => {
+                    let text = match (&r.loading, &r.key_error) {
+                        (Some(_), _) => vec![Line::styled(" Loading…", Style::default().fg(DIM))],
+                        (None, Some((_, e))) => super::redis::failed_lines(e, DANGER),
+                        _ => vec![Line::raw("Select a key")],
+                    };
+                    let title = r.loading.as_ref().or(r.key_error.as_ref().map(|k| &k.0)).map_or(" Value ".to_string(), |k| format!(" {k} "));
+                    f.render_widget(Paragraph::new(text).block(panel(title, vf)), right)
+                }
                 Some((key, d)) => {
                     let ttl = if d.ttl >= 0 { format!("TTL {}s", d.ttl / 1000) } else { "no TTL".into() };
                     let title = format!(" {} {key} · {} · {} {} ", d.ty.to_uppercase(), ttl, d.length, if d.ty == "string" { "bytes" } else { "items" });

@@ -247,6 +247,19 @@ const reconnectWait = async (a: any) => {
     delete reconnectWaits[a.callId];
   }
 };
+/** The Redis browser's calls (#220): each waits on a reconnect as table_detail does; window.__mockRedisSlow = { scan, overview, key,
+ *  exec, line } (ms, or true to wait until cancel_call) holds it, window.__mockRedisFail = { … } (a message) fails it after that */
+const redisWait = async (what: "scan" | "overview" | "key" | "exec" | "line", a: any) => {
+  await reconnectWait(a);
+  const g = globalThis as any;
+  const slow = g.__mockRedisSlow?.[what];
+  if (slow)
+    await new Promise<void>((ok, fail) => {
+      if (a.callId) reconnectWaits[a.callId] = () => fail("Cancelled");
+      if (slow !== true) setTimeout(ok, slow);
+    }).finally(() => delete reconnectWaits[a.callId]);
+  if (g.__mockRedisFail?.[what]) throw g.__mockRedisFail[what];
+};
 /** core app::Reconnecting for a mock source (qurry_shared::errors' words) */
 export const mockReconnecting = (id: string) => {
   const c: any = conns.find((c) => c.id === id);
@@ -335,21 +348,22 @@ const handlers: Record<string, (a: any) => unknown> = {
     const v = a.id === "lan" ? ["lan_app"] : a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"];
     return g.__mockDbListDelay ? new Promise((ok) => setTimeout(() => ok(v), g.__mockDbListDelay)) : v;
   },
-  redis_scan: (a: any) => ({
+  redis_scan: async (a: any) => (await redisWait("scan", a), {
     cursor: "0",
     keys: redisKeys(a.id).filter((k) => (!a.typeFilter || k.type === a.typeFilter) && redisMatch(a.pattern, k.key)),
   }),
-  redis_overview: () => ({ configAllowed: !(globalThis as any).__mockRedis?.managed, databases: [{ name: "db0", keys: 7 }, { name: "db3", keys: 2 }] }),
+  redis_overview: async (a: any) => (await redisWait("overview", a), { configAllowed: !(globalThis as any).__mockRedis?.managed, databases: [{ name: "db0", keys: 7 }, { name: "db3", keys: 2 }] }),
   redis_key_names: (a: any) => redisKeys(a.id).map((k) => k.key).filter((k) => k.startsWith(a.prefix)).sort().slice(0, a.max),
-  redis_key: (a: any) =>
+  redis_key: async (a: any) => (await redisWait("key", a),
     a.key === "user:1"
       ? { type: "hash", ttl: -1, length: 3, memory: 96, encoding: "listpack", truncated: false, value: [["age", "30"], ["email", "a@b.c"], ["profile", '{"city":"Seoul","tags":["vip","beta"]}']] }
       : a.key === "rank"
       ? { type: "zset", ttl: 86400000, length: 2, memory: 72, encoding: "listpack", truncated: false, value: [["alice", "10"], ["bob", "20"]] }
-      : { type: "string", ttl: 3540000, length: 42, memory: 80, encoding: "embstr", truncated: false, value: '{"uid":1,"roles":["admin"],"exp":1760000000}' },
-  redis_exec: () => ({ status: "OK" }),
+      : { type: "string", ttl: 3540000, length: 42, memory: 80, encoding: "embstr", truncated: false, value: '{"uid":1,"roles":["admin"],"exp":1760000000}' }),
+  redis_exec: async (a: any) => (await redisWait("exec", a), { status: "OK" }),
   // As the backend: a read-only source refuses writes; replies by command (window.__mockRedisLines lists the lines that ran)
-  redis_exec_line: (a: any) => {
+  redis_exec_line: async (a: any) => {
+    await redisWait("line", a);
     const g = globalThis as any;
     const cmd = String(a.line).trim().split(/\s+/)[0].toUpperCase();
     if (g.__mockRedis?.readOnly && !["GET", "HGETALL", "LRANGE", "SMEMBERS", "ZRANGE", "TTL", "TYPE", "DBSIZE", "PING", "SCAN"].includes(cmd)) throw `Data source "[Redis] cache" is read-only: ${cmd} changes data`;

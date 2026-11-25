@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { ask, askText } from "../lib/dialogs";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
@@ -6,7 +6,11 @@ import { api, history, QueryResult, redis, RedisDbInfo, RedisKeyDetail, RedisKey
 import { keyTree, parentPaths, visibleRows } from "../lib/keyTree";
 import { sharedOr, useSharedReady, type RedisAssist, type RedisReplyTable } from "../lib/shared";
 import { isRead, unsafeReason } from "../lib/stmtKind";
+import { waitOn } from "../lib/reconnect";
+import { eventSpec, hit } from "../lib/shortcuts";
+import { useRedisLoad } from "../features/redis/useRedisLoad";
 import { FolderIcon } from "../ui/icons";
+import { LoadFailed, RedisLoadState, Running, StopButton } from "./RedisLoad";
 import { Badge, Button, EmptyState, FormGrid, IconButton, Modal, Named, Notice, Select, Spacer, Table, Tabs, Td, Text, TextArea, TextInput, Th, ToolButton, Toolbar, TreeRow } from "../ui";
 
 const isMacOS = navigator.platform.toLowerCase().includes("mac");
@@ -85,11 +89,15 @@ export function RedisBrowser(p: Props) {
   const [typeFilter, setTypeFilter] = useState("");
   const [keys, setKeys] = useState<RedisKeyRow[]>([]);
   const [cursor, setCursor] = useState("0");
-  const [scanning, setScanning] = useState(false);
   const [sel, setSel] = useState<string | null>(p.initialKey ?? null);
   const [tab, setTab] = useState<"content" | "terminal" | "info" | "config">("content");
   const [adding, setAdding] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // The key list's SCAN and the key counts (#220): Loading… with ■, a failure with its reason and Retry
+  const sc = useRedisLoad(p.onStatus);
+  const ov = useRedisLoad(p.onStatus);
+  const scanning = sc.loading;
+  /** ■ of the key value loading on the right (KeyContent), for ⌘F2 */
+  const valueCancel = useRef<(() => void) | null>(null);
 
   // Keys appear as folders grouped by ":" (Medis). open = expanded folders, cur = selected folder (null when a key is selected)
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -117,21 +125,18 @@ export function RedisBrowser(p: Props) {
 
   // The database picker's key counts and whether CONFIG works (checked on connect), read again with each new scan
   const [overview, setOverview] = useState<RedisOverview | null>(null);
-  const loadOverview = () => redis.overview(p.target).then(setOverview, () => {});
+  const loadOverview = (): Promise<void> => ov.run(p.target, (id) => redis.overview(p.target, id), () => void loadOverview()).then((o) => void (o && setOverview(o)));
   const configOff = overview?.configAllowed === false;
   useEffect(() => {
     if (configOff && tab === "config") setTab("info");
   }, [configOff]);
 
   // A scan of the database shown before that answers late is dropped (shownTarget: the database shown now)
-  const scan = async (reset: boolean) => {
+  const scan = async (reset: boolean): Promise<void> => {
     const asked = p.target;
-    setScanning(true);
-    setError(null);
     if (reset) loadOverview();
-    try {
-      const page = await redis.scan(asked, reset ? "0" : cursor, pattern, 500, typeFilter);
-      if (asked !== shownTarget.current) return;
+    const page = await sc.run(asked, (id) => redis.scan(asked, reset ? "0" : cursor, pattern, 500, typeFilter, id), () => void scan(reset));
+    if (page && asked === shownTarget.current) {
       setKeys((ks) => {
         // Merge only the new (sorted) page into the already sorted list (instead of re-sorting everything each time)
         const have = new Set(reset ? [] : ks.map((k) => k.key));
@@ -143,10 +148,6 @@ export function RedisBrowser(p: Props) {
         return out;
       });
       setCursor(page.cursor);
-    } catch (e) {
-      if (asked === shownTarget.current) setError(String(e));
-    } finally {
-      if (asked === shownTarget.current) setScanning(false);
     }
   };
   useEffect(() => {
@@ -157,6 +158,8 @@ export function RedisBrowser(p: Props) {
   useEffect(() => {
     if (shownTarget.current === p.target) return;
     shownTarget.current = p.target;
+    setKeys([]);
+    setCursor("0");
     setSel(p.initialKey ?? null);
     setCur(null);
     setOpen(new Set());
@@ -165,9 +168,10 @@ export function RedisBrowser(p: Props) {
     if (p.initialKey) setSel(p.initialKey);
   }, [p.initialKey]);
 
-  const exec = async (args: string[]) => {
+  // An edit waits on a reconnect as a load does; the toast's Retry sends it again (a reconnect that failed sent nothing)
+  const exec = async (args: string[], retry?: () => void): Promise<RedisReply> => {
     if (p.readOnly) throw new Error("Data source is read-only");
-    return redis.exec(p.target, args);
+    return waitOn(p.target, (id) => redis.exec(p.target, args, id), retry ?? (() => void exec(args).catch((e) => p.onStatus(String(e)))));
   };
   const removeKeyLocal = (k: string) => setKeys((ks) => ks.filter((x) => x.key !== k));
   const renameLocal = (from: string, to: string) => setKeys((ks) => ks.map((x) => (x.key === from ? { ...x, key: to } : x)).sort((a, b) => a.key.localeCompare(b.key)));
@@ -176,15 +180,19 @@ export function RedisBrowser(p: Props) {
     <div
       className="redis-browser"
       onKeyDown={(e) => {
-        // ⌘r = reload (same as the toolbar's Scan again)
+        // ⌘r = reload (same as the toolbar's Scan again); ⌘F2 stops the scan and the value loading, as ■ does
         if ((isMacOS ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && e.code === "KeyR") {
           e.preventDefault();
           scan(true);
+        } else if (hit(eventSpec(e), "editor.cancel") && (scanning || valueCancel.current)) {
+          e.preventDefault();
+          sc.cancel();
+          valueCancel.current?.();
         }
       }}
     >
       <Toolbar className="rd-toolbar">
-        <Select className="rd-db" value={p.database} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database (the explorer's databases switch it too)" aria-label="Database">
+        <Select className="rd-db" value={p.database} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database (the explorer's databases switch it too)" aria-label="Database" aria-busy={ov.loading}>
           {(overview?.databases.some((d) => d.name === p.database) ? overview.databases : [{ name: p.database, keys: -1 }, ...(overview?.databases ?? [])]).map((d) => (
             <option key={d.name} value={d.name}>
               {dbLabel(d)}
@@ -213,13 +221,21 @@ export function RedisBrowser(p: Props) {
             </option>
           ))}
         </Select>
-        <IconButton title="Scan again (⌘r)" onClick={() => scan(true)}>
-          ⟳
-        </IconButton>
+        {scanning ? (
+          <StopButton onClick={sc.cancel} />
+        ) : (
+          <IconButton title="Scan again (⌘r)" onClick={() => scan(true)}>
+            ⟳
+          </IconButton>
+        )}
         <ToolButton title="Add a new key" onClick={() => setAdding(true)} disabled={p.readOnly}>
           + Key
         </ToolButton>
       </Toolbar>
+      {/* The key counts failed while the keys came: the picker shows the database alone (a failed scan says it for both) */}
+      {ov.state.phase === "failed" && sc.state.phase !== "failed" && (
+        <LoadFailed error={`Couldn't read the key counts: ${ov.state.error}`} onRetry={loadOverview} />
+      )}
       <Group orientation="horizontal" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
         <Panel id="keys" defaultSize="34%" minSize="18%">
           <div className="rd-keys">
@@ -296,8 +312,10 @@ export function RedisBrowser(p: Props) {
                   );
                 })}
               </div>
-              {!keys.length && !scanning && <EmptyState>{error ?? "No keys match"}</EmptyState>}
+              {!keys.length && (sc.state.phase === "idle" ? <EmptyState>No keys match</EmptyState> : <RedisLoadState load={sc.state} onCancel={sc.cancel} onRetry={() => scan(true)} />)}
             </div>
+            {/* A scan that failed after keys came: below them, which stay */}
+            {keys.length > 0 && sc.state.phase === "failed" && <LoadFailed error={sc.state.error} onRetry={() => scan(true)} />}
             <div className="rd-keys-foot">
               <span>
                 {keys.length.toLocaleString()} key{keys.length === 1 ? "" : "s"}
@@ -340,6 +358,7 @@ export function RedisBrowser(p: Props) {
                       setSel(to);
                     }}
                     onTtl={(ttl) => setKeys((ks) => ks.map((x) => (x.key === sel ? { ...x, ttl } : x)))}
+                    cancelRef={valueCancel}
                   />
                 ) : (
                   <EmptyState>Select a key on the left.</EmptyState>
@@ -356,8 +375,8 @@ export function RedisBrowser(p: Props) {
                   onChanged={() => scan(true)}
                 />
               )}
-              {tab === "info" && <ServerTable target={p.target} command="INFO" />}
-              {tab === "config" && <ServerTable target={p.target} command="CONFIG GET *" />}
+              {tab === "info" && <ServerTable target={p.target} command="INFO" onStatus={p.onStatus} />}
+              {tab === "config" && <ServerTable target={p.target} command="CONFIG GET *" onStatus={p.onStatus} />}
             </div>
           </div>
         </Panel>
@@ -390,15 +409,17 @@ export function RedisBrowser(p: Props) {
 
 type Row = { id: string; cols: string[]; raw: unknown };
 
-function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRenamed, onTtl }: {
+function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRenamed, onTtl, cancelRef }: {
   target: string;
   keyName: string;
   readOnly: boolean;
-  exec: (args: string[]) => Promise<RedisReply>;
+  exec: (args: string[], retry?: () => void) => Promise<RedisReply>;
   onStatus: (s: string) => void;
   onDeleted: () => void;
   onRenamed: (to: string) => void;
   onTtl: (ttl: number) => void;
+  /** Its ■ while the value loads (the browser's ⌘F2) */
+  cancelRef: MutableRefObject<(() => void) | null>;
 }) {
   const layout = useDefaultLayout({ id: "dbtool-redis-content", panelIds: ["items", "value"] });
   const [d, setD] = useState<RedisKeyDetail | null>(null);
@@ -411,24 +432,25 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
   const [fmt, setFmt] = useState<"raw" | "json">("raw");
   const [newItem, setNewItem] = useState<{ a: string; b: string } | null>(null);
 
-  const load = async (lim = limit) => {
+  // The value (#220): Loading… with ■, a failure with its reason and Retry
+  const ld = useRedisLoad(onStatus);
+  cancelRef.current = ld.loading ? ld.cancel : null;
+  useEffect(() => () => void (cancelRef.current = null), []);
+  const load = async (lim = limit): Promise<void> => {
     setErr(null);
-    try {
-      const r = await redis.key(target, keyName, lim);
-      setD(r);
-      setTtl(r.ttl >= 0 ? String(Math.round(r.ttl / 1000)) : "");
-      if (r.type === "string") setText(String(r.value ?? ""));
-    } catch (e) {
-      setErr(String(e));
-    }
+    const r = await ld.run(target, (id) => redis.key(target, keyName, lim, id), () => void load(lim));
+    if (!r) return;
+    setD(r);
+    setTtl(r.ttl >= 0 ? String(Math.round(r.ttl / 1000)) : "");
+    if (r.type === "string") setText(String(r.value ?? ""));
   };
   useEffect(() => {
     load();
   }, [keyName]);
 
-  const run = async (args: string[], msg?: string) => {
+  const run = async (args: string[], msg?: string): Promise<boolean> => {
     try {
-      await exec(args);
+      await exec(args, () => void run(args, msg));
       if (msg) onStatus(msg);
       await load();
       return true;
@@ -532,8 +554,7 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
     if (ok) setNewItem(null);
   };
 
-  if (err && !d) return <Notice tone="danger">{err}</Notice>;
-  if (!d) return <EmptyState>Loading {keyName}…</EmptyState>;
+  if (!d) return <RedisLoadState load={ld.state} onCancel={ld.cancel} onRetry={() => load()} />;
 
   return (
     <div className="rd-content">
@@ -581,9 +602,13 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
           {d.encoding ? ` · ${d.encoding}` : ""}
           {d.memory != null ? ` · ${fmtBytes(d.memory)}` : ""}
         </Text>
-        <IconButton title="Reload" onClick={() => load()}>
-          ⟳
-        </IconButton>
+        {ld.loading ? (
+          <StopButton onClick={ld.cancel} />
+        ) : (
+          <IconButton title="Reload" onClick={() => load()}>
+            ⟳
+          </IconButton>
+        )}
         <IconButton tone="danger"
           title="Delete key"
           disabled={readOnly}
@@ -602,6 +627,8 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
         </IconButton>
       </div>
       {err && <Notice tone="danger">{err}</Notice>}
+      {/* A reload that failed: the value read before stays below */}
+      {ld.state.phase === "failed" && <LoadFailed error={ld.state.error} onRetry={() => load()} />}
       {d.type === "string" ? (
         <ValueEditor text={text} fmt={fmt} setFmt={setFmt} pretty={pretty} readOnly={readOnly} onSave={saveText} big />
       ) : (
@@ -759,12 +786,14 @@ function Terminal({ target, connId, connName, database, readOnly, production, pr
   const [keys, setKeys] = useState<{ prefix: string; names: string[] } | null>(null);
   const [pick, setPick] = useState(0);
   const [closed, setClosed] = useState(false);
+  /** When the line running now started (Running… below the output) */
+  const [running, setRunning] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const ready = useSharedReady();
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
-  }, [lines]);
+  }, [lines, running]);
   const loadHist = () => history.list(connId, "", 200).then((h) => setHist(h.map((x) => x.sql)), () => {});
   useEffect(() => {
     loadHist();
@@ -816,12 +845,16 @@ function Terminal({ target, connId, connName, database, readOnly, production, pr
 
   // Keep only the last TERM_MAX lines of output
   const push = (...xs: TermLine[]) => setLines((l) => [...l, ...xs].slice(-TERM_MAX));
-  const submit = async () => {
+  const submit = () => {
     const line = input.trim();
-    if (!line) return;
+    if (!line || running !== null) return;
     hi.current = -1;
     edit("");
     if (line.toLowerCase() === "clear") return setLines([]);
+    void runLine(line);
+  };
+  /** A line, with the console's checks; also the reconnect toast's Retry (a reconnect that failed sent nothing, and it asks again) */
+  const runLine = async (line: string) => {
     const echo: TermLine = { kind: "in", text: `${prompt} ${line}` };
     // This source's history (the core masks AUTH / HELLO … AUTH / requirepass), also for a HELP or a refused line; not for a cancelled one
     const remember = () => history.add(connId, database, line).then(loadHist, () => {});
@@ -848,13 +881,16 @@ function Terminal({ target, connId, connName, database, readOnly, production, pr
     }
     remember();
     push(echo);
+    setRunning(Date.now());
     try {
-      const r = await redis.execLine(target, line);
+      const r = await waitOn(target, (id) => redis.execLine(target, line, id), () => void runLine(line));
       const table = sharedOr<RedisReplyTable | undefined>(undefined, (s) => s.redisReplyTable(line, r));
       push(table ? { kind: "table", table } : r === null ? { kind: "nil", text: "(nil)" } : { kind: "out", text: formatReply(r) });
       if (write) onChanged();
     } catch (e) {
       push({ kind: "err", text: `(error) ${String(e).replace(/^Redis: /, "")}` });
+    } finally {
+      setRunning(null);
     }
   };
   return (
@@ -886,6 +922,7 @@ function Terminal({ target, connId, connName, database, readOnly, production, pr
             </pre>
           ),
         )}
+        {running !== null && <Running since={running} />}
         <div ref={end} />
       </div>
       <div className="rd-term-in">
@@ -978,22 +1015,22 @@ function Terminal({ target, connId, connName, database, readOnly, production, pr
 }
 
 /** Info / Config: searchable table */
-function ServerTable({ target, command }: { target: string; command: string }) {
+function ServerTable({ target, command, onStatus }: { target: string; command: string; onStatus: (s: string) => void }) {
   const [r, setR] = useState<QueryResult | null>(null);
-  const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
-  const load = () => {
-    setErr(null);
-    api.runQuery(target, command).then(setR, (e) => setErr(String(e)));
+  const ld = useRedisLoad(onStatus);
+  const load = async (): Promise<void> => {
+    const v = await ld.run(target, () => api.runQuery(target, command), () => void load());
+    if (v) setR(v);
   };
   useEffect(() => {
     load();
   }, [target, command]);
+  const err = ld.state.phase === "failed" ? ld.state.error : null;
   // Managed Redis (AWS ElastiCache · MemoryDB, Azure, GCP Memorystore, Upstash …) renames or blocks CONFIG
   if (err && /^CONFIG/i.test(command) && /unknown command|NOPERM|disabled|not allowed/i.test(err))
     return <Notice>{CONFIG_REFUSED}</Notice>;
-  if (err) return <Notice tone="danger">{err}</Notice>;
-  if (!r) return <EmptyState>Loading…</EmptyState>;
+  if (!r) return <RedisLoadState load={ld.state} onCancel={ld.cancel} onRetry={load} />;
   const rows = q ? r.rows.filter((row) => row.some((c) => String(c ?? "").toLowerCase().includes(q.toLowerCase()))) : r.rows;
   return (
     <div className="rd-server">
@@ -1001,10 +1038,15 @@ function ServerTable({ target, command }: { target: string; command: string }) {
         <TextInput placeholder="Filter" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
         <Spacer />
         <Text tone="muted">{rows.length} entries</Text>
-        <IconButton onClick={load} title="Reload">
-          ⟳
-        </IconButton>
+        {ld.loading ? (
+          <StopButton onClick={ld.cancel} />
+        ) : (
+          <IconButton onClick={load} title="Reload">
+            ⟳
+          </IconButton>
+        )}
       </Toolbar>
+      {err && <LoadFailed error={err} onRetry={load} />}
       <div className="rd-table-wrap">
         <Table className="rd-table">
           <thead>

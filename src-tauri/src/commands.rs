@@ -208,14 +208,15 @@ pub async fn full_text_search(state: State<'_, AppState>, id: String, req: crate
     state.full_text_search(id, req).await
 }
 
+/// The Redis browser's loads and runs (#220): `call_id`: cancel_call stops it (it may wait on a reconnecting tunnel)
 #[tauri::command]
-pub async fn redis_scan(state: State<'_, AppState>, id: String, cursor: String, pattern: String, count: usize, type_filter: Option<String>) -> AppResult<crate::redisdb::ScanPage> {
-    state.redis_scan(id, cursor, pattern, count, type_filter).await
+pub async fn redis_scan(state: State<'_, AppState>, id: String, cursor: String, pattern: String, count: usize, type_filter: Option<String>, call_id: Option<String>) -> AppResult<crate::redisdb::ScanPage> {
+    cancellable(call_id, LOAD_CANCELLED, state.redis_scan(id, cursor, pattern, count, type_filter)).await
 }
 
 #[tauri::command]
-pub async fn redis_overview(state: State<'_, AppState>, id: String) -> AppResult<crate::redisdb::ServerOverview> {
-    state.redis_overview(id).await
+pub async fn redis_overview(state: State<'_, AppState>, id: String, call_id: Option<String>) -> AppResult<crate::redisdb::ServerOverview> {
+    cancellable(call_id, LOAD_CANCELLED, state.redis_overview(id)).await
 }
 
 #[tauri::command]
@@ -224,19 +225,19 @@ pub async fn redis_key_names(state: State<'_, AppState>, id: String, prefix: Str
 }
 
 #[tauri::command]
-pub async fn redis_key(state: State<'_, AppState>, id: String, key: String, limit: Option<usize>) -> AppResult<crate::redisdb::KeyDetail> {
-    state.redis_key(id, key, limit).await
+pub async fn redis_key(state: State<'_, AppState>, id: String, key: String, limit: Option<usize>, call_id: Option<String>) -> AppResult<crate::redisdb::KeyDetail> {
+    cancellable(call_id, LOAD_CANCELLED, state.redis_key(id, key, limit)).await
 }
 
 /// Terminal: one line as is, like redis-cli
 #[tauri::command]
-pub async fn redis_exec_line(state: State<'_, AppState>, id: String, line: String) -> AppResult<serde_json::Value> {
-    state.redis_exec_line(id, line).await
+pub async fn redis_exec_line(state: State<'_, AppState>, id: String, line: String, call_id: Option<String>) -> AppResult<serde_json::Value> {
+    cancellable(call_id, LOAD_CANCELLED, state.redis_exec_line(id, line)).await
 }
 
 #[tauri::command]
-pub async fn redis_exec(state: State<'_, AppState>, id: String, args: Vec<String>) -> AppResult<serde_json::Value> {
-    state.redis_exec(id, args).await
+pub async fn redis_exec(state: State<'_, AppState>, id: String, args: Vec<String>, call_id: Option<String>) -> AppResult<serde_json::Value> {
+    cancellable(call_id, LOAD_CANCELLED, state.redis_exec(id, args)).await
 }
 
 #[tauri::command]

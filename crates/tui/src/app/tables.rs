@@ -159,7 +159,7 @@ impl App {
                         a.status = e.clone();
                         // It waited on a reconnect: if that failed (not the load itself), why, and r retries (the Message popup)
                         if let Some(rc) = seen {
-                            a.reconnect_failed(&rc, &e, true);
+                            a.reconnect_failed(&rc, &e, Some("table"));
                         }
                     }
                 }

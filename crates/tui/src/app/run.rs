@@ -701,6 +701,8 @@ impl App {
         let session = match &t.kind {
             TabKind::Console(c) => c.session.clone(),
             TabKind::Table(tt) => tt.session.clone(),
+            // Its scan or value load (#220): dropped, as a table tab's metadata load
+            TabKind::Redis(_) => return self.redis_cancel(t.id),
             _ => return,
         };
         let st = self.state.clone();

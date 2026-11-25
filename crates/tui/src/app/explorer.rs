@@ -251,7 +251,7 @@ impl App {
                         Err(e) => {
                             done(a, key, Err(e.clone()));
                             if let Some(rc) = seen {
-                                a.reconnect_failed(&rc, &e, false);
+                                a.reconnect_failed(&rc, &e, None);
                             }
                         }
                         Ok((_, Some((schema, objs)))) => {
@@ -297,7 +297,7 @@ impl App {
                     done(a, key, r);
                     // It waited on a reconnect: if that failed (not the load itself), why, and how to load it again (the Message popup)
                     if let Some((e, rc)) = failed {
-                        a.reconnect_failed(&rc, &e, false);
+                        a.reconnect_failed(&rc, &e, None);
                     }
                 });
             }
