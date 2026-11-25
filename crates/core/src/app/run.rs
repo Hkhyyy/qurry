@@ -11,8 +11,9 @@ struct TxSeen {
     ended: Option<&'static str>,
 }
 
-/// MCP execute on Redis: its checks and its run, one call at a time in this process (AppState::execute_batch_prepared)
-static REDIS_MCP_WRITES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Statements one MCP execute on Redis may send: its checks and run hold the source's write lock (Connecting::redis_mcp_writes),
+/// each command up to redisdb::RESPONSE_TIMEOUT
+const REDIS_MCP_MAX_STATEMENTS: usize = 100;
 
 /// Max size of an MCP CSV export
 const EXPORT_MAX_BYTES: u64 = 512 << 20;
@@ -353,6 +354,9 @@ impl AppState {
     /// another type are refused (redisdb::check_mcp_write)
     pub async fn execute_batch_prepared(&self, id: String, statements: Vec<String>) -> AppResult<BatchResult> {
         if self.kind_of(&id)? == store::DbKind::Redis {
+            if statements.len() > REDIS_MCP_MAX_STATEMENTS {
+                return Err(AppError::Msg(format!("At most {REDIS_MCP_MAX_STATEMENTS} Redis commands per execute call; split them over several calls")));
+            }
             // A read-only source refuses a write before the size checks connect
             for st in &statements {
                 self.check_read_only(&id, st)?;
@@ -361,9 +365,10 @@ impl AppState {
             for st in &statements {
                 crate::redisdb::check_read(&m, st).await?;
             }
-            // From the count to the run, one MCP call at a time: two calls sent at once (HDEL k a, HDEL k b) would each see the
-            // other's element still there. Other clients of the server can still change the key in between
-            let _one = REDIS_MCP_WRITES.lock().await;
+            // From the count to the run, one MCP call at a time on the source: two calls sent at once (HDEL k a, HDEL k b) would
+            // each see the other's element still there. Other clients of the server can still change the key in between
+            let c = self.connecting(split_target(&id).0);
+            let _one = c.redis_mcp_writes.lock().await;
             crate::redisdb::check_mcp_write(&m, &statements).await?;
             return self.execute_batch_with(id, statements, false, true).await;
         }

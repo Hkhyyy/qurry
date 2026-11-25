@@ -27,11 +27,15 @@ fn pct(s: &str) -> String {
 pub use qurry_shared::kind::redis_db_index as db_index;
 
 /// A connection, and whether the server answered CONFIG when it connected (managed services like ElastiCache, Azure Cache,
-/// Memorystore or Upstash rename or refuse it; the browser's Config tab is then greyed out)
+/// Memorystore or Upstash rename or refuse it; the browser's Config tab is then greyed out). One per data source: its
+/// databases share it, each clone pinned to one (`db`, on_db). When the server takes SELECT (`select`), every command goes out
+/// in one write behind a SELECT of its database, so commands of different databases sent at once never run in another one's
 #[derive(Clone)]
 pub struct RedisConn {
     link: Link,
     config: bool,
+    db: i64,
+    select: bool,
 }
 
 /// Standalone·Sentinel use one ConnectionManager; Cluster uses the cluster connection + a connection per master (for SCAN)
@@ -64,29 +68,81 @@ impl redis::aio::ConnectionLike for Link {
 
 impl redis::aio::ConnectionLike for RedisConn {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a redis::Cmd) -> redis::RedisFuture<'a, RV> {
-        self.link.req_packed_command(cmd)
+        if !self.select {
+            return self.link.req_packed_command(cmd);
+        }
+        Box::pin(async move {
+            let mut p = self.selecting();
+            p.add_command(cmd.clone());
+            let mut v = self.selected(&p, 1).await?;
+            v.pop().ok_or_else(|| redis::RedisError::from((redis::ErrorKind::Client, "no reply")))
+        })
     }
     fn req_packed_commands<'a>(&'a mut self, cmd: &'a redis::Pipeline, offset: usize, count: usize) -> redis::RedisFuture<'a, Vec<RV>> {
-        self.link.req_packed_commands(cmd, offset, count)
+        if !self.select {
+            return self.link.req_packed_commands(cmd, offset, count);
+        }
+        Box::pin(async move {
+            // MULTI … EXEC would need its replies counted around the SELECT: nothing here sends one
+            if cmd.is_transaction() {
+                return Err(redis::RedisError::from((redis::ErrorKind::Client, "transactions aren't sent on a shared Redis connection")));
+            }
+            let mut p = self.selecting();
+            for c in cmd.cmd_iter() {
+                p.add_command(c.clone());
+            }
+            Ok(self.selected(&p, cmd.len()).await?.into_iter().skip(offset).take(count).collect())
+        })
     }
     fn get_db(&self) -> i64 {
-        self.link.get_db()
+        if self.is_cluster() { 0 } else { self.db }
     }
 }
 
 impl RedisConn {
+    /// A pipeline that starts with the SELECT of this clone's database
+    fn selecting(&self) -> redis::Pipeline {
+        let mut p = redis::pipe();
+        p.cmd("SELECT").arg(self.db);
+        p
+    }
+    /// Sends `p` (selecting + `n` commands) in one write: the connection runs it in order, with nothing of another caller in
+    /// between. → the commands' replies, once the SELECT's is OK. Should it fail anyway (on_db checked it for this database),
+    /// the commands after it ran in the database before: that is the error, not their replies
+    async fn selected(&mut self, p: &redis::Pipeline, n: usize) -> redis::RedisResult<Vec<RV>> {
+        let mut v = redis::aio::ConnectionLike::req_packed_commands(&mut self.link, p, 0, n + 1).await?;
+        if v.is_empty() {
+            return Err(redis::RedisError::from((redis::ErrorKind::Client, "no reply to SELECT")));
+        }
+        v.remove(0).extract_error()?;
+        Ok(v)
+    }
+    /// This connection pinned to database `db` of the server, checked with a round trip, so a database the server doesn't have
+    /// (or won't SELECT) fails here and never sends a command into the one before. A cluster has db0 only: as it was
+    pub async fn on_db(&self, db: i64) -> AppResult<RedisConn> {
+        let mut c = RedisConn { db, ..self.clone() };
+        if c.is_cluster() || db == self.db {
+            return Ok(c);
+        }
+        if !self.select {
+            return Err(AppError::Msg(format!("This Redis server refuses SELECT, so only db{} of it can be opened", self.db)));
+        }
+        let _: String = redis::cmd("PING").query_async(&mut c).await.map_err(err)?;
+        Ok(c)
+    }
     pub fn is_cluster(&self) -> bool {
-        matches!(self.link, Link::Cluster { .. })
+        self.link.is_cluster()
     }
     /// The server answered CONFIG GET when this connection was made
     pub fn config_allowed(&self) -> bool {
         self.config
     }
-    /// Nodes to run SCAN on (all masters for a cluster)
-    fn scan_nodes(&self) -> Vec<ConnectionManager> {
+    /// Nodes to run SCAN on (all masters for a cluster). A single node is this connection, pinned to its database like every
+    /// command on it
+    fn scan_nodes(&self) -> Vec<RedisConn> {
         match &self.link {
-            Link::Single(m) => vec![m.clone()],
-            Link::Cluster { masters, .. } => masters.clone(),
+            Link::Single(_) => vec![self.clone()],
+            Link::Cluster { masters, .. } => masters.iter().map(|m| RedisConn { link: Link::Single(m.clone()), config: self.config, db: 0, select: false }).collect(),
         }
     }
 }
@@ -118,6 +174,11 @@ pub fn parse_nodes(s: &str, default_port: u16) -> Vec<(String, u16)> {
         .collect()
 }
 
+/// How long a connect to a Redis server may take (TCP, TLS, login)
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long a command waits for the server's reply, as a large value through a slow tunnel needs (redis' own default is 500 ms)
+pub const RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 struct Endpoint {
     scheme: &'static str,
     auth: String,
@@ -138,9 +199,17 @@ impl Endpoint {
         }
         .map_err(err)
     }
+    /// No retries: a refused or reset connect says so at once (the default 6 retries with backoff took about 9.5s each); a
+    /// connection that drops later connects again on its next command
     async fn manager(&self, host: &str, port: u16, db: i64) -> AppResult<ConnectionManager> {
-        let cfg = redis::aio::ConnectionManagerConfig::new().set_connection_timeout(Some(std::time::Duration::from_secs(10)));
-        let mut m = ConnectionManager::new_with_config(self.client(host, port, db)?, cfg).await.map_err(|e| AppError::Msg(format!("Redis {host}:{port}: {e}")))?;
+        let cfg = redis::aio::ConnectionManagerConfig::new()
+            .set_connection_timeout(Some(CONNECT_TIMEOUT))
+            .set_response_timeout(Some(RESPONSE_TIMEOUT))
+            .set_number_of_retries(0);
+        let mut m = ConnectionManager::new_with_config(self.client(host, port, db)?, cfg).await.map_err(|e| match e.is_timeout() {
+            true => AppError::Msg(format!("Redis {host}:{port}: timed out — the server or tunnel didn't answer within {}s", CONNECT_TIMEOUT.as_secs())),
+            false => AppError::Msg(format!("Redis {host}:{port}: {e}")),
+        })?;
         let _: String = redis::cmd("PING").query_async(&mut m).await.map_err(err)?;
         Ok(m)
     }
@@ -215,8 +284,8 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
             let mut seeds = vec![(host.to_string(), port)];
             seeds.extend(parse_nodes(&cfg.redis.as_ref().map(|r| r.nodes.clone()).unwrap_or_default(), 6379));
             let mut b = redis::cluster::ClusterClientBuilder::new(seeds.iter().map(|(h, p)| ep.url(h, *p, 0)).collect::<Vec<_>>())
-                .connection_timeout(std::time::Duration::from_secs(10))
-                .response_timeout(std::time::Duration::from_secs(30));
+                .connection_timeout(CONNECT_TIMEOUT)
+                .response_timeout(RESPONSE_TIMEOUT);
             if let Some(p) = password.filter(|p| !p.is_empty()) {
                 b = b.password(p);
             }
@@ -269,10 +338,21 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
     }
     // Checked once here: any refusal (unknown command, NOPERM, a renamed CONFIG) greys out the Config tab
     let config = matches!(redis::cmd("CONFIG").arg("GET").arg("maxmemory").query_async::<RV>(&mut c).await, Ok(v) if !matches!(v, RV::ServerError(_)));
-    Ok(RedisConn { link: conn, config })
+    // A proxy or an ACL may refuse SELECT: then commands go as they are, to the database connected to (on_db refuses others)
+    let select = !conn.is_cluster() && redis::cmd("SELECT").arg(db).query_async::<()>(&mut c).await.is_ok();
+    Ok(RedisConn { link: conn, config, db, select })
+}
+
+impl Link {
+    fn is_cluster(&self) -> bool {
+        matches!(self, Link::Cluster { .. })
+    }
 }
 
 fn err(e: redis::RedisError) -> AppError {
+    if e.is_timeout() {
+        return AppError::Msg(format!("Redis: timed out — the server or tunnel didn't answer within {}s. Check that it's up and reachable, then run it again.", RESPONSE_TIMEOUT.as_secs()));
+    }
     AppError::Msg(format!("Redis: {e}"))
 }
 
@@ -1125,6 +1205,15 @@ mod tests {
         assert!(matches!(parse_command("GET \"x"), Err(AppError::Msg(m)) if m == "Unbalanced quotes"));
         assert_eq!(quote_arg("a b"), "\"a b\"");
         assert_eq!(quote_arg("user:1"), "user:1");
+    }
+
+    /// A reply that doesn't come says why, and still reads as a lost connection (recover checks the source)
+    #[test]
+    fn a_response_timeout_names_its_cause() {
+        let e = err(std::io::Error::from(std::io::ErrorKind::TimedOut).into());
+        assert!(e.to_string().contains("the server or tunnel didn't answer within 30s"), "{e}");
+        assert!(crate::app::is_conn_lost(&e));
+        assert!(!err(redis::RedisError::from((redis::ErrorKind::Client, "x"))).to_string().contains("didn't answer"));
     }
 
     #[test]
