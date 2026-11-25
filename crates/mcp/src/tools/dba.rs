@@ -34,10 +34,7 @@ impl Server {
         let id = qurry_core::app::split_target(&t).0.to_string();
         let c = self.sources().await?.into_iter().find(|c| c.config.id == id).ok_or("Data source not found")?.config;
         if !c.mcp_dba_report_allowed() {
-            return Err(format!(
-                "\"{}\" is a Production data source: MCP reads its Database Admin reports (sessions, client addresses, settings, roles) only if a person allows it for this data source in Qurry (Data Source Properties › Options › \"AI tools can read admin reports\"; TUI: \"Admin reports\" in the data source form)",
-                c.name
-            ));
+            return Err(reports_not_allowed(&c.name, "Database Admin reports (sessions, client addresses, settings, roles)"));
         }
         let info = dba::reports(kind).into_iter().find(|r| r.id == report).ok_or_else(|| unknown_report(&report, kind))?;
         let mut r = st.dba_report(t, report).await.map_err(e)?;
@@ -49,6 +46,13 @@ impl Server {
         // Never the report's actions (Cancel Query, Terminate Session, generated SQL): MCP only reads
         Ok(json!({ "report": info.id, "title": info.title, "help": info.help, "result": result_json(&r) }))
     }
+}
+
+/// A Production source's admin reports (dba_report, Redis's SLOWLOG GET and CLIENT LIST through query) before a person allowed them
+pub(super) fn reports_not_allowed(name: &str, what: &str) -> String {
+    format!(
+        "\"{name}\" is a Production data source: MCP reads its {what} only if a person allows it for this data source in Qurry (Data Source Properties › Options › \"AI tools can read admin reports\"; TUI: \"Admin reports\" in the data source form)"
+    )
 }
 
 /// get_erd: at most this many tables

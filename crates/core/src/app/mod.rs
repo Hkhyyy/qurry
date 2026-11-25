@@ -15,6 +15,7 @@ mod sessions;
 pub use sessions::*;
 mod sources;
 pub use sources::*;
+mod redis_mcp;
 mod run;
 pub use run::*;
 mod tx;

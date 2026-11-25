@@ -18,7 +18,7 @@ MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mc
 
 | MCP 설정 | `--allow-write` 없이 | `--allow-write` 로 |
 |---|---|---|
-| **Off** | 아무것도. 목록에 없고, 비밀번호를 읽지도 접속하지도 않습니다 (클라이언트가 이름이나 id 로 직접 요청해도) | 같음 |
+| **Off** | 아무것도. 목록에 없고, 비밀번호를 읽지도 접속하지도 않습니다 (클라이언트가 이름이나 id 로 직접 요청해도. 숨긴 Data Source 에도 맞는 이름 일부로는 아무것도 찾지 않습니다) | 같음 |
 | **Read** | 둘러보기와 읽기: 데이터베이스, 스키마, 객체, 컬럼, DDL, 객체 검색, `query`, `explain`, `full_text_search`, `get_erd`, `dba_report` (Production 은 사람이 허용한 곳만), Redis 키와 값, RAG 검색, `export_csv` | 같음 |
 | **Read & write** | Read 와 같음 | `execute` 도 — 단 Data Source 가 **읽기 전용** 이거나 **Production** 이면 Read 에 머뭅니다 |
 | *(설정 없음: 이 설정이 생기기 전에 만든 것)* | Read, Production Data Source 면 **Off** | Read & write (읽기 전용이면 Read), Production Data Source 면 **Off** |
@@ -30,6 +30,7 @@ MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mc
 - `export_csv` 는 `~/Downloads/qurry-exports` 에 새 파일만 씁니다. 이름은 클라이언트가 폴더 없이 정하고, 있는 파일을 덮어쓰지 않습니다.
 - `semantic_search` 는 질문을 인덱스의 임베딩 제공자 (Ollama 또는 OpenAI) 로 보내고, 인덱스한 테이블의 Data Source 와 벡터 저장소의 Data Source 가 둘 다 보일 때만 동작합니다.
 - `dba_report` 는 앱의 Database Admin 이 보여 주는 것을 보여 줍니다: 누가 접속해 있는지 (사용자, 애플리케이션, 클라이언트 주소) 와 무엇을 실행하는지, 락 대기, 가장 느린 문장, 서버 설정, 역할과 그 권한, 테이블 권한. 문장 텍스트 안의 문자열 · 숫자 리터럴은 모든 Data Source 에서 `?` 로 바꾸지만, 테이블 · 컬럼 이름, 주석, 문장의 모양은 그대로 읽힙니다. MySQL 복제의 마지막 오류 (`SHOW REPLICA STATUS` 의 `Last_Error`, `Last_SQL_Error`, `Last_IO_Error`) 는 서버가 이스케이프하지 않는 따옴표 안에 행 값과 실패한 문장을 담으므로, 첫 따옴표부터 마지막 따옴표까지를 `?` 하나로 바꿉니다 (오류 번호와 그 앞뒤 말은 남습니다). 전체 텍스트는 Qurry 의 Database Admin 에서 보세요. 리터럴은 기본 설정대로 읽습니다: MySQL `NO_BACKSLASH_ESCAPES` 나 PostgreSQL `standard_conforming_strings = off` 로 도는 서버에서는 문자열 안에 `\` 가 있는 문장의 뒤쪽 리터럴이 가려지지 않을 수 있습니다. **Production** Data Source 에서는 사람이 Qurry 에서 그 Data Source 에 허용한 뒤에만 답합니다 (Data Source Properties › Options › **AI tools can read admin reports**, TUI: Data Source 폼의 `Admin reports`). 처음에는 꺼져 있고, 예전 Qurry 가 그 Data Source 를 저장하면 다시 꺼집니다. 다른 Data Source 에서는 MCP 로 공유하는 동안 언제나 답하므로, 이 설정이 체크된 채 비활성으로 보입니다. 아무것도 바꾸지 않습니다: 세션을 취소하거나 끝내지 않고, 리포트가 권하는 해결책 (CREATE / DROP INDEX, VACUUM …) 은 사람이 Qurry 에서 실행할 텍스트로만 돌아옵니다.
+- Redis 에는 이런 리포트가 둘 있고 `query` 로 읽습니다: `SLOWLOG GET` (다른 클라이언트의 느린 명령, 그 주소와 이름) 과 `CLIENT LIST` (모든 연결). **Production** Data Source 에서는 같은 **AI tools can read admin reports** 설정이 켜져 있을 때만 답합니다. `SLOWLOG GET` 은 모든 Data Source 에서 명령과 키만 보여 줍니다 (`SET card:1 … (1 more)`): 다른 클라이언트가 보낸 값, 스크립트, 비밀번호는 빠집니다.
 - `get_erd` 는 이름만 돌려줍니다: 테이블, 기본 키와 외래 키 컬럼. 행은 돌려주지 않습니다.
 
 ## 읽기 전용은 어떻게 지키는가
@@ -37,16 +38,16 @@ MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mc
 `query`, `explain`, `export_csv` 는 클라이언트가 준 SQL 이나 명령을 받습니다. 이 도구들은 보내기 전에 같은 엔진 검사 (`qurry_core::guard`) 를 거치고, 데이터베이스가 할 수 있는 것은 그 위에서 데이터베이스가 지킵니다.
 
 - **PostgreSQL / MySQL**: 읽는 문장 정확히 하나를, 60초 제한이 걸린 READ ONLY 트랜잭션에서 실행하고 항상 롤백합니다. 쓰기 CTE, 변경문의 `EXPLAIN ANALYZE`, `SELECT … INTO OUTFILE`, 읽기 전용 끄기, 부작용이 있는 알려진 함수 (`pg_terminate_backend`, `pg_read_file`, `dblink`, `load_file`, `sleep` …) 는 실행 전에 거부합니다.
-- **Redis**: 읽기 명령만, `CONFIG` 와 `KEYS` 는 빼고, 명령 하나에 원소 1,000개까지.
+- **Redis**: 읽기 명령만, `CONFIG` 와 `KEYS` 는 빼고, 명령 하나에 원소 1,000개, 인자 1,000개, 4 MB 까지. 크기는 실행 전에 서버에서 잽니다 (`STRLEN`, `HSTRLEN`, `MEMORY USAGE`. 원소가 10,000개 넘는 키는 표본으로 재므로, 표본이 놓친 큰 원소 몇 개가 있으면 더 올 수 있습니다). 64 KB 가 넘는 값은 잘려서 옵니다.
 - **드라이버 Data Source** (SQL Server, DuckDB, ClickHouse, MongoDB, 벡터 DB) 는 READ ONLY 트랜잭션이 없어서 문장 검사가 더 엄격하고, DuckDB 는 외부 접근을 끈 채 열며 ClickHouse 읽기는 `readonly=2` 로 실행합니다.
 
-다른 도구는 SQL 을 받지 않습니다: Qurry 가 직접 만든 문장을 엔진 검사 없이 실행합니다. PostgreSQL · MySQL 의 `full_text_search` 는 테이블마다 `SELECT` 하나를 롤백하는 READ ONLY 트랜잭션에서 실행하고, 테이블마다 15초 제한이 있지만 호출 전체에는 제한이 없습니다. 둘러보기 도구 (데이터베이스, 스키마, 객체, 컬럼, DDL, `search_objects`, `get_erd`) 는 카탈로그를 읽습니다. `dba_report` 는 Qurry 에 들어 있는 리포트 문장만, 문장마다 30초 제한으로 실행합니다 (PostgreSQL 은 롤백하는 트랜잭션 안에서). `redis_get` 은 값의 원소를 10,000개까지, `redis_scan` 은 호출 한 번에 키를 5,000개까지 읽습니다.
+다른 도구는 SQL 을 받지 않습니다: Qurry 가 직접 만든 문장을 엔진 검사 없이 실행합니다. PostgreSQL · MySQL 의 `full_text_search` 는 테이블마다 `SELECT` 하나를 롤백하는 READ ONLY 트랜잭션에서 실행하고, 테이블마다 15초 제한이 있지만 호출 전체에는 제한이 없습니다. 둘러보기 도구 (데이터베이스, 스키마, 객체, 컬럼, DDL, `search_objects`, `get_erd`) 는 카탈로그를 읽습니다. `dba_report` 는 Qurry 에 들어 있는 리포트 문장만, 문장마다 30초 제한으로 실행합니다 (PostgreSQL 은 롤백하는 트랜잭션 안에서). `redis_get` 은 값의 원소를 10,000개까지 (4 MB 를 넘게 되면 그보다 적게, 원소마다 64 KB 까지, 문자열은 앞 64 KB), `redis_scan` 은 호출 한 번에 키를 5,000개까지 읽습니다. Redis 의 `get_ddl` 은 키를 통째로 읽으므로 `query` 와 같은 한도 안에서만 됩니다.
 
 전체 목록은 [MCP 서버 › 읽기 전용을 지키는 방법](mcp.md)에 있습니다. 이 검사들은 두 번째 방어선입니다: 검사가 모르는 함수는 DB 사용자에게 권한이 있으면 실행됩니다.
 
 ## 쓰기 (`--allow-write`)
 
-`execute` 는 서버를 `--allow-write` 로 띄웠을 때만 목록에 나오고, Read & write 이면서 읽기 전용도 Production 도 아닌 Data Source 에서만 실행됩니다. 허용 목록만 받습니다: 항목마다 `INSERT` 하나, 또는 `WHERE` 가 있는 `UPDATE` / `DELETE`, 그리고 MongoDB · 벡터 DB · Redis 의 같은 것들. DDL, `TRUNCATE`, `MERGE`, 스크립트, 삭제 (drop) 는 거부합니다. PostgreSQL / MySQL 은 항목마다 prepared statement 로 실행하므로, 한 항목에 숨겨 넣은 두 번째 문장은 서버가 거부합니다.
+`execute` 는 서버를 `--allow-write` 로 띄웠을 때만 목록에 나오고, Read & write 이면서 읽기 전용도 Production 도 아닌 Data Source 에서만 실행됩니다. 허용 목록만 받습니다: 항목마다 `INSERT` 하나, 또는 `WHERE` 가 있는 `UPDATE` / `DELETE`, 그리고 MongoDB · 벡터 DB · Redis 의 같은 것들. DDL, `TRUNCATE`, `MERGE`, 스크립트, 삭제 (drop) 는 거부하고, Redis 키를 비우거나 잘라내거나 다른 타입의 키를 통째로 바꿀 수 있는 쓰기도 거부합니다 (Qurry 가 Data Source 마다 `execute` 호출을 하나씩, 키의 크기와 타입을 서버에 먼저 묻습니다. 그 사이 다른 클라이언트가 키를 바꾸는 것은 막지 못합니다). PostgreSQL / MySQL 은 항목마다 prepared statement 로 실행하므로, 한 항목에 숨겨 넣은 두 번째 문장은 서버가 거부합니다.
 
 Production Data Source 는 MCP 설정과 상관없이 `execute` 를 받지 않습니다: 앱이 변경 전에 묻는 바뀔 행 수 확인은 사람이 있어야 하고, AI 도구는 그걸 건너뛰기 때문입니다. 운영 데이터는 Qurry 에서 직접 바꾸세요.
 

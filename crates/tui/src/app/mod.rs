@@ -469,6 +469,12 @@ pub struct RedisTab {
     pub scanning: bool,
     /// Key given on open (selected once the scan finishes)
     pub want: Option<String>,
+    /// Why the last scan, the key counts, or the value of a key (and which) didn't load (#220): said in the tab, r retries
+    pub scan_error: Option<String>,
+    pub counts_error: Option<String>,
+    pub key_error: Option<(String, String)>,
+    /// The key whose value is loading (a newer pick's answer wins)
+    pub loading: Option<String>,
 }
 
 /// A row in the key browser: a folder grouped by ":", or a key (index into keys)
@@ -480,7 +486,7 @@ pub enum KRow {
 
 impl RedisTab {
     pub fn new(pattern: &str, want: Option<String>) -> Self {
-        RedisTab { dbs: vec![], pattern: pattern.into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, open: HashSet::new(), detail: None, text: None, value: None, focus_value: false, scanning: false, want }
+        RedisTab { dbs: vec![], pattern: pattern.into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, open: HashSet::new(), detail: None, text: None, value: None, focus_value: false, scanning: false, want, scan_error: None, counts_error: None, key_error: None, loading: None }
     }
 
     /// Visible rows: folders first (by name), then keys. Only expanded folders show contents (same rules as the explorer's tree::key_folders)
@@ -559,6 +565,8 @@ impl Tab {
         let (running, grid, what) = match &self.kind {
             TabKind::Console(c) => (c.running, c.grid(), "Executing".to_string()),
             TabKind::Table(tt) => (tt.running, tt.grid.as_ref(), format!("Loading {}.{}", tt.schema, tt.table)),
+            // The key list's scan, then a key's value (#220)
+            TabKind::Redis(r) => return r.scanning.then(|| "Scanning keys".to_string()).or_else(|| r.loading.as_ref().map(|k| format!("Loading {k}"))),
             _ => return None,
         };
         if running {
@@ -1283,7 +1291,7 @@ impl App {
     /// The source the active table tab's load waits on (spawn_wait), if it does
     fn active_wait(&self) -> Option<String> {
         let id = self.tabs.get(self.active)?.id;
-        self.waits.values().find(|w| matches!(w.into, WaitFor::Table(t) if t == id)).map(|w| w.base.clone())
+        self.waits.values().find(|w| matches!(w.into, WaitFor::Table(t) | WaitFor::Redis(t) | WaitFor::RedisRun(t) if t == id)).map(|w| w.base.clone())
     }
 
     /// Whether the Cancel key stops the active tab's own work (a run or a load-more, as the GUI's ⌘F2) rather than a reconnect a
@@ -1304,7 +1312,7 @@ impl App {
         let Some(base) = base else { return false };
         let text = self.state.reconnecting().into_iter().find(|r| r.id == base).map(|r| r.cancelled).unwrap_or_else(|| "Cancelled.".into());
         let ids: Vec<u64> = self.waits.iter().filter(|(_, w)| w.base == base).map(|(id, _)| *id).collect();
-        let mut table = false;
+        let (mut table, mut run) = (false, false);
         let gone: Vec<Wait> = ids.into_iter().filter_map(|id| self.waits.remove(&id)).collect();
         for w in gone {
             w.abort.abort();
@@ -1319,11 +1327,18 @@ impl App {
                     self.tree.loading.remove(&key);
                     self.tree.children.insert(key.clone(), vec![Node::info(&key, "", format!("⚠ {text}"))]);
                 }
+                WaitFor::Redis(tab) => {
+                    table = true;
+                    self.redis_stopped(tab, &text);
+                }
+                WaitFor::RedisRun(_) => run = true,
             }
         }
         self.reconnect_since.remove(&base);
         // Short, and never cut, so the key shows (the tree node keeps the whole text)
-        self.status = format!("Cancelled while reconnecting {} · {} retry", self.conn_name(&base), self.retry_key(table));
+        // A Terminal line isn't sent again by r: it is run again
+        let how = if run && !table { "run it again".to_string() } else { format!("{} retry", self.retry_key(table)) };
+        self.status = format!("Cancelled while reconnecting {} · {how}", self.conn_name(&base));
         self.retry_status = self.status.clone();
         true
     }
@@ -1343,8 +1358,21 @@ impl App {
 
     /// A load that waited on a reconnect (`r`: what the core listed) failed with `e`. When the core says it couldn't reconnect (the
     /// tunnel didn't open again), the Message popup says why and how to load again, once per source (its loads fail together), and
-    /// the status line too, short and never cut so the key shows. Any other error is the load's own, which its caller shows
-    pub(crate) fn reconnect_failed(&mut self, r: &Reconnecting, e: &str, table: bool) {
+    /// the status line too, short and never cut so the key shows. Any other error is the load's own, which its caller shows.
+    /// `tab`: the kind of tab it loaded into ("table", "Redis"), whose r retries; None for an explorer node
+    pub(crate) fn reconnect_failed(&mut self, r: &Reconnecting, e: &str, tab: Option<&str>) {
+        let key = self.retry_key(tab.is_some());
+        let where_ = tab.map_or("on the explorer node".to_string(), |t| format!("in the {t} tab"));
+        self.reconnect_failed_saying(r, e, &format!("{key} retry"), &format!("{key} {where_} retries."));
+    }
+
+    /// reconnect_failed for what the Redis tab sends (a Terminal line, an edit): r only reloads the keys, so it says to run it again
+    pub(crate) fn reconnect_failed_run(&mut self, r: &Reconnecting, e: &str) {
+        self.reconnect_failed_saying(r, e, "run it again", "Run it again: r in the Redis tab only loads its keys again.");
+    }
+
+    /// The Message popup and status line of a failed reconnect: `short` on the status line, `how` in the popup
+    fn reconnect_failed_saying(&mut self, r: &Reconnecting, e: &str, short: &str, how: &str) {
         let Some(reason) = qurry_shared::errors::reconnect_reason(&r.failed, e) else { return };
         let heading = format!("{}.\n\n", r.failed);
         let mut open = self.popup.as_ref();
@@ -1357,11 +1385,9 @@ impl App {
                 _ => None,
             };
         }
-        let key = self.retry_key(table);
-        let where_ = if table { "in the table tab" } else { "on the explorer node" };
-        self.status = format!("Couldn't reconnect {} · {key} retry", self.conn_name(&r.id));
+        self.status = format!("Couldn't reconnect {} · {short}", self.conn_name(&r.id));
         self.retry_status = self.status.clone();
-        self.open_after_notices(Popup::Message { title: "Couldn't reconnect".into(), text: format!("{heading}{reason}\n\n{key} {where_} retries.") });
+        self.open_after_notices(Popup::Message { title: "Couldn't reconnect".into(), text: format!("{heading}{reason}\n\n{how}") });
     }
 }
 
@@ -1372,10 +1398,13 @@ pub struct Wait {
     abort: tokio::task::AbortHandle,
 }
 
-/// What a waiting load fills in: a table tab (its id) or an explorer node's children (its key)
+/// What a waiting load fills in: a table tab (its id), an explorer node's children (its key), a Redis tab's keys, key counts or value
+/// (its id), or what a Redis tab sends (a command line or an edit: the Cancel key stops it only while the source reconnects)
 pub enum WaitFor {
     Table(u64),
     Tree(String),
+    Redis(u64),
+    RedisRun(u64),
 }
 
 /// `fut`, and the last reconnecting() entry for `base` seen when it started or while it ran (looked at every 250 ms; nothing is read

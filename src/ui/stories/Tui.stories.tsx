@@ -104,6 +104,9 @@ export const ScreenRedis = { ...by("Redis"), name: "Screen · Redis" };
 export const ScreenRedisDatabase = { ...by("Redis: database"), name: "Screen · Redis: database (d)" };
 export const ScreenRedisCommandLine = { ...by("Redis: command line"), name: "Screen · Redis: command line (:)" };
 export const ScreenRedisArgumentHints = { ...by("Redis: argument hints"), name: "Screen · Redis: argument hints" };
+export const ScreenRedisLoading = { ...by("Redis: loading"), name: "Screen · Redis: loading (#220)" };
+export const ScreenRedisFailed = { ...by("Redis: failed"), name: "Screen · Redis: failed, r retries (#220)" };
+export const ScreenRedisReconnecting = { ...by("Redis: reconnecting"), name: "Screen · Redis: reconnecting (#220)" };
 export const ScreenMysqlBackupDefiners = { ...by("MySQL backup: DEFINER= question"), name: "Screen · MySQL backup: DEFINER= question" };
 export const ScreenTooSmall = { ...by("Terminal too small"), name: "Screen · Terminal too small" };
 // Small windows: what stays when a dialog doesn't fit

@@ -13,10 +13,27 @@ impl Server {
         let s = |k: &str| a.get(k).and_then(|v| v.as_str()).map(String::from);
         let n = |k: &str, d: usize| a.get(k).and_then(|v| v.as_u64()).map(|x| x as usize).unwrap_or(d);
         let e = |e: qurry_core::error::AppError| e.to_string();
-        let (t, ..) = self.target(a).await?;
+        let (t, kind, ..) = self.target(a).await?;
         let limit = n("limit", 100).clamp(1, MAX_ROWS);
-        let r = st.run_read_only(t, s("sql").ok_or("sql is required")?, limit).await.map_err(e)?;
+        let sql = s("sql").ok_or("sql is required")?;
+        if kind == DbKind::Redis {
+            self.redis_admin_report_allowed(&t, &sql).await?;
+        }
+        let r = st.run_read_only(t, sql, limit).await.map_err(e)?;
         Ok(result_json(&r))
+    }
+
+    /// Redis's admin reports (SLOWLOG GET, CLIENT LIST: other clients' commands, addresses and names) on a Production source: only
+    /// where a person allowed them, as dba_report (#227)
+    async fn redis_admin_report_allowed(&self, t: &str, line: &str) -> Result<(), String> {
+        let args = qurry_core::redisdb::parse_command(line.trim().trim_end_matches(';').trim()).map_err(|e| e.to_string())?;
+        let word = |i: usize| args.get(i).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
+        if !qurry_core::redisdb::is_admin_report(&word(0), &word(1)) {
+            return Ok(());
+        }
+        let id = qurry_core::app::split_target(t).0;
+        let c = self.sources().await?.into_iter().find(|c| c.config.id == id).ok_or("Data source not found")?.config;
+        if c.mcp_dba_report_allowed() { Ok(()) } else { Err(super::dba::reports_not_allowed(&c.name, &format!("{} {} (other clients' commands, addresses and names)", word(0), word(1)))) }
     }
 
     pub(super) async fn export_csv(&self, a: &Value) -> Result<Value, String> {
@@ -79,13 +96,18 @@ pub(super) fn result_json(r: &QueryResult) -> Value {
     if !r.has_result_set {
         return json!({ "rows_affected": r.rows_affected });
     }
-    json!({
+    let mut v = json!({
         "columns": r.columns.iter().map(|c| json!({ "name": c.name, "type": c.type_name })).collect::<Vec<_>>(),
         "rows": r.rows,
         "row_count": r.rows.len(),
         "truncated": r.truncated,
         "elapsed_ms": r.elapsed_ms
-    })
+    });
+    // Redis: values cut at redis_read::VALUE_MAX, as [row, column]
+    if !r.cut.is_empty() {
+        v["cut"] = json!(r.cut);
+    }
+    v
 }
 
 #[cfg(test)]

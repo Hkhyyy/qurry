@@ -575,15 +575,16 @@ export type RedisReply = null | number | string | boolean | { status: string } |
 export interface RedisDbInfo { name: string; keys: number }
 /** The databases with their key counts, and whether CONFIG works (checked on connect: managed Redis refuses it) */
 export interface RedisOverview { configAllowed: boolean; databases: RedisDbInfo[] }
+/** `callId` (the Redis browser's loads and runs, through waitOn): api.cancelCall(callId) stops it; it then fails with "Cancelled" */
 export const redis = {
-  overview: (id: string) => invoke<RedisOverview>("redis_overview", { id }),
+  overview: (id: string, callId?: string) => invoke<RedisOverview>("redis_overview", { id, callId: callId ?? null }),
   /** Key names starting with `prefix`, from a bounded SCAN (Terminal completion) */
   keyNames: (id: string, prefix: string, max = 50) => invoke<string[]>("redis_key_names", { id, prefix, max }),
-  scan: (id: string, cursor: string, pattern: string, count: number, typeFilter?: string) =>
-    invoke<{ cursor: string; keys: RedisKeyRow[] }>("redis_scan", { id, cursor, pattern, count, typeFilter: typeFilter || null }),
-  key: (id: string, key: string, limit?: number) => invoke<RedisKeyDetail>("redis_key", { id, key, limit: limit ?? null }),
-  exec: (id: string, args: string[]) => invoke<RedisReply>("redis_exec", { id, args }),
-  execLine: (id: string, line: string) => invoke<RedisReply>("redis_exec_line", { id, line }),
+  scan: (id: string, cursor: string, pattern: string, count: number, typeFilter?: string, callId?: string) =>
+    invoke<{ cursor: string; keys: RedisKeyRow[] }>("redis_scan", { id, cursor, pattern, count, typeFilter: typeFilter || null, callId: callId ?? null }),
+  key: (id: string, key: string, limit?: number, callId?: string) => invoke<RedisKeyDetail>("redis_key", { id, key, limit: limit ?? null, callId: callId ?? null }),
+  exec: (id: string, args: string[], callId?: string) => invoke<RedisReply>("redis_exec", { id, args, callId: callId ?? null }),
+  execLine: (id: string, line: string, callId?: string) => invoke<RedisReply>("redis_exec_line", { id, line, callId: callId ?? null }),
 };
 export interface IndexEntry { schema: string; name: string; kind: string }
 export interface CachedIndex { target: string; objects: IndexEntry[]; columns: CompletionTable[] }

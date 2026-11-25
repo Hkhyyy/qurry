@@ -66,7 +66,7 @@ A pull request that only changes files under `docs/` or `.md` files (other than 
 
 The Audit workflow (`.github/workflows/audit.yml`) checks the lockfiles for known vulnerabilities (`cargo deny check advisories`, `pnpm audit --prod`) on pull requests that change a lockfile and every week on `main`. It is not a required check. What to do when it fails: [CONTRIBUTING › Dependencies](../CONTRIBUTING.md#dependencies). Dependabot opens weekly update pull requests for Cargo, npm and GitHub Actions.
 
-Redis TLS (16391), Sentinel (26392 → 16392) and Cluster (17001-17003) servers are described in the test comments in `crates/core/src/backend/redisdb.rs` (TLS certificate folder: `QURRY_TEST_TLS_DIR`, default `/tmp/dbtool-tls`).
+The Redis TLS, Sentinel and Cluster tests run when their servers are given: `QURRY_TEST_REDIS_TLS=host:port:password` (certificates `ca.pem`, `client.pem`, `client-key.pem` in `QURRY_TEST_TLS_DIR`, default `/tmp/dbtool-tls`), `QURRY_TEST_REDIS_SENTINEL=sentinel-host:port:master-name:password`, `QURRY_TEST_REDIS_CLUSTER=host:port,host:port` (two of its masters); unset, they say they skipped.
 
 Driver and vector database tests run when their server is given as `host:port:user:password:database` (and the driver is built — `cargo build -p qurry-driver-<name>`): `QURRY_TEST_CH`, `QURRY_TEST_MSSQL`, `QURRY_TEST_MONGO`, `QURRY_TEST_ORACLE`, `QURRY_TEST_QDRANT`, `QURRY_TEST_CHROMA`, `QURRY_TEST_MILVUS` (e.g. `QURRY_TEST_QDRANT=127.0.0.1:6333:::qdrant`). The pgvector and RAG tests use `QURRY_TEST_PG` when the server has the `vector` extension (`pgvector/pgvector:pg16`); RAG tests use a fake embedding server, so no model is needed.
 

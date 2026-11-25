@@ -36,7 +36,7 @@ async fn handle(server: Arc<Server>, msg: Value) -> Option<Value> {
                     "Qurry: database tools for the data sources configured in the Qurry app (PostgreSQL, MySQL, Redis and driver databases; SSH tunnels supported). \
                      Start with list_data_sources, then list_objects / describe_table / search_objects, and query for data. \
                      To find rows by meaning, use list_rag_indexes and semantic_search. {}",
-                    if server.allow_write { "Write access is enabled via the execute tool." } else { "The server is read-only: query runs one statement in a READ ONLY transaction." }
+                    if server.allow_write { "Write access is enabled via the execute tool." } else { "The server is read-only: query runs one statement in a READ ONLY transaction (PostgreSQL, MySQL) or one read command (Redis)." }
                 )
             }))
         }

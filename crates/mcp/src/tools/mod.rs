@@ -2,6 +2,7 @@
 //! (execute, only with --allow-write, is still answered here).
 use crate::Server;
 use qurry_core::app::ConnectionView;
+use qurry_core::redis_read::{READ_MAX_BYTES, VALUE_MAX};
 use qurry_core::sql;
 use qurry_core::store::{DbKind, McpAccess};
 use serde_json::{json, Value};
@@ -47,28 +48,28 @@ impl Server {
             tool("list_schemas", "List schemas in a database (MySQL/Redis: the database itself).", ds_props(json!({})), &["data_source"], true),
             tool(
                 "list_objects",
-                "List tables, views, materialized views, sequences and routines in a schema (Redis: keys with their types).",
+                &format!("List tables, views, materialized views, sequences and routines in a schema (Redis: keys with their types, at most {}; over that truncated: true, total_keys and a hint).", qurry_core::redisdb::MAX_KEYS),
                 ds_props(json!({ "schema": { "type": "string", "description": "Schema name (PostgreSQL default: public)" } })),
                 &["data_source"],
                 true,
             ),
             tool(
                 "describe_table",
-                "Columns (type, nullability, default, comment, primary key), indexes and constraints of a table.",
+                "Columns (type, nullability, default, comment, primary key), indexes and constraints of a table (not for Redis: use redis_get).",
                 ds_props(json!({ "schema": { "type": "string" }, "table": { "type": "string" } })),
                 &["data_source", "table"],
                 true,
             ),
             tool(
                 "get_ddl",
-                "DDL of a table, view, materialized view, sequence or routine (Redis: commands that recreate the key).",
+                "DDL of a table, view, materialized view, sequence or routine (Redis: commands that recreate the key; only for a key small enough to read whole, as query would).",
                 ds_props(json!({ "schema": { "type": "string" }, "name": { "type": "string" }, "kind": { "type": "string", "enum": ["table", "view", "matview", "sequence", "routine", "key"], "description": "default: table" } })),
                 &["data_source", "name"],
                 true,
             ),
             tool(
                 "search_objects",
-                "Fuzzy search database objects by name (Go to Database Object). Searches the default database of each data source, or the given one.",
+                "Fuzzy search database objects by name (Go to Database Object). Searches the default database of each data source, or the given one. Redis: keys whose name contains the query in any case (SCAN MATCH over up to 100,000 keys per database; notes says when it stopped before the end).",
                 json!({
                     "query": { "type": "string", "description": "Name or fragment, e.g. 'usr_pay' or 'public.orders'" },
                     "data_source": { "type": "string", "description": "Limit to one data source (default: all)" },
@@ -80,7 +81,7 @@ impl Server {
             ),
             tool(
                 "query",
-                "Run a read-only query and return rows. PostgreSQL/MySQL: a single SELECT/WITH/SHOW/EXPLAIN statement executed in a READ ONLY transaction. Redis: a read command line (e.g. 'HGETALL user:1', 'SCAN 0 MATCH user:* COUNT 100').",
+                &format!("Run a read-only query and return rows. PostgreSQL/MySQL: a single SELECT/WITH/SHOW/EXPLAIN statement executed in a READ ONLY transaction. Redis: a read command line (e.g. 'HGETALL user:1', 'SCAN 0 MATCH user:* COUNT 100'); one command reads at most {} MB (measured on the server before it runs; read big strings in parts with GETRANGE) and {} elements, and values over {} KB come back cut, listed in cut as [row, column]; SLOWLOG GET shows each command with its key only, and on a Production data source it and CLIENT LIST answer only if a person allowed admin reports there.", READ_MAX_BYTES >> 20, qurry_core::guard::REDIS_STRICT_MAX, VALUE_MAX >> 10),
                 ds_props(json!({ "sql": { "type": "string" }, "limit": { "type": "integer", "description": "max rows, default 100, max 1000" } })),
                 &["data_source", "sql"],
                 true,
@@ -125,16 +126,25 @@ impl Server {
             ),
             tool(
                 "redis_scan",
-                "Scan Redis keys with a pattern and get their type and TTL (ms, -1 = no expiry).",
-                ds_props(json!({ "pattern": { "type": "string", "description": "default *" }, "type": { "type": "string", "enum": ["string", "hash", "list", "set", "zset", "stream"] }, "count": { "type": "integer", "description": "default 200" }, "cursor": { "type": "string" } })),
+                "Scan Redis keys with a pattern and get their type and TTL (ms, -1 = no expiry). A key name that isn't UTF-8 comes as key_base64 instead of key; pass it to redis_get as is. Continue with next_cursor until it is \"0\".",
+                ds_props(json!({
+                    "pattern": { "type": "string", "description": "default *" },
+                    "type": { "type": "string", "description": "Only keys of this type: string, hash, list, set, zset, stream, or a module type such as ReJSON-RL" },
+                    "count": { "type": "integer", "description": "default 200" },
+                    "cursor": { "type": "string", "description": "next_cursor of the previous call; default 0 (the start)" }
+                })),
                 &["data_source"],
                 true,
             ),
             tool(
                 "redis_get",
-                "Get a Redis key's type, TTL, size and value (hash fields, list items, set/zset members, stream entries).",
-                ds_props(json!({ "key": { "type": "string" }, "limit": { "type": "integer", "description": "max elements, default 200" } })),
-                &["data_source", "key"],
+                &format!("Get a Redis key's type, TTL (ms, -1 = no expiry), size and value (hash fields, list items, set/zset members, stream entries). A string shows its first {} KB; a collection its first `limit` elements, fewer when they would read more than {} MB (truncated: true). A value over {} KB comes as {{\"text\": its beginning, \"size\": bytes}}; a value that isn't UTF-8 as {{\"base64\": …}} (with size when cut).", VALUE_MAX >> 10, READ_MAX_BYTES >> 20, VALUE_MAX >> 10),
+                ds_props(json!({
+                    "key": { "type": "string" },
+                    "key_base64": { "type": "string", "description": "Instead of key: a name that isn't UTF-8, as redis_scan gave it" },
+                    "limit": { "type": "integer", "description": "max elements, default 200" }
+                })),
+                &["data_source"],
                 true,
             ),
             tool(
@@ -166,7 +176,7 @@ impl Server {
         if self.allow_write {
             t.push(tool(
                 "execute",
-                "Change data, one statement per item, from an allow-list. SQL: one INSERT, or UPDATE / DELETE with a WHERE. MongoDB: insertOne / insertMany, and updateOne / updateMany / replaceOne / deleteOne / deleteMany with a non-empty filter. Vector DBs: adding points, and deleting points by id. Redis: reads, and writes to single keys without expiry options. PostgreSQL/MySQL: all items in one transaction (all or nothing); other kinds run them one by one with no rollback. Only for data sources whose MCP access is 'Read & write' (see list_data_sources). Anything else (DDL such as CREATE / ALTER / DROP, TRUNCATE, MERGE, scripts, deletes of whole keys or collections) is refused — ask the user to run it in Qurry.",
+                "Change data, one statement per item, from an allow-list. SQL: one INSERT, or UPDATE / DELETE with a WHERE. MongoDB: insertOne / insertMany, and updateOne / updateMany / replaceOne / deleteOne / deleteMany with a non-empty filter. Vector DBs: adding points, and deleting points by id. Redis: reads, and writes to single keys without expiry options; refused: removals that could empty a key (HDEL / SREM / ZREM / XDEL / SMOVE / LPOP / RPOP / LREM, counted cautiously), trimming (XADD MAXLEN / MINID, LREM count 0), and SET-like writes onto a key of another type. PostgreSQL/MySQL: all items in one transaction (all or nothing); other kinds run them one by one with no rollback. Only for data sources whose MCP access is 'Read & write' (see list_data_sources). Anything else (DDL such as CREATE / ALTER / DROP, TRUNCATE, MERGE, scripts, deletes of whole keys or collections) is refused — ask the user to run it in Qurry.",
                 ds_props(json!({ "statements": { "type": "array", "items": { "type": "string" } } })),
                 &["data_source", "statements"],
                 false,
@@ -192,10 +202,23 @@ impl Server {
     async fn target(&self, a: &Value) -> Result<(String, DbKind, String, McpAccess), String> {
         let (id, kind, def, ro) = self.resolve(a).await?;
         let db = a.get("database").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(String::from).unwrap_or(def);
+        // Redis would read any other name as db0
+        if kind == DbKind::Redis && qurry_core::redisdb::db_number(&db).is_none() {
+            return Err(format!("Unknown Redis database \"{db}\": use db0, db1, … (list_databases)"));
+        }
         Ok((sql::target_id(&id, Some(&db)), kind, db, ro))
     }
 
+    /// A read whose Redis connection dropped (the server restarted) runs once more on the new connection; execute and export_csv
+    /// (it writes a file) never do
     pub(crate) async fn call(&self, name: &str, a: &Value) -> Result<Value, String> {
+        match self.call_once(name, a).await {
+            Err(e) if !matches!(name, "execute" | "export_csv") && qurry_core::redisdb::dropped(&e) => self.call_once(name, a).await,
+            r => r,
+        }
+    }
+
+    async fn call_once(&self, name: &str, a: &Value) -> Result<Value, String> {
         let st = &self.state;
         let e = |e: qurry_core::error::AppError| e.to_string();
         match name {
@@ -258,24 +281,29 @@ impl Server {
     }
 }
 
-/// The Data Source an MCP client asked for: id, name (any case) or a unique part of the name, among the ones shared with MCP.
-/// A hidden source that matches by id or name gets its own error (the user turned it off — it isn't missing), and nothing else about it is shown
+/// The Data Source an MCP client asked for: id, name or a unique part of the name, among the ones shared with MCP. Names compare
+/// trimmed and in any case (Unicode), the exact match and the part alike.
+/// A hidden source that matches by id or name gets its own error (the user turned it off — it isn't missing), and nothing else about it is shown.
+/// That check comes before the partial match, so a hidden source's exact name never lands on a shared source whose name contains it.
+/// A part must match one source among all of them, hidden ones included: matching several (or a hidden one) is "not found", not the first one
 fn find_source<'a>(all: &'a [ConnectionView], want: &str, allow_write: bool) -> Result<&'a ConnectionView, String> {
     let shown = |c: &ConnectionView| c.config.mcp_access(allow_write) != McpAccess::Off;
+    let key = want.trim().to_lowercase();
+    let name = |c: &ConnectionView| c.config.name.trim().to_lowercase();
+    let exact = |c: &ConnectionView| c.config.id == want.trim() || name(c) == key;
     let list: Vec<&ConnectionView> = all.iter().filter(|c| shown(c)).collect();
-    let found = list
-        .iter()
-        .find(|c| c.config.id == want)
-        .or_else(|| list.iter().find(|c| c.config.name.eq_ignore_ascii_case(want)))
-        .or_else(|| {
-            let m: Vec<_> = list.iter().filter(|c| c.config.name.to_lowercase().contains(&want.to_lowercase())).collect();
-            if m.len() == 1 { Some(m[0]) } else { None }
-        });
+    let found = list.iter().find(|c| c.config.id == want.trim()).or_else(|| list.iter().find(|c| name(c) == key));
     if let Some(c) = found {
         return Ok(c);
     }
-    if all.iter().any(|c| !shown(c) && (c.config.id == want || c.config.name.eq_ignore_ascii_case(want))) {
+    if all.iter().any(|c| !shown(c) && exact(c)) {
         return Err(format!("Data source \"{want}\" is not shared with MCP — turn it on in Qurry: data source › Options › MCP (TUI: data source form)"));
+    }
+    let m: Vec<_> = all.iter().filter(|c| !key.is_empty() && name(c).contains(&key)).collect();
+    if let [c] = m.as_slice()
+        && shown(c)
+    {
+        return Ok(c);
     }
     Err(format!("Data source not found: {want}. Available: {}", list.iter().map(|c| c.config.name.as_str()).collect::<Vec<_>>().join(", ")))
 }
@@ -327,6 +355,46 @@ pub(crate) mod tests {
         // A part of a hidden name doesn't match it, and hidden sources aren't listed as available
         let e = find("Analy").unwrap_err();
         assert!(e.starts_with("Data source not found") && !e.contains("Analytics") && !e.contains("Prod"), "{e}");
+
+        // A hidden source's exact name (or id) never resolves to a shared source whose name contains it (#228), whatever the kind
+        for kind in ["redis", "postgres", "mongodb"] {
+            let mut all = [source("p", "Acme Redis Prod", None, true), source("r", "Acme Redis ProdRead", Some("read"), false), source("w", "Acme Redis ProdWrite", Some("write"), false)];
+            for s in &mut all {
+                s.config.kind = serde_json::from_value(json!(kind)).unwrap();
+            }
+            for allow_write in [false, true] {
+                let find = |w: &str| find_source(&all, w, allow_write).map(|c| c.config.id.clone());
+                for w in ["Acme Redis Prod", "acme redis prod", "ACME REDIS PROD", "p"] {
+                    let e = find(w).unwrap_err();
+                    assert!(e.contains("is not shared with MCP"), "{kind} {w}: {e}");
+                }
+                assert_eq!(find("acme redis prodread").unwrap(), "r");
+                assert_eq!(find("ProdWrite").unwrap(), "w");
+                // Two shared sources contain "Redis": an error, not the first one
+                let e = find("Redis").unwrap_err();
+                assert!(e.starts_with("Data source not found") && e.contains("ProdRead") && e.contains("ProdWrite") && !e.contains("Acme Redis Prod,"), "{kind}: {e}");
+            }
+        }
+
+        // One shared source contains a hidden one's name; names in another case (Unicode), with spaces around, or a part that also
+        // matches a hidden source never reach the shared one
+        let all = [source("h", "Shop Prod", None, true), source("s", "Shop Prod Copy", Some("write"), false), source("u", "Ünal Cache", Some("off"), false),
+            source("v", "Ünal Cache Replica", Some("read"), false)];
+        for allow_write in [false, true] {
+            let find = |w: &str| find_source(&all, w, allow_write).map(|c| c.config.id.clone());
+            for w in ["Shop Prod", "shop prod", "Shop Prod ", " SHOP PROD", "ünal cache", "ÜNAL CACHE", "Ünal Cache\t", "h", " u "] {
+                let e = find(w).unwrap_err();
+                assert!(e.contains("is not shared with MCP"), "{w:?}: {e}");
+            }
+            for w in ["Shop", "shop pro", "ünal", "cache"] {
+                let e = find(w).unwrap_err();
+                assert!(e.starts_with("Data source not found") && e.contains("Available: Shop Prod Copy, Ünal Cache Replica"), "{w:?}: {e}");
+            }
+            for (w, id) in [("Shop Prod Copy", "s"), (" shop prod copy ", "s"), ("copy", "s"), ("ünal cache replica", "v"), ("REPLICA", "v"), ("s", "s")] {
+                assert_eq!(find(w).as_deref(), Ok(id), "{w:?}");
+            }
+            assert!(find("").is_err() && find("  ").is_err());
+        }
     }
 
     /// search_objects looks in the databases the app's tree shows: system DBs of every kind hidden, unless the Schemas tab scopes them
