@@ -264,13 +264,16 @@ async fn an_mcp_execute_on_redis_takes_at_most_100_commands() {
 
 /// Two keys on db11 with their own values, read while another caller's command ran first: each GET gets its own key's value
 async fn replies_stay_in_order(st: &AppState, id: &str) {
-    st.redis_exec(target(id, 11), vec!["SET".into(), "qurry-221:a".into(), "va".into()]).await.unwrap();
-    st.redis_exec(target(id, 11), vec!["SET".into(), "qurry-221:b".into(), "vb".into()]).await.unwrap();
+    // Keys of this caller's own (tests run at once, and another one cleans up qurry-221:a / b)
+    let (ka, kb) = (format!("qurry-221:{id}:a"), format!("qurry-221:{id}:b"));
+    st.redis_exec(target(id, 11), vec!["SET".into(), ka.clone(), "va".into()]).await.unwrap();
+    st.redis_exec(target(id, 11), vec!["SET".into(), kb.clone(), "vb".into()]).await.unwrap();
     for _ in 0..3 {
-        let read = |k: &'static str| tokio::time::timeout(Duration::from_secs(2), st.redis_exec(target(id, 11), vec!["GET".into(), k.into()]));
-        let (a, b) = tokio::join!(read("qurry-221:a"), read("qurry-221:b"));
+        let read = |k: &String| tokio::time::timeout(Duration::from_secs(2), st.redis_exec(target(id, 11), vec!["GET".into(), k.clone()]));
+        let (a, b) = tokio::join!(read(&ka), read(&kb));
         assert_eq!((a.expect("GET a answered").unwrap(), b.expect("GET b answered").unwrap()), (json!("va"), json!("vb")));
     }
+    st.redis_exec(target(id, 11), vec!["DEL".into(), ka, kb]).await.unwrap();
 }
 
 /// CLIENT REPLY SKIP / OFF from the Terminal would make the shared connection's next reply go to another caller (H1): refused,
@@ -280,7 +283,8 @@ async fn replies_stay_in_order(st: &AppState, id: &str) {
 async fn client_reply_from_the_terminal_is_refused_and_replies_stay_in_order() {
     let Some((_, port)) = server() else { return };
     let (st, _dir) = state(&[("cr", port)]).await;
-    for line in ["CLIENT REPLY SKIP", "client reply off"] {
+    // REPLCONF ACK / GETACK get no reply either (a replica's command): refused like CLIENT REPLY
+    for line in ["CLIENT REPLY SKIP", "client reply off", "REPLCONF ACK 0", "REPLCONF GETACK *"] {
         let r = tokio::time::timeout(Duration::from_secs(2), st.redis_exec_line(target("cr", 10), line.into())).await;
         let e = r.map(|r| r.map_err(|e| e.to_string())).unwrap_or_else(|_| Err("no answer".into())).unwrap_err();
         assert!(e.contains("would change the connection Qurry shares"), "{line}: {e}");
@@ -288,6 +292,10 @@ async fn client_reply_from_the_terminal_is_refused_and_replies_stay_in_order() {
     }
     let e = st.run_query(target("cr", 10), "CLIENT REPLY SKIP".into(), None, Some("tab".into())).await.unwrap_err().to_string();
     assert!(e.contains("would change the connection"), "{e}");
+    // The server reads 0x0 as 0 (wait forever): a timeout that isn't a plain decimal never reaches the shared connection
+    let e = tokio::time::timeout(Duration::from_secs(2), st.redis_exec_line(target("cr", 10), "BLPOP qurry-221:q 0x0".into())).await.expect("answered").unwrap_err().to_string();
+    assert!(e.contains("decimal number of seconds"), "{e}");
+    replies_stay_in_order(&st, "cr").await;
 }
 
 /// MULTI from the Terminal would queue the browser's edits on another database (H2), and SUBSCRIBE would take the connection

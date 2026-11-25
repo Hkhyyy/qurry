@@ -374,6 +374,10 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
         if let Some(why) = qurry_shared::redis_cmd::shared_connection_refusal(&name.to_uppercase(), &sub) {
             return Err(AppError::Msg(format!("Startup script (Options): {why}")));
         }
+        let rest: Vec<String> = args[1..].iter().map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+        if qurry_shared::redis_cmd::blocking_wait(&name.to_uppercase(), &rest).is_some() {
+            return Err(AppError::Msg(format!("Startup script (Options): {name} waits for data, which would hold up the connection Qurry shares across this data source's databases, so it isn't run")));
+        }
         let mut cmd = redis::cmd(&name);
         for a in &args[1..] {
             cmd.arg(a.as_slice());

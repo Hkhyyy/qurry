@@ -228,7 +228,7 @@ pub fn shared_connection_refusal(cmd: &str, sub: &str) -> Option<String> {
         "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" | "UNSUBSCRIBE" | "PUNSUBSCRIBE" | "SUNSUBSCRIBE" | "MONITOR" | "SYNC" | "PSYNC" => {
             format!("{shared}, so it isn't available here: use redis-cli")
         }
-        "RESET" | "QUIT" | "READONLY" | "READWRITE" | "ASKING" => format!("{shared}, so it isn't run"),
+        "RESET" | "QUIT" | "READONLY" | "READWRITE" | "ASKING" | "REPLCONF" => format!("{shared}, so it isn't run"),
         "CLIENT" if matches!(sub, "REPLY" | "TRACKING" | "CACHING" | "NO-EVICT" | "NO-TOUCH") => format!("CLIENT {sub} would change the connection Qurry shares across this data source's databases, so it isn't run"),
         _ => return None,
     })
@@ -241,20 +241,35 @@ pub const BLOCK_MAX_MS: u64 = 300_000;
 /// WAITAOF): how long it may wait, in ms. Err when it would wait forever (timeout 0) or longer than BLOCK_MAX_MS. None for other
 /// commands, and for a timeout that isn't a positive number (the server refuses it at once). cmd uppercased, args after it
 pub fn blocking_wait(cmd: &str, args: &[String]) -> Option<Result<u64, String>> {
-    let secs = |a: Option<&String>| a.and_then(|t| t.parse::<f64>().ok()).filter(|t| t.is_finite() && *t >= 0.0).map(|t| t * 1000.0);
+    // The server reads a seconds timeout with strtold, which also takes forms Rust's parse doesn't (0x0 is 0: waits forever):
+    // one that isn't a plain decimal number is refused rather than sent to the shared connection unchecked
+    let secs = |a: Option<&String>| -> Option<Result<f64, String>> {
+        let t = a?;
+        match t.parse::<f64>() {
+            Ok(v) if v.is_finite() && v >= 0.0 => Some(Ok(v * 1000.0)),
+            Ok(_) => None,
+            Err(_) => Some(Err(format!("{cmd}: give the timeout as a decimal number of seconds, not \"{t}\""))),
+        }
+    };
     let ms = |a: Option<&String>| a.and_then(|t| t.parse::<f64>().ok()).filter(|t| t.is_finite() && *t >= 0.0);
     let wait = match cmd {
-        "BLPOP" | "BRPOP" | "BRPOPLPUSH" | "BLMOVE" | "BZPOPMIN" | "BZPOPMAX" => secs(args.last()),
-        "BLMPOP" | "BZMPOP" => secs(args.first()),
+        "BLPOP" | "BRPOP" | "BRPOPLPUSH" | "BLMOVE" | "BZPOPMIN" | "BZPOPMAX" => match secs(args.last())? {
+            Ok(w) => w,
+            Err(e) => return Some(Err(e)),
+        },
+        "BLMPOP" | "BZMPOP" => match secs(args.first())? {
+            Ok(w) => w,
+            Err(e) => return Some(Err(e)),
+        },
         "XREAD" | "XREADGROUP" => {
             let before = args.iter().position(|a| a.eq_ignore_ascii_case("STREAMS")).unwrap_or(args.len());
             let at = args[..before].iter().position(|a| a.eq_ignore_ascii_case("BLOCK"))?;
-            ms(args.get(at + 1))
+            ms(args.get(at + 1))?
         }
-        "WAIT" => ms(args.get(1)),
-        "WAITAOF" => ms(args.get(2)),
+        "WAIT" => ms(args.get(1))?,
+        "WAITAOF" => ms(args.get(2))?,
         _ => return None,
-    }?;
+    };
     Some(match wait {
         0.0 => Err(format!("{cmd} with a timeout of 0 waits forever: give it a timeout of at most {} seconds", BLOCK_MAX_MS / 1000)),
         w if w > BLOCK_MAX_MS as f64 => Err(format!("{cmd} may wait at most {} seconds in Qurry: give it a shorter timeout, or use redis-cli", BLOCK_MAX_MS / 1000)),
@@ -726,7 +741,7 @@ mod tests {
     #[test]
     fn commands_that_change_the_shared_connection_are_refused() {
         for (cmd, sub) in [("CLIENT", "REPLY"), ("CLIENT", "TRACKING"), ("MULTI", ""), ("EXEC", ""), ("DISCARD", ""), ("WATCH", ""), ("RESET", ""), ("HELLO", ""),
-            ("AUTH", ""), ("QUIT", ""), ("SUBSCRIBE", ""), ("PUNSUBSCRIBE", ""), ("SSUBSCRIBE", ""), ("MONITOR", ""), ("READONLY", ""), ("PSYNC", "")] {
+            ("AUTH", ""), ("QUIT", ""), ("SUBSCRIBE", ""), ("PUNSUBSCRIBE", ""), ("SSUBSCRIBE", ""), ("MONITOR", ""), ("READONLY", ""), ("PSYNC", ""), ("REPLCONF", "ACK")] {
             let why = shared_connection_refusal(cmd, sub).unwrap_or_else(|| panic!("{cmd} {sub}"));
             assert!(why.contains("would change the connection Qurry shares"), "{why}");
         }
@@ -759,7 +774,11 @@ mod tests {
         assert_eq!(w("XREAD STREAMS BLOCK 0"), None);
         assert_eq!(w("XREAD COUNT 1 STREAMS s 0"), None);
         assert_eq!(w("LPOP l"), None);
-        assert_eq!(w("BLPOP l x"), None);
+        // The server reads a seconds timeout with strtold (0x0 is 0, 0x1 is 1s): anything but a plain decimal is refused
+        for t in ["0x0", "0x1", "x", "1e"] {
+            assert!(w(&format!("BLPOP l {t}")).unwrap().unwrap_err().contains("decimal number of seconds"), "{t}");
+        }
+        assert!(w("BLMPOP 0x0 1 l LEFT").unwrap().is_err());
         assert_eq!(w("BLPOP l -1"), None);
     }
 

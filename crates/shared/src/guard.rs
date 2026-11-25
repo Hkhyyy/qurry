@@ -711,7 +711,7 @@ pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
         "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZREVRANGEBYSCORE" | "ZREVRANGEBYLEX" if opt("LIMIT").is_some_and(|i| too_many(num(i + 2))) => need_limit("LIMIT offset count"),
         "XRANGE" | "XREVRANGE" if opt("COUNT").is_some_and(|i| too_many(num(i + 1))) => need_limit("COUNT"),
         // A negative count returns that many (with repeats)
-        "SRANDMEMBER" | "HRANDFIELD" | "ZRANDMEMBER" if args.len() > 1 && num(1).is_none_or(|n| n.abs() > REDIS_STRICT_MAX) => need_limit("a count"),
+        "SRANDMEMBER" | "HRANDFIELD" | "ZRANDMEMBER" if args.len() > 1 && num(1).is_none_or(|n| n.unsigned_abs() > REDIS_STRICT_MAX as u64) => need_limit("a count"),
         "SCAN" | "HSCAN" | "SSCAN" | "ZSCAN" if opt("COUNT").is_some_and(|i| too_many(num(i + 1))) => need_limit("COUNT"),
         "LPOS" if opt("COUNT").is_some_and(|i| too_many(num(i + 1))) => need_limit("COUNT"),
         "GEOSEARCH" if opt("COUNT").is_none_or(|i| too_many(num(i + 1))) => need_limit("COUNT"),
@@ -1550,6 +1550,8 @@ mod tests {
             let cmd = w.next().unwrap().to_uppercase();
             redis_strict_violation(&cmd, &w.map(String::from).collect::<Vec<_>>())
         };
+        // i64::MIN has no absolute value in i64: refused, not a panic
+        assert!(v("SRANDMEMBER s -9223372036854775808").is_some());
         let size = |line: &str| {
             let mut w = line.split_whitespace();
             let cmd = w.next().unwrap().to_uppercase();
