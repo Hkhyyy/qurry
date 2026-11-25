@@ -197,6 +197,30 @@ test("over a Background image, what cells scroll under stays opaque: the header,
   expect(await alpha(".cell.pinned.sel"), "selected pinned cell").toBe(1);
 });
 
+test("a Redis tab draws the Background image behind its key list and a hash's grid; the headers stay opaque (#222)", async ({ page }) => {
+  await openInTheme(page, "custom-1", pictures({ background: { file: RIDGES, opacity: 60, fill: "cover", anchor: "center" } }));
+  await treeItem(page, "db0 7").dblclick();
+  await work(page).getByRole("treeitem", { name: "user 2" }).click();
+  await work(page).getByRole("treeitem").filter({ hasText: /^HASHuser:1—$/ }).click();
+  await expect(work(page).locator(".rd-table")).toContainText("a@b.c");
+  await expect(windowLayer(page)).toHaveCount(1);
+  // The key list below its last key, and the hash grid's row right of its value: the image, not the opaque surface
+  const list = (await work(page).locator(".rd-keys-list").boundingBox())!;
+  const keys: [number, number] = [list.x + list.width / 2, list.y + list.height - 20];
+  const cell = (await work(page).locator(".rd-table td", { hasText: "a@b.c" }).boundingBox())!;
+  const row: [number, number] = [cell.x + cell.width - 8, cell.y + cell.height / 2];
+  const [k, r] = [await pixel(page, ...keys), await pixel(page, ...row)];
+  const [kPlain, rPlain] = await withoutImage(page, async () => [await pixel(page, ...keys), await pixel(page, ...row)]);
+  expect(far(k, kPlain), `key list ${k} vs ${kPlain}`).toBe(true);
+  expect(far(r, rPlain), `hash row ${r} vs ${rPlain}`).toBe(true);
+  // What rows scroll under, or sit on top of the list, keeps an opaque surface
+  for (const sel of [".rd-table th", ".rd-keys-head", ".rd-keybar"]) {
+    const box = (await work(page).locator(sel).first().boundingBox())!;
+    const at: [number, number] = [box.x + box.width - 4, box.y + box.height / 2];
+    expect(far(await pixel(page, ...at), await withoutImage(page, () => pixel(page, ...at))), sel).toBe(false);
+  }
+});
+
 test.describe("with Reduce motion on", () => {
   test.use({ reducedMotion: "reduce" });
   test("an animated image is drawn as its first frame, a still", async ({ page }) => {

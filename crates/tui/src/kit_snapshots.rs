@@ -876,6 +876,7 @@ async fn redis(h: &mut Harness, scenes: &mut Vec<Value>) {
     }
     scenes.push(app_scene(h, "Redis: key names", "A key argument: names from a bounded SCAN, the key typed out first; ↩ runs the line unless ↑↓ moved to another key, ⇥ picks; a key with spaces goes in quoted", 120, 22));
     h.app.popup = None;
+    redis_loads(h, id, scenes);
     h.app.close_tab_now(h.app.active);
     h.app.tree.children.remove("rd");
     h.app.state.delete_connection("rd".into()).await.unwrap();
@@ -885,6 +886,46 @@ async fn redis(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.redis_tab(&["session:9f2c", "session:a771", "user:41", "user:41:cart", "queue:mail", "rank:daily"]);
     h.app.status.clear();
     h.app.focus = crate::app::Focus::Tree;
+}
+
+/// #220: the Redis tab's loads as a table tab's: Loading… in the key list and the value (the status line with the time and the Cancel
+/// key), a failure in the tab with r to retry, a reconnect on the status line (#135)
+fn redis_loads(h: &mut Harness, id: u64, scenes: &mut Vec<Value>) {
+    use crate::app::{Action, TabKind, WaitFor};
+    fn tab(h: &mut Harness, id: u64) -> &mut crate::app::RedisTab {
+        match h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+            Some(TabKind::Redis(r)) => r,
+            _ => unreachable!(),
+        }
+    }
+    let keys = std::mem::take(&mut tab(h, id).keys);
+    let load = |h: &mut Harness| {
+        let r = tab(h, id);
+        (r.scanning, r.loading, r.detail, r.value) = (true, Some("prod:refresh:{9}".into()), None, None);
+        h.app.spawn_wait("rd::db0", WaitFor::Redis(id), std::future::pending::<()>(), |_, _, _| {});
+        h.app.status.clear();
+    };
+    load(h);
+    scenes.push(app_scene(h, "Redis: loading", "The keys and the picked key's value load: Loading… in each, the status line says what with the time and the Cancel key, which stops both (the GUI's ■)", 120, 22));
+    h.app.run_action(Action::Cancel);
+    let refused = "Redis: Connection refused (os error 61)";
+    let r = tab(h, id);
+    (r.scan_error, r.key_error) = (Some(refused.into()), Some(("prod:refresh:{9}".into(), refused.into())));
+    h.app.status = refused.into();
+    scenes.push(app_scene(h, "Redis: failed", "A failed scan and value load say why in the tab (the status line has it all) and that r loads them again (the GUI's Retry)", 120, 22));
+    let r = tab(h, id);
+    (r.scan_error, r.key_error) = (None, None);
+    load(h);
+    let st = h.app.state.clone();
+    let shown = st.reconnecting_now("rd");
+    h.app.reconnect_line();
+    *h.app.reconnect_since.get_mut("rd").unwrap() = std::time::Instant::now() - std::time::Duration::from_secs_f64(3.2);
+    scenes.push(app_scene(h, "Redis: reconnecting", "The tab's loads wait on the source while it reconnects: the status line says so with the time and the Cancel key, as a table tab's (#135)", 120, 22));
+    h.app.run_action(Action::Cancel);
+    drop(shown);
+    let r = tab(h, id);
+    (r.scan_error, r.key_error, r.keys) = (None, None, keys);
+    h.app.status.clear();
 }
 
 /// Every Storybook scene, in file order
@@ -1200,7 +1241,7 @@ async fn reconnect_scenes(scenes: &mut Vec<Value>) {
     scenes.push(app_scene(&mut h, "Reconnect: cancelled", "The Cancel key stops the loads waiting on the source (the connect they wait on is dropped); the tab stays, r loads it again", 120, 22));
     let r = h.app.state.reconnecting().pop().unwrap();
     let e = format!("{}: aws ssm start-session: TargetNotConnected (i-0a1b2c3d4e5f is not connected). Check that the instance is running and its SSM agent is online.", r.failed);
-    h.app.reconnect_failed(&r, &e, true);
+    h.app.reconnect_failed(&r, &e, Some("table"));
     scenes.push(app_scene(&mut h, "Reconnect: failed", "A load that waited on the reconnect failed: the Message popup says why and that r in the table tab loads it again; the status line keeps it", 120, 22));
     h.app.popup = None;
     // The explorer: a schema expanding while the source reconnects shows only its loading mark

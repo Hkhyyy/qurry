@@ -11,6 +11,7 @@ mod marks;
 mod notices;
 mod perf;
 mod reconnect;
+mod redis;
 mod reformat;
 mod result_tabs;
 mod search_scope;

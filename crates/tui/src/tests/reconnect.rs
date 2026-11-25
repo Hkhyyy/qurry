@@ -73,8 +73,8 @@ async fn a_failed_reconnect_says_why_and_how_to_retry_once_per_source() {
     let shown = st.reconnecting_now("s");
     let (r, e) = failed(&h, "TargetNotConnected");
     // A table tab and an explorer node waited on it: one popup
-    h.app.reconnect_failed(&r, &e, true);
-    h.app.reconnect_failed(&r, &e, false);
+    h.app.reconnect_failed(&r, &e, Some("table"));
+    h.app.reconnect_failed(&r, &e, None);
     let Some(Popup::Message { title, text }) = &h.app.popup else { panic!("no popup: {}", h.app.status) };
     assert_eq!(title, "Couldn't reconnect");
     assert_eq!(text, "Couldn't reconnect [PROD] orders through AWS SSM.\n\nTargetNotConnected\n\nr in the table tab retries.");
@@ -85,7 +85,7 @@ async fn a_failed_reconnect_says_why_and_how_to_retry_once_per_source() {
     // Another source's failure still opens its own
     let mut other = r.clone();
     other.failed = "Couldn't reconnect stage through SSH".into();
-    h.app.reconnect_failed(&other, &format!("{}: refused", other.failed), true);
+    h.app.reconnect_failed(&other, &format!("{}: refused", other.failed), Some("table"));
     assert!(matches!(&h.app.popup, Some(Popup::Note { text, back, .. }) if text.starts_with("Couldn't reconnect [PROD]") && matches!(&**back, Popup::Message { text, .. } if text.starts_with("Couldn't reconnect stage"))));
     drop(shown);
     let _ = id;

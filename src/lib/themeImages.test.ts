@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import TABLE from "../../crates/shared/src/themes.json";
 import { shared } from "./shared";
+// Read as a file (vitest doesn't load CSS), as focusRing.test.ts does
+const fs: { readFileSync(p: URL, enc: "utf8"): string } = await import("node:" + "fs");
+const css = fs.readFileSync(new URL("../App.css", import.meta.url), "utf8");
 import { backdropStyle, holdImage, IDLE_KEEP, IDLE_MS, motionPaused, TINTS, mayMove, mixHex, releaseImage, newBackgroundSlot, newCornerSlot, opacityCap, sameImages, stickerStyle, warningsOver } from "./themeImages";
 
 const api = vi.hoisted(() => ({ themeImage: vi.fn() }));
@@ -38,6 +41,20 @@ describe("theme background image", () => {
       // A surface not drawn over the image is left as it is
       expect(q.hover).toBe(p.hover);
     }
+  });
+  it("counts every tint App.css draws over the image at its share: the grid's and the Redis browser's (#222)", async () => {
+    // theme.ts draws the theme as it loads
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: true, addEventListener: () => {} }) });
+    vi.stubGlobal("document", { documentElement: { dataset: {}, style: { setProperty: () => {} } } });
+    const { TOKEN_VARS } = await import("./theme");
+    vi.unstubAllGlobals();
+    const token = (v: string) => Object.keys(TOKEN_VARS).find((k) => TOKEN_VARS[k].includes(v));
+    const tints = css
+      .split("}")
+      .filter((r) => r.includes(".has-image"))
+      .flatMap((r) => [...r.matchAll(/color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, transparent\)/g)].map((m) => ({ rule: r.split("{")[0].trim(), token: token(m[1]), share: Number(m[2]) / 100 })));
+    expect(tints.filter((t) => t.rule.includes(".rd-")).map((t) => t.token)).toEqual(["sel", "sel"]);
+    for (const t of tints.filter((t) => t.token)) expect(TINTS[t.token!], t.rule).toBe(t.share);
   });
   it("doesn't count a pair the palette already fails", () => {
     const p = { ...colors("dark"), comment: "#3a3c40" };

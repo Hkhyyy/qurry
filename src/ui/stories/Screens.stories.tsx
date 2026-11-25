@@ -8,7 +8,7 @@ import App from "../../App";
 import { ResultTabsField, SettingsDialog, type SettingsPage } from "../../features/settings/SettingsDialog";
 import { askTextChoice } from "../../lib/dialogs";
 import { setFont } from "../../lib/prefs";
-import { saveCustomTheme, setThemeSync } from "../../lib/theme";
+import { BUILT_IN, previewTheme, saveCustomTheme, setThemeSync } from "../../lib/theme";
 import { dialectOf, type ConnectionView, type QueryResult, type SearchScope } from "../../lib/api";
 import type { GridStatus, StatusItemId } from "../../lib/shared";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
@@ -39,8 +39,9 @@ import { WorkspaceBar } from "../../components/WorkspaceBar";
 import { StatusBar } from "../../features/settings/StatusBar";
 import { useConnActions } from "../../features/conns/useConnActions";
 import { ConfirmHost, Menu, TabItem, TabStrip, Text, Toasts } from "..";
-import { ReconnectToastView } from "../../components/ReconnectToasts";
-import type { ReconnectToast } from "../../lib/reconnect";
+import { ReconnectToasts, ReconnectToastView } from "../../components/ReconnectToasts";
+import { cancelReconnect, useReconnect, waitingToast, type ReconnectToast } from "../../lib/reconnect";
+import { ThemeEditorArea } from "../../features/settings/ThemeImages";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 import { inSmallWindow } from "./SmallWindow";
 import { BackgroundWindow, InEditor, SAMPLE_BACKGROUND, SAMPLE_CORNER, SplitWindow } from "./BackgroundWindow";
@@ -1339,6 +1340,90 @@ export const RedisTerminalKeys: S = {
     const c = within(canvasElement);
     await userEvent.click(await c.findByRole("tab", { name: "Terminal" }));
     await userEvent.type(await c.findByRole("textbox", { name: "Redis command" }), "HGETALL user:1");
+  },
+};
+/** #220 #222: the Redis tab as in the window, in the editor area (its Background image host), with the reconnect toasts and the status
+ *  bar its loads write to; user:1 (a hash) picked */
+function RedisScreen() {
+  const reconnect = waitingToast(useReconnect((s) => s.toasts));
+  const [status, setStatus] = useState("");
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
+      <TabStrip className="tabs" activeKey="rd">
+        <TabItem label="[Redis] cache [db0]" active onClose={noop} />
+      </TabStrip>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <ThemeEditorArea>
+          <div className="work-area" style={{ height: "100%" }}>
+            <RedisBrowser target="rd" connId="rd" connName="[Redis] cache" database="db0" readOnly={false} production={false} initialKey="user:1" onSwitchDb={noop} onStatus={setStatus} />
+          </div>
+        </ThemeEditorArea>
+      </div>
+      <ReconnectToasts />
+      <StatusBar status={status} busy={reconnect ? { label: reconnect.message, since: reconnect.since, onCancel: () => cancelReconnect(reconnect.id) } : undefined} readOnly={false} onUpdate={noop} jobs={[]} />
+    </div>
+  );
+}
+const REFUSED = "Redis: Connection refused (os error 61)";
+/** A Redis tab whose loads the mock holds or fails (window.__mockRedisSlow / __mockRedisFail / __mockReconnect, src/lib/mock.ts) */
+const redisStory = (name: string, mock: Record<string, unknown>, light = false): S => ({
+  name: `Redis Browser — ${name} (${light ? "light" : "dark"})`,
+  globals: { theme: light ? "light" : "dark" },
+  beforeEach: () => {
+    Object.assign(globalThis, mock);
+    return () => {
+      for (const k of Object.keys(mock)) delete (globalThis as any)[k];
+      useReconnect.setState({ toasts: [] });
+    };
+  },
+  render: () => <RedisScreen />,
+});
+/** #220 Loading: the key list (SCAN) and the picked key's value each say Loading… with ■ (⌘F2 stops both), past a second how long;
+ *  the toolbar's ⟳ is ■ meanwhile, as the grid's */
+const SLOW = { __mockRedisSlow: { scan: true, overview: true, key: true } };
+export const RedisLoading = redisStory("loading", SLOW);
+export const RedisLoadingLight = redisStory("loading", SLOW, true);
+/** #220 Failed: the reason in full with Retry where the keys and the value go, and on the status bar */
+const FAILED = { __mockRedisFail: { scan: REFUSED, overview: REFUSED, key: REFUSED } };
+export const RedisFailed = redisStory("failed with Retry", FAILED);
+export const RedisFailedLight = redisStory("failed with Retry", FAILED, true);
+/** #220 The key counts failed while the keys came: the picker shows the database alone, the line under the toolbar says why with Retry */
+export const RedisKeyCountsFailed = redisStory("key counts failed", { __mockRedisFail: { overview: "Redis: NOPERM this user has no permissions to run the 'info' command" } });
+/** #220 Reconnecting (#135): the loads wait on the source's tunnel; the toast and the status bar say so with the time and Cancel */
+const RECONNECTING = { __mockReconnect: { id: "rd" } };
+export const RedisReconnecting = redisStory("reconnecting", RECONNECTING);
+export const RedisReconnectingLight = redisStory("reconnecting", RECONNECTING, true);
+/** …and it couldn't: the toast keeps the reason with Retry, the key list and the value say it too */
+export const RedisReconnectFailed = redisStory("reconnect failed", { __mockReconnect: { id: "rd", after: 1500, fail: "SSH connect timeout: bastion.example.com:22 didn't answer within 10s. Check the SSH server, then run it again." } });
+
+/** #222 The theme's Background image in a Redis tab, as in a table tab: the key list, the value grids and the terminal let it through,
+ *  the selection is a tint (70%, as the grid's); the grid's header, the key list's head and foot, the key bar and the tab strip stay
+ *  opaque. `span`: the editor area's one picture (the default) or the tab's own */
+function RedisImage({ light, span }: { light: boolean; span: "area" | "pane" }) {
+  useEffect(() => {
+    const base = BUILT_IN.find((t) => t.id === (light ? "light" : "dark"))!;
+    // After the Storybook theme decorator's own previewTheme (it runs after the story's effects)
+    const t = setTimeout(() => previewTheme({ ...base, images: { background: { ...SAMPLE_BACKGROUND, opacity: 35, span } } }));
+    return () => (clearTimeout(t), previewTheme(base));
+  }, [light, span]);
+  return <RedisScreen />;
+}
+const redisImage = (light: boolean, span: "area" | "pane" = "area"): S => ({
+  name: `Redis Browser — Background image${span === "pane" ? " per pane" : ""} (${light ? "light" : "dark"})`,
+  globals: { theme: light ? "light" : "dark" },
+  render: () => <RedisImage light={light} span={span} />,
+});
+export const RedisImageDark = redisImage(false);
+export const RedisImageLight = redisImage(true);
+export const RedisImagePane = redisImage(false, "pane");
+/** The same with the Terminal open: a hash reply as a table over the image */
+export const RedisImageTerminal: S = {
+  ...redisImage(false),
+  name: "Redis Browser — Background image, Terminal (dark)",
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(await c.findByRole("tab", { name: "Terminal" }));
+    await userEvent.type(await c.findByRole("textbox", { name: "Redis command" }), "HGETALL user:1{Escape}{Enter}");
   },
 };
 const WS_NAMES = ["Default", "Reports", "Billing", "Analytics", "Ops", "Support", "Growth", "Search", "Mobile", "Payments"];

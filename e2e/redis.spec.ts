@@ -212,3 +212,103 @@ test("Terminal: FLUSHDB and DEL always ask, also off Production", async ({ page 
   await expect.poll(() => ran(page)).toEqual(["DEL tags"]);
   await expect(term(page)).toBeFocused();
 });
+
+// #220: the Redis browser's loads give a database tab's feedback. The mock holds a call with window.__mockRedisSlow, fails it with
+// __mockRedisFail and makes the source reconnect with __mockReconnect (src/lib/mock.ts); set after the explorer read its key counts
+const mock = (page: Page, g: Record<string, unknown>) => page.evaluate((g) => Object.assign(window, g), g);
+const keyList = (page: Page) => work(page).locator(".rd-keys");
+const value = (page: Page) => work(page).locator(".rd-tab-body");
+const status = (page: Page) => page.locator(".statusbar");
+const toast = (page: Page) => page.locator(".ui-toast");
+const REFUSED = "Redis: Connection refused (os error 61)";
+async function openWith(page: Page, g: Record<string, unknown>) {
+  await openApp(page);
+  await mock(page, g);
+  await treeItem(page, "db0 7").dblclick();
+}
+
+test("the key list and a key's value say Loading… with ■; ■ and ⌘F2 stop them, Retry loads them", async ({ page }) => {
+  await openWith(page, { __mockRedisSlow: { scan: true } });
+  await expect(keyList(page).getByRole("status")).toHaveText(/^Loading…/);
+  // Past a second, how long; the toolbar's ⟳ is ■ meanwhile, as the grid's
+  await expect(keyList(page).getByRole("status")).toHaveText(/^Loading… \d+\.\d s$/);
+  await expect(work(page).locator(".rd-toolbar").getByTitle(/^Cancel/)).toBeVisible();
+  await keyList(page).getByRole("status").getByTitle(/^Cancel/).click();
+  await expect(keyList(page)).toContainText("Cancelled");
+  await expect(status(page)).toContainText("Cancelled");
+  await expect(work(page).locator(".rd-toolbar").getByTitle("Scan again (⌘r)")).toBeVisible();
+  await mock(page, { __mockRedisSlow: { key: true } });
+  await keyList(page).getByRole("button", { name: "Retry" }).click();
+  await work(page).getByRole("treeitem", { name: /rank/ }).click();
+  await expect(value(page).getByRole("status")).toHaveText(/^Loading…/);
+  await page.keyboard.press("Meta+F2");
+  await expect(value(page)).toContainText("Cancelled");
+  await mock(page, { __mockRedisSlow: {} });
+  await value(page).getByRole("button", { name: "Retry" }).click();
+  await expect(value(page)).toContainText("alice");
+});
+
+test("a failed scan, key counts or value says why with Retry, and the status bar says it too", async ({ page }) => {
+  await openWith(page, { __mockRedisFail: { scan: REFUSED, overview: REFUSED } });
+  await expect(keyList(page).locator(".rd-load-error")).toContainText(REFUSED);
+  await expect(status(page)).toContainText(REFUSED);
+  // One failure said once: the key counts line waits for the keys
+  await expect(work(page).getByText(/^Couldn't read the key counts/)).toHaveCount(0);
+  await mock(page, { __mockRedisFail: { overview: REFUSED } });
+  await keyList(page).getByRole("button", { name: "Retry" }).click();
+  await expect(work(page).getByRole("treeitem", { name: /rank/ })).toBeVisible();
+  const counts = work(page).locator(".rd-load-error", { hasText: `Couldn't read the key counts: ${REFUSED}` });
+  await expect(counts).toBeVisible();
+  await expect(picker(page)).toHaveValue("db0");
+  await mock(page, { __mockRedisFail: { key: "Redis: WRONGTYPE Operation against a key holding the wrong kind of value" } });
+  await counts.getByRole("button", { name: "Retry" }).click();
+  await expect(counts).toHaveCount(0);
+  await expect(picker(page).locator("option")).toHaveText(["db0 · 7 keys", "db3 · 2 keys"]);
+  await work(page).getByRole("treeitem", { name: /rank/ }).click();
+  await expect(value(page).locator(".rd-load-error")).toContainText("WRONGTYPE");
+  await expect(status(page)).toContainText("WRONGTYPE");
+  await mock(page, { __mockRedisFail: {} });
+  await value(page).getByRole("button", { name: "Retry" }).click();
+  await expect(value(page)).toContainText("alice");
+});
+
+test("a reconnect shows the toast and the status bar for the scan, an edit and the Terminal; Cancel ends them, a failed one keeps Retry", async ({ page }) => {
+  const waiting = /^Reconnecting \[Redis\] cache through SSH… \d+\.\d s/;
+  await openWith(page, { __mockReconnect: { id: "rd" } });
+  await expect(keyList(page).getByRole("status")).toHaveText(/^Loading…/);
+  await expect(toast(page)).toContainText(waiting);
+  await expect(status(page).locator(".running-bar")).toContainText(waiting);
+  await toast(page).getByRole("button", { name: "Cancel" }).click();
+  await expect(toast(page)).toHaveText("Cancelled while reconnecting [Redis] cache through SSH.×");
+  await expect(keyList(page).getByRole("status")).toHaveCount(0);
+  await expect(keyList(page).getByRole("button", { name: "Retry" })).toBeVisible();
+
+  // An edit waits the same way
+  await mock(page, { __mockReconnect: null });
+  await keyList(page).getByRole("button", { name: "Retry" }).click();
+  await work(page).getByRole("treeitem", { name: /rank/ }).click();
+  await expect(value(page)).toContainText("alice");
+  await mock(page, { __mockReconnect: { id: "rd" } });
+  await work(page).locator(".rd-ttl-edit input").fill("60");
+  await work(page).locator(".rd-ttl-edit input").press("Enter");
+  await expect(toast(page)).toContainText(waiting);
+  await toast(page).getByRole("button", { name: "Cancel" }).click();
+  await expect(status(page)).toContainText("Cancelled while reconnecting [Redis] cache through SSH.");
+
+  // The Terminal: Running… while it waits; the reconnect fails with its reason and Retry, which runs the line again
+  const reason = "SSH connect timeout: bastion.example.com:22 didn't answer within 10s. Check the SSH server, then run it again.";
+  await mock(page, { __mockReconnect: { id: "rd", fail: reason, after: 1800 } });
+  await work(page).getByRole("tab", { name: "Terminal" }).click();
+  await run(page, "HGETALL user:1");
+  await expect(work(page).locator(".rd-term-out").getByRole("status")).toHaveText(/^Running…/);
+  await expect(toast(page)).toContainText(waiting);
+  await expect(toast(page)).toContainText("Couldn't reconnect [Redis] cache through SSH");
+  await expect(toast(page)).toContainText(reason);
+  await expect(work(page).locator(".rd-term-out pre.err")).toHaveText(`(error) Couldn't reconnect [Redis] cache through SSH: ${reason}`);
+  await expect(work(page).locator(".rd-term-out").getByRole("status")).toHaveCount(0);
+  await mock(page, { __mockReconnect: null });
+  await toast(page).getByRole("button", { name: "Retry" }).click();
+  await expect(toast(page)).toHaveCount(0);
+  await expect(work(page).locator(".rd-term-table")).toContainText("a@b.c");
+  expect(await ran(page)).toEqual(["HGETALL user:1"]);
+});
