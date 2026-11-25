@@ -17,11 +17,11 @@ Data sources made before this setting existed keep working as before (read, and 
 | Tool | Description |
 |---|---|
 | `list_data_sources` | Data sources shared with MCP (kind, host without any password in a URI, default database, read-only, production, MCP access, SSH, and `dba_report`: whether `dba_report` answers for it) |
-| `list_databases` / `list_schemas` / `list_objects` | Browse the tree (Redis: keys and their types) |
+| `list_databases` / `list_schemas` / `list_objects` | Browse the tree (Redis: keys and their types, at most 5,000; with more, `truncated: true`, the database's `total_keys` and a hint to use `redis_scan` with a pattern) |
 | `describe_table` | Columns, indexes, constraints |
 | `get_erd` | Tables with their primary keys and the foreign keys between them, as JSON and as a Mermaid `erDiagram` (no row data). `schemas` defaults to `public` on PostgreSQL and the database on MySQL; tables in other schemas that a foreign key points to come too. At most 200 tables: a `note` then says how many there are, and keys to tables left out are dropped |
 | `get_ddl` | DDL (Redis: commands that recreate the key — only for a key `query` could read whole: up to 1,000 elements and 4 MB; use `redis_get` for bigger keys) |
-| `search_objects` | Fuzzy search by object name (Go to Database Object), across the databases visible in each data source |
+| `search_objects` | Fuzzy search by object name (Go to Database Object), across the databases visible in each data source (Redis: keys whose name contains the query in any case, by `SCAN MATCH` over up to 100,000 keys per database; `notes` says when it stopped before the end) |
 | `query` | Read-only query (100 rows by default, max 1000) |
 | `explain` | Execution plan (optionally ANALYZE). PostgreSQL answers with two content items: the plan text as before, then JSON `{"plan_analysis": …}` — the plan tree with each step's share of the estimated cost, its own cost, estimated rows and warnings (a Seq Scan reading a big table, sorts or hashes spilled to disk …). The analysis comes from a separate `EXPLAIN (FORMAT JSON)` without ANALYZE, so with `analyze` the statement still runs once, and the shares are by cost (`"basis": "cost"`). If that second run fails, only the text comes back. MySQL and the others answer with one item, as before |
 | `full_text_search` | Find a value in every table |

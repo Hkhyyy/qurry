@@ -146,6 +146,53 @@ pub(crate) async fn check_whole_key(m: &RedisConn, key: &[u8]) -> AppResult<()> 
     crate::redisdb::check_read_args(m, &args).await
 }
 
+/// SCAN iterations (COUNT 1000 each, per cluster master) search_keys takes: 100,000 keys, so a needle nothing matches can't walk
+/// a database of millions
+const SEARCH_SCANS: usize = 100;
+
+/// SCAN MATCH pattern for key names containing `query` in any ASCII case, glob characters matching themselves
+fn contains_pattern(query: &str) -> String {
+    let mut p = String::from("*");
+    for c in query.chars() {
+        match c {
+            c if c.is_ascii_alphabetic() => p.push_str(&format!("[{}{}]", c.to_ascii_lowercase(), c.to_ascii_uppercase())),
+            '*' | '?' | '[' | ']' | '\\' => p.push_str(&format!("\\{c}")),
+            c => p.push(c),
+        }
+    }
+    p.push('*');
+    p
+}
+
+/// search_objects on Redis: key names containing `query` (any ASCII case), at most `max`, from a bounded SCAN MATCH. complete =
+/// the whole database was scanned
+pub(crate) async fn search_keys(m: &RedisConn, query: &str, max: usize) -> AppResult<(Vec<Vec<u8>>, bool)> {
+    let pattern = contains_pattern(query);
+    let mut out: Vec<Vec<u8>> = vec![];
+    let mut complete = true;
+    'nodes: for mut node in m.scan_nodes() {
+        let mut cur = 0u64;
+        for _ in 0..SEARCH_SCANS {
+            let (next, keys): (u64, Vec<Vec<u8>>) =
+                redis::cmd("SCAN").arg(cur).arg("MATCH").arg(&pattern).arg("COUNT").arg(1000).query_async(&mut node).await.map_err(crate::redisdb::err)?;
+            out.extend(keys);
+            cur = next;
+            if cur == 0 {
+                break;
+            }
+            if out.len() >= max {
+                complete = false;
+                break 'nodes;
+            }
+        }
+        complete &= cur == 0;
+    }
+    out.sort();
+    out.dedup();
+    out.truncate(max);
+    Ok((out, complete))
+}
+
 /// A value in an MCP answer: text up to VALUE_MAX as is; longer text as {"text": its first VALUE_MAX bytes, "size": its bytes};
 /// bytes that aren't UTF-8 as {"base64": …}, with "size" when cut too. `size` = the value's whole length when `b` is only its
 /// beginning (a string preview), else b.len()
@@ -279,6 +326,35 @@ mod tests {
         let e = st.redis_key_ddl_read_only("rd::db9".into(), keys[1].into()).await.unwrap_err().to_string();
         assert!(e.contains("reads the whole key") && e.contains("per MCP read"), "{e}");
         let _: () = redis::cmd("DEL").arg(&keys[..]).query_async(&mut c).await.unwrap();
+    }
+
+    #[test]
+    fn search_matches_a_part_in_any_case() {
+        assert_eq!(contains_pattern("Shop:1"), "*[sS][hH][oO][pP]:1*");
+        assert_eq!(contains_pattern("a*b?[c]\\"), "*[aA]\\*[bB]\\?\\[[cC]\\]\\\\*");
+        assert_eq!(contains_pattern("é"), "*é*");
+    }
+
+    /// #225: search_keys finds a key by any part of its name in any case, past what one SCAN page holds, and says when it stopped.
+    /// Own qurry:search:* keys in db15
+    #[tokio::test]
+    #[ignore]
+    async fn search_keys_scans_past_the_first_page() {
+        let Some((st, m)) = state("db15").await else { return };
+        let mut c = m.clone();
+        let fill = "for i=1,3000 do redis.call(ARGV[1], 'qurry:search:k:'..i, 'v') end return 1";
+        let _: () = redis::cmd("EVAL").arg(fill).arg(0).arg("SET").query_async(&mut c).await.unwrap();
+        let _: () = redis::cmd("SET").arg("qurry:search:Shop:Leader*board").arg("x").query_async(&mut c).await.unwrap();
+        let find = |q: &str, max: usize| st.redis_search_keys("rd::db15".into(), q.into(), max);
+        for q in ["shop:leader*", "LEADER*BOARD", "Shop:Leader*board"] {
+            assert_eq!(find(q, 10).await.unwrap(), (vec![b"qurry:search:Shop:Leader*board".to_vec()], true), "{q}");
+        }
+        // A glob character matches itself only
+        assert_eq!(find("leaderb", 10).await.unwrap().0.len(), 0);
+        let (some, complete) = find("qurry:search:k:", 5).await.unwrap();
+        assert!(some.len() == 5 && !complete);
+        let _: () = redis::cmd("EVAL").arg(fill.replace("ARGV[1], 'qurry:search:k:'..i, 'v'", "'DEL', 'qurry:search:k:'..i")).arg(0).query_async(&mut c).await.unwrap();
+        let _: () = redis::cmd("DEL").arg("qurry:search:Shop:Leader*board").query_async(&mut c).await.unwrap();
     }
 
     #[test]

@@ -48,7 +48,7 @@ impl Server {
             tool("list_schemas", "List schemas in a database (MySQL/Redis: the database itself).", ds_props(json!({})), &["data_source"], true),
             tool(
                 "list_objects",
-                "List tables, views, materialized views, sequences and routines in a schema (Redis: keys with their types).",
+                &format!("List tables, views, materialized views, sequences and routines in a schema (Redis: keys with their types, at most {}; over that truncated: true, total_keys and a hint).", qurry_core::redisdb::MAX_KEYS),
                 ds_props(json!({ "schema": { "type": "string", "description": "Schema name (PostgreSQL default: public)" } })),
                 &["data_source"],
                 true,
@@ -69,7 +69,7 @@ impl Server {
             ),
             tool(
                 "search_objects",
-                "Fuzzy search database objects by name (Go to Database Object). Searches the default database of each data source, or the given one.",
+                "Fuzzy search database objects by name (Go to Database Object). Searches the default database of each data source, or the given one. Redis: keys whose name contains the query in any case (SCAN MATCH over up to 100,000 keys per database; notes says when it stopped before the end).",
                 json!({
                     "query": { "type": "string", "description": "Name or fragment, e.g. 'usr_pay' or 'public.orders'" },
                     "data_source": { "type": "string", "description": "Limit to one data source (default: all)" },

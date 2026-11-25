@@ -16,4 +16,10 @@ impl AppState {
         crate::redis_read::check_whole_key(&m, key.as_bytes()).await.map_err(|e| AppError::Msg(format!("The DDL reads the whole key: {e}")))?;
         redisdb::key_ddl(&m, &key).await
     }
+
+    /// search_objects on Redis: key names containing `query` in any case, from a bounded SCAN MATCH; and whether it scanned the
+    /// whole database
+    pub async fn redis_search_keys(&self, id: String, query: String, max: usize) -> AppResult<(Vec<Vec<u8>>, bool)> {
+        crate::redis_read::search_keys(&redis_pool(self, &id).await?, &query, max).await
+    }
 }

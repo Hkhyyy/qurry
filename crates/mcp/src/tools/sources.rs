@@ -6,6 +6,9 @@ use qurry_core::sql;
 use qurry_core::store::{DbKind, McpAccess};
 use serde_json::{json, Value};
 
+/// Redis keys search_objects ranks per database (all contain the query)
+const REDIS_SEARCH_MAX: usize = 1000;
+
 impl Server {
     pub(super) async fn list_data_sources(&self) -> Result<Value, String> {
         let list = self.sources().await?;
@@ -49,8 +52,19 @@ impl Server {
         let e = |e: qurry_core::error::AppError| e.to_string();
         let schema_or = |kind: DbKind, db: &str| s("schema").unwrap_or_else(|| if kind == DbKind::Postgres { "public".into() } else { db.to_string() });
         let (t, kind, db, _) = self.target(a).await?;
-        let o = st.list_objects(t, schema_or(kind, &db)).await.map_err(e)?;
-        Ok(json!({ "relations": o.relations, "routines": o.routines }))
+        let o = st.list_objects(t.clone(), schema_or(kind, &db)).await.map_err(e)?;
+        let mut v = json!({ "relations": o.relations, "routines": o.routines });
+        // Redis lists the first MAX_KEYS keys SCAN finds: say so, with the database's key count
+        if kind == DbKind::Redis && o.relations.len() >= qurry_core::redisdb::MAX_KEYS {
+            let name = format!("db{}", qurry_core::redisdb::db_index(&db));
+            let total = st.redis_overview(t).await.ok().and_then(|o| o.databases.into_iter().find(|d| d.name == name)).map(|d| d.keys);
+            if total.is_none_or(|n| n > o.relations.len() as i64) {
+                v["truncated"] = json!(true);
+                v["total_keys"] = json!(total);
+                v["hint"] = json!(format!("Only {} keys are listed: use search_objects, or redis_scan with a pattern (and its next_cursor), for the others", qurry_core::redisdb::MAX_KEYS));
+            }
+        }
+        Ok(v)
     }
 
     pub(super) async fn describe_table(&self, a: &Value) -> Result<Value, String> {
@@ -88,6 +102,7 @@ impl Server {
         let only = if a.get("data_source").is_some() { Some(self.resolve(a).await?.0) } else { None };
         let mut hits: Vec<(i64, Value)> = vec![];
         let mut errors = vec![];
+        let mut notes: Vec<String> = vec![];
         for c in list.iter().filter(|c| only.as_ref().map(|o| o == &c.config.id).unwrap_or(true)) {
             let def = sql::default_db(&c.config);
             // DBs to search: the given DB, otherwise the DBs made visible in the app's Schemas tab (at most 8)
@@ -106,7 +121,25 @@ impl Server {
                 },
             };
             for db in dbs {
-            match st.object_index(sql::target_id(&c.config.id, Some(&db))).await {
+            let target = sql::target_id(&c.config.id, Some(&db));
+            // Redis: SCAN MATCH *<query>* over the database, not the first MAX_KEYS keys
+            if c.config.kind == DbKind::Redis {
+                match st.redis_search_keys(target, q.clone(), REDIS_SEARCH_MAX).await {
+                    Ok((keys, complete)) => {
+                        for k in keys {
+                            let name = String::from_utf8_lossy(&k).into_owned();
+                            let sc = fuzzy(&q, &name).unwrap_or(0);
+                            hits.push((sc, json!({ "data_source": c.config.name, "database": db, "schema": db, "name": name, "kind": "key" })));
+                        }
+                        if !complete {
+                            notes.push(format!("{}/{db}: searched part of the keys only; use redis_scan with a pattern for the rest", c.config.name));
+                        }
+                    }
+                    Err(err) => errors.push(format!("{}/{db}: {err}", c.config.name)),
+                }
+                continue;
+            }
+            match st.object_index(target).await {
                 Ok(es) => {
                     for x in es {
                         let full = format!("{}.{}", x.schema, x.name);
@@ -121,7 +154,11 @@ impl Server {
             }
         }
         hits.sort_by_key(|h| std::cmp::Reverse(h.0));
-        Ok(json!({ "matches": hits.into_iter().take(limit).map(|h| h.1).collect::<Vec<_>>(), "errors": errors }))
+        let mut v = json!({ "matches": hits.into_iter().take(limit).map(|h| h.1).collect::<Vec<_>>(), "errors": errors });
+        if !notes.is_empty() {
+            v["notes"] = json!(notes);
+        }
+        Ok(v)
     }
 }
 

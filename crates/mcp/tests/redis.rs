@@ -1,7 +1,7 @@
 //! Redis through the real stdio server (qurry-mcp --allow-write): redis_scan, redis_get, query refusing writes, and execute refusing
 //! writes that empty a key while partial ones run (#223); a hidden source's exact name is refused (#228); reads within the byte
-//! budget (#224).
-//! QURRY_TEST_REDIS=host:port cargo test -p qurry-mcp --test redis -- --ignored. Own keys (qurry:mcp:*) in db10 and db11
+//! budget (#224); list_objects says when it stopped at 5,000 keys and search_objects finds keys past them (#225).
+//! QURRY_TEST_REDIS=host:port cargo test -p qurry-mcp --test redis -- --ignored. Own keys (qurry:mcp:*) in db10, db11 and db13
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -253,5 +253,40 @@ async fn redis_reads_are_bounded_over_stdio() {
 
     m.stop();
     run(format!("DEL {l} {h} {big} {s2}")).await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #225: with more than 5,000 keys, list_objects says it stopped and how many there are; search_objects finds keys it didn't list,
+/// in any case
+#[tokio::test]
+#[ignore]
+async fn redis_key_lists_say_when_they_stop_over_stdio() {
+    let Some(addr) = qurry_core::testenv::var("QURRY_TEST_REDIS") else { return };
+    let (host, port) = addr.rsplit_once(':').expect("QURRY_TEST_REDIS=host:port");
+    let mut c = source("k", "Keys", host, port, Some("read"), false);
+    c.database = "db13".into();
+    let (dir, config, st) = setup(&[c]).await;
+    let run = |s: &str| st.run_query("k::db13".into(), s.to_string(), None, None);
+    let keys = "for i=1,5100 do redis.call(ARGV[1], 'qurry:mcp:k:'..i, ARGV[2]) end return 1";
+    run(&format!("EVAL \"{keys}\" 0 SET v")).await.unwrap();
+    run("SET zzz:Shop:Leaderboard x").await.unwrap();
+
+    let mut m = Mcp::start(&dir, &config);
+    let (err, t) = m.call("list_objects", json!({ "data_source": "Keys" }));
+    let v: Value = serde_json::from_str(&t).unwrap();
+    assert!(!err && v["relations"].as_array().unwrap().len() == 5000 && v["truncated"] == json!(true), "{}", &t[..200]);
+    assert!(v["total_keys"].as_i64().unwrap() >= 5101 && v["hint"].as_str().unwrap().contains("redis_scan"), "{} {}", v["total_keys"], v["hint"]);
+    for q in ["shop:leaderboard", "LEADERBOARD", "zzz:shop"] {
+        let (err, t) = m.call("search_objects", json!({ "data_source": "Keys", "query": q }));
+        let v: Value = serde_json::from_str(&t).unwrap();
+        assert!(!err && v["matches"][0]["name"] == json!("zzz:Shop:Leaderboard") && v.get("notes").is_none(), "{q}: {t}");
+    }
+    let (_, t) = m.call("search_objects", json!({ "data_source": "Keys", "query": "qurry:mcp:k:51", "limit": 500 }));
+    let v: Value = serde_json::from_str(&t).unwrap();
+    assert_eq!(v["matches"].as_array().unwrap().len(), 12, "51, 510…519, 5100: {t}");
+
+    m.stop();
+    run(&format!("EVAL \"{}\" 0", keys.replace("ARGV[1], 'qurry:mcp:k:'..i, ARGV[2]", "'DEL', 'qurry:mcp:k:'..i"))).await.unwrap();
+    run("DEL zzz:Shop:Leaderboard").await.unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }

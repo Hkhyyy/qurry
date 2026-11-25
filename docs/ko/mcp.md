@@ -19,11 +19,11 @@ claude mcp add qurry-rw -- qurry-mcp --allow-write  # execute 도구 추가
 | 도구 | 설명 |
 |---|---|
 | `list_data_sources` | MCP 에 보이는 연결 (종류, 호스트 — URI 안의 비밀번호는 뺌, 기본 데이터베이스, 읽기 전용, Production, MCP 권한, SSH, 그리고 `dba_report`: 그 연결에 `dba_report` 가 답하는지) |
-| `list_databases` / `list_schemas` / `list_objects` | 트리 둘러보기 (Redis: 키와 타입) |
+| `list_databases` / `list_schemas` / `list_objects` | 트리 둘러보기 (Redis: 키와 타입, 5,000개까지. 더 있으면 `truncated: true`, 데이터베이스의 `total_keys`, 패턴으로 `redis_scan` 을 쓰라는 안내) |
 | `describe_table` | 컬럼, 인덱스, 제약 조건 |
 | `get_erd` | 테이블과 그 기본 키, 테이블 사이의 외래 키를 JSON 과 Mermaid `erDiagram` 으로 (행 데이터는 없음). `schemas` 를 주지 않으면 PostgreSQL 은 `public`, MySQL 은 그 데이터베이스입니다. 외래 키가 가리키는 다른 스키마의 테이블도 함께 옵니다. 테이블은 200개까지: 넘으면 `note` 가 전체 개수를 알려 주고, 빠진 테이블로 가는 키는 뺍니다 |
 | `get_ddl` | DDL (Redis: 키를 다시 만드는 명령 — `query` 로 통째로 읽을 수 있는 키만: 요소 1,000개, 4 MB 까지. 더 큰 키는 `redis_get`) |
-| `search_objects` | 객체 이름으로 퍼지 검색 (Go to Database Object). Data Source 마다 보이는 데이터베이스 전체에서 |
+| `search_objects` | 객체 이름으로 퍼지 검색 (Go to Database Object). Data Source 마다 보이는 데이터베이스 전체에서 (Redis: 이름에 검색어가 대소문자 상관없이 들어간 키, 데이터베이스마다 키 100,000개까지 `SCAN MATCH` 로. 끝까지 못 보면 `notes` 에 적습니다) |
 | `query` | 읽기 전용 쿼리 (기본 100행, 최대 1000행) |
 | `explain` | 실행 계획 (ANALYZE 선택). PostgreSQL 은 content 항목 두 개로 답합니다: 예전과 같은 계획 텍스트, 그리고 JSON `{"plan_analysis": …}` — 계획 트리와 단계마다 예상 비용에서 차지하는 몫, 자기 비용, 예상 행 수, 경고 (큰 테이블을 Seq Scan 으로 읽음, 정렬이나 해시가 디스크로 넘침 …). 분석은 ANALYZE 없이 따로 돌린 `EXPLAIN (FORMAT JSON)` 에서 나오므로, `analyze` 를 줘도 문장은 한 번만 실행되고 몫은 비용 기준입니다 (`"basis": "cost"`). 이 두 번째 실행이 실패하면 텍스트만 옵니다. MySQL 과 다른 종류는 예전처럼 항목 하나로 답합니다 |
 | `full_text_search` | 모든 테이블에서 값 찾기 |

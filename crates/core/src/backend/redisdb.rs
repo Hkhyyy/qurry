@@ -12,7 +12,7 @@ use std::time::Instant;
 /// Fake command the frontend sends when opening a single key
 pub const VIEW_CMD: &str = "DBTOOL.VIEW";
 /// Max number of keys fetched at once for the tree·search
-const MAX_KEYS: usize = 5000;
+pub const MAX_KEYS: usize = 5000;
 
 fn pct(s: &str) -> String {
     s.bytes()
@@ -83,7 +83,7 @@ impl RedisConn {
         self.config
     }
     /// Nodes to run SCAN on (all masters for a cluster)
-    fn scan_nodes(&self) -> Vec<ConnectionManager> {
+    pub(crate) fn scan_nodes(&self) -> Vec<ConnectionManager> {
         match &self.link {
             Link::Single(m) => vec![m.clone()],
             Link::Cluster { masters, .. } => masters.clone(),
@@ -624,9 +624,10 @@ async fn scan_keys(m: &RedisConn, pattern: &str, max: usize) -> AppResult<Vec<Ve
             break;
         }
     }
-    out.truncate(max);
+    // SCAN can return a key twice: drop repeats first, so a full list is exactly `max` long
     out.sort();
     out.dedup();
+    out.truncate(max);
     Ok(out)
 }
 
