@@ -214,6 +214,54 @@ pub fn is_read_command(cmd: &str, sub: &str) -> bool {
     }
 }
 
+/// Why a command can't be sent from the Terminal, a console or MCP: it would change the state of the one connection Qurry
+/// shares across a data source's databases (the browser, the Terminal, consoles and MCP all use it, #221). Replies turned off or
+/// queued (CLIENT REPLY, MULTI) would reach other callers, a subscription or MONITOR would take the connection over, RESET /
+/// AUTH / HELLO change its user or protocol, READONLY / ASKING / CLIENT TRACKING change how later commands of others run.
+/// cmd and sub uppercased
+pub fn shared_connection_refusal(cmd: &str, sub: &str) -> Option<String> {
+    let shared = format!("{cmd} would change the connection Qurry shares across this data source's databases");
+    Some(match cmd {
+        "SELECT" => "Switch databases with the database selector".into(),
+        "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH" => format!("{shared}, so transactions aren't available: run the commands one by one"),
+        "AUTH" | "HELLO" => format!("{shared}: set the user and password in the data source's settings"),
+        "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" | "UNSUBSCRIBE" | "PUNSUBSCRIBE" | "SUNSUBSCRIBE" | "MONITOR" | "SYNC" | "PSYNC" => {
+            format!("{shared}, so it isn't available here: use redis-cli")
+        }
+        "RESET" | "QUIT" | "READONLY" | "READWRITE" | "ASKING" => format!("{shared}, so it isn't run"),
+        "CLIENT" if matches!(sub, "REPLY" | "TRACKING" | "CACHING" | "NO-EVICT" | "NO-TOUCH") => format!("CLIENT {sub} would change the connection Qurry shares across this data source's databases, so it isn't run"),
+        _ => return None,
+    })
+}
+
+/// Most a blocking command may wait, in ms: it runs on a connection of its own (redisdb), and longer waits are better sent with redis-cli
+pub const BLOCK_MAX_MS: u64 = 300_000;
+
+/// A blocking command (BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN / MAX, BZMPOP, XREAD / XREADGROUP with BLOCK, WAIT,
+/// WAITAOF): how long it may wait, in ms. Err when it would wait forever (timeout 0) or longer than BLOCK_MAX_MS. None for other
+/// commands, and for a timeout that isn't a positive number (the server refuses it at once). cmd uppercased, args after it
+pub fn blocking_wait(cmd: &str, args: &[String]) -> Option<Result<u64, String>> {
+    let secs = |a: Option<&String>| a.and_then(|t| t.parse::<f64>().ok()).filter(|t| t.is_finite() && *t >= 0.0).map(|t| t * 1000.0);
+    let ms = |a: Option<&String>| a.and_then(|t| t.parse::<f64>().ok()).filter(|t| t.is_finite() && *t >= 0.0);
+    let wait = match cmd {
+        "BLPOP" | "BRPOP" | "BRPOPLPUSH" | "BLMOVE" | "BZPOPMIN" | "BZPOPMAX" => secs(args.last()),
+        "BLMPOP" | "BZMPOP" => secs(args.first()),
+        "XREAD" | "XREADGROUP" => {
+            let before = args.iter().position(|a| a.eq_ignore_ascii_case("STREAMS")).unwrap_or(args.len());
+            let at = args[..before].iter().position(|a| a.eq_ignore_ascii_case("BLOCK"))?;
+            ms(args.get(at + 1))
+        }
+        "WAIT" => ms(args.get(1)),
+        "WAITAOF" => ms(args.get(2)),
+        _ => return None,
+    }?;
+    Some(match wait {
+        0.0 => Err(format!("{cmd} with a timeout of 0 waits forever: give it a timeout of at most {} seconds", BLOCK_MAX_MS / 1000)),
+        w if w > BLOCK_MAX_MS as f64 => Err(format!("{cmd} may wait at most {} seconds in Qurry: give it a shorter timeout, or use redis-cli", BLOCK_MAX_MS / 1000)),
+        w => Ok(w.ceil() as u64),
+    })
+}
+
 /// Reads that show other clients: SLOWLOG GET (their commands with arguments, address, name) and CLIENT LIST (every connection).
 /// The admin reports of Redis: MCP reads them on a Production data source only where a person allowed it, as dba_report (#227)
 pub fn is_admin_report(cmd: &str, sub: &str) -> bool {
@@ -674,6 +722,46 @@ pub fn reply_table(line: &str, reply: &serde_json::Value) -> Option<ReplyTable> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_that_change_the_shared_connection_are_refused() {
+        for (cmd, sub) in [("CLIENT", "REPLY"), ("CLIENT", "TRACKING"), ("MULTI", ""), ("EXEC", ""), ("DISCARD", ""), ("WATCH", ""), ("RESET", ""), ("HELLO", ""),
+            ("AUTH", ""), ("QUIT", ""), ("SUBSCRIBE", ""), ("PUNSUBSCRIBE", ""), ("SSUBSCRIBE", ""), ("MONITOR", ""), ("READONLY", ""), ("PSYNC", "")] {
+            let why = shared_connection_refusal(cmd, sub).unwrap_or_else(|| panic!("{cmd} {sub}"));
+            assert!(why.contains("would change the connection Qurry shares"), "{why}");
+        }
+        assert!(shared_connection_refusal("AUTH", "").unwrap().contains("data source's settings"));
+        assert_eq!(shared_connection_refusal("SELECT", "1").unwrap(), "Switch databases with the database selector");
+        for (cmd, sub) in [("GET", "K"), ("CLIENT", "LIST"), ("CLIENT", "SETNAME"), ("PUBLISH", "C"), ("SWAPDB", "0")] {
+            assert_eq!(shared_connection_refusal(cmd, sub), None, "{cmd} {sub}");
+        }
+    }
+
+    #[test]
+    fn blocking_commands_wait_their_own_timeout_never_forever() {
+        let w = |line: &str| {
+            let a: Vec<String> = line.split(' ').map(String::from).collect();
+            blocking_wait(&a[0], &a[1..])
+        };
+        assert_eq!(w("BLPOP a b 1.5"), Some(Ok(1500)));
+        assert_eq!(w("BLMOVE a b LEFT RIGHT 2"), Some(Ok(2000)));
+        assert_eq!(w("BLMPOP 3 1 l LEFT"), Some(Ok(3000)));
+        assert_eq!(w("BZMPOP 1 1 z MIN"), Some(Ok(1000)));
+        assert_eq!(w("XREAD COUNT 2 block 250 STREAMS s $"), Some(Ok(250)));
+        assert_eq!(w("XREADGROUP GROUP g c BLOCK 100 STREAMS s >"), Some(Ok(100)));
+        assert_eq!(w("WAIT 1 500"), Some(Ok(500)));
+        assert_eq!(w("WAITAOF 1 0 700"), Some(Ok(700)));
+        assert!(w("BLPOP l 0").unwrap().unwrap_err().contains("waits forever"));
+        assert!(w("XREAD BLOCK 0 STREAMS s $").unwrap().unwrap_err().contains("waits forever"));
+        assert!(w("WAIT 1 0").unwrap().is_err());
+        assert!(w("BRPOP l 301").unwrap().unwrap_err().contains("at most 300 seconds"));
+        // Not blocking: no BLOCK, BLOCK only as a stream key, other commands, a timeout the server refuses at once
+        assert_eq!(w("XREAD STREAMS BLOCK 0"), None);
+        assert_eq!(w("XREAD COUNT 1 STREAMS s 0"), None);
+        assert_eq!(w("LPOP l"), None);
+        assert_eq!(w("BLPOP l x"), None);
+        assert_eq!(w("BLPOP l -1"), None);
+    }
 
     /// #227: SLOWLOG GET over MCP shows the command and its key, never the values; it and CLIENT LIST are admin reports
     #[test]
