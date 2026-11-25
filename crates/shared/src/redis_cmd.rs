@@ -214,6 +214,37 @@ pub fn is_read_command(cmd: &str, sub: &str) -> bool {
     }
 }
 
+/// Reads that show other clients: SLOWLOG GET (their commands with arguments, address, name) and CLIENT LIST (every connection).
+/// The admin reports of Redis: MCP reads them on a Production data source only where a person allowed it, as dba_report (#227)
+pub fn is_admin_report(cmd: &str, sub: &str) -> bool {
+    matches!((cmd, sub), ("SLOWLOG", "GET") | ("CLIENT", "LIST"))
+}
+
+/// A SLOWLOG entry's command as MCP shows it: the command (with its subcommand), the key when the command's first argument is
+/// one, and how many arguments are left out — values, scripts and passwords can hold anything the client sent
+pub fn slowlog_command(args: &[String]) -> String {
+    let words: Vec<&str> = args.iter().map(String::as_str).collect();
+    let Some((doc, used)) = command_doc(&words) else {
+        let n = args.len().saturating_sub(1);
+        return match args.first() {
+            Some(c) if n > 0 => format!("{} … ({n} more)", c.to_uppercase()),
+            Some(c) => c.to_uppercase(),
+            None => String::new(),
+        };
+    };
+    let mut out = vec![doc.name.to_string()];
+    if doc.positional().first().is_some_and(|a| *a == "key")
+        && let Some(k) = args.get(used)
+    {
+        out.push(quote_arg(k));
+    }
+    let shown = used + out.len() - 1;
+    if args.len() > shown {
+        out.push(format!("… ({} more)", args.len() - shown));
+    }
+    out.join(" ")
+}
+
 // ───────── Terminal: the bundled command table, completion, HELP, reply shapes ─────────
 
 /// One command of the Terminal's table: its name (a container command's subcommand as "CONFIG GET"), its arguments as Redis
@@ -643,6 +674,24 @@ pub fn reply_table(line: &str, reply: &serde_json::Value) -> Option<ReplyTable> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #227: SLOWLOG GET over MCP shows the command and its key, never the values; it and CLIENT LIST are admin reports
+    #[test]
+    fn slowlog_commands_keep_only_the_command_and_key() {
+        let m = |line: &str| slowlog_command(&line.split_whitespace().map(String::from).collect::<Vec<_>>());
+        assert_eq!(m("SET card:1 4111-1111-1111-1111 EX 60"), "SET card:1 … (3 more)");
+        assert_eq!(m("set card:1 v"), "SET card:1 … (1 more)");
+        assert_eq!(m("HGETALL user:42"), "HGETALL user:42");
+        assert_eq!(m("CONFIG SET requirepass hunter2"), "CONFIG SET … (2 more)");
+        assert_eq!(m("CLIENT SETNAME billing-worker"), "CLIENT SETNAME … (1 more)");
+        assert_eq!(m("EVAL return 0"), "EVAL … (2 more)");
+        assert_eq!(m("MIGRATE h 6379 k 0 5000 AUTH pw"), "MIGRATE … (7 more)");
+        assert_eq!(m("MYMODULE.DO secret"), "MYMODULE.DO … (1 more)");
+        assert_eq!(m("PING"), "PING");
+        assert_eq!(m(""), "");
+        assert!(is_admin_report("SLOWLOG", "GET") && is_admin_report("CLIENT", "LIST"));
+        assert!(!is_admin_report("SLOWLOG", "LEN") && !is_admin_report("CLIENT", "INFO"));
+    }
 
     #[test]
     fn parse_args() {

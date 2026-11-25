@@ -221,8 +221,47 @@ pub(crate) fn reply_json(v: &RV) -> Value {
     }
 }
 
+/// An MCP read's answer (after check_read): the command's table, with SLOWLOG GET's commands masked to the command and key
+/// (redis_cmd::slowlog_command) and text cells over VALUE_MAX cut (cut_cells)
+pub(crate) async fn run(m: &RedisConn, line: &str, limit: usize) -> AppResult<QueryResult> {
+    let args = crate::redisdb::parse_command(line.trim().trim_end_matches(';').trim())?;
+    let word = |i: usize| args.get(i).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
+    let mut r = if (word(0).as_str(), word(1).as_str()) == ("SLOWLOG", "GET") { slowlog(m, &args, limit).await? } else { crate::redisdb::run(m, line, limit).await? };
+    cut_cells(&mut r);
+    Ok(r)
+}
+
+/// SLOWLOG GET [count]: one row per entry (id, unix time, microseconds, command, client address, client name); the command
+/// without its values, which can hold anything another client sent (card numbers, tokens …)
+async fn slowlog(m: &RedisConn, args: &[Vec<u8>], limit: usize) -> AppResult<QueryResult> {
+    use crate::redisdb::{cell, text_of};
+    let start = std::time::Instant::now();
+    let mut c = redis::cmd("SLOWLOG");
+    for a in &args[1..] {
+        c.arg(a.as_slice());
+    }
+    let v: RV = c.query_async(&mut m.clone()).await.map_err(crate::redisdb::err)?;
+    let RV::Array(entries) = v else { return Ok(crate::redisdb::table(&["result"], vec![vec![cell(&v)]], 1, start)) };
+    let rows = entries
+        .iter()
+        .map(|e| {
+            let f = match e {
+                RV::Array(f) => f.as_slice(),
+                _ => &[],
+            };
+            let at = |i: usize| f.get(i).map(cell).unwrap_or(Value::Null);
+            let command = match f.get(3) {
+                Some(RV::Array(words)) => Value::from(qurry_shared::redis_cmd::slowlog_command(&words.iter().map(text_of).collect::<Vec<_>>())),
+                _ => Value::Null,
+            };
+            vec![at(0), at(1), at(2), command, at(4), at(5)]
+        })
+        .collect();
+    Ok(crate::redisdb::table(&["id", "time", "duration_us", "command", "client", "client_name"], rows, limit, start))
+}
+
 /// An MCP query's answer: text cells over VALUE_MAX cut there (at a character boundary), their [row, column] in `cut`
-pub(crate) fn cut_cells(r: &mut QueryResult) {
+fn cut_cells(r: &mut QueryResult) {
     for (i, row) in r.rows.iter_mut().enumerate() {
         for (j, v) in row.iter_mut().enumerate() {
             if let Value::String(s) = v

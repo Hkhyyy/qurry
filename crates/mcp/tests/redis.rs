@@ -1,6 +1,7 @@
 //! Redis through the real stdio server (qurry-mcp --allow-write): redis_scan, redis_get, query refusing writes, and execute refusing
 //! writes that empty a key while partial ones run (#223); a hidden source's exact name is refused (#228); reads within the byte
-//! budget (#224); list_objects says when it stopped at 5,000 keys and search_objects finds keys past them (#225).
+//! budget (#224); list_objects says when it stopped at 5,000 keys and search_objects finds keys past them (#225); SLOWLOG and CLIENT LIST
+//! on Production only with the admin-reports consent, SLOWLOG's values masked (#227).
 //! QURRY_TEST_REDIS=host:port cargo test -p qurry-mcp --test redis -- --ignored. Own keys (qurry:mcp:*) in db10, db11 and db13
 
 use serde_json::{json, Value};
@@ -288,5 +289,44 @@ async fn redis_key_lists_say_when_they_stop_over_stdio() {
     m.stop();
     run(&format!("EVAL \"{}\" 0", keys.replace("ARGV[1], 'qurry:mcp:k:'..i, ARGV[2]", "'DEL', 'qurry:mcp:k:'..i"))).await.unwrap();
     run("DEL zzz:Shop:Leaderboard").await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #227: on Production, SLOWLOG GET and CLIENT LIST need "AI tools can read admin reports", as dba_report; SLOWLOG never shows
+/// another client's values
+#[tokio::test]
+#[ignore]
+async fn redis_admin_reports_need_consent_over_stdio() {
+    let Some(addr) = qurry_core::testenv::var("QURRY_TEST_REDIS") else { return };
+    let (host, port) = addr.rsplit_once(':').expect("QURRY_TEST_REDIS=host:port");
+    let mut allowed = source("pa", "Prod Allowed", host, port, Some("read"), true);
+    allowed.options.mcp_dba_reports = true;
+    let (dir, config, st) = setup(&[source("p", "Prod", host, port, Some("read"), true), allowed, source("d", "Dev", host, port, Some("read"), false)]).await;
+    // A client writes a secret while every command goes to the slow log
+    let run = |s: &str| st.run_query("d::db10".into(), s.to_string(), None, None);
+    let was = run("CONFIG GET slowlog-log-slower-than").await.unwrap().rows[0][1].clone();
+    run("CONFIG SET slowlog-log-slower-than 0").await.unwrap();
+    run("SET qurry:mcp:card \"4111-1111-1111-1111 cvv 123\"").await.unwrap();
+    run(&format!("CONFIG SET slowlog-log-slower-than {}", was.as_str().unwrap())).await.unwrap();
+
+    let mut m = Mcp::start(&dir, &config);
+    let q = |source: &str, sql: &str| json!({ "data_source": source, "sql": sql });
+    for sql in ["SLOWLOG GET 10", "client list"] {
+        let (err, t) = m.call("query", q("Prod", sql));
+        assert!(err && t.contains("AI tools can read admin reports"), "{sql}: {t}");
+    }
+    for sql in ["SLOWLOG LEN", "CLIENT INFO"] {
+        let (err, t) = m.call("query", q("Prod", sql));
+        assert!(!err, "{sql}: {t}");
+    }
+    let (err, t) = m.call("query", q("Prod Allowed", "CLIENT LIST"));
+    assert!(!err && t.contains("addr="), "{t}");
+    for source in ["Prod Allowed", "Dev"] {
+        let (err, t) = m.call("query", q(source, "SLOWLOG GET 128"));
+        assert!(!err && t.contains("SET qurry:mcp:card … (1 more)") && !t.contains("4111"), "{source}: {t}");
+    }
+
+    m.stop();
+    run("DEL qurry:mcp:card").await.unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }

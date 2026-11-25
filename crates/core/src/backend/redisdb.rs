@@ -296,7 +296,7 @@ pub async fn check(m: &RedisConn) -> AppResult<()> {
 }
 
 /// Whether the command doesn't change values (MCP read-only mode). Shared with the guard
-pub use qurry_shared::redis_cmd::is_read_command;
+pub use qurry_shared::redis_cmd::{is_admin_report, is_read_command};
 
 /// redis-cli style argument splitting (qurry_shared::redis_cmd::parse_command, the same rules the guard reads a line with)
 pub fn parse_command(line: &str) -> AppResult<Vec<Vec<u8>>> {
@@ -334,7 +334,7 @@ pub(crate) fn cell(v: &RV) -> Value {
         other => Value::from(format!("{other:?}")),
     }
 }
-fn text_of(v: &RV) -> String {
+pub(crate) fn text_of(v: &RV) -> String {
     match cell(v) {
         Value::String(s) => s,
         Value::Null => String::new(),
@@ -346,7 +346,7 @@ fn cols(names: &[&str]) -> Vec<ColumnInfo> {
     names.iter().map(|n| ColumnInfo { name: n.to_string(), type_name: "TEXT".into() }).collect()
 }
 
-fn table(names: &[&str], mut rows: Vec<Vec<Value>>, limit: usize, start: Instant) -> QueryResult {
+pub(crate) fn table(names: &[&str], mut rows: Vec<Vec<Value>>, limit: usize, start: Instant) -> QueryResult {
     let truncated = rows.len() > limit;
     rows.truncate(limit);
     query_result(cols(names), rows, 0, truncated, start, true)

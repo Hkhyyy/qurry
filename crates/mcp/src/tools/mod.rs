@@ -81,7 +81,7 @@ impl Server {
             ),
             tool(
                 "query",
-                &format!("Run a read-only query and return rows. PostgreSQL/MySQL: a single SELECT/WITH/SHOW/EXPLAIN statement executed in a READ ONLY transaction. Redis: a read command line (e.g. 'HGETALL user:1', 'SCAN 0 MATCH user:* COUNT 100'); one command reads at most {} MB (measured on the server before it runs; read big strings in parts with GETRANGE) and {} elements, and values over {} KB come back cut, listed in cut as [row, column].", READ_MAX_BYTES >> 20, qurry_core::guard::REDIS_STRICT_MAX, VALUE_MAX >> 10),
+                &format!("Run a read-only query and return rows. PostgreSQL/MySQL: a single SELECT/WITH/SHOW/EXPLAIN statement executed in a READ ONLY transaction. Redis: a read command line (e.g. 'HGETALL user:1', 'SCAN 0 MATCH user:* COUNT 100'); one command reads at most {} MB (measured on the server before it runs; read big strings in parts with GETRANGE) and {} elements, and values over {} KB come back cut, listed in cut as [row, column]; SLOWLOG GET shows each command with its key only, and on a Production data source it and CLIENT LIST answer only if a person allowed admin reports there.", READ_MAX_BYTES >> 20, qurry_core::guard::REDIS_STRICT_MAX, VALUE_MAX >> 10),
                 ds_props(json!({ "sql": { "type": "string" }, "limit": { "type": "integer", "description": "max rows, default 100, max 1000" } })),
                 &["data_source", "sql"],
                 true,
