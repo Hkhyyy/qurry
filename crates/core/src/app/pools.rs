@@ -143,6 +143,9 @@ pub(super) struct Connecting {
     /// Held while a Redis source connects: its databases share the one connection (redis_db). Then the time and message of
     /// its failure, for the callers that waited meanwhile (redis_turn)
     redis_connect: tokio::sync::Mutex<Option<(std::time::Instant, String)>>,
+    /// MCP execute on this Redis source: its checks and its run, one call at a time (AppState::execute_batch_prepared). Per
+    /// source, so a server that doesn't answer holds up only its own source's writes, for at most redisdb::RESPONSE_TIMEOUT each
+    pub(super) redis_mcp_writes: tokio::sync::Mutex<()>,
 }
 
 impl Connecting {

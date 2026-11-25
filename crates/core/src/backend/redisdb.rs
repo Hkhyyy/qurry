@@ -176,6 +176,8 @@ pub fn parse_nodes(s: &str, default_port: u16) -> Vec<(String, u16)> {
 
 /// How long a connect to a Redis server may take (TCP, TLS, login)
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long a command waits for the server's reply, as a large value through a slow tunnel needs (redis' own default is 500 ms)
+pub const RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 struct Endpoint {
     scheme: &'static str,
@@ -202,6 +204,7 @@ impl Endpoint {
     async fn manager(&self, host: &str, port: u16, db: i64) -> AppResult<ConnectionManager> {
         let cfg = redis::aio::ConnectionManagerConfig::new()
             .set_connection_timeout(Some(CONNECT_TIMEOUT))
+            .set_response_timeout(Some(RESPONSE_TIMEOUT))
             .set_number_of_retries(0);
         let mut m = ConnectionManager::new_with_config(self.client(host, port, db)?, cfg).await.map_err(|e| match e.is_timeout() {
             true => AppError::Msg(format!("Redis {host}:{port}: timed out — the server or tunnel didn't answer within {}s", CONNECT_TIMEOUT.as_secs())),
@@ -282,7 +285,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
             seeds.extend(parse_nodes(&cfg.redis.as_ref().map(|r| r.nodes.clone()).unwrap_or_default(), 6379));
             let mut b = redis::cluster::ClusterClientBuilder::new(seeds.iter().map(|(h, p)| ep.url(h, *p, 0)).collect::<Vec<_>>())
                 .connection_timeout(CONNECT_TIMEOUT)
-                .response_timeout(std::time::Duration::from_secs(30));
+                .response_timeout(RESPONSE_TIMEOUT);
             if let Some(p) = password.filter(|p| !p.is_empty()) {
                 b = b.password(p);
             }
@@ -347,6 +350,9 @@ impl Link {
 }
 
 fn err(e: redis::RedisError) -> AppError {
+    if e.is_timeout() {
+        return AppError::Msg(format!("Redis: timed out — the server or tunnel didn't answer within {}s. Check that it's up and reachable, then run it again.", RESPONSE_TIMEOUT.as_secs()));
+    }
     AppError::Msg(format!("Redis: {e}"))
 }
 
@@ -1199,6 +1205,15 @@ mod tests {
         assert!(matches!(parse_command("GET \"x"), Err(AppError::Msg(m)) if m == "Unbalanced quotes"));
         assert_eq!(quote_arg("a b"), "\"a b\"");
         assert_eq!(quote_arg("user:1"), "user:1");
+    }
+
+    /// A reply that doesn't come says why, and still reads as a lost connection (recover checks the source)
+    #[test]
+    fn a_response_timeout_names_its_cause() {
+        let e = err(std::io::Error::from(std::io::ErrorKind::TimedOut).into());
+        assert!(e.to_string().contains("the server or tunnel didn't answer within 30s"), "{e}");
+        assert!(crate::app::is_conn_lost(&e));
+        assert!(!err(redis::RedisError::from((redis::ErrorKind::Client, "x"))).to_string().contains("didn't answer"));
     }
 
     #[test]

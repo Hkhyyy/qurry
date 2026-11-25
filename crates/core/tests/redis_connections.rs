@@ -1,5 +1,5 @@
-//! A Redis source's connection (#221): one connection for all its databases, and each command run in its own database when
-//! callers on several databases send at once.
+//! A Redis source's connection (#221, #226): one connection for all its databases, each command run in its own database when
+//! callers on several databases send at once, and a reply that doesn't come ends at redisdb::RESPONSE_TIMEOUT for that source only.
 //! Real-server tests are #[ignore]d: QURRY_TEST_REDIS=host:port cargo test -p qurry-core --test redis_connections -- --ignored
 //! They use db10, db11, db13 and db15 and keys `qurry-221:*`, removed at the end (no FLUSHDB)
 use qurry_core::app::AppState;
@@ -198,4 +198,61 @@ async fn commands_on_databases_sent_at_once_stay_in_their_own() {
         assert_eq!(vals, want, "db{db}");
     }
     clean(&addr, &keys).await;
+}
+
+/// A reply that comes after redis' own 500 ms default still arrives; one that doesn't come ends at the response timeout with
+/// its cause. Meanwhile a call that is cancelled stops waiting at once, and MCP writes on another source aren't held up by the
+/// stalled one's (the write lock is per source)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn a_stalled_server_ends_at_the_response_timeout_and_holds_up_only_its_source() {
+    let Some((addr, port)) = server() else { return };
+    let (slow_port, p) = proxy(addr.clone()).await;
+    let (st, _dir) = state(&[("slow", slow_port), ("fast", port)]).await;
+    let st = &st;
+    let keys = vec!["qurry-221:stall".to_string()];
+    clean(&addr, &keys).await;
+    st.redis_exec("slow::db10".into(), vec!["SET".into(), keys[0].clone(), "v".into()]).await.unwrap();
+    // A slow reply (1.5s)
+    p.stall.store(true, SeqCst);
+    let late = async {
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        p.stall.store(false, SeqCst);
+    };
+    let (got, ()) = tokio::join!(st.redis_exec_line("slow::db10".into(), "GET qurry-221:stall".into()), late);
+    assert_eq!(got.unwrap(), json!("v"), "a reply after 1.5s");
+    // No reply: an MCP write on the stalled source holds its lock until the timeout; one on another source goes on
+    p.stall.store(true, SeqCst);
+    let started = Instant::now();
+    let stalled = st.execute_batch_prepared("slow::db10".into(), vec!["SET qurry-221:stall w".into()]);
+    let others = async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let t = Instant::now();
+        st.execute_batch_prepared("fast::db10".into(), vec!["SET qurry-221:stall x".into()]).await.unwrap();
+        let fast = t.elapsed();
+        // Cancelled (a tab closed, Cancel): dropping the call stops its wait
+        let t = Instant::now();
+        assert!(tokio::time::timeout(Duration::from_millis(500), st.redis_exec_line("slow::db11".into(), "PING".into())).await.is_err());
+        (fast, t.elapsed())
+    };
+    let (r, (fast, cancelled)) = tokio::join!(stalled, others);
+    let waited = started.elapsed();
+    let e = r.unwrap_err().to_string();
+    assert!(e.contains("didn't answer within 30s"), "{e}");
+    assert!(waited >= Duration::from_secs(30) && waited < Duration::from_secs(36), "{waited:?}");
+    assert!(fast < Duration::from_secs(2), "the other source's write waited {fast:?}");
+    assert!(cancelled < Duration::from_secs(1), "{cancelled:?}");
+    p.stall.store(false, SeqCst);
+    // The source works again once the server answers
+    assert_eq!(st.redis_exec_line("slow::db10".into(), "GET qurry-221:stall".into()).await.unwrap(), json!("x"));
+    clean(&addr, &keys).await;
+}
+
+/// MCP execute on Redis holds its source's write lock for all its commands: a call with too many is refused before anything
+/// connects (the source's port has no server)
+#[tokio::test]
+async fn an_mcp_execute_on_redis_takes_at_most_100_commands() {
+    let (st, _dir) = state(&[("cap", 1)]).await;
+    let e = st.execute_batch_prepared("cap".into(), vec!["SET k v".into(); 101]).await.unwrap_err().to_string();
+    assert!(e.contains("At most 100 Redis commands per execute call"), "{e}");
 }
