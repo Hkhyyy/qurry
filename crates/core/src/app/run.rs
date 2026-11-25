@@ -346,7 +346,7 @@ impl AppState {
     }
 
     /// MCP execute: like execute_batch, but PostgreSQL / MySQL run each statement as a prepared statement (one statement per item, enforced by the server)
-    /// Redis reads among the items get the same size checks as run_read_only
+    /// Redis reads among the items get the same size checks as run_read_only, and removals that could empty a key are refused
     pub async fn execute_batch_prepared(&self, id: String, statements: Vec<String>) -> AppResult<BatchResult> {
         if self.kind_of(&id)? == store::DbKind::Redis {
             // A read-only source refuses a write before the size checks connect
@@ -357,6 +357,7 @@ impl AppState {
             for st in &statements {
                 crate::redisdb::check_read(&m, st).await?;
             }
+            crate::redisdb::check_not_emptied(&m, &statements).await?;
         }
         self.execute_batch_with(id, statements, false, true).await
     }

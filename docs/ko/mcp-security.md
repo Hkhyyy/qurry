@@ -46,7 +46,7 @@ MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mc
 
 ## 쓰기 (`--allow-write`)
 
-`execute` 는 서버를 `--allow-write` 로 띄웠을 때만 목록에 나오고, Read & write 이면서 읽기 전용도 Production 도 아닌 Data Source 에서만 실행됩니다. 허용 목록만 받습니다: 항목마다 `INSERT` 하나, 또는 `WHERE` 가 있는 `UPDATE` / `DELETE`, 그리고 MongoDB · 벡터 DB · Redis 의 같은 것들. DDL, `TRUNCATE`, `MERGE`, 스크립트, 삭제 (drop) 는 거부합니다. PostgreSQL / MySQL 은 항목마다 prepared statement 로 실행하므로, 한 항목에 숨겨 넣은 두 번째 문장은 서버가 거부합니다.
+`execute` 는 서버를 `--allow-write` 로 띄웠을 때만 목록에 나오고, Read & write 이면서 읽기 전용도 Production 도 아닌 Data Source 에서만 실행됩니다. 허용 목록만 받습니다: 항목마다 `INSERT` 하나, 또는 `WHERE` 가 있는 `UPDATE` / `DELETE`, 그리고 MongoDB · 벡터 DB · Redis 의 같은 것들. DDL, `TRUNCATE`, `MERGE`, 스크립트, 삭제 (drop) 는 거부하고, Redis 키를 비우거나 잘라낼 수 있는 쓰기도 거부합니다 (Qurry 가 키의 요소를 먼저 셉니다). PostgreSQL / MySQL 은 항목마다 prepared statement 로 실행하므로, 한 항목에 숨겨 넣은 두 번째 문장은 서버가 거부합니다.
 
 Production Data Source 는 MCP 설정과 상관없이 `execute` 를 받지 않습니다: 앱이 변경 전에 묻는 바뀔 행 수 확인은 사람이 있어야 하고, AI 도구는 그걸 건너뛰기 때문입니다. 운영 데이터는 Qurry 에서 직접 바꾸세요.
 

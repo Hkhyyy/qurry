@@ -981,11 +981,12 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
     if !WRITES.contains(&cmd.as_str()) {
         return Some(format!("{cmd} is not allowed over MCP — ask the user to run it in Qurry"));
     }
-    // An expiry (even 1 ms) or popping many elements amounts to deleting data
+    // An expiry (even 1 ms), popping many elements, removing every match (LREM count 0) or trimming a stream amounts to deleting data
     let expiry = cmd == "SET" && args.iter().skip(3).any(|a| ["EX", "PX", "EXAT", "PXAT"].contains(&a.to_uppercase().as_str()));
     let many = matches!(cmd.as_str(), "LPOP" | "RPOP") && args.get(2).is_some_and(|n| n.parse::<i64>() != Ok(1));
-    if expiry || many {
-        return Some(format!("{cmd} with that option can delete data — refused over MCP"));
+    let every_match = cmd == "LREM" && args.get(2).is_none_or(|n| n.parse::<i64>().map_or(true, |n| n == 0));
+    if expiry || many || every_match || (cmd == "XADD" && xadd_trims(&args[1..])) {
+        return Some(format!("{cmd} with that option can delete data — refused over MCP; ask the user to run it in Qurry"));
     }
     // A far offset makes Redis allocate the whole value up to it (up to 512 MB per key)
     let limit = match cmd.as_str() {
@@ -995,6 +996,45 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
     };
     let far = limit.is_some_and(|max| args.get(2).is_none_or(|o| o.parse::<u64>().map_or(true, |o| o >= max)));
     far.then(|| format!("{cmd} offset must be below {} bytes over MCP", REDIS_MCP_MAX_OFFSET))
+}
+
+/// XADD key [NOMKSTREAM] [MAXLEN | MINID [= | ~] threshold [LIMIT count]] id field value …: whether it trims the stream.
+/// Reads the options before the id as Redis does, so a field named MAXLEN after the id doesn't count
+fn xadd_trims(args: &[String]) -> bool {
+    for a in args.iter().skip(1) {
+        match a.to_uppercase().as_str() {
+            "NOMKSTREAM" => continue,
+            "MAXLEN" | "MINID" => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// A Redis write that takes elements out of a key: MCP counts the key's elements with `count` first and refuses it when `removes`
+/// (distinct fields, members or entries, or how many it pops) would take every one — Redis then deletes the key (a stream stays, empty)
+#[derive(Debug, PartialEq)]
+pub struct RedisEmptyCheck {
+    pub count: &'static str,
+    pub key: String,
+    pub removes: u64,
+}
+
+/// Whether a write redis_mcp_write_violation lets through needs a RedisEmptyCheck. cmd uppercased, args = arguments after it
+pub fn redis_empty_check(cmd: &str, args: &[String]) -> Option<RedisEmptyCheck> {
+    let key = args.first()?.clone();
+    let distinct = |from: usize| args.get(from..).unwrap_or(&[]).iter().collect::<std::collections::HashSet<_>>().len() as u64;
+    let (count, removes) = match cmd {
+        "HDEL" => ("HLEN", distinct(1)),
+        "SREM" => ("SCARD", distinct(1)),
+        "ZREM" => ("ZCARD", distinct(1)),
+        "XDEL" => ("XLEN", distinct(1)),
+        "SMOVE" => ("SCARD", 1),
+        "LPOP" | "RPOP" => ("LLEN", args.get(1).and_then(|n| n.parse::<u64>().ok()).unwrap_or(1)),
+        "LREM" => ("LLEN", args.get(1).and_then(|n| n.parse::<i64>().ok()).map_or(0, |n| n.unsigned_abs())),
+        _ => return None,
+    };
+    Some(RedisEmptyCheck { count, key, removes })
 }
 
 /// Whether the statement doesn't change data (Production confirmation, Explain Analyse rollback, the Production log, and
@@ -1553,6 +1593,41 @@ mod tests {
             "RENAME a b", "ZREMRANGEBYRANK z 0 -1", "LTRIM l 0 0", "EXPIRE k 0", "EXPIRE k 1", "EXPIREAT k 1", "SET k v PX 1", "SETEX k 1 v", "LPOP k 1000000",
             "DEBUG SLEEP 1", "MODULE LOAD x", "DEL a", "LRANGE l 0 5000", "KEYS *", "FLUSHALL;"] {
             assert!(v(bad).is_some(), "{bad}");
+        }
+    }
+
+    /// Writes that empty a key or a stream are refused from their arguments alone (#223); the ones that take out a few elements
+    /// pass, and redis_empty_check says what the server must count before they run
+    #[test]
+    fn redis_mcp_writes_that_empty_keys() {
+        let v = |s: &str| redis_mcp_write_violation(s);
+        for ok in ["XADD s * a b", "XADD s NOMKSTREAM * a b", "xadd s * maxlen 0", "XADD s * MINID 0", "LREM l 1 x", "LREM l -2 x", "LPOP l 1", "RPOP l", "RPOP l 1",
+            "HDEL h a", "SREM s a", "ZREM z a", "XDEL s 1-0", "SMOVE a b m", "SET k v GET", "SET k v KEEPTTL", "GETSET k v"] {
+            assert!(v(ok).is_none(), "{ok}: {:?}", v(ok));
+        }
+        for bad in ["XADD s MAXLEN 0 * a b", "XADD s maxlen ~ 1000 * a b", "XADD s MINID = 1-0 * a b", "XADD s NOMKSTREAM MAXLEN 0 * a b", "XADD s MAXLEN 1 LIMIT 10 * a b",
+            "LREM l 0 x", "LREM l x y", "LREM l", "RPOP l 2", "LPOP l 0", "LPOP l -1",
+            "XTRIM s MAXLEN 0", "LTRIM l 1 0", "ZREMRANGEBYSCORE z -inf +inf", "ZREMRANGEBYLEX z - +", "ZREMRANGEBYRANK z 0 -1", "SPOP s", "SPOP s 10", "ZPOPMIN z", "ZPOPMAX z 5",
+            "BZPOPMIN z 0", "BLPOP l 0", "LMPOP 1 l LEFT COUNT 9", "LMOVE a b LEFT RIGHT", "RPOPLPUSH a b", "GETDEL k", "GETEX k EX 1", "SET k v EXAT 1", "PSETEX k 1 v",
+            "HGETDEL h FIELDS 1 a", "HEXPIRE h 1 FIELDS 1 a", "JSON.DEL k", "JSON.CLEAR k", "SINTERSTORE d a b", "COPY a b REPLACE", "RESTORE k 0 x REPLACE"] {
+            let e = v(bad).unwrap_or_else(|| panic!("{bad} passed"));
+            assert!(e.contains("run it in Qurry"), "{bad}: {e}");
+        }
+        let check = |s: &str| {
+            let a = redis_args(s);
+            redis_empty_check(&a[0].to_uppercase(), &a[1..]).map(|c| (c.count, c.key, c.removes))
+        };
+        // Duplicates count once
+        assert_eq!(check("HDEL h a b a"), Some(("HLEN", "h".into(), 2)));
+        assert_eq!(check("SREM s x x x"), Some(("SCARD", "s".into(), 1)));
+        assert_eq!(check("ZREM z a b"), Some(("ZCARD", "z".into(), 2)));
+        assert_eq!(check("XDEL s 1-0 2-0 1-0"), Some(("XLEN", "s".into(), 2)));
+        assert_eq!(check("SMOVE a b m"), Some(("SCARD", "a".into(), 1)));
+        assert_eq!(check("LPOP l"), Some(("LLEN", "l".into(), 1)));
+        assert_eq!(check("rpop l 1"), Some(("LLEN", "l".into(), 1)));
+        assert_eq!(check("LREM l -3 x"), Some(("LLEN", "l".into(), 3)));
+        for none in ["SET a 1", "HSET h f v", "XADD s * a b", "GET a", "SADD s a", "HDEL"] {
+            assert_eq!(check(none), None, "{none}");
         }
     }
 

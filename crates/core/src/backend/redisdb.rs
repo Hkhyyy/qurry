@@ -918,6 +918,33 @@ pub(crate) async fn check_read(m: &RedisConn, line: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// MCP Redis writes (execute): refuse removals (HDEL, SREM, ZREM, XDEL, SMOVE, LPOP, RPOP, LREM) that could empty a key, which Redis
+/// then deletes. Counts what the statements together take out of each key (guard::redis_empty_check), so splitting the removal
+/// over several items doesn't get around it
+pub(crate) async fn check_not_emptied(m: &RedisConn, lines: &[String]) -> AppResult<()> {
+    let mut removed: Vec<(crate::guard::RedisEmptyCheck, String)> = Vec::new();
+    for line in lines {
+        let args = parse_command(line.trim().trim_end_matches(';').trim())?;
+        let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
+        let rest: Vec<String> = args.iter().skip(1).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+        let Some(c) = crate::guard::redis_empty_check(&cmd, &rest) else { continue };
+        match removed.iter_mut().find(|(r, _)| r.key == c.key && r.count == c.count) {
+            Some((r, _)) => r.removes = r.removes.saturating_add(c.removes),
+            None => removed.push((c, cmd)),
+        }
+    }
+    for (c, cmd) in removed {
+        let n = element_count(m, c.count, c.key.as_bytes()).await?;
+        if n > 0 && c.removes >= n as u64 {
+            return Err(AppError::Msg(format!(
+                "{cmd} could take every element out of {} ({n}), which empties or deletes the key — refused over MCP; ask the user to run it in Qurry",
+                c.key
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<KeyDetail> {
     let mut mgr = m.clone();
     let k = key.as_bytes();
@@ -1206,6 +1233,60 @@ mod tests {
         assert_eq!(st.run_read_only("rd::db14".into(), "GET qurry:guard:k".into(), 10).await.unwrap().rows[0][0], "before");
         let _: () = redis::cmd("DEL").arg("qurry:guard:k").query_async(&mut c).await.unwrap();
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MCP execute: removals that would empty a key are refused before anything runs, also when split over several items, and
+    /// partial ones run (#223). Own keys in db9
+    #[tokio::test]
+    #[ignore]
+    async fn redis_mcp_removals_never_empty_a_key() {
+        if crate::testenv::var("QURRY_TEST_REDIS").is_none() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        st.save_connection(cfg("db9"), None, None).await.unwrap();
+        let pool = crate::db::connect(&cfg("db9"), None).await.expect("connect");
+        let Pool::Redis(m, 9) = &pool else { panic!("db index") };
+        let mut c = m.clone();
+        let (h, s, z, l, x) = ("qurry:empty:h", "qurry:empty:s", "qurry:empty:z", "qurry:empty:l", "qurry:empty:x");
+        let reset = || {
+            let mut c = c.clone();
+            async move {
+                let _: () = redis::cmd("DEL").arg(h).arg(s).arg(z).arg(l).arg(x).query_async(&mut c).await.unwrap();
+                let _: () = redis::cmd("HSET").arg(h).arg("a").arg(1).arg("b").arg(2).query_async(&mut c).await.unwrap();
+                let _: () = redis::cmd("SADD").arg(s).arg("a").arg("b").query_async(&mut c).await.unwrap();
+                let _: () = redis::cmd("ZADD").arg(z).arg(1).arg("a").arg(2).arg("b").query_async(&mut c).await.unwrap();
+                let _: () = redis::cmd("RPUSH").arg(l).arg("x").arg("x").query_async(&mut c).await.unwrap();
+                let _: String = redis::cmd("XADD").arg(x).arg("1-0").arg("f").arg("v").query_async(&mut c).await.unwrap();
+                let _: String = redis::cmd("XADD").arg(x).arg("2-0").arg("f").arg("v").query_async(&mut c).await.unwrap();
+            }
+        };
+        let sizes = || {
+            let mut c = c.clone();
+            async move {
+                let mut n = vec![];
+                for (cmd, k) in [("HLEN", h), ("SCARD", s), ("ZCARD", z), ("LLEN", l), ("XLEN", x)] {
+                    n.push(redis::cmd(cmd).arg(k).query_async::<i64>(&mut c).await.unwrap());
+                }
+                n
+            }
+        };
+        reset().await;
+        let exec = |v: Vec<&str>| st.execute_batch_prepared("rd::db9".into(), v.into_iter().map(String::from).collect());
+        for bad in [vec!["HDEL qurry:empty:h a b"], vec!["HDEL qurry:empty:h a b a"], vec!["SREM qurry:empty:s a b c"], vec!["ZREM qurry:empty:z b a"],
+            vec!["XDEL qurry:empty:x 1-0 2-0"], vec!["LREM qurry:empty:l 2 x"], vec!["LPOP qurry:empty:l", "RPOP qurry:empty:l"],
+            vec!["HDEL qurry:empty:h a", "HDEL qurry:empty:h b"], vec!["SMOVE qurry:empty:s qurry:empty:s2 a", "SREM qurry:empty:s b"]] {
+            let e = exec(bad.clone()).await.expect_err("refused").to_string();
+            assert!(e.contains("could take every element out of") && e.contains("run it in Qurry"), "{bad:?}: {e}");
+            assert_eq!(sizes().await, [2, 2, 2, 2, 2], "{bad:?} changed nothing");
+        }
+        // Some of the elements, a missing key, a field that isn't there: they run
+        for ok in ["HDEL qurry:empty:h a", "SREM qurry:empty:s a a", "ZREM qurry:empty:z a", "XDEL qurry:empty:x 1-0", "LREM qurry:empty:l 1 x", "HDEL qurry:empty:missing a b"] {
+            exec(vec![ok]).await.unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+        assert_eq!(sizes().await, [1, 1, 1, 1, 1]);
+        let _: () = redis::cmd("DEL").arg(h).arg(s).arg(z).arg(l).arg(x).query_async(&mut c).await.unwrap();
     }
 
     /// MCP read: whole keys (HGETALL, SMEMBERS, set ops, LRANGE 0 -1, XRANGE without COUNT) are read when small, refused when over 1,000 elements
