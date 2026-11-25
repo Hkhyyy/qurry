@@ -9,6 +9,7 @@ import { isRead, unsafeReason } from "../lib/stmtKind";
 import { waitOn } from "../lib/reconnect";
 import { eventSpec, hit } from "../lib/shortcuts";
 import { useRedisLoad } from "../features/redis/useRedisLoad";
+import { ThemeBackground } from "../features/settings/ThemeImages";
 import { FolderIcon } from "../ui/icons";
 import { LoadFailed, RedisLoadState, Running, StopButton } from "./RedisLoad";
 import { Badge, Button, EmptyState, FormGrid, IconButton, Modal, Named, Notice, Select, Spacer, Table, Tabs, Td, Text, TextArea, TextInput, Th, ToolButton, Toolbar, TreeRow } from "../ui";
@@ -236,151 +237,154 @@ export function RedisBrowser(p: Props) {
       {ov.state.phase === "failed" && sc.state.phase !== "failed" && (
         <LoadFailed error={`Couldn't read the key counts: ${ov.state.error}`} onRetry={loadOverview} />
       )}
-      <Group orientation="horizontal" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
-        <Panel id="keys" defaultSize="34%" minSize="18%">
-          <div className="rd-keys">
-            <div className="rd-keys-head">
-              <span>Key</span>
-              <Spacer />
-              <span>TTL</span>
-            </div>
-            <div className="rd-keys-list" ref={listRef} tabIndex={0} onKeyDown={(e) => {
-              const i = rows.findIndex((r) => (cur ? r.kind === "folder" && r.path === cur : r.kind === "key" && r.item.key === sel));
-              const r = rows[i];
-              const go = (j: number) => {
-                e.preventDefault();
-                const t = rows[j];
-                if (t.kind === "folder") setCur(t.path);
-                else {
-                  setCur(null);
-                  setSel(t.item.key);
+      {/* The theme's Background image: behind the key list, the value and the terminal (#222) */}
+      <ThemeBackground className="rd-body">
+        <Group orientation="horizontal" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
+          <Panel id="keys" defaultSize="34%" minSize="18%">
+            <div className="rd-keys">
+              <div className="rd-keys-head">
+                <span>Key</span>
+                <Spacer />
+                <span>TTL</span>
+              </div>
+              <div className="rd-keys-list" ref={listRef} tabIndex={0} onKeyDown={(e) => {
+                const i = rows.findIndex((r) => (cur ? r.kind === "folder" && r.path === cur : r.kind === "key" && r.item.key === sel));
+                const r = rows[i];
+                const go = (j: number) => {
+                  e.preventDefault();
+                  const t = rows[j];
+                  if (t.kind === "folder") setCur(t.path);
+                  else {
+                    setCur(null);
+                    setSel(t.item.key);
+                  }
+                  keyVirt.scrollToIndex(j);
+                };
+                if (e.key === "ArrowDown" && i < rows.length - 1) go(i + 1);
+                if (e.key === "ArrowUp" && i > 0) go(i - 1);
+                // Folders: → expand · ← collapse · Enter toggle. Otherwise ← goes to the parent folder
+                if (r?.kind === "folder" && (e.key === "Enter" || (e.key === "ArrowRight" && !open.has(r.path)) || (e.key === "ArrowLeft" && open.has(r.path)))) {
+                  e.preventDefault();
+                  toggle(r.path);
+                } else if (r && e.key === "ArrowLeft" && r.depth > 0) {
+                  for (let j = i - 1; j >= 0; j--) if (rows[j].kind === "folder" && rows[j].depth === r.depth - 1) return go(j);
                 }
-                keyVirt.scrollToIndex(j);
-              };
-              if (e.key === "ArrowDown" && i < rows.length - 1) go(i + 1);
-              if (e.key === "ArrowUp" && i > 0) go(i - 1);
-              // Folders: → expand · ← collapse · Enter toggle. Otherwise ← goes to the parent folder
-              if (r?.kind === "folder" && (e.key === "Enter" || (e.key === "ArrowRight" && !open.has(r.path)) || (e.key === "ArrowLeft" && open.has(r.path)))) {
-                e.preventDefault();
-                toggle(r.path);
-              } else if (r && e.key === "ArrowLeft" && r.depth > 0) {
-                for (let j = i - 1; j >= 0; j--) if (rows[j].kind === "folder" && rows[j].depth === r.depth - 1) return go(j);
-              }
-            }}>
-              {/* Render only visible rows (light even with tens of thousands of keys) */}
-              <div style={{ height: keyVirt.getTotalSize(), position: "relative" }}>
-                {keyVirt.getVirtualItems().map((vi) => {
-                  const r = rows[vi.index];
-                  const style = { position: "absolute" as const, top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` };
-                  if (r.kind === "folder")
+              }}>
+                {/* Render only visible rows (light even with tens of thousands of keys) */}
+                <div style={{ height: keyVirt.getTotalSize(), position: "relative" }}>
+                  {keyVirt.getVirtualItems().map((vi) => {
+                    const r = rows[vi.index];
+                    const style = { position: "absolute" as const, top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` };
+                    if (r.kind === "folder")
+                      return (
+                        <TreeRow
+                          key={"f:" + r.path}
+                          depth={r.depth}
+                          open={open.has(r.path)}
+                          icon={<FolderIcon />}
+                          label={r.name}
+                          sub={r.count.toLocaleString("en-US")}
+                          selected={cur === r.path}
+                          style={style}
+                          title={`${r.path}:*`}
+                          onSelect={() => setCur(r.path)}
+                          onToggle={() => toggle(r.path)}
+                          onClick={() => toggle(r.path)}
+                          onDoubleClick={() => {}}
+                        />
+                      );
+                    const k = r.item;
                     return (
                       <TreeRow
-                        key={"f:" + r.path}
+                        key={k.key}
                         depth={r.depth}
-                        open={open.has(r.path)}
-                        icon={<FolderIcon />}
-                        label={r.name}
-                        sub={r.count.toLocaleString("en-US")}
-                        selected={cur === r.path}
+                        leaf
+                        icon={<TypeBadge type={k.type} />}
+                        iconClass="rd-type"
+                        label={k.key}
+                        trailing={<span className={k.ttl < 0 ? "rd-ttl none" : "rd-ttl"}>{fmtTtl(k.ttl)}</span>}
+                        selected={!cur && k.key === sel}
                         style={style}
-                        title={`${r.path}:*`}
-                        onSelect={() => setCur(r.path)}
-                        onToggle={() => toggle(r.path)}
-                        onClick={() => toggle(r.path)}
-                        onDoubleClick={() => {}}
+                        title={k.key}
+                        onClick={() => {
+                          setCur(null);
+                          setSel(k.key);
+                          setTab("content");
+                        }}
                       />
                     );
-                  const k = r.item;
-                  return (
-                    <TreeRow
-                      key={k.key}
-                      depth={r.depth}
-                      leaf
-                      icon={<TypeBadge type={k.type} />}
-                      iconClass="rd-type"
-                      label={k.key}
-                      trailing={<span className={k.ttl < 0 ? "rd-ttl none" : "rd-ttl"}>{fmtTtl(k.ttl)}</span>}
-                      selected={!cur && k.key === sel}
-                      style={style}
-                      title={k.key}
-                      onClick={() => {
-                        setCur(null);
-                        setSel(k.key);
-                        setTab("content");
-                      }}
-                    />
-                  );
-                })}
+                  })}
+                </div>
+                {!keys.length && (sc.state.phase === "idle" ? <EmptyState>No keys match</EmptyState> : <RedisLoadState load={sc.state} onCancel={sc.cancel} onRetry={() => scan(true)} />)}
               </div>
-              {!keys.length && (sc.state.phase === "idle" ? <EmptyState>No keys match</EmptyState> : <RedisLoadState load={sc.state} onCancel={sc.cancel} onRetry={() => scan(true)} />)}
+              {/* A scan that failed after keys came: below them, which stay */}
+              {keys.length > 0 && sc.state.phase === "failed" && <LoadFailed error={sc.state.error} onRetry={() => scan(true)} />}
+              <div className="rd-keys-foot">
+                <span>
+                  {keys.length.toLocaleString()} key{keys.length === 1 ? "" : "s"}
+                  {cursor !== "0" ? "+" : ""}
+                </span>
+                <Spacer />
+                {scanning ? <Text tone="muted">Scanning…</Text> : cursor !== "0" && <Button variant="link" onClick={() => scan(false)}>Scan more</Button>}
+              </div>
             </div>
-            {/* A scan that failed after keys came: below them, which stay */}
-            {keys.length > 0 && sc.state.phase === "failed" && <LoadFailed error={sc.state.error} onRetry={() => scan(true)} />}
-            <div className="rd-keys-foot">
-              <span>
-                {keys.length.toLocaleString()} key{keys.length === 1 ? "" : "s"}
-                {cursor !== "0" ? "+" : ""}
-              </span>
-              <Spacer />
-              {scanning ? <Text tone="muted">Scanning…</Text> : cursor !== "0" && <Button variant="link" onClick={() => scan(false)}>Scan more</Button>}
-            </div>
-          </div>
-        </Panel>
-        <Separator className="resize-h" />
-        <Panel id="content" minSize="30%">
-          <div className="rd-right">
-            <Tabs
-              size="sm"
-              items={(["content", "terminal", "info", "config"] as const).map((t) => ({
-                id: t,
-                label: t[0].toUpperCase() + t.slice(1),
-                ...(t === "config" && configOff ? { disabled: true, title: CONFIG_REFUSED } : {}),
-              }))}
-              value={tab}
-              onChange={setTab}
-            />
-            <div className="rd-tab-body">
-              {tab === "content" &&
-                (sel ? (
-                  <KeyContent
-                    key={sel}
+          </Panel>
+          <Separator className="resize-h" />
+          <Panel id="content" minSize="30%">
+            <div className="rd-right">
+              <Tabs
+                size="sm"
+                items={(["content", "terminal", "info", "config"] as const).map((t) => ({
+                  id: t,
+                  label: t[0].toUpperCase() + t.slice(1),
+                  ...(t === "config" && configOff ? { disabled: true, title: CONFIG_REFUSED } : {}),
+                }))}
+                value={tab}
+                onChange={setTab}
+              />
+              <div className="rd-tab-body">
+                {tab === "content" &&
+                  (sel ? (
+                    <KeyContent
+                      key={sel}
+                      target={p.target}
+                      keyName={sel}
+                      readOnly={p.readOnly}
+                      exec={exec}
+                      onStatus={p.onStatus}
+                      onDeleted={() => {
+                        removeKeyLocal(sel);
+                        setSel(null);
+                      }}
+                      onRenamed={(to) => {
+                        renameLocal(sel, to);
+                        setSel(to);
+                      }}
+                      onTtl={(ttl) => setKeys((ks) => ks.map((x) => (x.key === sel ? { ...x, ttl } : x)))}
+                      cancelRef={valueCancel}
+                    />
+                  ) : (
+                    <EmptyState>Select a key on the left.</EmptyState>
+                  ))}
+                {tab === "terminal" && (
+                  <Terminal
                     target={p.target}
-                    keyName={sel}
+                    connId={p.connId}
+                    connName={p.connName}
+                    database={p.database}
                     readOnly={p.readOnly}
-                    exec={exec}
-                    onStatus={p.onStatus}
-                    onDeleted={() => {
-                      removeKeyLocal(sel);
-                      setSel(null);
-                    }}
-                    onRenamed={(to) => {
-                      renameLocal(sel, to);
-                      setSel(to);
-                    }}
-                    onTtl={(ttl) => setKeys((ks) => ks.map((x) => (x.key === sel ? { ...x, ttl } : x)))}
-                    cancelRef={valueCancel}
+                    production={p.production}
+                    prompt={`${p.database}>`}
+                    onChanged={() => scan(true)}
                   />
-                ) : (
-                  <EmptyState>Select a key on the left.</EmptyState>
-                ))}
-              {tab === "terminal" && (
-                <Terminal
-                  target={p.target}
-                  connId={p.connId}
-                  connName={p.connName}
-                  database={p.database}
-                  readOnly={p.readOnly}
-                  production={p.production}
-                  prompt={`${p.database}>`}
-                  onChanged={() => scan(true)}
-                />
-              )}
-              {tab === "info" && <ServerTable target={p.target} command="INFO" onStatus={p.onStatus} />}
-              {tab === "config" && <ServerTable target={p.target} command="CONFIG GET *" onStatus={p.onStatus} />}
+                )}
+                {tab === "info" && <ServerTable target={p.target} command="INFO" onStatus={p.onStatus} />}
+                {tab === "config" && <ServerTable target={p.target} command="CONFIG GET *" onStatus={p.onStatus} />}
+              </div>
             </div>
-          </div>
-        </Panel>
-      </Group>
+          </Panel>
+        </Group>
+      </ThemeBackground>
       {adding && (
         <NewKeyDialog
           onClose={() => setAdding(false)}

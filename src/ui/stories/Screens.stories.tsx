@@ -8,7 +8,7 @@ import App from "../../App";
 import { ResultTabsField, SettingsDialog, type SettingsPage } from "../../features/settings/SettingsDialog";
 import { askTextChoice } from "../../lib/dialogs";
 import { setFont } from "../../lib/prefs";
-import { saveCustomTheme, setThemeSync } from "../../lib/theme";
+import { BUILT_IN, previewTheme, saveCustomTheme, setThemeSync } from "../../lib/theme";
 import { dialectOf, type ConnectionView, type QueryResult, type SearchScope } from "../../lib/api";
 import type { GridStatus, StatusItemId } from "../../lib/shared";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
@@ -1396,6 +1396,36 @@ export const RedisReconnectingLight = redisStory("reconnecting", RECONNECTING, t
 /** …and it couldn't: the toast keeps the reason with Retry, the key list and the value say it too */
 export const RedisReconnectFailed = redisStory("reconnect failed", { __mockReconnect: { id: "rd", after: 1500, fail: "SSH connect timeout: bastion.example.com:22 didn't answer within 10s. Check the SSH server, then run it again." } });
 
+/** #222 The theme's Background image in a Redis tab, as in a table tab: the key list, the value grids and the terminal let it through,
+ *  the selection is a tint (70%, as the grid's); the grid's header, the key list's head and foot, the key bar and the tab strip stay
+ *  opaque. `span`: the editor area's one picture (the default) or the tab's own */
+function RedisImage({ light, span }: { light: boolean; span: "area" | "pane" }) {
+  useEffect(() => {
+    const base = BUILT_IN.find((t) => t.id === (light ? "light" : "dark"))!;
+    // After the Storybook theme decorator's own previewTheme (it runs after the story's effects)
+    const t = setTimeout(() => previewTheme({ ...base, images: { background: { ...SAMPLE_BACKGROUND, opacity: 35, span } } }));
+    return () => (clearTimeout(t), previewTheme(base));
+  }, [light, span]);
+  return <RedisScreen />;
+}
+const redisImage = (light: boolean, span: "area" | "pane" = "area"): S => ({
+  name: `Redis Browser — Background image${span === "pane" ? " per pane" : ""} (${light ? "light" : "dark"})`,
+  globals: { theme: light ? "light" : "dark" },
+  render: () => <RedisImage light={light} span={span} />,
+});
+export const RedisImageDark = redisImage(false);
+export const RedisImageLight = redisImage(true);
+export const RedisImagePane = redisImage(false, "pane");
+/** The same with the Terminal open: a hash reply as a table over the image */
+export const RedisImageTerminal: S = {
+  ...redisImage(false),
+  name: "Redis Browser — Background image, Terminal (dark)",
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(await c.findByRole("tab", { name: "Terminal" }));
+    await userEvent.type(await c.findByRole("textbox", { name: "Redis command" }), "HGETALL user:1{Escape}{Enter}");
+  },
+};
 const WS_NAMES = ["Default", "Reports", "Billing", "Analytics", "Ops", "Support", "Growth", "Search", "Mobile", "Payments"];
 /** The rail at a fixed window height: n workspaces, the 2nd current. Keymap and Settings stay at the bottom while the list scrolls */
 const Rail = ({ n, h = 420 }: { n: number; h?: number }) => {

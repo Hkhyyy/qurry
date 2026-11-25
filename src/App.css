@@ -545,6 +545,14 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .theme-backdrop-host.see-through { background: transparent; }
 .theme-editor-area.span-area .editor-group, .theme-editor-area.span-area .work-area { background: transparent; }
 .theme-editor-area.span-area .editor-group > .tabs { background: var(--panel); }
+/* The Redis browser over the image (#222): the key list, the value grids and editor, and the terminal let it through, the selection
+   a tint as the grid's (TINTS.sel); the bars content sits under (the key list's head and foot, the key bar, the tab strip) stay opaque,
+   the value grids' header keeps the panel's color */
+.theme-backdrop-host.has-image :is(.rd-terminal, .rd-editor textarea) { background: transparent; }
+.theme-backdrop-host.has-image :is(.rd-keys-head, .rd-keys-foot, .rd-keybar) { background: var(--bg); }
+.theme-backdrop-host.has-image .rd-right > .ui-tabs { background: var(--panel); }
+.theme-backdrop-host.has-image .rd-table tr.sel td { background: color-mix(in srgb, var(--sel) 70%, transparent); }
+.theme-backdrop-host.has-image .rd-keys-list .tree-node.selected { background: color-mix(in srgb, var(--sel) 70%, transparent) !important; }
 .console-images { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .console-images > [data-group] { flex: 1; min-height: 0; }
 .theme-sticker { position: fixed; z-index: var(--ui-z-sticker); pointer-events: none; user-select: none; object-fit: contain; }
@@ -631,8 +639,10 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .update-notes .muted { color: var(--muted); }
 
 /* Redis browser (Medis style) */
-.redis-browser { height: 100%; display: flex; flex-direction: column; background: var(--bg); }
-.redis-browser > [data-group] { flex: 1; min-height: 0; }
+.redis-browser { height: 100%; display: flex; flex-direction: column; }
+/* The key list and the right side, the theme's Background image host (#222) */
+.rd-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rd-body > [data-group] { flex: 1; min-height: 0; }
 /* A load's place while its result isn't there (#220): Loading… with ■, or the failure with Retry (the grid's) */
 .rd-load { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 16px; }
 .rd-term-out .rd-load { justify-content: flex-start; padding: 0 0 2px; }

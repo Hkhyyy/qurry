@@ -70,8 +70,8 @@ export function sameImages(a: ThemeImages | undefined, b: ThemeImages | undefine
 export const newBackgroundSlot = (file: string): BackgroundSlot => ({ file, opacity: 15, fill: "cover", anchor: "center", span: "area", play: "focused" });
 export const newCornerSlot = (file: string): CornerSlot => ({ file, corner: "right bottom", size: 20, opacity: 100, play: "focused" });
 
-/** The grid's colors drawn as tints over the image (App.css, :is(.theme-backdrop-host, .theme-preview).has-image): how much of each
- *  color is laid over it. Background itself is the image's backdrop */
+/** The grid's colors drawn as tints over the image (App.css, :is(.theme-backdrop-host, .theme-preview).has-image), the Redis browser's
+ *  key list, value grids and terminal too (#222): how much of each color is laid over it. Background itself is the image's backdrop */
 // The header (panel) and row numbers (panel2) stay opaque over the image: cells scroll under them (App.css)
 export const TINTS: Record<string, number> = { odd: 0.5, panel: 1, panel2: 1, sel: 0.7, changed: 0.7, added: 0.7, deleted: 0.7, match: 0.7 };
 
