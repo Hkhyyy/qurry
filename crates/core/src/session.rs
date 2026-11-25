@@ -929,7 +929,7 @@ impl Session {
         match self {
             Session::Pg(s) => s.set_manual(manual).await,
             Session::My(s) => s.set_manual(manual).await,
-            Session::Redis(_) => Err(AppError::Msg("Manual transactions are not supported for Redis (use MULTI / EXEC)".into())),
+            Session::Redis(_) => Err(AppError::Msg("Manual transactions are not supported for Redis: its commands run one by one on a connection the data source's databases share".into())),
             Session::Plugin(c) => Err(AppError::Msg(format!("Manual transactions are not supported by the {} driver yet (use BEGIN / COMMIT in the console)", c.driver))),
         }
     }

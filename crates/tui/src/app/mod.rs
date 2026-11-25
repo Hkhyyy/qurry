@@ -1312,7 +1312,7 @@ impl App {
         let Some(base) = base else { return false };
         let text = self.state.reconnecting().into_iter().find(|r| r.id == base).map(|r| r.cancelled).unwrap_or_else(|| "Cancelled.".into());
         let ids: Vec<u64> = self.waits.iter().filter(|(_, w)| w.base == base).map(|(id, _)| *id).collect();
-        let mut table = false;
+        let (mut table, mut run) = (false, false);
         let gone: Vec<Wait> = ids.into_iter().filter_map(|id| self.waits.remove(&id)).collect();
         for w in gone {
             w.abort.abort();
@@ -1331,12 +1331,14 @@ impl App {
                     table = true;
                     self.redis_stopped(tab, &text);
                 }
-                WaitFor::RedisRun(_) => table = true,
+                WaitFor::RedisRun(_) => run = true,
             }
         }
         self.reconnect_since.remove(&base);
         // Short, and never cut, so the key shows (the tree node keeps the whole text)
-        self.status = format!("Cancelled while reconnecting {} · {} retry", self.conn_name(&base), self.retry_key(table));
+        // A Terminal line isn't sent again by r: it is run again
+        let how = if run && !table { "run it again".to_string() } else { format!("{} retry", self.retry_key(table)) };
+        self.status = format!("Cancelled while reconnecting {} · {how}", self.conn_name(&base));
         self.retry_status = self.status.clone();
         true
     }
@@ -1359,6 +1361,18 @@ impl App {
     /// the status line too, short and never cut so the key shows. Any other error is the load's own, which its caller shows.
     /// `tab`: the kind of tab it loaded into ("table", "Redis"), whose r retries; None for an explorer node
     pub(crate) fn reconnect_failed(&mut self, r: &Reconnecting, e: &str, tab: Option<&str>) {
+        let key = self.retry_key(tab.is_some());
+        let where_ = tab.map_or("on the explorer node".to_string(), |t| format!("in the {t} tab"));
+        self.reconnect_failed_saying(r, e, &format!("{key} retry"), &format!("{key} {where_} retries."));
+    }
+
+    /// reconnect_failed for what the Redis tab sends (a Terminal line, an edit): r only reloads the keys, so it says to run it again
+    pub(crate) fn reconnect_failed_run(&mut self, r: &Reconnecting, e: &str) {
+        self.reconnect_failed_saying(r, e, "run it again", "Run it again: r in the Redis tab only loads its keys again.");
+    }
+
+    /// The Message popup and status line of a failed reconnect: `short` on the status line, `how` in the popup
+    fn reconnect_failed_saying(&mut self, r: &Reconnecting, e: &str, short: &str, how: &str) {
         let Some(reason) = qurry_shared::errors::reconnect_reason(&r.failed, e) else { return };
         let heading = format!("{}.\n\n", r.failed);
         let mut open = self.popup.as_ref();
@@ -1371,11 +1385,9 @@ impl App {
                 _ => None,
             };
         }
-        let key = self.retry_key(tab.is_some());
-        let where_ = tab.map_or("on the explorer node".to_string(), |t| format!("in the {t} tab"));
-        self.status = format!("Couldn't reconnect {} · {key} retry", self.conn_name(&r.id));
+        self.status = format!("Couldn't reconnect {} · {short}", self.conn_name(&r.id));
         self.retry_status = self.status.clone();
-        self.open_after_notices(Popup::Message { title: "Couldn't reconnect".into(), text: format!("{heading}{reason}\n\n{key} {where_} retries.") });
+        self.open_after_notices(Popup::Message { title: "Couldn't reconnect".into(), text: format!("{heading}{reason}\n\n{how}") });
     }
 }
 

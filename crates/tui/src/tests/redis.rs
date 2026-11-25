@@ -101,3 +101,17 @@ async fn a_reconnect_says_so_on_the_status_line_and_its_cancel_says_how_to_retry
     assert!(matches!(&h.app.popup, Some(crate::app::Popup::Message { text, .. }) if text.ends_with("r in the Redis tab retries.")));
     drop(shown);
 }
+
+/// What the tab sent (a Terminal line, an edit) isn't sent again by r: its failed reconnect says to run it again
+#[tokio::test]
+async fn a_sent_line_whose_reconnect_failed_says_to_run_it_again() {
+    let mut h = Harness::new().await;
+    redis_tab(&mut h).await;
+    let st = h.app.state.clone();
+    let shown = st.reconnecting_now("rd");
+    let r = h.app.state.reconnecting().pop().unwrap();
+    h.app.reconnect_failed_run(&r, &format!("{}: refused", r.failed));
+    assert!(matches!(&h.app.popup, Some(crate::app::Popup::Message { text, .. }) if text.ends_with("Run it again: r in the Redis tab only loads its keys again.")), "{:?}", h.app.status);
+    assert_eq!(h.app.status, "Couldn't reconnect [DEV] cache · run it again");
+    drop(shown);
+}

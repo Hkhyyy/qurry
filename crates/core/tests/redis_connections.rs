@@ -1,7 +1,8 @@
 //! A Redis source's connection (#221, #226): one connection for all its databases, each command run in its own database when
 //! callers on several databases send at once, and a reply that doesn't come ends at redisdb::RESPONSE_TIMEOUT for that source only.
 //! Real-server tests are #[ignore]d: QURRY_TEST_REDIS=host:port cargo test -p qurry-core --test redis_connections -- --ignored
-//! They use db10, db11, db13 and db15 and keys `qurry-221:*`, removed at the end (no FLUSHDB)
+//! They use db10, db11, db13 and db15 and keys `qurry-221:*`, removed at the end (no FLUSHDB). Commands that would change the
+//! shared connection are refused, and blocking ones run on a connection of their own; RESET also on QURRY_TEST_REDIS_AUTH
 use qurry_core::app::AppState;
 use serde_json::json;
 use std::sync::Arc;
@@ -123,6 +124,10 @@ async fn a_redis_source_opens_one_connection_for_all_its_databases() {
     assert!(e.contains("DB index is out of range"), "{e}");
     st.redis_exec("rq::db10".into(), vec!["PING".into()]).await.unwrap();
     assert_eq!(p.total.load(SeqCst), 1);
+    // A blocking command opens one more, for itself, and closes it when it ends
+    st.redis_exec_line("rq::db10".into(), "BLPOP qurry-221:none 0.1".into()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!((p.total.load(SeqCst), p.open.load(SeqCst)), (2, 1));
 }
 
 /// A server that drops every connection: callers on all databases at once get the one connect's error right away, instead of
@@ -255,4 +260,113 @@ async fn an_mcp_execute_on_redis_takes_at_most_100_commands() {
     let (st, _dir) = state(&[("cap", 1)]).await;
     let e = st.execute_batch_prepared("cap".into(), vec!["SET k v".into(); 101]).await.unwrap_err().to_string();
     assert!(e.contains("At most 100 Redis commands per execute call"), "{e}");
+}
+
+/// Two keys on db11 with their own values, read while another caller's command ran first: each GET gets its own key's value
+async fn replies_stay_in_order(st: &AppState, id: &str) {
+    st.redis_exec(target(id, 11), vec!["SET".into(), "qurry-221:a".into(), "va".into()]).await.unwrap();
+    st.redis_exec(target(id, 11), vec!["SET".into(), "qurry-221:b".into(), "vb".into()]).await.unwrap();
+    for _ in 0..3 {
+        let read = |k: &'static str| tokio::time::timeout(Duration::from_secs(2), st.redis_exec(target(id, 11), vec!["GET".into(), k.into()]));
+        let (a, b) = tokio::join!(read("qurry-221:a"), read("qurry-221:b"));
+        assert_eq!((a.expect("GET a answered").unwrap(), b.expect("GET b answered").unwrap()), (json!("va"), json!("vb")));
+    }
+}
+
+/// CLIENT REPLY SKIP / OFF from the Terminal would make the shared connection's next reply go to another caller (H1): refused,
+/// from the Terminal line and the argument array alike, and the other databases' replies stay their own
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn client_reply_from_the_terminal_is_refused_and_replies_stay_in_order() {
+    let Some((_, port)) = server() else { return };
+    let (st, _dir) = state(&[("cr", port)]).await;
+    for line in ["CLIENT REPLY SKIP", "client reply off"] {
+        let r = tokio::time::timeout(Duration::from_secs(2), st.redis_exec_line(target("cr", 10), line.into())).await;
+        let e = r.map(|r| r.map_err(|e| e.to_string())).unwrap_or_else(|_| Err("no answer".into())).unwrap_err();
+        assert!(e.contains("would change the connection Qurry shares"), "{line}: {e}");
+        replies_stay_in_order(&st, "cr").await;
+    }
+    let e = st.run_query(target("cr", 10), "CLIENT REPLY SKIP".into(), None, Some("tab".into())).await.unwrap_err().to_string();
+    assert!(e.contains("would change the connection"), "{e}");
+}
+
+/// MULTI from the Terminal would queue the browser's edits on another database (H2), and SUBSCRIBE would take the connection
+/// over (M1): refused, and a SET from the browser on another database is set at once
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn multi_and_subscribe_from_the_terminal_are_refused_and_edits_elsewhere_run() {
+    let Some((addr, port)) = server() else { return };
+    let (st, _dir) = state(&[("mu", port)]).await;
+    for args in [vec!["MULTI"], vec!["SUBSCRIBE", "qurry-221:c"], vec!["WATCH", "qurry-221:a"]] {
+        let args: Vec<String> = args.into_iter().map(String::from).collect();
+        let r = tokio::time::timeout(Duration::from_secs(2), st.redis_exec(target("mu", 10), args.clone())).await;
+        let e = r.map(|r| r.map_err(|e| e.to_string())).unwrap_or_else(|_| Err("no answer".into())).unwrap_err();
+        assert!(e.contains("would change the connection Qurry shares"), "{args:?}: {e}");
+        let set = tokio::time::timeout(Duration::from_secs(2), st.redis_exec(target("mu", 11), vec!["SET".into(), "qurry-221:edit".into(), "now".into()])).await;
+        assert_eq!(set.expect("SET answered").unwrap(), json!({ "status": "OK" }), "after {args:?}");
+        let got: Option<String> = redis::cmd("GET").arg("qurry-221:edit").query_async(&mut direct(&addr, 11).await).await.unwrap();
+        assert_eq!(got.as_deref(), Some("now"));
+        replies_stay_in_order(&st, "mu").await;
+    }
+    clean(&addr, &["qurry-221:edit".into(), "qurry-221:a".into(), "qurry-221:b".into()]).await;
+}
+
+/// RESET from the Terminal would log the shared connection out on a server with a password (M1, NOAUTH until Disconnect): refused
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn reset_from_the_terminal_is_refused_on_a_server_with_a_password() {
+    let Some(e) = qurry_core::testenv::var("QURRY_TEST_REDIS_AUTH") else { return };
+    let p: Vec<&str> = e.splitn(3, ':').collect();
+    let dir = tempfile::tempdir().unwrap();
+    let st = qurry_core::open_state(Some(dir.path().to_path_buf())).unwrap();
+    st.save_connection(source("au", p[1].parse().unwrap()), Some(p[2].to_string()), None).await.unwrap();
+    st.redis_exec("au".into(), vec!["PING".into()]).await.unwrap();
+    for line in ["RESET", "AUTH default nope", "HELLO 3"] {
+        let e = st.redis_exec_line(target("au", 10), line.into()).await.unwrap_err().to_string();
+        assert!(e.contains("would change the connection Qurry shares"), "{line}: {e}");
+    }
+    assert_eq!(st.redis_exec(target("au", 11), vec!["PING".into()]).await.unwrap(), json!({ "status": "PONG" }));
+}
+
+/// A blocking command (H3) runs on a connection of its own: the other databases' commands answer meanwhile, one cancelled or
+/// timed out ends on the server, so it never pops what another client pushes later, and one that would wait forever is refused
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn blocking_commands_run_on_their_own_connection_and_end_when_cancelled() {
+    let Some((addr, _)) = server() else { return };
+    let (proxy_port, p) = proxy(addr.clone()).await;
+    let (st, _dir) = state(&[("bl", proxy_port)]).await;
+    let st = &st;
+    let q = "qurry-221:queue".to_string();
+    clean(&addr, std::slice::from_ref(&q)).await;
+    st.redis_exec(target("bl", 11), vec!["PING".into()]).await.unwrap();
+    let shared = p.total.load(SeqCst);
+    // Meanwhile: a GET on another database answers at once
+    let blocked = st.redis_exec_line(target("bl", 10), format!("BLPOP {q} 2"));
+    let other = async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let t = Instant::now();
+        st.redis_exec(target("bl", 11), vec!["PING".into()]).await.unwrap();
+        t.elapsed()
+    };
+    let (r, waited) = tokio::join!(blocked, other);
+    assert_eq!(r.unwrap(), json!(null), "BLPOP timed out empty");
+    assert!(waited < Duration::from_millis(500), "the other database waited {waited:?}");
+    assert_eq!(p.total.load(SeqCst), shared + 1, "one connection of its own");
+    // Cancelled (a tab closed): what is pushed afterwards stays in the list
+    assert!(tokio::time::timeout(Duration::from_millis(300), st.redis_exec_line(target("bl", 10), format!("BLPOP {q} 5"))).await.is_err());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut c = direct(&addr, 10).await;
+    let _: i64 = redis::cmd("RPUSH").arg(&q).arg("job").query_async(&mut c).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let n: i64 = redis::cmd("LLEN").arg(&q).query_async(&mut c).await.unwrap();
+    assert_eq!(n, 1, "the cancelled BLPOP took the job");
+    // A wait that ends gives its value; forever is refused
+    assert_eq!(st.redis_exec_line(target("bl", 10), format!("BLPOP {q} 1")).await.unwrap(), json!([q, "job"]));
+    for line in [format!("BLPOP {q} 0"), "XREAD BLOCK 0 STREAMS qurry-221:s $".into()] {
+        let e = st.redis_exec_line(target("bl", 10), line.clone()).await.unwrap_err().to_string();
+        assert!(e.contains("waits forever"), "{line}: {e}");
+    }
+    assert_eq!(p.open.load(SeqCst), 1, "the blocking connections are closed");
+    clean(&addr, &[q]).await;
 }

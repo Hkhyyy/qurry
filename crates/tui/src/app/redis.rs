@@ -213,6 +213,13 @@ impl App {
         }
     }
 
+    /// redis_reconnect_failed for what the tab sent (WaitFor::RedisRun), which r doesn't send again
+    fn redis_run_failed(&mut self, seen: Option<Reconnecting>, e: &str) {
+        if let Some(rc) = seen {
+            self.reconnect_failed_run(&rc, e);
+        }
+    }
+
     /// A key's value, Loading… in the value panel meanwhile (a newer pick's answer wins)
     pub fn redis_load_key(&mut self, id: u64, key: String) {
         let Some(t) = self.tab_mut(id) else { return };
@@ -351,7 +358,7 @@ impl App {
                 Ok(v) => a.notice(line.clone(), crate::ui::format_typed(&line, &v)),
                 Err(e) => {
                     a.notice(line, format!("(error) {}", e.trim_start_matches("Redis: ")));
-                    a.redis_reconnect_failed(seen, &e);
+                    a.redis_run_failed(seen, &e);
                 }
             }
             if write {
@@ -389,7 +396,7 @@ impl App {
             }
             Err(e) => {
                 a.status = e.clone();
-                a.redis_reconnect_failed(seen, &e);
+                a.redis_run_failed(seen, &e);
             }
         });
     }

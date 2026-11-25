@@ -37,6 +37,16 @@ pub struct RedisConn {
     config: bool,
     db: i64,
     select: bool,
+    opener: std::sync::Arc<Opener>,
+}
+
+/// What opens a connection of its own for a blocking command (RedisConn::blocking): the same server, user and TLS, through the
+/// same tunnel port
+// Built once per connect and held behind an Arc (RedisConn::opener): the variants' sizes don't matter
+#[allow(clippy::large_enum_variant)]
+enum Opener {
+    Single(redis::Client),
+    Cluster(redis::cluster::ClusterClient),
 }
 
 /// Standalone·Sentinel use one ConnectionManager; Cluster uses the cluster connection + a connection per master (for SCAN)
@@ -134,6 +144,28 @@ impl RedisConn {
     pub fn is_cluster(&self) -> bool {
         self.link.is_cluster()
     }
+    /// A blocking command (BLPOP, XREAD BLOCK, WAIT …) on a connection opened for it alone, so it holds up nothing else of the
+    /// source. The connection closes when the command ends, times out or is cancelled (the future dropped), and with it the
+    /// wait on the server: nothing is popped for a caller that is gone. `wait` = the command's own timeout
+    async fn blocking(&self, cmd: &redis::Cmd, wait: std::time::Duration) -> AppResult<RV> {
+        let run = async {
+            match self.opener.as_ref() {
+                Opener::Single(client) => {
+                    let cfg = redis::AsyncConnectionConfig::new().set_connection_timeout(Some(CONNECT_TIMEOUT)).set_response_timeout(None);
+                    let mut c = client.get_multiplexed_async_connection_with_config(&cfg).await?;
+                    if self.select {
+                        redis::cmd("SELECT").arg(self.db).query_async::<()>(&mut c).await?;
+                    }
+                    cmd.query_async::<RV>(&mut c).await
+                }
+                Opener::Cluster(client) => cmd.query_async::<RV>(&mut client.get_async_connection().await?).await,
+            }
+        };
+        match tokio::time::timeout(wait + BLOCK_MARGIN, run).await {
+            Ok(r) => r.map_err(err),
+            Err(_) => Err(AppError::Msg(format!("Redis: timed out — the server or tunnel didn't answer within {}s of the command's own timeout", BLOCK_MARGIN.as_secs()))),
+        }
+    }
     /// The server answered CONFIG GET when this connection was made
     pub fn config_allowed(&self) -> bool {
         self.config
@@ -143,7 +175,7 @@ impl RedisConn {
     pub(crate) fn scan_nodes(&self) -> Vec<RedisConn> {
         match &self.link {
             Link::Single(_) => vec![self.clone()],
-            Link::Cluster { masters, .. } => masters.iter().map(|m| RedisConn { link: Link::Single(m.clone()), config: self.config, db: 0, select: false }).collect(),
+            Link::Cluster { masters, .. } => masters.iter().map(|m| RedisConn { link: Link::Single(m.clone()), db: 0, select: false, ..self.clone() }).collect(),
         }
     }
 }
@@ -179,6 +211,8 @@ pub fn parse_nodes(s: &str, default_port: u16) -> Vec<(String, u16)> {
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// How long a command waits for the server's reply, as a large value through a slow tunnel needs (redis' own default is 500 ms)
 pub const RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long past its own timeout a blocking command's reply may take (the connect and the round trip through a tunnel)
+const BLOCK_MARGIN: std::time::Duration = std::time::Duration::from_secs(5);
 
 struct Endpoint {
     scheme: &'static str,
@@ -280,26 +314,31 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
     if mode != "standalone" && cfg.tunneled() {
         return Err(AppError::Msg(format!("SSH / AWS SSM tunnels are not supported with Redis {mode} (nodes announce their own addresses)")));
     }
-    let conn = match mode {
+    let (conn, opener) = match mode {
         "cluster" => {
             let mut seeds = vec![(host.to_string(), port)];
             seeds.extend(parse_nodes(&cfg.redis.as_ref().map(|r| r.nodes.clone()).unwrap_or_default(), 6379));
-            let mut b = redis::cluster::ClusterClientBuilder::new(seeds.iter().map(|(h, p)| ep.url(h, *p, 0)).collect::<Vec<_>>())
-                .connection_timeout(CONNECT_TIMEOUT)
-                .response_timeout(RESPONSE_TIMEOUT);
-            if let Some(p) = password.filter(|p| !p.is_empty()) {
-                b = b.password(p);
-            }
-            if !cfg.user.trim().is_empty() {
-                b = b.username(cfg.user.trim());
-            }
-            if ep.scheme == "rediss" {
-                b = b.tls(if ep.insecure { redis::TlsMode::Insecure } else { redis::TlsMode::Secure });
-                if let Some(c) = &ep.certs {
-                    b = b.certs(c.clone());
+            // The shared connection, and one for blocking commands, whose replies take their own timeout (RedisConn::blocking)
+            let client = |response: std::time::Duration| {
+                let mut b = redis::cluster::ClusterClientBuilder::new(seeds.iter().map(|(h, p)| ep.url(h, *p, 0)).collect::<Vec<_>>())
+                    .connection_timeout(CONNECT_TIMEOUT)
+                    .response_timeout(response);
+                if let Some(p) = password.filter(|p| !p.is_empty()) {
+                    b = b.password(p);
                 }
-            }
-            let mut conn = b.build().map_err(err)?.get_async_connection().await.map_err(|e| AppError::Msg(format!("Redis cluster: {e}")))?;
+                if !cfg.user.trim().is_empty() {
+                    b = b.username(cfg.user.trim());
+                }
+                if ep.scheme == "rediss" {
+                    b = b.tls(if ep.insecure { redis::TlsMode::Insecure } else { redis::TlsMode::Secure });
+                    if let Some(c) = &ep.certs {
+                        b = b.certs(c.clone());
+                    }
+                }
+                b.build().map_err(err)
+            };
+            let blocking = client(std::time::Duration::from_millis(qurry_shared::redis_cmd::BLOCK_MAX_MS) + BLOCK_MARGIN)?;
+            let mut conn = client(RESPONSE_TIMEOUT)?.get_async_connection().await.map_err(|e| AppError::Msg(format!("Redis cluster: {e}")))?;
             // Master list (SCAN runs per node)
             let nodes: String = redis::cmd("CLUSTER").arg("NODES").query_async(&mut conn).await.map_err(err)?;
             let mut masters = vec![];
@@ -318,19 +357,23 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
             if masters.is_empty() {
                 return Err(AppError::Msg("Redis cluster: no reachable master nodes".into()));
             }
-            Link::Cluster { conn, masters }
+            (Link::Cluster { conn, masters }, Opener::Cluster(blocking))
         }
         "sentinel" => {
             let (h, p) = sentinel_master(cfg, &ep, host, port).await?;
-            Link::Single(ep.manager(&h, p, db).await?)
+            (Link::Single(ep.manager(&h, p, db).await?), Opener::Single(ep.client(&h, p, db)?))
         }
-        _ => Link::Single(ep.manager(host, port, db).await?),
+        _ => (Link::Single(ep.manager(host, port, db).await?), Opener::Single(ep.client(host, port, db)?)),
     };
     let mut c = conn.clone();
     // Startup script (one line = one command)
     for line in cfg.options.startup_script.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
         let args = parse_command(line)?;
         let name = String::from_utf8_lossy(&args[0]).to_string();
+        let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
+        if let Some(why) = qurry_shared::redis_cmd::shared_connection_refusal(&name.to_uppercase(), &sub) {
+            return Err(AppError::Msg(format!("Startup script (Options): {why}")));
+        }
         let mut cmd = redis::cmd(&name);
         for a in &args[1..] {
             cmd.arg(a.as_slice());
@@ -341,7 +384,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
     let config = matches!(redis::cmd("CONFIG").arg("GET").arg("maxmemory").query_async::<RV>(&mut c).await, Ok(v) if !matches!(v, RV::ServerError(_)));
     // A proxy or an ACL may refuse SELECT: then commands go as they are, to the database connected to (on_db refuses others)
     let select = !conn.is_cluster() && redis::cmd("SELECT").arg(db).query_async::<()>(&mut c).await.is_ok();
-    Ok(RedisConn { link: conn, config, db, select })
+    Ok(RedisConn { link: conn, config, db, select, opener: std::sync::Arc::new(opener) })
 }
 
 impl Link {
@@ -511,6 +554,21 @@ fn shape(cmd: &str, args: &[Vec<u8>], v: RV, limit: usize, start: Instant) -> Qu
     }
 }
 
+/// A command a person or MCP typed (console, Terminal, value editing, MCP): refused when it would change the connection the
+/// source's databases share (qurry_shared::redis_cmd::shared_connection_refusal), on a connection of its own when it blocks
+/// (blocking_wait), otherwise on the shared one. cmd uppercased, args after it
+async fn user_command(m: &RedisConn, cmd: &str, args: &[String], c: &redis::Cmd) -> AppResult<RV> {
+    let sub = args.first().map(|a| a.to_uppercase()).unwrap_or_default();
+    if let Some(why) = qurry_shared::redis_cmd::shared_connection_refusal(cmd, &sub) {
+        return Err(AppError::Msg(why));
+    }
+    match qurry_shared::redis_cmd::blocking_wait(cmd, args) {
+        Some(Err(why)) => Err(AppError::Msg(why)),
+        Some(Ok(ms)) => m.blocking(c, std::time::Duration::from_millis(ms)).await,
+        None => c.query_async(&mut m.clone()).await.map_err(err),
+    }
+}
+
 /// Run one console command
 pub async fn run(m: &RedisConn, line: &str, limit: usize) -> AppResult<QueryResult> {
     let start = Instant::now();
@@ -521,19 +579,12 @@ pub async fn run(m: &RedisConn, line: &str, limit: usize) -> AppResult<QueryResu
         let key = args.get(1).ok_or_else(|| AppError::Msg("key required".into()))?;
         return view_key(m, key, limit).await;
     }
-    // The connection is shared, so DB switching goes through the console's database selection
-    if cmd == "SELECT" {
-        return Err(AppError::Msg("Use the database selector in the console toolbar to switch Redis databases".into()));
-    }
-    if matches!(cmd.as_str(), "SUBSCRIBE" | "PSUBSCRIBE" | "MONITOR" | "SSUBSCRIBE") {
-        return Err(AppError::Msg(format!("{cmd} is not supported in the console")));
-    }
     let mut c = redis::cmd(&cmd);
     for a in &args[1..] {
         c.arg(a.as_slice());
     }
-    let mut mgr = m.clone();
-    let v: RV = c.query_async(&mut mgr).await.map_err(err)?;
+    let words: Vec<String> = args[1..].iter().map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+    let v = user_command(m, &cmd, &words, &c).await?;
     Ok(shape(&cmd, &args[1..], v, limit, start))
 }
 
@@ -1155,16 +1206,11 @@ fn ty_is_collection(v: &Value) -> bool {
 pub async fn exec_args(m: &RedisConn, args: &[String]) -> AppResult<Value> {
     let first = args.first().ok_or_else(|| AppError::Msg("Empty command".into()))?;
     let cmd = first.to_uppercase();
-    if cmd == "SELECT" {
-        return Err(AppError::Msg("Switch databases with the database selector".into()));
-    }
     let mut c = redis::cmd(&cmd);
     for a in &args[1..] {
         c.arg(a.as_str());
     }
-    let mut mgr = m.clone();
-    let v: RV = c.query_async(&mut mgr).await.map_err(err)?;
-    Ok(json_of(&v))
+    Ok(json_of(&user_command(m, &cmd, &args[1..], &c).await?))
 }
 
 fn json_of(v: &RV) -> Value {
@@ -1582,26 +1628,33 @@ mod tests {
         let fields: Vec<String> = (0..5000).flat_map(|i| [format!("f{i}"), "v".into()]).collect();
         let _: () = redis::cmd("HSET").arg(h).arg(&fields).query_async(&mut c).await.unwrap();
         let _: () = redis::cmd("SET").arg("qurry:str:s").arg("hi").query_async(&mut c).await.unwrap();
-        async fn memory_calls(c: &mut RedisConn) -> i64 {
-            let info: String = redis::cmd("INFO").arg("commandstats").query_async(c).await.unwrap();
-            info.lines().find_map(|l| l.strip_prefix("cmdstat_memory|usage:calls=")).and_then(|r| r.split(',').next()).map_or(0, |n| n.parse().unwrap())
-        }
-        // The counter is the server's: another test running at the same time (as in CI) can add to it, so a round counts only
-        // when no call came in during it. A check that runs MEMORY USAGE adds to every round
-        let mut added = vec![];
-        for _ in 0..5 {
-            let before = memory_calls(&mut c).await;
-            let e = st.run_read_only("rd::db8".into(), format!("GET {h}"), 10).await.unwrap_err().to_string();
-            assert!(e.contains("WRONGTYPE"), "{e}");
-            assert!(st.run_read_only("rd::db8".into(), format!("MGET qurry:str:s {h}"), 10).await.is_ok());
-            assert!(st.run_read_only("rd::db8".into(), format!("GETRANGE {h} 0 -1"), 10).await.is_err());
-            assert!(st.run_read_only("rd::db8".into(), "GET qurry:str:s".into(), 10).await.is_ok());
-            added.push(memory_calls(&mut c).await - before);
-            if added.last() == Some(&0) {
+        // MONITOR on a connection of the test's own sees every command; only MEMORY USAGE of this test's key counts, so the other
+        // tests running at the same time (MEMORY USAGE of their own keys) don't
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let addr = std::env::var("QURRY_TEST_REDIS").unwrap();
+        let mut mon = tokio::io::BufReader::new(tokio::net::TcpStream::connect(&addr).await.unwrap());
+        mon.get_mut().write_all(b"MONITOR\r\n").await.unwrap();
+        let mut ok = String::new();
+        mon.read_line(&mut ok).await.unwrap();
+        assert_eq!(ok.trim(), "+OK");
+        let e = st.run_read_only("rd::db8".into(), format!("GET {h}"), 10).await.unwrap_err().to_string();
+        assert!(e.contains("WRONGTYPE"), "{e}");
+        assert!(st.run_read_only("rd::db8".into(), format!("MGET qurry:str:s {h}"), 10).await.is_ok());
+        assert!(st.run_read_only("rd::db8".into(), format!("GETRANGE {h} 0 -1"), 10).await.is_err());
+        assert!(st.run_read_only("rd::db8".into(), "GET qurry:str:s".into(), 10).await.is_ok());
+        // The last command, seen by MONITOR after everything before it
+        let _: () = redis::cmd("ECHO").arg("qurry:str:done").query_async(&mut c).await.unwrap();
+        let mut seen = vec![];
+        loop {
+            let mut line = String::new();
+            mon.read_line(&mut line).await.unwrap();
+            if line.contains("\"qurry:str:done\"") {
                 break;
             }
+            seen.push(line);
         }
-        assert_eq!(added.last(), Some(&0), "string size checks ran MEMORY USAGE: {added:?} calls per round");
+        let walks: Vec<&String> = seen.iter().filter(|l| l.to_uppercase().contains("\"MEMORY\" \"USAGE\"") && l.contains(h)).collect();
+        assert!(walks.is_empty(), "string size checks ran MEMORY USAGE: {walks:?}");
         let _: () = redis::cmd("DEL").arg(h).arg("qurry:str:s").query_async(&mut c).await.unwrap();
     }
 
@@ -1780,6 +1833,15 @@ mod tests {
         let d = key_detail(m, "ch:1", 100).await.unwrap();
         assert_eq!(d.length, 2);
         assert!(crate::meta::object_index(&p).await.unwrap().len() >= 61);
+        // A blocking command on a cluster connection of its own: it ends at its timeout, and a GET meanwhile answers
+        let started = std::time::Instant::now();
+        let (blocked, got) = tokio::join!(crate::redisdb::run(m, "BLPOP ck:queue 1", 1), async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            crate::redisdb::run(m, "GET ck:42", 1).await.map(|r| (r.rows[0][0].clone(), started.elapsed()))
+        });
+        assert!(blocked.is_ok() && started.elapsed() >= std::time::Duration::from_secs(1));
+        let (v, at) = got.unwrap();
+        assert!(v == "v42" && at < std::time::Duration::from_millis(600), "{at:?}");
     }
 
 }

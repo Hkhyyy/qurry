@@ -22,17 +22,22 @@ fn mb(n: i64) -> String {
 }
 
 /// Bytes `elements` of a collection key take: its memory (exact or sampled), shared out over its elements
-async fn part_bytes(m: &RedisConn, key: &[u8], count: &str, elements: i64) -> AppResult<i64> {
+async fn part_bytes(m: &RedisConn, key: &[u8], count: &str, elements: i64, repeats: bool) -> AppResult<i64> {
     let n = element_count(m, count, key).await?;
     if n <= 0 || elements <= 0 {
         return Ok(0);
     }
     let usage = memory_usage(m, key, if n <= EXACT_ELEMENTS { 0 } else { MEMORY_SAMPLES }).await?;
-    Ok(share(usage, elements, n))
+    Ok(share(usage, elements, n, repeats))
 }
 
-fn share(usage: i64, elements: i64, n: i64) -> i64 {
-    if elements >= n { usage } else { (usage as i128 * elements as i128 / n as i128) as i64 }
+/// The key's memory shared out over `elements` of its `n`: at most all of it, unless elements may repeat (SRANDMEMBER k -1000
+/// returns 1000 of a key's 10 elements)
+fn share(usage: i64, elements: i64, n: i64, repeats: bool) -> i64 {
+    if elements >= n && !repeats {
+        return usage;
+    }
+    (usage as i128 * elements as i128 / n as i128).min(i64::MAX as i128) as i64
 }
 
 /// Bytes of the strings and hash fields the command reads (GET, GETRANGE, MGET, JSON.GET, JSON.MGET, HGET, HMGET)
@@ -103,7 +108,7 @@ pub(crate) async fn check_budget(m: &RedisConn, cmd: &str, raw: &[Vec<u8>], rest
             bytes = bytes.saturating_add(memory_usage(m, k, 0).await?);
         }
     } else if let Some(p) = crate::guard::redis_part_read(cmd, rest) {
-        bytes = part_bytes(m, &raw[p.key], p.count, p.elements).await?;
+        bytes = part_bytes(m, &raw[p.key], p.count, p.elements, p.repeats).await?;
     }
     bytes = bytes.saturating_add(value_bytes(m, cmd, raw, rest).await?);
     if bytes > READ_MAX_BYTES {
@@ -425,10 +430,35 @@ mod tests {
         let _: () = redis::cmd("DEL").arg("qurry:search:Shop:Leader*board").query_async(&mut c).await.unwrap();
     }
 
+    /// A negative random count repeats elements (#224 review): SRANDMEMBER / HRANDFIELD of -1000 on a 3 MB key of 100 elements
+    /// return about 30 MB, so they count every element they return. Own qurry:repeat:* keys in db9
+    #[tokio::test]
+    #[ignore]
+    async fn repeating_random_reads_count_every_element() {
+        let Some((st, m)) = state("db9").await else { return };
+        let mut c = m.clone();
+        let keys = ["qurry:repeat:s", "qurry:repeat:h"];
+        let _: () = redis::cmd("DEL").arg(&keys[..]).query_async(&mut c).await.unwrap();
+        let fill = "for i = 1, 100 do local v = string.rep('x', 30000)..i redis.call('SADD', KEYS[1], v) redis.call('HSET', KEYS[2], 'f'..i, v) end return 1";
+        let _: () = redis::cmd("EVAL").arg(fill).arg(2).arg(&keys[..]).query_async(&mut c).await.unwrap();
+        let read = |s: &str| st.run_read_only("rd::db9".into(), s.to_string(), 100);
+        for over in ["SRANDMEMBER qurry:repeat:s -1000", "HRANDFIELD qurry:repeat:h -1000 WITHVALUES", "HRANDFIELD qurry:repeat:h -200 WITHVALUES"] {
+            let e = read(over).await.unwrap_err().to_string();
+            assert!(e.contains("per MCP read"), "{over}: {e}");
+        }
+        for within in ["SRANDMEMBER qurry:repeat:s -10", "SRANDMEMBER qurry:repeat:s 1000", "HRANDFIELD qurry:repeat:h 5 WITHVALUES"] {
+            read(within).await.unwrap_or_else(|e| panic!("{within}: {e}"));
+        }
+        let _: () = redis::cmd("DEL").arg(&keys[..]).query_async(&mut c).await.unwrap();
+    }
+
+    /// At most all of the key's memory, unless the elements repeat (SRANDMEMBER k -1000 of a key of 100)
     #[test]
     fn a_part_shares_the_key_memory() {
-        assert_eq!(share(1000, 10, 100), 100);
-        assert_eq!(share(1000, 500, 100), 1000);
-        assert_eq!(share(i64::MAX, i64::MAX - 1, i64::MAX), i64::MAX - 1);
+        assert_eq!(share(1000, 10, 100, false), 100);
+        assert_eq!(share(1000, 500, 100, false), 1000);
+        assert_eq!(share(i64::MAX, i64::MAX - 1, i64::MAX, false), i64::MAX - 1);
+        assert_eq!(share(1000, 500, 100, true), 5000);
+        assert_eq!(share(i64::MAX, 1000, 1, true), i64::MAX);
     }
 }
