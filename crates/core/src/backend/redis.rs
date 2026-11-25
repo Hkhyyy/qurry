@@ -90,9 +90,12 @@ impl Backend for Redis<'_> {
     }
 
     /// Within the size limits (redisdb::check_read). AppState::run_read_only has already refused anything but read commands (no CONFIG, KEYS)
+    /// Values over redis_read::VALUE_MAX come back cut, listed in `cut`
     async fn run_read_only(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         crate::redisdb::check_read(self.conn, sql).await?;
-        crate::redisdb::run(self.conn, sql, limit).await
+        let mut r = crate::redisdb::run(self.conn, sql, limit).await?;
+        crate::redis_read::cut_cells(&mut r);
+        Ok(r)
     }
 
     async fn export_read_only(&self, _sql: &str, _out: &mut Exporter) -> AppResult<()> {

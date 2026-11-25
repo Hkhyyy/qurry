@@ -272,7 +272,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
     Ok(RedisConn { link: conn, config })
 }
 
-fn err(e: redis::RedisError) -> AppError {
+pub(crate) fn err(e: redis::RedisError) -> AppError {
     AppError::Msg(format!("Redis: {e}"))
 }
 
@@ -317,7 +317,7 @@ fn bytes_text(b: &[u8]) -> Value {
 }
 
 /// Redis value → cell
-fn cell(v: &RV) -> Value {
+pub(crate) fn cell(v: &RV) -> Value {
     match v {
         RV::Nil => Value::Null,
         RV::Int(i) => int_value(*i),
@@ -448,7 +448,7 @@ pub async fn run(m: &RedisConn, line: &str, limit: usize) -> AppResult<QueryResu
     Ok(shape(&cmd, &args[1..], v, limit, start))
 }
 
-async fn key_type(m: &mut RedisConn, key: &[u8]) -> AppResult<String> {
+pub(crate) async fn key_type(m: &mut RedisConn, key: &[u8]) -> AppResult<String> {
     redis::cmd("TYPE").arg(key).query_async(m).await.map_err(err)
 }
 
@@ -631,7 +631,7 @@ async fn scan_keys(m: &RedisConn, pattern: &str, max: usize) -> AppResult<Vec<Ve
 }
 
 /// Same command per key (cluster: slots differ, so run them one by one concurrently instead of a pipeline)
-async fn per_key(m: &RedisConn, keys: &[Vec<u8>], cmds: &[&str]) -> AppResult<Vec<RV>> {
+pub(crate) async fn per_key(m: &RedisConn, keys: &[Vec<u8>], cmds: &[&str]) -> AppResult<Vec<RV>> {
     if keys.is_empty() {
         return Ok(vec![]);
     }
@@ -854,71 +854,25 @@ pub async fn field_len(m: &RedisConn, key: &[u8], field: &[u8]) -> AppResult<i64
     redis::cmd("HSTRLEN").arg(key).arg(field).query_async(&mut mgr).await.map_err(err)
 }
 
-/// Max size of a single Redis value readable from MCP
-const REDIS_READ_MAX_BYTES: i64 = 16 << 20;
-
-/// MCP Redis reads (query, and reads sent to execute): the guard's limits, then what only the server knows — whole-key reads
-/// (HGETALL, LRANGE 0 -1, XRANGE without COUNT …) up to REDIS_STRICT_MAX elements, and values up to REDIS_READ_MAX_BYTES.
-/// Commands that aren't reads are left to the caller
+/// MCP Redis reads (query, and reads sent to execute): the guard's limits, then the byte budget that only the server can tell
+/// (redis_read::check_budget). Commands that aren't reads are left to the caller
 pub(crate) async fn check_read(m: &RedisConn, line: &str) -> AppResult<()> {
-    use crate::guard::REDIS_STRICT_MAX;
-    let args = parse_command(line.trim().trim_end_matches(';').trim())?;
+    check_read_args(m, &parse_command(line.trim().trim_end_matches(';').trim())?).await
+}
+
+/// check_read of a command already split into its arguments (bytes as they will be sent)
+pub(crate) async fn check_read_args(m: &RedisConn, args: &[Vec<u8>]) -> AppResult<()> {
     let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
     let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
     if !is_read_command(&cmd, &sub) {
         return Ok(());
     }
     let rest: Vec<String> = args.iter().skip(1).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
-    // Keys and fields go to the server as the bytes that will run: lossy text would name another key when one isn't UTF-8
-    let raw = &args[1..];
     if let Some(why) = crate::guard::redis_strict_violation(&cmd, &rest) {
         return Err(AppError::Msg(why));
     }
-    // Whole keys: count the elements (and then the bytes) before reading
-    if let Some(c) = crate::guard::redis_size_check(&cmd, &rest) {
-        let keys: Vec<&[u8]> = c.keys.iter().map(|&i| raw[i].as_slice()).collect();
-        let mut n = 0i64;
-        for k in &keys {
-            n = n.saturating_add(element_count(m, c.count, k).await?);
-        }
-        if n > REDIS_STRICT_MAX {
-            return Err(AppError::Msg(format!("{cmd} would read {n} elements — at most {REDIS_STRICT_MAX} in read-only mode; use {} (or redis_get for a preview)", c.instead)));
-        }
-        let mut bytes = 0i64;
-        for k in &keys {
-            bytes = bytes.saturating_add(memory_usage(m, k, 0).await?);
-        }
-        if bytes > REDIS_READ_MAX_BYTES {
-            return Err(AppError::Msg(format!("{cmd} would read {} MB — too big to read here; use {}", bytes >> 20, c.instead)));
-        }
-    }
-    // Commands that return a whole value: check the size before reading
-    // GETRANGE with a bounded range reads at most that much
-    let range_small = cmd == "GETRANGE" && matches!((rest.get(1).and_then(|a| a.parse::<i64>().ok()), rest.get(2).and_then(|a| a.parse::<i64>().ok())), (Some(a), Some(b)) if a >= 0 && b >= a && b - a < REDIS_READ_MAX_BYTES);
-    let keys: &[Vec<u8>] = match cmd.as_str() {
-        "GET" | "JSON.GET" => raw.get(..1).unwrap_or(&[]),
-        "GETRANGE" if !range_small => raw.get(..1).unwrap_or(&[]),
-        "MGET" => raw,
-        "JSON.MGET" => raw.split_last().map(|(_, k)| k).unwrap_or(&[]),
-        _ => &[],
-    };
-    let json = cmd.starts_with("JSON.");
-    for k in keys {
-        let n = value_size(m, k, json).await?;
-        if n > REDIS_READ_MAX_BYTES {
-            return Err(AppError::Msg(format!("{} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", String::from_utf8_lossy(k), n >> 20)));
-        }
-    }
-    // HGET / HMGET: one hash field can be big too
-    if matches!(cmd.as_str(), "HGET" | "HMGET") && raw.len() > 1 {
-        for f in &raw[1..] {
-            let n = field_len(m, &raw[0], f).await?;
-            if n > REDIS_READ_MAX_BYTES {
-                return Err(AppError::Msg(format!("{}.{} is {} MB — too big to read here", rest[0], String::from_utf8_lossy(f), n >> 20)));
-            }
-        }
-    }
-    Ok(())
+    // Keys and fields go to the server as the bytes that will run: lossy text would name another key when one isn't UTF-8
+    crate::redis_read::check_budget(m, &cmd, &args[1..], &rest).await
 }
 
 /// MCP Redis writes (execute), what only the server knows: refuse removals (HDEL, SREM, ZREM, XDEL, SMOVE, LPOP, RPOP, LREM) that
@@ -956,9 +910,36 @@ pub(crate) async fn check_mcp_write(m: &RedisConn, lines: &[String]) -> AppResul
     Ok(())
 }
 
+/// Who reads a key's details: the app (whole elements, a string's first STRING_PREVIEW_MAX bytes, text read lossily) or MCP
+/// (redis_read: elements within its byte budget, each cut to VALUE_MAX, bytes that aren't UTF-8 as base64)
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Reader {
+    App,
+    Mcp,
+}
+
+impl Reader {
+    fn preview(self) -> i64 {
+        match self {
+            Reader::App => STRING_PREVIEW_MAX,
+            Reader::Mcp => crate::redis_read::VALUE_MAX as i64,
+        }
+    }
+    fn value(self, v: &RV) -> Value {
+        match self {
+            Reader::App => raw_text(v),
+            Reader::Mcp => crate::redis_read::reply_json(v),
+        }
+    }
+}
+
 pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<KeyDetail> {
+    key_detail_with(m, key.as_bytes(), limit, Reader::App).await
+}
+
+pub(crate) async fn key_detail_with(m: &RedisConn, k: &[u8], limit: usize, reader: Reader) -> AppResult<KeyDetail> {
     let mut mgr = m.clone();
-    let k = key.as_bytes();
+    let key = String::from_utf8_lossy(k);
     let ty = key_type(&mut mgr, k).await?;
     if ty == "none" {
         return Err(AppError::Msg(format!("Key not found: {key}")));
@@ -976,12 +957,21 @@ pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<Key
         _ => "",
     };
     let length: i64 = if len_cmd.is_empty() { 0 } else { redis::cmd(len_cmd).arg(k).query_async(&mut mgr).await.map_err(err)? };
+    let limit = match reader {
+        Reader::Mcp if !matches!(len_cmd, "" | "STRLEN") => crate::redis_read::elements_within_budget(m, k, &ty, length, limit).await?,
+        _ => limit,
+    };
     let lim = limit as i64;
+    let raw_text = |v: &RV| reader.value(v);
+    let preview = reader.preview();
     let value = match ty.as_str() {
         // Only the beginning of large strings (reading it whole would use up MCP · app memory)
-        "string" if length > STRING_PREVIEW_MAX => {
-            let v: RV = redis::cmd("GETRANGE").arg(k).arg(0).arg(STRING_PREVIEW_MAX - 1).query_async(&mut mgr).await.map_err(err)?;
-            raw_text(&v)
+        "string" if length > preview => {
+            let v: RV = redis::cmd("GETRANGE").arg(k).arg(0).arg(preview - 1).query_async(&mut mgr).await.map_err(err)?;
+            match (reader, &v) {
+                (Reader::Mcp, RV::BulkString(b)) => crate::redis_read::value_json(b, length as usize),
+                _ => raw_text(&v),
+            }
         }
         "string" => {
             let v: RV = redis::cmd("GET").arg(k).query_async(&mut mgr).await.map_err(err)?;
@@ -991,7 +981,7 @@ pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<Key
             let mut rows = Vec::new();
             let mut cur = 0u64;
             loop {
-                let (next, items): (u64, Vec<RV>) = redis::cmd("HSCAN").arg(k).arg(cur).arg("COUNT").arg(500).query_async(&mut mgr).await.map_err(err)?;
+                let (next, items): (u64, Vec<RV>) = redis::cmd("HSCAN").arg(k).arg(cur).arg("COUNT").arg(limit.min(500)).query_async(&mut mgr).await.map_err(err)?;
                 rows.extend(items.chunks(2).map(|c| Value::Array(vec![raw_text(&c[0]), c.get(1).map(raw_text).unwrap_or(Value::Null)])));
                 cur = next;
                 if cur == 0 || rows.len() >= limit {
@@ -1010,7 +1000,7 @@ pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<Key
             let mut rows = Vec::new();
             let mut cur = 0u64;
             loop {
-                let (next, items): (u64, Vec<RV>) = redis::cmd("SSCAN").arg(k).arg(cur).arg("COUNT").arg(500).query_async(&mut mgr).await.map_err(err)?;
+                let (next, items): (u64, Vec<RV>) = redis::cmd("SSCAN").arg(k).arg(cur).arg("COUNT").arg(limit.min(500)).query_async(&mut mgr).await.map_err(err)?;
                 rows.extend(items.iter().map(raw_text));
                 cur = next;
                 if cur == 0 || rows.len() >= limit {
@@ -1048,7 +1038,7 @@ pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<Key
         Value::Array(a) => a.len() as i64,
         _ => length,
     };
-    let truncated = (ty_is_collection(&value) && shown < length) || (ty == "string" && length > STRING_PREVIEW_MAX);
+    let truncated = (ty_is_collection(&value) && shown < length) || (ty == "string" && length > preview);
     Ok(KeyDetail { ty, ttl, length, memory, encoding, value, truncated })
 }
 fn ty_is_collection(v: &Value) -> bool {
@@ -1197,12 +1187,12 @@ mod tests {
         let _: () = redis::cmd("SET").arg("qurry:big").arg(&big).query_async(&mut c).await.unwrap();
         let _: () = redis::cmd("SET").arg("qurry:small").arg("hi").query_async(&mut c).await.unwrap();
         let e = st.run_read_only("rd::db4".into(), "GET qurry:big".into(), 10).await.unwrap_err().to_string();
-        assert!(e.contains("too big"), "{e}");
+        assert!(e.contains("per MCP read"), "{e}");
         assert!(st.run_read_only("rd::db4".into(), "MGET qurry:small qurry:big".into(), 10).await.is_err());
         assert!(st.run_read_only("rd::db4".into(), "GET qurry:small".into(), 10).await.is_ok());
         // Reads sent to MCP execute get the same checks
         let e = st.execute_batch_prepared("rd::db4".into(), vec!["GET qurry:big".into()]).await.unwrap_err().to_string();
-        assert!(e.contains("too big"), "{e}");
+        assert!(e.contains("per MCP read"), "{e}");
         assert!(st.execute_batch_prepared("rd::db4".into(), vec!["GET qurry:small".into()]).await.is_ok());
         assert!(st.run_read_only("rd::db4".into(), "GETRANGE qurry:big 0 -1".into(), 10).await.is_err());
         assert!(st.run_read_only("rd::db4".into(), "GETRANGE qurry:big 0 99".into(), 10).await.is_ok());
@@ -1406,7 +1396,7 @@ mod tests {
         let _: () = redis::cmd("DEL").arg(z).arg(s).arg(l).query_async(&mut c).await.unwrap();
     }
 
-    /// The 16 MB check counts every element: MEMORY USAGE's default sampling (the first 5 list nodes) reads a list whose first elements are small as ~10 MB
+    /// The byte budget counts every element of a whole-key read: MEMORY USAGE's default sampling (the first 5 list nodes) reads a list whose first elements are small as ~10 MB
     #[tokio::test]
     #[ignore]
     async fn redis_size_check_counts_every_element() {
@@ -1431,7 +1421,7 @@ mod tests {
         assert!(sampled < 16 << 20, "default sampling under-counts: {sampled}");
         assert!(memory_usage(m, k.as_bytes(), 0).await.unwrap() > 50 << 20);
         let e = st.run_read_only("rd::db7".into(), format!("LRANGE {k} 0 -1"), 1000).await.unwrap_err().to_string();
-        assert!(e.contains("too big"), "{e}");
+        assert!(e.contains("per MCP read"), "{e}");
         let _: () = redis::cmd("DEL").arg(k).query_async(&mut c).await.unwrap();
     }
 

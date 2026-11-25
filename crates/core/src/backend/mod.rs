@@ -21,6 +21,7 @@ pub mod mysql_db;
 pub(crate) mod pg;
 pub(crate) mod plugin;
 pub(crate) mod redis;
+pub mod redis_read;
 pub mod redisdb;
 
 /// Error for an operation this kind doesn't have

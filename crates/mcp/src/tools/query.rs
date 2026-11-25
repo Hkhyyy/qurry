@@ -79,13 +79,18 @@ pub(super) fn result_json(r: &QueryResult) -> Value {
     if !r.has_result_set {
         return json!({ "rows_affected": r.rows_affected });
     }
-    json!({
+    let mut v = json!({
         "columns": r.columns.iter().map(|c| json!({ "name": c.name, "type": c.type_name })).collect::<Vec<_>>(),
         "rows": r.rows,
         "row_count": r.rows.len(),
         "truncated": r.truncated,
         "elapsed_ms": r.elapsed_ms
-    })
+    });
+    // Redis: values cut at redis_read::VALUE_MAX, as [row, column]
+    if !r.cut.is_empty() {
+        v["cut"] = json!(r.cut);
+    }
+    v
 }
 
 #[cfg(test)]

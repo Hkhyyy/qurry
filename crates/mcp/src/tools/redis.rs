@@ -29,6 +29,7 @@ impl Server {
         if kind != DbKind::Redis {
             return Err("Not a Redis data source".into());
         }
-        Ok(json!(st.redis_key(t, s("key").ok_or("key is required")?, Some(n("limit", 200).clamp(1, 10000))).await.map_err(e)?))
+        let key = s("key").ok_or("key is required")?.into_bytes();
+        Ok(json!(st.redis_key_read_only(t, key, n("limit", 200).clamp(1, 10000)).await.map_err(e)?))
     }
 }

@@ -37,10 +37,10 @@ MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mc
 `query`, `explain`, `export_csv` 는 클라이언트가 준 SQL 이나 명령을 받습니다. 이 도구들은 보내기 전에 같은 엔진 검사 (`qurry_core::guard`) 를 거치고, 데이터베이스가 할 수 있는 것은 그 위에서 데이터베이스가 지킵니다.
 
 - **PostgreSQL / MySQL**: 읽는 문장 정확히 하나를, 60초 제한이 걸린 READ ONLY 트랜잭션에서 실행하고 항상 롤백합니다. 쓰기 CTE, 변경문의 `EXPLAIN ANALYZE`, `SELECT … INTO OUTFILE`, 읽기 전용 끄기, 부작용이 있는 알려진 함수 (`pg_terminate_backend`, `pg_read_file`, `dblink`, `load_file`, `sleep` …) 는 실행 전에 거부합니다.
-- **Redis**: 읽기 명령만, `CONFIG` 와 `KEYS` 는 빼고, 명령 하나에 원소 1,000개까지.
+- **Redis**: 읽기 명령만, `CONFIG` 와 `KEYS` 는 빼고, 명령 하나에 원소 1,000개, 인자 1,000개, 4 MB 까지. 크기는 실행 전에 서버에서 잽니다 (`STRLEN`, `HSTRLEN`, `MEMORY USAGE`. 원소가 10,000개 넘는 키는 표본으로 재므로, 표본이 놓친 큰 원소 몇 개가 있으면 더 올 수 있습니다). 64 KB 가 넘는 값은 잘려서 옵니다.
 - **드라이버 Data Source** (SQL Server, DuckDB, ClickHouse, MongoDB, 벡터 DB) 는 READ ONLY 트랜잭션이 없어서 문장 검사가 더 엄격하고, DuckDB 는 외부 접근을 끈 채 열며 ClickHouse 읽기는 `readonly=2` 로 실행합니다.
 
-다른 도구는 SQL 을 받지 않습니다: Qurry 가 직접 만든 문장을 엔진 검사 없이 실행합니다. PostgreSQL · MySQL 의 `full_text_search` 는 테이블마다 `SELECT` 하나를 롤백하는 READ ONLY 트랜잭션에서 실행하고, 테이블마다 15초 제한이 있지만 호출 전체에는 제한이 없습니다. 둘러보기 도구 (데이터베이스, 스키마, 객체, 컬럼, DDL, `search_objects`, `get_erd`) 는 카탈로그를 읽습니다. `dba_report` 는 Qurry 에 들어 있는 리포트 문장만, 문장마다 30초 제한으로 실행합니다 (PostgreSQL 은 롤백하는 트랜잭션 안에서). `redis_get` 은 값의 원소를 10,000개까지, `redis_scan` 은 호출 한 번에 키를 5,000개까지 읽습니다.
+다른 도구는 SQL 을 받지 않습니다: Qurry 가 직접 만든 문장을 엔진 검사 없이 실행합니다. PostgreSQL · MySQL 의 `full_text_search` 는 테이블마다 `SELECT` 하나를 롤백하는 READ ONLY 트랜잭션에서 실행하고, 테이블마다 15초 제한이 있지만 호출 전체에는 제한이 없습니다. 둘러보기 도구 (데이터베이스, 스키마, 객체, 컬럼, DDL, `search_objects`, `get_erd`) 는 카탈로그를 읽습니다. `dba_report` 는 Qurry 에 들어 있는 리포트 문장만, 문장마다 30초 제한으로 실행합니다 (PostgreSQL 은 롤백하는 트랜잭션 안에서). `redis_get` 은 값의 원소를 10,000개까지 (4 MB 를 넘게 되면 그보다 적게, 원소마다 64 KB 까지, 문자열은 앞 64 KB), `redis_scan` 은 호출 한 번에 키를 5,000개까지 읽습니다. Redis 의 `get_ddl` 은 키를 통째로 읽으므로 `query` 와 같은 한도 안에서만 됩니다.
 
 전체 목록은 [MCP 서버 › 읽기 전용을 지키는 방법](mcp.md)에 있습니다. 이 검사들은 두 번째 방어선입니다: 검사가 모르는 함수는 DB 사용자에게 권한이 있으면 실행됩니다.
 

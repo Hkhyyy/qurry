@@ -69,17 +69,13 @@ impl Server {
         let e = |e: qurry_core::error::AppError| e.to_string();
         let schema_or = |kind: DbKind, db: &str| s("schema").unwrap_or_else(|| if kind == DbKind::Postgres { "public".into() } else { db.to_string() });
         let (t, kind, db, _) = self.target(a).await?;
-        let k = s("kind").unwrap_or_else(|| if kind == DbKind::Redis { "key".into() } else { "table".into() });
-        // DDL of a Redis key reads the whole value: use redis_get (up to the limit) for large keys
+        let name = s("name").ok_or("name is required")?;
+        // DDL of a Redis key reads the whole value: only within the read checks (elements and bytes); redis_get previews big keys
         if kind == DbKind::Redis {
-            let key = s("name").ok_or("name is required")?;
-            let d = st.redis_key(t.clone(), key, Some(1)).await.map_err(e)?;
-            let big = if d.ty == "string" { d.length > qurry_core::redisdb::STRING_PREVIEW_MAX } else { d.length > qurry_core::guard::REDIS_STRICT_MAX };
-            if big {
-                return Err(format!("The key is too big for its DDL ({} {}) — use redis_get with a limit", d.length, if d.ty == "string" { "bytes" } else { "elements" }));
-            }
+            return Ok(Value::String(st.redis_key_ddl_read_only(t, name).await.map_err(e)?));
         }
-        Ok(Value::String(st.object_ddl(t, schema_or(kind, &db), s("name").ok_or("name is required")?, k).await.map_err(e)?))
+        let k = s("kind").unwrap_or_else(|| "table".into());
+        Ok(Value::String(st.object_ddl(t, schema_or(kind, &db), name, k).await.map_err(e)?))
     }
 
     pub(super) async fn search_objects(&self, a: &Value) -> Result<Value, String> {

@@ -2,6 +2,7 @@
 //! (execute, only with --allow-write, is still answered here).
 use crate::Server;
 use qurry_core::app::ConnectionView;
+use qurry_core::redis_read::{READ_MAX_BYTES, VALUE_MAX};
 use qurry_core::sql;
 use qurry_core::store::{DbKind, McpAccess};
 use serde_json::{json, Value};
@@ -61,7 +62,7 @@ impl Server {
             ),
             tool(
                 "get_ddl",
-                "DDL of a table, view, materialized view, sequence or routine (Redis: commands that recreate the key).",
+                "DDL of a table, view, materialized view, sequence or routine (Redis: commands that recreate the key; only for a key small enough to read whole, as query would).",
                 ds_props(json!({ "schema": { "type": "string" }, "name": { "type": "string" }, "kind": { "type": "string", "enum": ["table", "view", "matview", "sequence", "routine", "key"], "description": "default: table" } })),
                 &["data_source", "name"],
                 true,
@@ -80,7 +81,7 @@ impl Server {
             ),
             tool(
                 "query",
-                "Run a read-only query and return rows. PostgreSQL/MySQL: a single SELECT/WITH/SHOW/EXPLAIN statement executed in a READ ONLY transaction. Redis: a read command line (e.g. 'HGETALL user:1', 'SCAN 0 MATCH user:* COUNT 100').",
+                &format!("Run a read-only query and return rows. PostgreSQL/MySQL: a single SELECT/WITH/SHOW/EXPLAIN statement executed in a READ ONLY transaction. Redis: a read command line (e.g. 'HGETALL user:1', 'SCAN 0 MATCH user:* COUNT 100'); one command reads at most {} MB (measured on the server before it runs; read big strings in parts with GETRANGE) and {} elements, and values over {} KB come back cut, listed in cut as [row, column].", READ_MAX_BYTES >> 20, qurry_core::guard::REDIS_STRICT_MAX, VALUE_MAX >> 10),
                 ds_props(json!({ "sql": { "type": "string" }, "limit": { "type": "integer", "description": "max rows, default 100, max 1000" } })),
                 &["data_source", "sql"],
                 true,
@@ -132,7 +133,7 @@ impl Server {
             ),
             tool(
                 "redis_get",
-                "Get a Redis key's type, TTL, size and value (hash fields, list items, set/zset members, stream entries).",
+                &format!("Get a Redis key's type, TTL (ms, -1 = no expiry), size and value (hash fields, list items, set/zset members, stream entries). A string shows its first {} KB; a collection its first `limit` elements, fewer when they would read more than {} MB (truncated: true). A value over {} KB comes as {{\"text\": its beginning, \"size\": bytes}}.", VALUE_MAX >> 10, READ_MAX_BYTES >> 20, VALUE_MAX >> 10),
                 ds_props(json!({ "key": { "type": "string" }, "limit": { "type": "integer", "description": "max elements, default 200" } })),
                 &["data_source", "key"],
                 true,
