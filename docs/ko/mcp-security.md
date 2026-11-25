@@ -18,7 +18,7 @@ MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mc
 
 | MCP 설정 | `--allow-write` 없이 | `--allow-write` 로 |
 |---|---|---|
-| **Off** | 아무것도. 목록에 없고, 비밀번호를 읽지도 접속하지도 않습니다 (클라이언트가 이름이나 id 로 직접 요청해도) | 같음 |
+| **Off** | 아무것도. 목록에 없고, 비밀번호를 읽지도 접속하지도 않습니다 (클라이언트가 이름이나 id 로 직접 요청해도. 숨긴 Data Source 에도 맞는 이름 일부로는 아무것도 찾지 않습니다) | 같음 |
 | **Read** | 둘러보기와 읽기: 데이터베이스, 스키마, 객체, 컬럼, DDL, 객체 검색, `query`, `explain`, `full_text_search`, `get_erd`, `dba_report` (Production 은 사람이 허용한 곳만), Redis 키와 값, RAG 검색, `export_csv` | 같음 |
 | **Read & write** | Read 와 같음 | `execute` 도 — 단 Data Source 가 **읽기 전용** 이거나 **Production** 이면 Read 에 머뭅니다 |
 | *(설정 없음: 이 설정이 생기기 전에 만든 것)* | Read, Production Data Source 면 **Off** | Read & write (읽기 전용이면 Read), Production Data Source 면 **Off** |

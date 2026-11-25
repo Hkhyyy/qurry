@@ -18,7 +18,7 @@ Only `qurry-mcp` 0.2.13 or newer reads the MCP setting. An older `qurry-mcp` or 
 
 | MCP setting | Without `--allow-write` | With `--allow-write` |
 |---|---|---|
-| **Off** | Nothing. Not listed; its password is never read and no connection is opened (also when the client asks for it by name or id) | Same |
+| **Off** | Nothing. Not listed; its password is never read and no connection is opened (also when the client asks for it by name or id; a part of a name that also matches a hidden source finds nothing) | Same |
 | **Read** | Browse and read: databases, schemas, objects, columns, DDL, object search, `query`, `explain`, `full_text_search`, `get_erd`, `dba_report` (on Production only where a person allowed it), Redis keys and values, RAG search, `export_csv` | Same |
 | **Read & write** | Same as Read | Also `execute` — unless the data source is **Read-only** or **Production**, which keep it at Read |
 | *(not set: made before the setting existed)* | Read, or **Off** if it is a Production data source | Read & write (Read if Read-only), or **Off** if it is a Production data source |

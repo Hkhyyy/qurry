@@ -258,23 +258,28 @@ impl Server {
     }
 }
 
-/// The Data Source an MCP client asked for: id, name (any case) or a unique part of the name, among the ones shared with MCP.
+/// The Data Source an MCP client asked for: id, name or a unique part of the name, among the ones shared with MCP. Names compare
+/// trimmed and in any case (Unicode), the exact match and the part alike.
 /// A hidden source that matches by id or name gets its own error (the user turned it off — it isn't missing), and nothing else about it is shown.
 /// That check comes before the partial match, so a hidden source's exact name never lands on a shared source whose name contains it.
-/// A part that matches several shared sources is an error, not the first one
+/// A part must match one source among all of them, hidden ones included: matching several (or a hidden one) is "not found", not the first one
 fn find_source<'a>(all: &'a [ConnectionView], want: &str, allow_write: bool) -> Result<&'a ConnectionView, String> {
     let shown = |c: &ConnectionView| c.config.mcp_access(allow_write) != McpAccess::Off;
-    let exact = |c: &ConnectionView| c.config.id == want || c.config.name.eq_ignore_ascii_case(want);
+    let key = want.trim().to_lowercase();
+    let name = |c: &ConnectionView| c.config.name.trim().to_lowercase();
+    let exact = |c: &ConnectionView| c.config.id == want.trim() || name(c) == key;
     let list: Vec<&ConnectionView> = all.iter().filter(|c| shown(c)).collect();
-    let found = list.iter().find(|c| c.config.id == want).or_else(|| list.iter().find(|c| c.config.name.eq_ignore_ascii_case(want)));
+    let found = list.iter().find(|c| c.config.id == want.trim()).or_else(|| list.iter().find(|c| name(c) == key));
     if let Some(c) = found {
         return Ok(c);
     }
     if all.iter().any(|c| !shown(c) && exact(c)) {
         return Err(format!("Data source \"{want}\" is not shared with MCP — turn it on in Qurry: data source › Options › MCP (TUI: data source form)"));
     }
-    let m: Vec<_> = list.iter().filter(|c| c.config.name.to_lowercase().contains(&want.to_lowercase())).collect();
-    if let [c] = m.as_slice() {
+    let m: Vec<_> = all.iter().filter(|c| !key.is_empty() && name(c).contains(&key)).collect();
+    if let [c] = m.as_slice()
+        && shown(c)
+    {
         return Ok(c);
     }
     Err(format!("Data source not found: {want}. Available: {}", list.iter().map(|c| c.config.name.as_str()).collect::<Vec<_>>().join(", ")))
@@ -346,6 +351,26 @@ pub(crate) mod tests {
                 let e = find("Redis").unwrap_err();
                 assert!(e.starts_with("Data source not found") && e.contains("ProdRead") && e.contains("ProdWrite") && !e.contains("Acme Redis Prod,"), "{kind}: {e}");
             }
+        }
+
+        // One shared source contains a hidden one's name; names in another case (Unicode), with spaces around, or a part that also
+        // matches a hidden source never reach the shared one
+        let all = [source("h", "Shop Prod", None, true), source("s", "Shop Prod Copy", Some("write"), false), source("u", "Ünal Cache", Some("off"), false),
+            source("v", "Ünal Cache Replica", Some("read"), false)];
+        for allow_write in [false, true] {
+            let find = |w: &str| find_source(&all, w, allow_write).map(|c| c.config.id.clone());
+            for w in ["Shop Prod", "shop prod", "Shop Prod ", " SHOP PROD", "ünal cache", "ÜNAL CACHE", "Ünal Cache\t", "h", " u "] {
+                let e = find(w).unwrap_err();
+                assert!(e.contains("is not shared with MCP"), "{w:?}: {e}");
+            }
+            for w in ["Shop", "shop pro", "ünal", "cache"] {
+                let e = find(w).unwrap_err();
+                assert!(e.starts_with("Data source not found") && e.contains("Available: Shop Prod Copy, Ünal Cache Replica"), "{w:?}: {e}");
+            }
+            for (w, id) in [("Shop Prod Copy", "s"), (" shop prod copy ", "s"), ("copy", "s"), ("ünal cache replica", "v"), ("REPLICA", "v"), ("s", "s")] {
+                assert_eq!(find(w).as_deref(), Ok(id), "{w:?}");
+            }
+            assert!(find("").is_err() && find("  ").is_err());
         }
     }
 
