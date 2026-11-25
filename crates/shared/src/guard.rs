@@ -631,6 +631,8 @@ pub struct RedisPartRead {
     pub count: &'static str,
     pub key: usize,
     pub elements: i64,
+    /// The elements may repeat (a negative count of ZRANDMEMBER, SRANDMEMBER, HRANDFIELD): the read can return more than the key holds
+    pub repeats: bool,
 }
 
 /// The part of a collection a Redis read returns, from its arguments: a bounded range, a LIMIT, COUNT (SCAN-like commands return
@@ -665,11 +667,12 @@ pub fn redis_part_read(cmd: &str, args: &[String]) -> Option<RedisPartRead> {
         "GEOSEARCH" => ("ZCARD", count(10)),
         // XINFO STREAM key: its first and last entries; FULL: COUNT entries (10 by default)
         "XINFO" if args.len() > 1 && args[0].eq_ignore_ascii_case("STREAM") => {
-            return Some(RedisPartRead { count: "XLEN", key: 1, elements: if opt("FULL").is_some() { count(10)? } else { 2 } });
+            return Some(RedisPartRead { count: "XLEN", key: 1, elements: if opt("FULL").is_some() { count(10)? } else { 2 }, repeats: false });
         }
         _ => return None,
     };
-    Some(RedisPartRead { count: len, key: 0, elements: elements?.max(0) })
+    let repeats = matches!(cmd, "ZRANDMEMBER" | "SRANDMEMBER" | "HRANDFIELD") && num(1).is_some_and(|n| n < 0);
+    Some(RedisPartRead { count: len, key: 0, elements: elements?.max(0), repeats })
 }
 
 /// Read commands additionally blocked in Redis read-only (MCP): ones that expose config · passwords (CONFIG GET) or can stall the server (KEYS),
@@ -1605,6 +1608,14 @@ mod tests {
             ("XINFO STREAM x FULL COUNT 3", ("XLEN", 1, 3)), ("LRANGE l 5 2", ("LLEN", 0, 0)),
         ] {
             assert_eq!(part(line), Some(want), "{line}");
+        }
+        // A negative random count repeats elements: it may read more than the key holds
+        let repeats = |line: &str| {
+            let (cmd, a) = split(line);
+            redis_part_read(&cmd, &a).map(|p| p.repeats)
+        };
+        for (line, want) in [("SRANDMEMBER s -20", true), ("HRANDFIELD h -20 WITHVALUES", true), ("ZRANDMEMBER z -3", true), ("SRANDMEMBER s 20", false), ("HRANDFIELD h", false), ("LRANGE l 0 7", false)] {
+            assert_eq!(repeats(line), Some(want), "{line}");
         }
         // Whole keys are redis_size_check's; strings and numbers aren't parts
         for line in ["LRANGE l 0 -1", "HGETALL h", "XRANGE x - +", "GET a", "HGET h f", "ZSCORE z m", "LLEN l", "XINFO GROUPS x"] {
