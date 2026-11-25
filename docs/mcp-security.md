@@ -46,7 +46,7 @@ The full list is in [MCP server › How read-only is enforced](mcp.md). These ch
 
 ## Writes (`--allow-write`)
 
-`execute` is listed only when the server runs with `--allow-write`, and it runs only on data sources set to Read & write that are neither Read-only nor Production. It takes an allow-list: one `INSERT`, or `UPDATE` / `DELETE` with a `WHERE` per item, and the MongoDB, vector database and Redis equivalents. DDL, `TRUNCATE`, `MERGE`, scripts and drops are refused, and so is a Redis write that could empty or trim a key (Qurry counts the key's elements first). PostgreSQL / MySQL run each item as a prepared statement, so the server refuses a second statement hidden in one item.
+`execute` is listed only when the server runs with `--allow-write`, and it runs only on data sources set to Read & write that are neither Read-only nor Production. It takes an allow-list: one `INSERT`, or `UPDATE` / `DELETE` with a `WHERE` per item, and the MongoDB, vector database and Redis equivalents. DDL, `TRUNCATE`, `MERGE`, scripts and drops are refused, and so is a Redis write that could empty or trim a key or replace a key of another type (Qurry asks the server for the key's size and type first, one `execute` call at a time; another client can still change the key in between). PostgreSQL / MySQL run each item as a prepared statement, so the server refuses a second statement hidden in one item.
 
 A Production data source never takes `execute`, whatever its MCP setting: the row-count question the app asks before a change needs a person, and an AI tool would skip it. Change production data in Qurry yourself.
 

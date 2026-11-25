@@ -30,13 +30,21 @@ struct Mcp {
 
 impl Mcp {
     fn request(&mut self, method: &str, params: Value) -> Value {
-        self.id += 1;
-        writeln!(self.stdin, "{}", json!({ "jsonrpc": "2.0", "id": self.id, "method": method, "params": params })).unwrap();
-        let mut line = String::new();
-        self.stdout.read_line(&mut line).unwrap();
-        let r: Value = serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON-RPC: {line} ({e})"));
+        self.send(method, params);
+        let r = self.reply();
         assert_eq!(r["id"], json!(self.id), "{r}");
         r["result"].clone()
+    }
+
+    fn send(&mut self, method: &str, params: Value) {
+        self.id += 1;
+        writeln!(self.stdin, "{}", json!({ "jsonrpc": "2.0", "id": self.id, "method": method, "params": params })).unwrap();
+    }
+
+    fn reply(&mut self) -> Value {
+        let mut line = String::new();
+        self.stdout.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON-RPC: {line} ({e})"))
     }
 
     /// (isError, text) of a tool call
@@ -134,6 +142,13 @@ async fn redis_tools_over_stdio() {
         vec![format!("SPOP {S} 3")],
         vec![format!("ZPOPMIN {Z} 2")],
         vec![format!("GETDEL {H}")],
+        // Trimming options in any order (LIMIT first)
+        vec![format!("XADD {X} LIMIT 0 MAXLEN ~ 0 * a b")],
+        vec![format!("XADD {X} NOMKSTREAM LIMIT 5 MINID ~ 9-0 * a b")],
+        // A string write onto a hash, set or stream would replace it whole
+        vec![format!("SET {H} x")],
+        vec![format!("MSET qurry:mcp:new 1 {S} x")],
+        vec![format!("APPEND {X} x")],
     ] {
         let s: Vec<&str> = bad.iter().map(String::as_str).collect();
         let (err, t) = m.execute(&s);
@@ -148,6 +163,19 @@ async fn redis_tools_over_stdio() {
         assert!(!err, "{ok}: {t}");
     }
     assert_eq!(m.sizes(), [2, 2, 1, 1, 2]);
+    let (err, t) = m.call("redis_get", json!({ "data_source": "Demo Redis ProdCopy", "key": H }));
+    assert!(!err && t.contains("\"hash\""), "{t}");
+
+    // Two calls sent at once, each taking out one of the two fields: one runs, the other sees the field it left (the server answers
+    // requests concurrently; the count and the run are one at a time)
+    for round in 0..5 {
+        run(format!("HSET {H} name n email e")).await.unwrap();
+        run(format!("HDEL {H} tier")).await.unwrap();
+        m.send("tools/call", json!({ "name": "execute", "arguments": { "data_source": "Demo Redis ProdCopy", "statements": [format!("HDEL {H} name")] } }));
+        m.send("tools/call", json!({ "name": "execute", "arguments": { "data_source": "Demo Redis ProdCopy", "statements": [format!("HDEL {H} email")] } }));
+        let errors = [m.reply(), m.reply()].iter().filter(|r| r["result"]["isError"] == json!(true)).count();
+        assert_eq!((errors, m.sizes()[0]), (1, 1), "round {round}");
+    }
 
     drop(m.stdin);
     let _ = m.child.wait();

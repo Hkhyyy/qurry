@@ -869,21 +869,24 @@ pub(crate) async fn check_read(m: &RedisConn, line: &str) -> AppResult<()> {
         return Ok(());
     }
     let rest: Vec<String> = args.iter().skip(1).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+    // Keys and fields go to the server as the bytes that will run: lossy text would name another key when one isn't UTF-8
+    let raw = &args[1..];
     if let Some(why) = crate::guard::redis_strict_violation(&cmd, &rest) {
         return Err(AppError::Msg(why));
     }
     // Whole keys: count the elements (and then the bytes) before reading
     if let Some(c) = crate::guard::redis_size_check(&cmd, &rest) {
+        let keys: Vec<&[u8]> = c.keys.iter().map(|&i| raw[i].as_slice()).collect();
         let mut n = 0i64;
-        for k in &c.keys {
-            n = n.saturating_add(element_count(m, c.count, k.as_bytes()).await?);
+        for k in &keys {
+            n = n.saturating_add(element_count(m, c.count, k).await?);
         }
         if n > REDIS_STRICT_MAX {
             return Err(AppError::Msg(format!("{cmd} would read {n} elements — at most {REDIS_STRICT_MAX} in read-only mode; use {} (or redis_get for a preview)", c.instead)));
         }
         let mut bytes = 0i64;
-        for k in &c.keys {
-            bytes = bytes.saturating_add(memory_usage(m, k.as_bytes(), 0).await?);
+        for k in &keys {
+            bytes = bytes.saturating_add(memory_usage(m, k, 0).await?);
         }
         if bytes > REDIS_READ_MAX_BYTES {
             return Err(AppError::Msg(format!("{cmd} would read {} MB — too big to read here; use {}", bytes >> 20, c.instead)));
@@ -892,54 +895,62 @@ pub(crate) async fn check_read(m: &RedisConn, line: &str) -> AppResult<()> {
     // Commands that return a whole value: check the size before reading
     // GETRANGE with a bounded range reads at most that much
     let range_small = cmd == "GETRANGE" && matches!((rest.get(1).and_then(|a| a.parse::<i64>().ok()), rest.get(2).and_then(|a| a.parse::<i64>().ok())), (Some(a), Some(b)) if a >= 0 && b >= a && b - a < REDIS_READ_MAX_BYTES);
-    let keys: &[String] = match cmd.as_str() {
-        "GET" | "JSON.GET" => rest.get(..1).unwrap_or(&[]),
-        "GETRANGE" if !range_small => rest.get(..1).unwrap_or(&[]),
-        "MGET" => &rest,
-        "JSON.MGET" => rest.split_last().map(|(_, k)| k).unwrap_or(&[]),
+    let keys: &[Vec<u8>] = match cmd.as_str() {
+        "GET" | "JSON.GET" => raw.get(..1).unwrap_or(&[]),
+        "GETRANGE" if !range_small => raw.get(..1).unwrap_or(&[]),
+        "MGET" => raw,
+        "JSON.MGET" => raw.split_last().map(|(_, k)| k).unwrap_or(&[]),
         _ => &[],
     };
     let json = cmd.starts_with("JSON.");
     for k in keys {
-        let n = value_size(m, k.as_bytes(), json).await?;
+        let n = value_size(m, k, json).await?;
         if n > REDIS_READ_MAX_BYTES {
-            return Err(AppError::Msg(format!("{k} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", n >> 20)));
+            return Err(AppError::Msg(format!("{} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", String::from_utf8_lossy(k), n >> 20)));
         }
     }
     // HGET / HMGET: one hash field can be big too
-    if matches!(cmd.as_str(), "HGET" | "HMGET") && rest.len() > 1 {
-        for f in &rest[1..] {
-            let n = field_len(m, rest[0].as_bytes(), f.as_bytes()).await?;
+    if matches!(cmd.as_str(), "HGET" | "HMGET") && raw.len() > 1 {
+        for f in &raw[1..] {
+            let n = field_len(m, &raw[0], f).await?;
             if n > REDIS_READ_MAX_BYTES {
-                return Err(AppError::Msg(format!("{}.{f} is {} MB — too big to read here", rest[0], n >> 20)));
+                return Err(AppError::Msg(format!("{}.{} is {} MB — too big to read here", rest[0], String::from_utf8_lossy(f), n >> 20)));
             }
         }
     }
     Ok(())
 }
 
-/// MCP Redis writes (execute): refuse removals (HDEL, SREM, ZREM, XDEL, SMOVE, LPOP, RPOP, LREM) that could empty a key, which Redis
-/// then deletes. Counts what the statements together take out of each key (guard::redis_empty_check), so splitting the removal
-/// over several items doesn't get around it
-pub(crate) async fn check_not_emptied(m: &RedisConn, lines: &[String]) -> AppResult<()> {
+/// MCP Redis writes (execute), what only the server knows: refuse removals (HDEL, SREM, ZREM, XDEL, SMOVE, LPOP, RPOP, LREM) that
+/// could empty a key, which Redis then deletes, and SET-like writes onto a key of another type, which would replace it whole.
+/// Counts what the statements together take out of each key (guard::redis_empty_check), so splitting the removal over several
+/// items doesn't get around it. Keys and members are compared and sent as bytes. The caller holds REDIS_MCP_WRITES until they ran
+pub(crate) async fn check_mcp_write(m: &RedisConn, lines: &[String]) -> AppResult<()> {
+    let refuse = |what: String| Err(AppError::Msg(format!("{what} — refused over MCP; ask the user to run it in Qurry")));
     let mut removed: Vec<(crate::guard::RedisEmptyCheck, String)> = Vec::new();
     for line in lines {
         let args = parse_command(line.trim().trim_end_matches(';').trim())?;
         let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
-        let rest: Vec<String> = args.iter().skip(1).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
-        let Some(c) = crate::guard::redis_empty_check(&cmd, &rest) else { continue };
+        let raw = &args[1..];
+        if let Some((want, keys)) = crate::guard::redis_type_check(&cmd, raw.len()) {
+            let mut mgr = m.clone();
+            for i in keys {
+                let ty = key_type(&mut mgr, &raw[i]).await?;
+                if ty != "none" && ty != want {
+                    return refuse(format!("{cmd} would replace {} (a {ty}) with a new value", String::from_utf8_lossy(&raw[i])));
+                }
+            }
+        }
+        let Some(c) = crate::guard::redis_empty_check(&cmd, raw) else { continue };
         match removed.iter_mut().find(|(r, _)| r.key == c.key && r.count == c.count) {
             Some((r, _)) => r.removes = r.removes.saturating_add(c.removes),
             None => removed.push((c, cmd)),
         }
     }
     for (c, cmd) in removed {
-        let n = element_count(m, c.count, c.key.as_bytes()).await?;
+        let n = element_count(m, c.count, &c.key).await?;
         if n > 0 && c.removes >= n as u64 {
-            return Err(AppError::Msg(format!(
-                "{cmd} could take every element out of {} ({n}), which empties or deletes the key — refused over MCP; ask the user to run it in Qurry",
-                c.key
-            )));
+            return refuse(format!("{cmd} could take every element out of {} ({n}), which empties or deletes the key", String::from_utf8_lossy(&c.key)));
         }
     }
     Ok(())
@@ -1248,7 +1259,7 @@ mod tests {
         st.save_connection(cfg("db9"), None, None).await.unwrap();
         let pool = crate::db::connect(&cfg("db9"), None).await.expect("connect");
         let Pool::Redis(m, 9) = &pool else { panic!("db index") };
-        let mut c = m.clone();
+        let c = m.clone();
         let (h, s, z, l, x) = ("qurry:empty:h", "qurry:empty:s", "qurry:empty:z", "qurry:empty:l", "qurry:empty:x");
         let reset = || {
             let mut c = c.clone();
@@ -1286,7 +1297,37 @@ mod tests {
             exec(vec![ok]).await.unwrap_or_else(|e| panic!("{ok}: {e}"));
         }
         assert_eq!(sizes().await, [1, 1, 1, 1, 1]);
-        let _: () = redis::cmd("DEL").arg(h).arg(s).arg(z).arg(l).arg(x).query_async(&mut c).await.unwrap();
+
+        let mut d = m.clone();
+        // (a run that stopped halfway may have left them)
+        let _: () = redis::cmd("DEL").arg(b"qurry:empty:bs\xff").arg(b"qurry:empty:bh\xff").arg(b"qurry:empty:bl\xff").query_async(&mut d).await.unwrap();
+        // Keys and members that aren't UTF-8 are counted as the bytes that run: two members that read the same as lossy text, and
+        // a key whose lossy name is another (empty) key
+        let (bs, bh, bl) = (b"qurry:empty:bs\xff".to_vec(), b"qurry:empty:bh\xff".to_vec(), b"qurry:empty:bl\xff".to_vec());
+        let _: () = redis::cmd("SADD").arg(&bs).arg(b"\xff").arg(b"\xfe").query_async(&mut d).await.unwrap();
+        let _: () = redis::cmd("HSET").arg(&bh).arg("a").arg(1).arg("b").arg(2).query_async(&mut d).await.unwrap();
+        let _: () = redis::cmd("RPUSH").arg(&bl).arg(vec!["x"; 1500]).query_async(&mut d).await.unwrap();
+        for bad in [r#"SREM "qurry:empty:bs\xff" "\xff" "\xfe""#, r#"HDEL "qurry:empty:bh\xff" a b"#] {
+            let e = exec(vec![bad]).await.expect_err("refused").to_string();
+            assert!(e.contains("could take every element out of"), "{bad}: {e}");
+        }
+        assert_eq!(redis::cmd("SCARD").arg(&bs).query_async::<i64>(&mut d).await.unwrap(), 2);
+        assert_eq!(redis::cmd("HLEN").arg(&bh).query_async::<i64>(&mut d).await.unwrap(), 2);
+        // The whole-key read cap counts the binary key itself
+        let e = exec(vec![r#"LRANGE "qurry:empty:bl\xff" 0 -1"#]).await.expect_err("refused").to_string();
+        assert!(e.contains("1500 elements"), "{e}");
+
+        // SET-like writes never replace a key of another type; on a string or a new key they run
+        for bad in [vec!["SET qurry:empty:h x"], vec!["SET qurry:empty:s x GET"], vec!["MSET qurry:empty:str 1 qurry:empty:z x"], vec!["APPEND qurry:empty:l x"],
+            vec!["GETSET qurry:empty:x v"], vec!["SETRANGE qurry:empty:h 0 x"], vec!["SETNX qurry:empty:h x"], vec!["JSON.SET qurry:empty:h $ 1"]] {
+            let e = exec(bad.clone()).await.expect_err("refused").to_string();
+            assert!(e.contains("would replace") && e.contains("run it in Qurry"), "{bad:?}: {e}");
+        }
+        assert_eq!(sizes().await, [1, 1, 1, 1, 1]);
+        for ok in ["SET qurry:empty:str v", "SET qurry:empty:str w", "MSET qurry:empty:str a qurry:empty:str2 b", "APPEND qurry:empty:str x"] {
+            exec(vec![ok]).await.unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+        let _: () = redis::cmd("DEL").arg(h).arg(s).arg(z).arg(l).arg(x).arg(&bs).arg(&bh).arg(&bl).arg("qurry:empty:str").arg("qurry:empty:str2").query_async(&mut d).await.unwrap();
     }
 
     /// MCP read: whole keys (HGETALL, SMEMBERS, set ops, LRANGE 0 -1, XRANGE without COUNT) are read when small, refused when over 1,000 elements

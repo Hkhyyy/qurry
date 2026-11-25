@@ -598,7 +598,8 @@ fn redis_range_len(start: i64, stop: i64) -> Option<i64> {
 #[derive(Debug, PartialEq)]
 pub struct RedisSizeCheck {
     pub count: &'static str,
-    pub keys: Vec<String>,
+    /// Positions of the keys in the arguments, so the caller counts the exact bytes it will send (a key may not be UTF-8)
+    pub keys: Vec<usize>,
     pub instead: &'static str,
 }
 
@@ -608,11 +609,11 @@ pub fn redis_size_check(cmd: &str, args: &[String]) -> Option<RedisSizeCheck> {
     let opt = |name: &str| redis_opt(cmd, args, name);
     let unbounded = matches!((num(1), num(2)), (Some(a), Some(b)) if redis_range_len(a, b).is_none());
     let by = opt("BYSCORE").or(opt("BYLEX")).is_some();
-    let check = |count, instead| Some(RedisSizeCheck { count, keys: args.first().cloned().into_iter().collect(), instead });
+    let check = |count, instead| Some(RedisSizeCheck { count, keys: if args.is_empty() { vec![] } else { vec![0] }, instead });
     match cmd {
         "HGETALL" | "HKEYS" | "HVALS" => check("HLEN", "HSCAN"),
         "SMEMBERS" => check("SCARD", "SSCAN"),
-        "SINTER" | "SUNION" | "SDIFF" => Some(RedisSizeCheck { count: "SCARD", keys: args.to_vec(), instead: "SSCAN on each set" }),
+        "SINTER" | "SUNION" | "SDIFF" => Some(RedisSizeCheck { count: "SCARD", keys: (0..args.len()).collect(), instead: "SSCAN on each set" }),
         "LRANGE" if unbounded => check("LLEN", "a bounded range such as LRANGE key 0 99"),
         "ZREVRANGE" if unbounded => check("ZCARD", "ZSCAN or a bounded range"),
         "ZRANGE" if !by && unbounded => check("ZCARD", "ZSCAN or a bounded range"),
@@ -998,12 +999,14 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
     far.then(|| format!("{cmd} offset must be below {} bytes over MCP", REDIS_MCP_MAX_OFFSET))
 }
 
-/// XADD key [NOMKSTREAM] [MAXLEN | MINID [= | ~] threshold [LIMIT count]] id field value …: whether it trims the stream.
-/// Reads the options before the id as Redis does, so a field named MAXLEN after the id doesn't count
+/// XADD key [NOMKSTREAM] [MAXLEN | MINID [= | ~] threshold] [LIMIT count] id field value …: whether it trims the stream.
+/// Reads the options before the id as Redis does (in any order), so a field named MAXLEN after the id doesn't count
 fn xadd_trims(args: &[String]) -> bool {
-    for a in args.iter().skip(1) {
+    let mut i = 1;
+    while let Some(a) = args.get(i) {
         match a.to_uppercase().as_str() {
-            "NOMKSTREAM" => continue,
+            "NOMKSTREAM" => i += 1,
+            "LIMIT" => i += 2,
             "MAXLEN" | "MINID" => return true,
             _ => return false,
         }
@@ -1016,25 +1019,39 @@ fn xadd_trims(args: &[String]) -> bool {
 #[derive(Debug, PartialEq)]
 pub struct RedisEmptyCheck {
     pub count: &'static str,
-    pub key: String,
+    pub key: Vec<u8>,
     pub removes: u64,
 }
 
-/// Whether a write redis_mcp_write_violation lets through needs a RedisEmptyCheck. cmd uppercased, args = arguments after it
-pub fn redis_empty_check(cmd: &str, args: &[String]) -> Option<RedisEmptyCheck> {
+/// Whether a write redis_mcp_write_violation lets through needs a RedisEmptyCheck. cmd uppercased, args = the raw arguments after it
+/// (bytes: members and keys that aren't UTF-8 must stay distinct, as Redis sees them)
+pub fn redis_empty_check(cmd: &str, args: &[Vec<u8>]) -> Option<RedisEmptyCheck> {
     let key = args.first()?.clone();
     let distinct = |from: usize| args.get(from..).unwrap_or(&[]).iter().collect::<std::collections::HashSet<_>>().len() as u64;
+    let num = |i: usize| args.get(i).and_then(|n| std::str::from_utf8(n).ok()).and_then(|n| n.parse::<i64>().ok());
     let (count, removes) = match cmd {
         "HDEL" => ("HLEN", distinct(1)),
         "SREM" => ("SCARD", distinct(1)),
         "ZREM" => ("ZCARD", distinct(1)),
         "XDEL" => ("XLEN", distinct(1)),
         "SMOVE" => ("SCARD", 1),
-        "LPOP" | "RPOP" => ("LLEN", args.get(1).and_then(|n| n.parse::<u64>().ok()).unwrap_or(1)),
-        "LREM" => ("LLEN", args.get(1).and_then(|n| n.parse::<i64>().ok()).map_or(0, |n| n.unsigned_abs())),
+        "LPOP" | "RPOP" => ("LLEN", num(1).map_or(1, |n| n.unsigned_abs())),
+        "LREM" => ("LLEN", num(1).map_or(0, |n| n.unsigned_abs())),
         _ => return None,
     };
     Some(RedisEmptyCheck { count, key, removes })
+}
+
+/// Writes MCP allows that would replace a key of another type whole (SET on a hash turns it into a string): the type the keys
+/// must have when they exist, and their positions in the arguments. The other allowed writes fail with WRONGTYPE on another type.
+/// cmd uppercased, args = arguments after it
+pub fn redis_type_check(cmd: &str, args_len: usize) -> Option<(&'static str, Vec<usize>)> {
+    match cmd {
+        "SET" | "SETNX" | "GETSET" | "SETRANGE" | "APPEND" if args_len > 0 => Some(("string", vec![0])),
+        "MSET" | "MSETNX" => Some(("string", (0..args_len).step_by(2).collect())),
+        "JSON.SET" if args_len > 0 => Some(("ReJSON-RL", vec![0])),
+        _ => None,
+    }
 }
 
 /// Whether the statement doesn't change data (Production confirmation, Explain Analyse rollback, the Production log, and
@@ -1499,7 +1516,8 @@ mod tests {
             ("ZRANGEBYSCORE LIMIT 0 5", "ZCARD", vec!["LIMIT"]), ("XRANGE COUNT 5 +", "XLEN", vec!["COUNT"])] {
             assert!(v(line).is_none(), "{line}");
             let c = size(line).unwrap_or_else(|| panic!("{line}"));
-            assert_eq!((c.count, c.keys.iter().map(String::as_str).collect::<Vec<_>>()), (count, keys), "{line}");
+            let args: Vec<&str> = line.split_whitespace().skip(1).collect();
+            assert_eq!((c.count, c.keys.iter().map(|&i| args[i]).collect::<Vec<_>>()), (count, keys), "{line}");
         }
         for ok in ["GET a", "HGET h f", "LRANGE l 0 99", "ZRANGEBYSCORE z 0 1 LIMIT 0 10", "XRANGE s - + COUNT 10", "ZRANGE z 0 +inf BYSCORE LIMIT 0 10"] {
             assert!(size(ok).is_none(), "{ok}");
@@ -1606,6 +1624,7 @@ mod tests {
             assert!(v(ok).is_none(), "{ok}: {:?}", v(ok));
         }
         for bad in ["XADD s MAXLEN 0 * a b", "XADD s maxlen ~ 1000 * a b", "XADD s MINID = 1-0 * a b", "XADD s NOMKSTREAM MAXLEN 0 * a b", "XADD s MAXLEN 1 LIMIT 10 * a b",
+            "XADD st LIMIT 0 MAXLEN ~ 0 * a b", "XADD st NOMKSTREAM LIMIT 5 MINID ~ 9-0 * a b", "XADD st LIMIT 0 NOMKSTREAM MAXLEN 0 * a b", "XADD st MINID 0 LIMIT 1 * a b",
             "LREM l 0 x", "LREM l x y", "LREM l", "RPOP l 2", "LPOP l 0", "LPOP l -1",
             "XTRIM s MAXLEN 0", "LTRIM l 1 0", "ZREMRANGEBYSCORE z -inf +inf", "ZREMRANGEBYLEX z - +", "ZREMRANGEBYRANK z 0 -1", "SPOP s", "SPOP s 10", "ZPOPMIN z", "ZPOPMAX z 5",
             "BZPOPMIN z 0", "BLPOP l 0", "LMPOP 1 l LEFT COUNT 9", "LMOVE a b LEFT RIGHT", "RPOPLPUSH a b", "GETDEL k", "GETEX k EX 1", "SET k v EXAT 1", "PSETEX k 1 v",
@@ -1614,8 +1633,8 @@ mod tests {
             assert!(e.contains("run it in Qurry"), "{bad}: {e}");
         }
         let check = |s: &str| {
-            let a = redis_args(s);
-            redis_empty_check(&a[0].to_uppercase(), &a[1..]).map(|c| (c.count, c.key, c.removes))
+            let a = crate::redis_cmd::parse_command(s).unwrap();
+            redis_empty_check(&String::from_utf8_lossy(&a[0]).to_uppercase(), &a[1..]).map(|c| (c.count, String::from_utf8_lossy(&c.key).into_owned(), c.removes))
         };
         // Duplicates count once
         assert_eq!(check("HDEL h a b a"), Some(("HLEN", "h".into(), 2)));
@@ -1628,6 +1647,17 @@ mod tests {
         assert_eq!(check("LREM l -3 x"), Some(("LLEN", "l".into(), 3)));
         for none in ["SET a 1", "HSET h f v", "XADD s * a b", "GET a", "SADD s a", "HDEL"] {
             assert_eq!(check(none), None, "{none}");
+        }
+        // Members that aren't UTF-8 stay distinct (lossy text would make them one), and the key keeps its bytes
+        let a = crate::redis_cmd::parse_command(r#"SREM "bk\xff" "\xff" "\xfe""#).unwrap();
+        let c = redis_empty_check("SREM", &a[1..]).unwrap();
+        assert_eq!((c.key, c.removes), (b"bk\xff".to_vec(), 2));
+        // SET-like writes check the key's type; MSET each key
+        assert_eq!(redis_type_check("SET", 2), Some(("string", vec![0])));
+        assert_eq!(redis_type_check("MSET", 4), Some(("string", vec![0, 2])));
+        assert_eq!(redis_type_check("JSON.SET", 3), Some(("ReJSON-RL", vec![0])));
+        for none in ["HSET", "LSET", "INCR", "SADD", "SETBIT"] {
+            assert_eq!(redis_type_check(none, 3), None, "{none}");
         }
     }
 
