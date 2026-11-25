@@ -99,7 +99,9 @@ async fn a_loads_own_error_after_a_reconnect_is_not_a_failed_reconnect() {
     let st = h.app.state.clone();
     let shown = st.reconnecting_now("s");
     h.app.reload_table(id);
-    for _ in 0..50 {
+    // The load's connect fails at its own pace (a busy CI runner took over 5s): wait on the load, not a count of settles
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while std::time::Instant::now() < until {
         h.settle().await;
         if h.app.waits.is_empty() {
             break;
