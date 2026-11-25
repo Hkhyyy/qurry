@@ -259,23 +259,23 @@ impl Server {
 }
 
 /// The Data Source an MCP client asked for: id, name (any case) or a unique part of the name, among the ones shared with MCP.
-/// A hidden source that matches by id or name gets its own error (the user turned it off — it isn't missing), and nothing else about it is shown
+/// A hidden source that matches by id or name gets its own error (the user turned it off — it isn't missing), and nothing else about it is shown.
+/// That check comes before the partial match, so a hidden source's exact name never lands on a shared source whose name contains it.
+/// A part that matches several shared sources is an error, not the first one
 fn find_source<'a>(all: &'a [ConnectionView], want: &str, allow_write: bool) -> Result<&'a ConnectionView, String> {
     let shown = |c: &ConnectionView| c.config.mcp_access(allow_write) != McpAccess::Off;
+    let exact = |c: &ConnectionView| c.config.id == want || c.config.name.eq_ignore_ascii_case(want);
     let list: Vec<&ConnectionView> = all.iter().filter(|c| shown(c)).collect();
-    let found = list
-        .iter()
-        .find(|c| c.config.id == want)
-        .or_else(|| list.iter().find(|c| c.config.name.eq_ignore_ascii_case(want)))
-        .or_else(|| {
-            let m: Vec<_> = list.iter().filter(|c| c.config.name.to_lowercase().contains(&want.to_lowercase())).collect();
-            if m.len() == 1 { Some(m[0]) } else { None }
-        });
+    let found = list.iter().find(|c| c.config.id == want).or_else(|| list.iter().find(|c| c.config.name.eq_ignore_ascii_case(want)));
     if let Some(c) = found {
         return Ok(c);
     }
-    if all.iter().any(|c| !shown(c) && (c.config.id == want || c.config.name.eq_ignore_ascii_case(want))) {
+    if all.iter().any(|c| !shown(c) && exact(c)) {
         return Err(format!("Data source \"{want}\" is not shared with MCP — turn it on in Qurry: data source › Options › MCP (TUI: data source form)"));
+    }
+    let m: Vec<_> = list.iter().filter(|c| c.config.name.to_lowercase().contains(&want.to_lowercase())).collect();
+    if let [c] = m.as_slice() {
+        return Ok(c);
     }
     Err(format!("Data source not found: {want}. Available: {}", list.iter().map(|c| c.config.name.as_str()).collect::<Vec<_>>().join(", ")))
 }
@@ -327,6 +327,26 @@ pub(crate) mod tests {
         // A part of a hidden name doesn't match it, and hidden sources aren't listed as available
         let e = find("Analy").unwrap_err();
         assert!(e.starts_with("Data source not found") && !e.contains("Analytics") && !e.contains("Prod"), "{e}");
+
+        // A hidden source's exact name (or id) never resolves to a shared source whose name contains it (#228), whatever the kind
+        for kind in ["redis", "postgres", "mongodb"] {
+            let mut all = [source("p", "Acme Redis Prod", None, true), source("r", "Acme Redis ProdRead", Some("read"), false), source("w", "Acme Redis ProdWrite", Some("write"), false)];
+            for s in &mut all {
+                s.config.kind = serde_json::from_value(json!(kind)).unwrap();
+            }
+            for allow_write in [false, true] {
+                let find = |w: &str| find_source(&all, w, allow_write).map(|c| c.config.id.clone());
+                for w in ["Acme Redis Prod", "acme redis prod", "ACME REDIS PROD", "p"] {
+                    let e = find(w).unwrap_err();
+                    assert!(e.contains("is not shared with MCP"), "{kind} {w}: {e}");
+                }
+                assert_eq!(find("acme redis prodread").unwrap(), "r");
+                assert_eq!(find("ProdWrite").unwrap(), "w");
+                // Two shared sources contain "Redis": an error, not the first one
+                let e = find("Redis").unwrap_err();
+                assert!(e.starts_with("Data source not found") && e.contains("ProdRead") && e.contains("ProdWrite") && !e.contains("Acme Redis Prod,"), "{kind}: {e}");
+            }
+        }
     }
 
     /// search_objects looks in the databases the app's tree shows: system DBs of every kind hidden, unless the Schemas tab scopes them
